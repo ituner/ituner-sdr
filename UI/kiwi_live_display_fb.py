@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
 
@@ -78,53 +78,40 @@ class KiwiWebSocket:
 
     @staticmethod
     def connect(endpoint, stream_name, timeout=8.0):
-        """Open a Kiwi stream, following directory/proxy HTTP redirects."""
-        original_endpoint = endpoint
-        for _redirect in range(4):
-            scheme, host, port = parse_endpoint(endpoint)
-            ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
-            raw = socket.create_connection((host, port), timeout=timeout)
-            raw.settimeout(timeout)
-            if ws_scheme == "wss":
-                raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+        scheme, host, port = parse_endpoint(endpoint)
+        ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
+        raw = socket.create_connection((host, port), timeout=timeout)
+        raw.settimeout(timeout)
+        if ws_scheme == "wss":
+            raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
 
-            key = base64.b64encode(os.urandom(16)).decode("ascii")
-            path = f"/{int(time.time())}/{stream_name}"
-            request = (
-                f"GET {path} HTTP/1.1\r\n"
-                f"Host: {host}:{port}\r\n"
-                "Upgrade: websocket\r\n"
-                "Connection: Upgrade\r\n"
-                f"Sec-WebSocket-Key: {key}\r\n"
-                "Sec-WebSocket-Version: 13\r\n"
-                f"Origin: http://{host}:{port}\r\n"
-                "User-Agent: Codex-KiwiSDR-display\r\n"
-                "\r\n"
-            ).encode("ascii")
-            raw.sendall(request)
-            response = read_http_header(raw)
-            status = response.split(b"\r\n", 1)[0]
-            if b" 101 " in status:
-                expected = base64.b64encode(
-                    hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
-                )
-                if expected not in response:
-                    raw.close()
-                    raise RuntimeError(f"websocket accept check failed for {stream_name}")
-                raw.settimeout(1.0)
-                return KiwiWebSocket(raw)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        path = f"/{int(time.time())}/{stream_name}"
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            f"Origin: http://{host}:{port}\r\n"
+            "User-Agent: Codex-KiwiSDR-display\r\n"
+            "\r\n"
+        ).encode("ascii")
+        raw.sendall(request)
 
-            location = None
-            for header in response.decode("latin1", "replace").split("\r\n"):
-                if header.lower().startswith("location:"):
-                    location = header.split(":", 1)[1].strip()
-                    break
-            raw.close()
-            if b" 3" in status and location:
-                endpoint = urljoin(endpoint if "://" in endpoint else "http://" + endpoint, location)
-                continue
+        response = read_http_header(raw)
+        status = response.split(b"\r\n", 1)[0]
+        if b" 101 " not in status:
             raise RuntimeError(f"websocket handshake failed for {stream_name}: {status.decode('latin1', 'replace')}")
-        raise RuntimeError(f"too many redirects for {stream_name}: {original_endpoint}")
+        expected = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+        )
+        if expected not in response:
+            raise RuntimeError(f"websocket accept check failed for {stream_name}")
+
+        raw.settimeout(1.0)
+        return KiwiWebSocket(raw)
 
     def send_text(self, text):
         self._send_frame(0x1, text.encode("utf-8"))
