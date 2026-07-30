@@ -1,0 +1,29 @@
+/dts-v1/;
+/plugin/;
+
+/* Reconstructed from the known-working gt911-camdisp1.dtbo on the Pi 5. */
+/ {
+    compatible = "brcm,bcm2712";
+
+    fragment@0 {
+        target-path = "/axi/pcie@1000120000/rp1/i2c@80000";
+
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            touchscreen@5d {
+                compatible = "goodix,gt911";
+                reg = <0x5d>;
+                interrupt-parent = <&rp1_gpio>;
+                interrupts = <48 2>;
+                irq-gpios = <&rp1_gpio 48 0>;
+                touchscreen-size-x = <320>;
+                touchscreen-size-y = <960>;
+                touchscreen-swapped-x-y;
+                status = "okay";
+            };
+        };
+    };
+};

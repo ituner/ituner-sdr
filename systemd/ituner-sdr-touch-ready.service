@@ -1,0 +1,17 @@
+[Unit]
+Description=iTuner SDR GT911 touch readiness check
+After=multi-user.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/ituner-sdr/touch-ready.sh
+RemainAfterExit=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+

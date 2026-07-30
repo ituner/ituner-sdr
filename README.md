@@ -1,0 +1,103 @@
+# iTuner SDR for Raspberry Pi 5
+
+One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
+
+## Hardware connection
+
+Use **only Raspberry Pi 5 CAM/DISP 1 (DSI1)**. The 22-pin FFC from the adapter board connects to CAM/DISP 1; do **not** move it to CAM/DISP 0. The display overlay targets DSI1 and the bundled GT911 touch overlay targets the matching `i2c_csi_dsi1` controller (Linux I2C bus 11, address `0x5d`).
+
+The display framebuffer is **400x960**, not 320x960. The panel is physically 960 pixels tall and is used in the installed flipped/portrait orientation.
+
+## Architecture
+
+```text
+CAM/DISP 1 (DSI1) ── display overlay + rebuilt ST7701 panel module ── DRM/KMS framebuffer (400x960)
+                    └─ GT911 overlay ── Goodix input event ── OpenGL SDR UI
+                                                           └─ KiwiSDR WebSocket receiver + PipeWire audio
+```
+
+`UI/` contains two UI implementations:
+
+- `kiwi_gl_display.py` is the active OpenGL/Pygame touchscreen radio. It is the service started at boot.
+- `kiwi_live_display_fb.py` is the earlier Python/Pillow framebuffer skeleton/reference.
+
+All current and future UI updates are made to the **OpenGL implementation**. The Python skeleton is included for reference and is not started or maintained as the active UI.
+
+## Install
+
+1. Start with Raspberry Pi OS on a Raspberry Pi 5, network access, and the adapter FFC firmly seated in **CAM/DISP 1**.
+2. Clone this repository and run:
+
+   ```bash
+   git clone https://github.com/ituner/ituner-sdr.git
+   cd ituner-sdr
+   sudo ./scripts/install.sh
+   sudo reboot
+   ```
+
+The install is idempotent. It rebuilds the display module for the currently running kernel, stores the original module under `/var/lib/ituner-sdr/`, installs the display and touch overlays, configures the required boot settings in one marked block, installs Python/OpenGL/PipeWire dependencies, and enables all boot services.
+
+The public receiver configured by default is the established working initial endpoint. To use a receiver you are authorized to access, configure it after reboot:
+
+```bash
+sudo ituner-sdr-configure --server http://receiver-host:8073
+```
+
+Optional settings:
+
+```bash
+sudo ituner-sdr-configure --frequency-khz 7075.794 --orientation flipped
+```
+
+## Boot services and status
+
+After reboot, the following services are enabled:
+
+- `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
+- `ituner-sdr.service` starts the active OpenGL radio UI.
+- `ituner-sdr-health.service` gently checks cached public-directory receiver availability for the UI.
+
+Check them with:
+
+```bash
+systemctl status ituner-sdr.service ituner-sdr-touch-ready.service ituner-sdr-health.service
+```
+
+The UI uses the Goodix touch event automatically. Audio is sent through PipeWire to its current default audio sink; the installer enables the selected user's persistent runtime so this works at boot without an interactive login.
+
+## Touch test
+
+Run the installed standalone touch check at any time:
+
+```bash
+sudo ituner-sdr-touch-test
+```
+
+It draws a green circle that follows your finger. Press `Ctrl+C` to exit, then restart the radio UI:
+
+```bash
+sudo systemctl restart ituner-sdr.service
+```
+
+## Uninstall
+
+The uninstall is explicit and restores the saved display kernel module for the current kernel, removes this package's marked boot-config block and overlays, then disables/removes its services and installed files:
+
+```bash
+sudo ituner-sdr-uninstall
+sudo reboot
+```
+
+It preserves `/etc/ituner-sdr.conf` by default so an endpoint choice is not lost. To remove that configuration too:
+
+```bash
+sudo ituner-sdr-uninstall --purge-config
+sudo reboot
+```
+
+## Repository layout
+
+- `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
+- `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
+- `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture asset.
+- `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.

@@ -1,0 +1,18 @@
+[Unit]
+Description=iTuner SDR directory health checker
+After=network-online.target ituner-sdr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__ITUNER_SDR_USER__
+SupplementaryGroups=video input render
+WorkingDirectory=/opt/ituner-sdr/UI
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/ituner-sdr/UI/kiwi_station_health.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+

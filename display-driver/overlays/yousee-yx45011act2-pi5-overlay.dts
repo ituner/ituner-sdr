@@ -1,0 +1,40 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/axi/pcie@1000120000/rp1/dsi@128000";
+		__overlay__ {
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			panel@0 {
+				compatible = "yousee,yx45011act2";
+				reg = <0>;
+
+				/*
+				 * The ST7701 driver asserts/deasserts reset using logical
+				 * 0 then 1. The YX45011ACT2 module pin is RESET# on the
+				 * adapter, so describe the GPIO as active-high here to leave
+				 * the physical line high before sending DSI init commands.
+				 */
+				reset-gpios = <&rp1_gpio 46 0>;
+
+				port {
+					panel_in: endpoint {
+						remote-endpoint = <&dsi_out>;
+					};
+				};
+			};
+
+			port {
+				dsi_out: endpoint {
+					remote-endpoint = <&panel_in>;
+				};
+			};
+		};
+	};
+};
