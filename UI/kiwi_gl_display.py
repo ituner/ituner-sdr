@@ -55,6 +55,11 @@ SMETER_READOUT_INTERVAL_SECONDS = 0.30
 # (256 ms) PipeWire quantum: enough to cover the observed 107 ms network gap
 # while keeping buffer boundaries aligned with the incoming PCM cadence.
 PIPEWIRE_AUDIO_LATENCY = "3072"
+# Touch may generate far more events than a public Kiwi receiver can use.
+# The stream workers coalesce those events and transmit only the current
+# position at this cadence, keeping a fast drag responsive without a backlog.
+LIVE_TUNE_MIN_INTERVAL_SECONDS = 0.020
+KIWI_IO_POLL_SECONDS = 0.010
 SMETER_FLOOR_DBM = -121
 SMETER_S9_DBM = -73
 SMETER_PLUS20_DBM = -53
@@ -85,6 +90,7 @@ KIWI_MODE_PAGES = (
     ("STANDARD", ("AM", "AMN", "AMW", "USB", "LSB", "USN", "LSN", "CW", "CWN", "NBFM")),
     ("SPECIAL", ("NNFM", "DRM", "IQ", "SAM", "SAU", "SAL", "SAS", "QAM")),
 )
+KIWI_RADIO_MODES = frozenset(mode for _page, modes in KIWI_MODE_PAGES for mode in modes)
 RADIO_MODE_BOXES = (
     (32, 118, 205, 158),
     (217, 118, 390, 158),
@@ -149,6 +155,16 @@ AUDIO_PANEL_BOX = (12, 72, 948, 288)
 AUDIO_VOLUME_BOX = (42, 108, 918, 166)
 AUDIO_SQUELCH_BOX = (42, 190, 380, 266)
 AUDIO_FILTER_BOX = (400, 190, 918, 266)
+TEST_PANEL_BOX = (12, 72, 948, 288)
+TEST_DJ_BOX = (42, 112, 918, 158)
+TEST_PATTERN_BOX = (42, 172, 918, 222)
+TEST_RUN_BOX = (42, 234, 918, 280)
+DJ_PANEL_BOX = (12, 72, 948, 288)
+DJ_TRACK_BOX = (42, 130, 918, 205)
+DJ_STEP_BOX = (42, 224, 240, 276)
+DJ_RANGE_BOX = (258, 224, 456, 276)
+DJ_RATE_BOX = (474, 224, 672, 276)
+DJ_RETURN_BOX = (690, 224, 918, 276)
 GEAR_BOX = (892, 228, 958, 294)
 MENU_BOX = (12, 202, 948, 282)
 MENU_CLOSE_BOX = (0, 0, 0, 0)
@@ -156,6 +172,7 @@ MENU_VISIBLE_ITEMS = 5
 MENU_ITEMS = (
     ("rx", "RX"),
     ("audio", "AUDIO"),
+    ("tests", "TESTS"),
     ("radio", "RADIO"),
     ("display", "DISP"),
     ("decode", "DEC"),
@@ -491,6 +508,98 @@ def snap_frequency_khz(freq_khz, step_hz):
     return round(freq_khz * 1000 / step_hz) * step_hz / 1000
 
 
+def finger_tune_step_hz(zoom, base_step_hz):
+    """Use close zoom levels as a fine VFO without changing the base setting."""
+    zoom = int(zoom)
+    if zoom >= 14:
+        return min(int(base_step_hz), 5)
+    if zoom >= 13:
+        return min(int(base_step_hz), 10)
+    if zoom >= 12:
+        return min(int(base_step_hz), 25)
+    if zoom >= 11:
+        return min(int(base_step_hz), 50)
+    return int(base_step_hz)
+
+
+RETUNE_TEST_PATTERNS = (
+    ("GENTLE", "triangle", 8, 250, 0.10, 0.80),
+    ("FAST", "triangle", 10, 250, 0.05, 0.35),
+    ("JITTER", "jitter", 0, 0, 0.075, 0.0),
+    # AM envelope audio does not pitch-shift on small retunes. These go just
+    # beyond the normal +/-5 kHz AM receive passband, making a matched
+    # +6.4 kHz excursion audible at slow, medium, and fast tune cadences.
+    ("AM SLOW", "triangle", 16, 400, 0.16, 0.95),
+    ("AM MED", "triangle", 16, 400, 0.09, 0.75),
+    ("AM FAST", "triangle", 16, 400, 0.045, 0.35),
+    # Four two-second scan legs: +50 kHz, centre, -50 kHz, centre. Twelve
+    # moves per leg keeps the complete wide scan below the 50-command limit.
+    ("SCAN +/-50k", "scan", 12, 50000, 2.0 / 12.0, 0.0),
+    # FT8/SSB transition probe: one audible 50 Hz frequency increment every
+    # 20 ms, 50 steps outward and 50 back. It completes in two seconds.
+    ("SSB 50Hz 2s", "triangle", 50, 50, 0.020, 0.0),
+    # Four seconds total: 0 -> +25 kHz -> -25 kHz -> 0. Its 200 small state
+    # steps are intentionally never queued; a slower public Kiwi coalesces
+    # only the stale intermediate receiver commands.
+    ("SCAN +/-25k 4s", "cross_scan", 50, 25000, 0.020, 0.0),
+)
+RETUNE_TEST_MAX_COMMANDS = 200
+
+
+def retune_test_schedule(pattern_index):
+    """Return a short bounded sequence; no test can exceed 50 retunes."""
+    name, shape, steps, step_hz, cadence, hold_s = RETUNE_TEST_PATTERNS[pattern_index]
+    if shape == "triangle":
+        offsets_hz = [step * step_hz for step in range(1, steps + 1)]
+        offsets_hz.extend(step * step_hz for step in range(steps - 1, -1, -1))
+        delays_s = [cadence] * len(offsets_hz)
+        if hold_s > 0:
+            delays_s[steps - 1] = hold_s
+    elif shape == "jitter":
+        offsets_hz = (250, -250, 500, -500, 750, -750, 500, -500, 250, -250, 0)
+        delays_s = [cadence] * len(offsets_hz)
+    elif shape == "scan":
+        leg_step_hz = step_hz / steps
+        positive = [step * leg_step_hz for step in range(1, steps + 1)]
+        return_positive = [step * leg_step_hz for step in range(steps - 1, -1, -1)]
+        negative = [-step * leg_step_hz for step in range(1, steps + 1)]
+        return_negative = [-step * leg_step_hz for step in range(steps - 1, -1, -1)]
+        offsets_hz = positive + return_positive + negative + return_negative
+        delays_s = [cadence] * len(offsets_hz)
+    else:
+        increment_hz = step_hz / steps
+        to_positive = [step * increment_hz for step in range(1, steps + 1)]
+        through_negative = [step_hz - step * increment_hz for step in range(1, 2 * steps + 1)]
+        return_to_center = [-step_hz + step * increment_hz for step in range(1, steps + 1)]
+        offsets_hz = to_positive + through_negative + return_to_center
+        delays_s = [cadence] * len(offsets_hz)
+    if len(offsets_hz) > RETUNE_TEST_MAX_COMMANDS:
+        raise ValueError("retune test command limit exceeded")
+    return name, tuple(offset / 1000.0 for offset in offsets_hz), tuple(delays_s)
+
+
+class RetuneSweep:
+    """A clocked test with no command queue or delayed catch-up behavior."""
+
+    def __init__(self, start_khz, pattern_index, now):
+        self.start_khz = start_khz
+        self.name, self.offsets_khz, self.delays_s = retune_test_schedule(pattern_index)
+        self.index = 0
+        self.next_due = now + self.delays_s[0]
+
+    @property
+    def command_count(self):
+        return len(self.offsets_khz)
+
+    def advance(self, now):
+        if self.index >= self.command_count or now < self.next_due:
+            return None
+        frequency_khz = self.start_khz + self.offsets_khz[self.index]
+        self.next_due = now + self.delays_s[self.index]
+        self.index += 1
+        return frequency_khz, self.index >= self.command_count
+
+
 def waterfall_mapper(palette):
     if palette == "kiwi":
         return kiwi.make_waterfall_mapper()
@@ -517,13 +626,16 @@ def load_remembered_view(path):
             zoom = saved.get("zoom")
             if isinstance(zoom, int) and 0 <= zoom <= 14:
                 view["zoom"] = zoom
+            radio_mode = saved.get("radio_mode")
+            if isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
+                view["radio_mode"] = radio_mode.upper()
             return view
     except (OSError, ValueError, TypeError):
         pass
     return None
 
 
-def save_remembered_view(path, server, freq_khz, zoom):
+def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False):
     parsed = urlparse(server)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return
@@ -535,6 +647,8 @@ def save_remembered_view(path, server, freq_khz, zoom):
             "server": server,
             "zoom": clamp(int(zoom), 0, 14),
         }
+        if manual_radio_mode and isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
+            saved["radio_mode"] = radio_mode.upper()
         temporary.write_text(json.dumps(saved, sort_keys=True) + "\n")
         os.replace(temporary, path)
     except OSError as exc:
@@ -567,6 +681,7 @@ class SharedState:
         self.smeter_peak_last_decay_t = 0.0
         self.view_generation = 0
         self.server_generation = 0
+        self.live_tune_rate_hz = round(1.0 / LIVE_TUNE_MIN_INTERVAL_SECONDS)
         self.wf_floor = float(wf_floor)
         self.wf_ceil = float(wf_ceil)
         self.wf_speed = int(wf_speed)
@@ -606,6 +721,15 @@ class SharedState:
             self.spectrum_peak_history.clear()
             self.view_generation += 1
             return self.freq_khz, self.zoom, self.view_generation
+
+    def tune_rate_snapshot(self):
+        with self.lock:
+            return self.live_tune_rate_hz
+
+    def set_tune_rate(self, rate_hz):
+        with self.lock:
+            self.live_tune_rate_hz = int(clamp(int(rate_hz), 1, 100))
+            return self.live_tune_rate_hz
 
     def set_server(self, server, zoom=None):
         with self.lock:
@@ -1410,6 +1534,94 @@ def draw_audio_panel(text_cache, volume, squelch_enabled, low_cut, high_cut, out
     panel_button(AUDIO_FILTER_BOX, "AUDIO FILTER", format_filter_width(high_cut - low_cut), False)
 
 
+def tests_option_at(x, y):
+    if contains(TEST_DJ_BOX, x, y):
+        return "dj"
+    if contains(TEST_PATTERN_BOX, x, y):
+        return "pattern"
+    if contains(TEST_RUN_BOX, x, y):
+        return "run"
+    return None
+
+
+def draw_tests_button(text_cache, box, title, detail, active=False):
+    x0, y0, x1, y1 = box
+    fill = (104, 53, 20, 204) if active else (18, 29, 38, 210)
+    line = (255, 184, 83, 220) if active else (115, 140, 151, 78)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, (237, 248, 248), 20, True, True, "lm")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm")
+
+
+def draw_tests_panel(text_cache, pattern_index, sweep):
+    """Dedicated, extensible diagnostics workspace; Audio remains listening-only."""
+    x0, y0, x1, y1 = TEST_PANEL_BOX
+    pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
+    _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 94, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
+    draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
+    if sweep is None:
+        draw_tests_button(text_cache, TEST_RUN_BOX, "RUN TEST", "LIVE KIWI WATERFALL + USB AUDIO")
+    else:
+        draw_tests_button(
+            text_cache,
+            TEST_RUN_BOX,
+            "STOP",
+            f"{sweep.name}  {sweep.index}/{sweep.command_count}",
+            active=True,
+        )
+
+
+def draw_dj_control(text_cache, box, title, detail, active=False):
+    x0, y0, x1, y1 = box
+    fill = (27, 76, 70, 210) if active else (18, 29, 38, 210)
+    line = (94, 230, 178, 210) if active else (115, 140, 151, 78)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - 9, title, (232, 247, 247), 16, True, True, "cm")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 14, detail, (126, 225, 183), 13, False, True, "cm")
+
+
+def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, link_rate_hz):
+    """Finger-driven, detented tune laboratory that always has an origin."""
+    x0, y0, x1, y1 = DJ_PANEL_BOX
+    tx0, ty0, tx1, ty1 = DJ_TRACK_BOX
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 94, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
+    delta_hz = round((current_khz - origin_khz) * 1000)
+    delta_label = f"{delta_hz:+d} Hz" if delta_hz else "CENTRE"
+    draw_text(text_cache, 918, 94, delta_label, (110, 230, 180), 16, True, True, "rm")
+    draw_text(text_cache, LOGICAL_W / 2, 114, sdr_ui.format_freq(current_khz), (232, 246, 247), 28, True, False, "cm")
+    draw_logical_rect(tx0, ty0, tx1, ty1, (10, 23, 29, 232))
+    mid_x = (tx0 + tx1) / 2
+    draw_logical_line(mid_x, ty0 + 7, mid_x, ty1 - 7, (113, 239, 187, 235), 2)
+    for tick in range(-10, 11):
+        x = mid_x + tick * (tx1 - tx0) / 20
+        height = 22 if tick % 5 == 0 else 12
+        draw_logical_line(x, (ty0 + ty1) / 2 - height / 2, x, (ty0 + ty1) / 2 + height / 2, (132, 167, 174, 130), 1)
+    marker_x = clamp(mid_x + (current_khz - origin_khz) / range_khz * (tx1 - tx0) / 2, tx0, tx1)
+    draw_logical_line(marker_x, ty0 + 5, marker_x, ty1 - 5, (244, 224, 151, 255), 3)
+    draw_dj_control(text_cache, DJ_STEP_BOX, "STEP", f"{step_hz} Hz", step_hz == 100)
+    draw_dj_control(text_cache, DJ_RANGE_BOX, "RANGE", f"+/-{range_khz:.1f} kHz")
+    draw_dj_control(text_cache, DJ_RATE_BOX, "LINK RATE", f"{link_rate_hz} Hz", link_rate_hz != 50)
+    draw_dj_control(text_cache, DJ_RETURN_BOX, "RETURN", sdr_ui.format_freq(origin_khz))
+
+
 def draw_filter_width_control(text_cache, box, label):
     """Large neutral controls that stay legible over the cool waterfall."""
     x0, y0, x1, y1 = box
@@ -1723,6 +1935,14 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.polygon(surface, color, ((cx - 28, cy + 4), (cx - 13, cy + 4), (cx + 6, cy - 15), (cx + 6, cy + 23), (cx - 13, cy + 4)))
         pygame.draw.arc(surface, dim, (cx, cy - 21, 36, 48), math.radians(-45), math.radians(45), 3)
         pygame.draw.arc(surface, dim, (cx + 9, cy - 30, 50, 66), math.radians(-45), math.radians(45), 3)
+    elif kind == "tests":
+        pygame.draw.rect(surface, color, (cx - 26, cy - 23, 52, 48), 3, border_radius=5)
+        pygame.draw.line(surface, dim, (cx - 14, cy - 10), (cx + 14, cy - 10), 3)
+        pygame.draw.line(surface, dim, (cx - 14, cy), (cx + 8, cy), 3)
+        pygame.draw.line(surface, dim, (cx - 14, cy + 10), (cx + 2, cy + 10), 3)
+        pygame.draw.circle(surface, color, (cx + 15, cy + 11), 10, 3)
+        pygame.draw.line(surface, color, (cx + 15, cy + 4), (cx + 15, cy + 12), 2)
+        pygame.draw.line(surface, color, (cx + 15, cy + 12), (cx + 21, cy + 16), 2)
     elif kind == "decode":
         for offset in (-18, 0, 18):
             pygame.draw.line(surface, color, (cx + offset, cy - 24), (cx + offset, cy + 24), 3)
@@ -2399,20 +2619,28 @@ def snd_meter_worker(args, stop_event, state):
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             configured = False
             last_keepalive = 0
+            next_view_send_at = 0.0
             while not stop_event.is_set():
                 server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
                 radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
                 squelch_enabled, audio_generation = state.audio_snapshot()
+                live_tune_interval = 1.0 / state.tune_rate_snapshot()
                 if server_generation != seen_server_generation:
                     seen_server_generation = server_generation
                     break
-                if configured and (view_generation != seen_view_generation or radio_generation != seen_radio_generation):
+                now_monotonic = time.monotonic()
+                if (
+                    configured
+                    and (view_generation != seen_view_generation or radio_generation != seen_radio_generation)
+                    and now_monotonic >= next_view_send_at
+                ):
                     snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
                     kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut)
                     ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
                     seen_view_generation = view_generation
                     seen_radio_generation = radio_generation
                     seen_audio_generation = audio_generation
+                    next_view_send_at = now_monotonic + live_tune_interval
                     print(
                         f"gl snd mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
                         flush=True,
@@ -2423,6 +2651,9 @@ def snd_meter_worker(args, stop_event, state):
                     ws.send_text("SET keepalive")
                     last_keepalive = now
                 try:
+                    readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
+                    if not readable:
+                        continue
                     message = ws.recv()
                 except socket.timeout:
                     continue
@@ -2442,6 +2673,7 @@ def snd_meter_worker(args, stop_event, state):
                         seen_view_generation = view_generation
                         seen_radio_generation = radio_generation
                         seen_audio_generation = audio_generation
+                        next_view_send_at = time.monotonic() + live_tune_interval
                         print(
                             f"gl snd setup mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
                             flush=True,
@@ -2496,18 +2728,22 @@ def waterfall_worker(args, line_queue, stop_event, state):
             kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
             last_keepalive = 0
             last_frame_at = time.monotonic()
+            next_view_send_at = 0.0
             print(f"gl wf setup: {server} {freq_khz:.3f} kHz zoom {zoom}", flush=True)
             while not stop_event.is_set():
                 server, freq_khz, zoom, _smeter_dbm, generation, server_generation = state.snapshot()
                 next_floor, next_ceil, next_speed, next_auto, next_palette, wf_generation = state.waterfall_snapshot()
+                live_tune_interval = 1.0 / state.tune_rate_snapshot()
                 if server_generation != seen_server_generation:
                     seen_server_generation = server_generation
                     drain_queue(line_queue)
                     break
-                if generation != seen_generation:
+                now_monotonic = time.monotonic()
+                if generation != seen_generation and now_monotonic >= next_view_send_at:
                     seen_generation = generation
                     drain_queue(line_queue)
                     kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+                    next_view_send_at = now_monotonic + live_tune_interval
                     print(f"gl wf retune: {freq_khz:.3f} kHz zoom {zoom}", flush=True)
                 if wf_generation != seen_wf_generation:
                     seen_wf_generation = wf_generation
@@ -2526,6 +2762,9 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     ws.send_text("SET keepalive")
                     last_keepalive = now
                 try:
+                    readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
+                    if not readable:
+                        continue
                     message = ws.recv()
                 except socket.timeout:
                     continue
@@ -2584,6 +2823,12 @@ def main():
     parser.add_argument("--invert-y", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--swap-x-y", action="store_true")
     parser.add_argument("--invert-tune", action="store_true")
+    parser.add_argument(
+        "--finger-tune-positional",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="map finger distance to the active zoom span independently of drag velocity",
+    )
     parser.add_argument("--tap-px", type=int, default=12)
     parser.add_argument("--swipe-start-px", type=int, default=4)
     parser.add_argument("--swipe-sensitivity", type=float, help=argparse.SUPPRESS)
@@ -2617,12 +2862,14 @@ def main():
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
     args = parser.parse_args()
+    remembered_radio_mode = None
     if args.remember_receiver:
         remembered_view = load_remembered_view(args.receiver_state_file)
         if remembered_view:
             args.server = remembered_view["server"]
             args.freq_khz = remembered_view.get("freq_khz", args.freq_khz)
             args.zoom = remembered_view.get("zoom", args.zoom)
+            remembered_radio_mode = remembered_view.get("radio_mode")
             print(
                 f"gl remembered receiver: {args.server} "
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
@@ -2678,9 +2925,9 @@ def main():
 
     signal.signal(signal.SIGUSR1, request_screenshot)
     signal.signal(signal.SIGUSR2, request_zoom_osd)
-    radio_mode = default_sideband_mode(args.freq_khz)
+    radio_mode = remembered_radio_mode or default_sideband_mode(args.freq_khz)
     auto_sideband_mode = radio_mode
-    manual_radio_mode = False
+    manual_radio_mode = remembered_radio_mode is not None
     state = SharedState(
         args.server,
         args.freq_khz,
@@ -2693,7 +2940,7 @@ def main():
         args.spectrum,
     )
     if args.remember_receiver:
-        save_remembered_view(args.receiver_state_file, args.server, args.freq_khz, args.zoom)
+        save_remembered_view(args.receiver_state_file, args.server, args.freq_khz, args.zoom, radio_mode, manual_radio_mode)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
     snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state), daemon=True)
     wf_thread.start()
@@ -2740,6 +2987,15 @@ def main():
     audio_panel_open = False
     audio_volume = pipewire_default_volume()
     audio_volume_last_apply = 0.0
+    tests_panel_open = False
+    retune_pattern_index = 0
+    retune_sweep = None
+    dj_tune_open = False
+    dj_origin_khz = args.freq_khz
+    dj_current_khz = args.freq_khz
+    dj_step_hz = 100
+    dj_range_khz = 5.0
+    dj_drag_remainder_hz = 0.0
     filter_panel_open = False
     filter_drag_edge = None
     filter_drag_center = 0.0
@@ -2784,11 +3040,15 @@ def main():
         if not args.remember_receiver:
             return
         server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
-        save_remembered_view(args.receiver_state_file, server, freq_khz, zoom)
+        save_remembered_view(args.receiver_state_file, server, freq_khz, zoom, radio_mode, manual_radio_mode)
 
     def apply_band_default(freq_khz):
         """Follow the conventional 10 MHz split until the operator takes over."""
         nonlocal radio_mode, auto_sideband_mode
+        # The retune test is observational. It must not unexpectedly change
+        # the current demodulator while it crosses a nearby band threshold.
+        if retune_sweep is not None:
+            return
         desired_mode = default_sideband_mode(freq_khz)
         if manual_radio_mode or desired_mode == auto_sideband_mode:
             return
@@ -2799,7 +3059,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or filter_panel_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or dj_tune_open or filter_panel_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -2854,6 +3114,90 @@ def main():
         zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
 
+    def set_test_frequency(freq_khz):
+        """Publish a fresh desired tune; workers consume state, not a queue."""
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        frequency = clamp(freq_khz, 0.0, 30000.0)
+        state.set_view(freq_khz=frequency)
+        display_freq = frequency
+        candidate_freq = frequency
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+
+    def start_retune_sweep():
+        nonlocal retune_sweep, display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        _server, freq_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        retune_sweep = RetuneSweep(freq_khz, retune_pattern_index, time.monotonic())
+        display_freq = freq_khz
+        candidate_freq = freq_khz
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+        wake_controls()
+        print(f"gl test start {retune_sweep.name} {retune_sweep.command_count} at {freq_khz:.3f} kHz", flush=True)
+
+    def stop_retune_sweep(reason):
+        nonlocal retune_sweep
+        if retune_sweep is None:
+            return
+        start_khz = retune_sweep.start_khz
+        retune_sweep = None
+        set_test_frequency(start_khz)
+        remember_current_view()
+        print(f"gl test {reason}; restored {start_khz:.3f} kHz", flush=True)
+
+    def advance_retune_sweep(now):
+        nonlocal retune_sweep
+        if retune_sweep is None:
+            return
+        step = retune_sweep.advance(now)
+        if step is None:
+            return
+        frequency, done = step
+        set_test_frequency(frequency)
+        if done:
+            finished = retune_sweep
+            retune_sweep = None
+            remember_current_view()
+            print(f"gl test complete {finished.name}; restored {frequency:.3f} kHz", flush=True)
+
+    def open_dj_tune():
+        nonlocal dj_tune_open, dj_origin_khz, dj_current_khz, dj_drag_remainder_hz
+        _server, frequency, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        dj_tune_open = True
+        dj_origin_khz = frequency
+        dj_current_khz = frequency
+        dj_drag_remainder_hz = 0.0
+        wake_controls()
+
+    def restore_dj_origin(reason):
+        nonlocal dj_current_khz, dj_drag_remainder_hz
+        set_test_frequency(dj_origin_khz)
+        dj_current_khz = dj_origin_khz
+        dj_drag_remainder_hz = 0.0
+        remember_current_view()
+        print(f"gl dj {reason}; restored {dj_origin_khz:.3f} kHz", flush=True)
+
+    def advance_dj_tune(delta_px):
+        nonlocal dj_current_khz, dj_drag_remainder_hz, display_freq, candidate_freq
+        hz_per_px = 2.0 * dj_range_khz * 1000.0 / (DJ_TRACK_BOX[2] - DJ_TRACK_BOX[0])
+        dj_drag_remainder_hz += delta_px * hz_per_px
+        steps = math.trunc(dj_drag_remainder_hz / dj_step_hz)
+        if not steps:
+            return
+        target = clamp(
+            dj_current_khz + steps * dj_step_hz / 1000.0,
+            dj_origin_khz - dj_range_khz,
+            dj_origin_khz + dj_range_khz,
+        )
+        if target == dj_current_khz:
+            dj_drag_remainder_hz = 0.0
+            return
+        dj_drag_remainder_hz -= steps * dj_step_hz
+        dj_current_khz = target
+        state.set_view(freq_khz=target)
+        display_freq = target
+        candidate_freq = target
+
     def advance_waterfall_drag(x):
         nonlocal candidate_freq, display_freq, last_move_x, last_move_t, swipe_velocity_px_s
         nonlocal start_span, zoom_osd_until, fast_sweep_zoom_applied, auto_zoom_levels_used
@@ -2871,7 +3215,8 @@ def main():
         # moving decisively. That leaves a deliberate slow follow-up drag as
         # fine tuning, even directly after travelling quickly.
         if (
-            not repeat_zoom_applied
+            not args.finger_tune_positional
+            and not repeat_zoom_applied
             and repeat_swipe_count >= args.swipe_repeat_zoom_threshold
             and abs(swipe_velocity_px_s) >= args.swipe_fast_px_s
             and abs(x - start_x) >= args.swipe_fast_zoom_distance_px
@@ -2899,7 +3244,8 @@ def main():
             repeat_zoom_applied = True
 
         if (
-            not fast_sweep_zoom_applied
+            not args.finger_tune_positional
+            and not fast_sweep_zoom_applied
             and repeat_zoom_applied
             and abs(swipe_velocity_px_s) >= args.swipe_fast_zoom_px_s
             and abs(x - start_x) >= args.swipe_fast_zoom_distance_px
@@ -2929,15 +3275,29 @@ def main():
         )
         travel_t = travel_t * travel_t * (3.0 - 2.0 * travel_t)
         live_swipe_boost = 1.0 + (active_swipe_boost - 1.0) * travel_t
-        sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args) * live_swipe_boost
+        sensitivity = (
+            args.swipe_slow_sensitivity
+            if args.finger_tune_positional
+            else swipe_effective_sensitivity(swipe_velocity_px_s, args) * live_swipe_boost
+        )
         candidate_freq = clamp(
             candidate_freq + retune_delta_from_drag(dx, start_span, args.invert_tune, sensitivity),
             0.0,
             30000.0,
         )
+        # A normal waterfall drag is a live, positional tuning control. The
+        # active zoom supplies the travel range, while the radio step supplies
+        # tactile detents. Publishing state here lets the two Kiwi streams
+        # follow the finger; their workers coalesce to the newest request.
+        _server, _live_freq, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
+        live_step_hz = finger_tune_step_hz(active_zoom, tune_step_hz)
+        live_candidate_freq = snap_frequency_khz(candidate_freq, live_step_hz)
         last_move_x = x
         last_move_t = now_move
-        display_freq = candidate_freq
+        display_freq = live_candidate_freq
+        _server, live_freq, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        if live_freq != live_candidate_freq:
+            state.set_view(freq_khz=live_candidate_freq)
 
     def begin_swipe(x):
         nonlocal swipe_started, last_swipe_direction, last_swipe_time, repeat_swipe_count, active_swipe_boost, repeat_zoom_applied, repeat_zoom_changed
@@ -3012,6 +3372,13 @@ def main():
 
                     if is_active:
                         if not touch_started:
+                            # Any new operator gesture takes ownership from a
+                            # running test. The run button itself is exempt so
+                            # it remains an immediate, obvious Stop control.
+                            if retune_sweep is not None and not (
+                                tests_panel_open and contains(TEST_RUN_BOX, x, y)
+                            ):
+                                stop_retune_sweep("interrupted")
                             if abs(inertia_velocity_khz_s) > 0.001:
                                 state.set_view(freq_khz=display_freq)
                                 remember_current_view()
@@ -3031,7 +3398,7 @@ def main():
                             swipe_started = False
                             fast_sweep_zoom_applied = False
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not filter_panel_open else freq_khz
+                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not tests_panel_open and not dj_tune_open and not filter_panel_open else freq_khz
                             start_span = display_span
                             candidate_freq = start_freq
                             if waterfall_focus_progress() > 0.01:
@@ -3049,6 +3416,22 @@ def main():
                                 gesture = "audio_filter"
                             elif audio_panel_open:
                                 gesture = "audio_panel_outside"
+                            elif dj_tune_open and contains(DJ_TRACK_BOX, x, y):
+                                dj_drag_remainder_hz = 0.0
+                                gesture = "dj_tune"
+                            elif dj_tune_open and (
+                                contains(DJ_STEP_BOX, x, y)
+                                or contains(DJ_RANGE_BOX, x, y)
+                                or contains(DJ_RATE_BOX, x, y)
+                                or contains(DJ_RETURN_BOX, x, y)
+                            ):
+                                gesture = "dj_controls"
+                            elif dj_tune_open:
+                                gesture = "dj_tune_outside"
+                            elif tests_panel_open and contains(TEST_PANEL_BOX, x, y):
+                                gesture = "tests_panel"
+                            elif tests_panel_open:
+                                gesture = "tests_panel_outside"
                             elif filter_panel_open and contains(FILTER_EDIT_BOX, x, y):
                                 _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                                 filter_drag_audio_center = filter_center_hz(low_cut, high_cut)
@@ -3137,6 +3520,9 @@ def main():
                                 if applied_volume is not None:
                                     audio_volume = applied_volume
                                     audio_volume_last_apply = time.monotonic()
+                        elif gesture == "dj_tune":
+                            advance_dj_tune(x - last_move_x)
+                            last_move_x = x
                         elif gesture == "filter_drag" and contains(FILTER_EDIT_BOX, x, y):
                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                             cut_hz = filter_cut_at_x(
@@ -3181,6 +3567,10 @@ def main():
                                 radio_setup_open = False
                                 display_setup_open = False
                                 audio_panel_open = False
+                                tests_panel_open = False
+                                if dj_tune_open:
+                                    restore_dj_origin("closed")
+                                    dj_tune_open = False
                                 filter_panel_open = False
                                 menu_scroll = 0.0
                                 station_scroll = 0
@@ -3193,6 +3583,10 @@ def main():
                                 picker_open = False
                                 display_setup_open = False
                                 audio_panel_open = False
+                                tests_panel_open = False
+                                if dj_tune_open:
+                                    restore_dj_origin("closed")
+                                    dj_tune_open = False
                                 filter_panel_open = False
                         elif touch_started and gesture == "audio_volume":
                             applied_volume = set_pipewire_default_volume(audio_volume_at_x(x))
@@ -3217,6 +3611,56 @@ def main():
                             if moved <= args.tap_px:
                                 audio_panel_open = False
                             wake_controls()
+                        elif touch_started and gesture == "dj_tune":
+                            wake_controls()
+                        elif touch_started and gesture == "dj_controls":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                if contains(DJ_STEP_BOX, x, y):
+                                    steps = (50, 100, 250)
+                                    dj_step_hz = steps[(steps.index(dj_step_hz) + 1) % len(steps)]
+                                elif contains(DJ_RANGE_BOX, x, y):
+                                    ranges = (2.5, 5.0, 10.0)
+                                    dj_range_khz = ranges[(ranges.index(dj_range_khz) + 1) % len(ranges)]
+                                    dj_current_khz = clamp(
+                                        dj_current_khz,
+                                        dj_origin_khz - dj_range_khz,
+                                        dj_origin_khz + dj_range_khz,
+                                    )
+                                    set_test_frequency(dj_current_khz)
+                                elif contains(DJ_RATE_BOX, x, y):
+                                    rate_options = tuple(range(10, 101, 10))
+                                    current_rate = state.tune_rate_snapshot()
+                                    state.set_tune_rate(rate_options[(rate_options.index(current_rate) + 1) % len(rate_options)])
+                                elif contains(DJ_RETURN_BOX, x, y):
+                                    restore_dj_origin("return")
+                            wake_controls()
+                        elif touch_started and gesture == "dj_tune_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                restore_dj_origin("closed")
+                                dj_tune_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "tests_panel":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                choice = tests_option_at(x, y)
+                                if choice == "dj":
+                                    tests_panel_open = False
+                                    open_dj_tune()
+                                elif choice == "pattern" and retune_sweep is None:
+                                    retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
+                                elif choice == "run":
+                                    if retune_sweep is None:
+                                        start_retune_sweep()
+                                    else:
+                                        stop_retune_sweep("stopped")
+                            wake_controls()
+                        elif touch_started and gesture == "tests_panel_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                tests_panel_open = False
+                            wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -3229,6 +3673,7 @@ def main():
                                         filter_custom_width = False
                                         digital_mode = "IQ" if value == "IQ" else "DIG"
                                         state.set_radio_mode(radio_mode)
+                                        remember_current_view()
                                     elif kind == "mode_page":
                                         radio_mode_page = clamp(
                                             radio_mode_page + value,
@@ -3330,6 +3775,8 @@ def main():
                                         radio_setup_open = False
                                         display_setup_open = False
                                         audio_panel_open = False
+                                        tests_panel_open = False
+                                        dj_tune_open = False
                                         filter_panel_open = False
                                         station_scroll = 0
                                         station_query = ""
@@ -3341,12 +3788,16 @@ def main():
                                         menu_open = False
                                         radio_setup_open = False
                                         audio_panel_open = False
+                                        tests_panel_open = False
+                                        dj_tune_open = False
                                         filter_panel_open = False
                                     elif kind == "radio":
                                         radio_setup_open = True
                                         menu_open = False
                                         display_setup_open = False
                                         audio_panel_open = False
+                                        tests_panel_open = False
+                                        dj_tune_open = False
                                         filter_panel_open = False
                                     elif kind == "audio":
                                         audio_volume = pipewire_default_volume()
@@ -3354,6 +3805,17 @@ def main():
                                         menu_open = False
                                         radio_setup_open = False
                                         display_setup_open = False
+                                        tests_panel_open = False
+                                        dj_tune_open = False
+                                        filter_panel_open = False
+                                    elif kind == "tests":
+                                        tests_panel_open = True
+                                        menu_open = False
+                                        picker_open = False
+                                        radio_setup_open = False
+                                        display_setup_open = False
+                                        audio_panel_open = False
+                                        dj_tune_open = False
                                         filter_panel_open = False
                                     else:
                                         print(f"gl menu {label} pending", flush=True)
@@ -3380,6 +3842,8 @@ def main():
                                 radio_setup_open = False
                                 display_setup_open = False
                                 audio_panel_open = False
+                                tests_panel_open = False
+                                dj_tune_open = False
                                 wake_controls()
                         elif touch_started and gesture == "search":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -3449,8 +3913,9 @@ def main():
                                 candidate_freq = clamp(retune_from_tap(x, start_freq, start_span), 0.0, 30000.0)
                             elif not swipe_started:
                                 candidate_freq = start_freq
+                            live_step_hz = finger_tune_step_hz(zoom, tune_step_hz)
                             candidate_freq = clamp(
-                                snap_frequency_khz(candidate_freq, tune_step_hz),
+                                snap_frequency_khz(candidate_freq, live_step_hz),
                                 0.0,
                                 30000.0,
                             )
@@ -3484,6 +3949,7 @@ def main():
                 zoom_osd_until = now + args.zoom_osd_seconds
                 zoom_osd_requested.clear()
             update_animation()
+            advance_retune_sweep(now)
             inertia_active = False
             if not touch_started and abs(inertia_velocity_khz_s) > 0.01:
                 dt = min(0.05, max(0.0, now - inertia_last_t))
@@ -3574,7 +4040,7 @@ def main():
                 waterfall_y1,
                 0.82,
             )
-            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or filter_panel_open else controls_alpha(now)
+            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or dj_tune_open or filter_panel_open else controls_alpha(now)
             selected_station_name = next(
                 (
                     bottom_station_title(name, location)
@@ -3593,7 +4059,7 @@ def main():
                 smeter_readout_dbm,
                 radio_mode,
                 digital_mode,
-                tune_step_hz,
+                finger_tune_step_hz(zoom, tune_step_hz),
                 controls_alpha=control_alpha,
                 focus_progress=focus_progress,
                 ruler_y0=ruler_y0,
@@ -3638,6 +4104,17 @@ def main():
                     audio_low_cut,
                     audio_high_cut,
                     audio_volume is not None,
+                )
+            if tests_panel_open:
+                draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
+            if dj_tune_open:
+                draw_dj_tune_panel(
+                    text_cache,
+                    dj_origin_khz,
+                    dj_current_khz,
+                    dj_step_hz,
+                    dj_range_khz,
+                    state.tune_rate_snapshot(),
                 )
             if filter_panel_open:
                 draw_filter_setup_panel(text_cache, radio_mode, low_cut, high_cut, filter_custom_width)
