@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 53937)
-Total output lines: 4504
+Warning: truncated output (original token count: 54889)
+Total output lines: 4591
 
 #!/usr/bin/env python3
 import argparse
@@ -175,9 +175,33 @@ TEST_GLOBE_BOX = (42, 112, 468, 166)
 TEST_DJ_BOX = (492, 112, 918, 166)
 TEST_PATTERN_BOX = (42, 178, 918, 224)
 TEST_RUN_BOX = (42, 236, 918, 280)
-GLOBE_PANEL_BOX = (12, 72, 948, 312)
-GLOBE_MAP_BOX = (30, 94, 560, 300)
-GLOBE_BACK_BOX = (770, 88, 930, 120)
+GLOBE_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+GLOBE_MAP_BOX = (20, 28, 576, 320)
+GLOBE_BACK_BOX = (770, 14, 930, 50)
+def load_globe_coastlines():
+    """Load genuine Natural Earth land outlines, decimated for the small panel."""
+    try:
+        payload = json.loads((Path(__file__).parent / "assets" / "ne_110m_land.geojson").read_text())
+    except (OSError, ValueError, TypeError):
+        return ()
+    outlines = []
+    for feature in payload.get("features", []):
+        geometry = feature.get("geometry") or {}
+        coordinates = geometry.get("coordinates") or []
+        polygons = coordinates if geometry.get("type") == "MultiPolygon" else [coordinates]
+        for polygon in polygons:
+            for ring in polygon:
+                if len(ring) < 3:
+                    continue
+                stride = max(1, len(ring) // 72)
+                simplified = ring[::stride]
+                if simplified[-1] != ring[-1]:
+                    simplified.append(ring[-1])
+                outlines.append(tuple((float(lat), float(lon)) for lon, lat, *_rest in simplified))
+    return tuple(outlines)
+
+
+GLOBE_COASTLINES = load_globe_coastlines()
 DJ_PANEL_BOX = (12, 72, 948, 288)
 DJ_TRACK_BOX = (42, 130, 918, 205)
 DJ_STEP_BOX = (42, 224, 240, 276)
@@ -231,6 +255,7 @@ PUBLIC_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.js
 STATION_HEALTH_CACHE = Path.home() / ".local/state/kiwi-gl-station-health.json"
 GLOBE_DIRECTORY_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
 GLOBE_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-globe-receivers.json"
+GLOBE_ACTION_RADIUS_KM = 805.0  # 500 statute miles
 station_health_write_lock = threading.Lock()
 
 
@@ -444,6 +469,18 @@ def globe_haversine_km(a, b):
     lat1, lon1, lat2, lon2 = map(math.radians, (a["lat"], a["lon"], b["lat"], b["lon"]))
     h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
     return 12742.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def globe_destination(center, bearing_radians, distance_km):
+    """Return a point on a small geodesic action circle around a receiver."""
+    angular = distance_km / 6371.0
+    lat1, lon1 = math.radians(center["lat"]), math.radians(center["lon"])
+    lat2 = math.asin(math.sin(lat1) * math.cos(angular) + math.cos(lat1) * math.sin(angular) * math.cos(bearing_radians))
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing_radians) * math.sin(angular) * math.cos(lat1),
+        math.cos(angular) - math.sin(lat1) * math.sin(lat2),
+    )
+    return {"lat": math.degrees(lat2), "lon": math.degrees(lon2)}
 
 
 def choose_globe_triangle(anchor, receivers, health):
@@ -1462,44 +1499,7 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
 
         color = (219, 223, 225, 178)
         dim = (174, 180, 184, 54)
-        baseline = h / 2 - 1
-        left = w / 2 - 14
-        right = w / 2 + 14
-        pygame.draw.line(hi, dim, (p(10), p(baseline)), (p(w - 10), p(baseline)), p(1.2))
-        pygame.draw.rect(hi, dim, (p(left), p(baseline - 14), p(right - left), p(14)))
-        pygame.draw.line(hi, color, (p(left), p(baseline - 18)), (p(left), p(baseline)), p(2.0))
-        pygame.draw.line(hi, color, (p(right), p(baseline - 18)), (p(right), p(baseline)), p(2.0))
-        pygame.draw.line(hi, (221, 245, 246, 122), (p(w / 2), p(baseline - 20)), (p(w / 2), p(baseline + 2)), p(1.1))
-        label = text_cache.font(16 * scale, bold=True, mono=True).render("FILTER", True, color[:3])
-        hi.blit(label, ((hi.get_width() - label.get_width()) // 2, p(h - 27)))
-        surface = pygame.transform.smoothscale(hi, (w, h))
-        cached = text_cache.surface_texture(key, surface)
-    tex, tex_w, tex_h = cached
-    draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
-
-
-def draw_gear_button(text_cache):
-    x0, y0, x1, y1 = GEAR_BOX
-    draw_logical_rect(x0, y0, x1, y1, (3, 9, 14, 58))
-    cx = (x0 + x1) / 2
-    cy = (y0 + y1) / 2
-    ring = (206, 238, 242, 128)
-    color = (226, 246, 249, 210)
-    for ox, oy in ((0, 0), (1, 0), (0, 1)):
-        draw_logical_line(x0 + 8 + ox, y0 + 6 + oy, x1 - 8 + ox, y0 + 6 + oy, ring, 1)
-        draw_logical_line(x0 + 8 + ox, y1 - 6 + oy, x1 - 8 + ox, y1 - 6 + oy, ring, 1)
-        draw_logical_line(x0 + 6 + ox, y0 + 8 + oy, x0 + 6 + ox, y1 - 8 + oy, ring, 1)
-        draw_logical_line(x1 - 6 + ox, y0 + 8 + oy, x1 - 6 + ox, y1 - 8 + oy, ring, 1)
-    for angle in range(0, 360, 45):
-        radians = math.radians(angle)
-        r0 = 9 if angle % 90 == 0 else 8
-    …23937 tokens truncated…om=new_zoom)
-                    remember_current_view()
-                    start_span = kiwi.zoom_to_span_khz(new_zoom)
-                    animate_to(candidate_freq, start_span, 0.18)
-                    zoom_osd_until = now_move + args.zoom_osd_seconds
-                    auto_zoom_levels_used += applied_levels
-                    print(f"gl fast swipe: zoom {new_zoom} span {start_span:.1f} kHz", flush=True)
+        baselin…24889 tokens truncated…pan {start_span:.1f} kHz", flush=True)
             fast_sweep_zoom_applied = True
         # Travel boost is tied to live velocity, not merely to the fact that
         # recent swipes were fast. It fades to exactly 1x during fine motion.
@@ -1777,12 +1777,16 @@ def draw_gear_button(text_cache):
                                 if globe_pinch_distance is None:
                                     globe_pinch_distance = max(1.0, distance)
                                 else:
-                                    globe_scale = clamp(globe_scale * (distance / globe_pinch_distance), 0.72, 1.35)
+                                    # Regional receiver selection needs far more than a
+                                    # whole-hemisphere view. Allow a continent-scale closeup.
+                                    globe_scale = clamp(globe_scale * (distance / globe_pinch_distance), 0.60, 3.50)
                                     globe_pinch_distance = max(1.0, distance)
                             else:
                                 globe_pinch_distance = None
-                                globe_yaw = globe_start_yaw + (x - start_x) * 0.011
-                                globe_pitch = clamp(globe_start_pitch - (y - start_y) * 0.008, math.radians(-48), math.radians(48))
+                                # Treat the sphere as a direct-manipulation object:
+                                # dragging right/down carries its visible surface right/down.
+                                globe_yaw = globe_start_yaw - (x - start_x) * 0.011
+                                globe_pitch = clamp(globe_start_pitch + (y - start_y) * 0.008, math.radians(-48), math.radians(48))
                         elif gesture == "filter_drag" and contains(FILTER_EDIT_BOX, x, y):
                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                             cut_hz = filter_cut_at_x(
@@ -1910,11 +1914,12 @@ def draw_gear_button(text_cache):
                                 # receiver cluster under the operator's finger.
                                 candidates = []
                                 for receiver in globe_receivers:
-                                    point = globe_project(receiver, globe_yaw, globe_pitch, 294, 199, 101 * globe_scale)
+                                    point = globe_project(receiver, globe_yaw, globe_pitch, 300, 174, 139 * globe_scale)
                                     if point:
                                         candidates.append((math.hypot(point[0] - x, point[1] - y), receiver))
                                 if candidates:
                                     _distance, anchor = min(candidates, key=lambda item: item[0])
+                                    globe_anchor = anchor
                                     globe_triangle = choose_globe_triangle(anchor, globe_receivers, station_health)
                                     globe_failover = list(globe_triangle)
                                     selected = globe_failover.pop(0)
@@ -1925,7 +1930,6 @@ def draw_gear_button(text_cache):
                                     wf_texture.clear()
                                     animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
                                     globe_failover_deadline = time.monotonic() + 5.0
-                                    globe_open = False
                                     print(f"gl globe audition {selected['name']}: {selected['server']}", flush=True)
                             wake_controls()
                         elif touch_started and gesture == "globe_outside":
@@ -2423,7 +2427,7 @@ def draw_gear_button(text_cache):
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
             if globe_open:
-                draw_globe_panel(text_cache, globe_receivers, globe_yaw, globe_pitch, globe_scale, globe_triangle, globe_status)
+                draw_globe_panel(text_cache, globe_receivers, globe_yaw, globe_pitch, globe_scale, globe_triangle, globe_anchor, globe_status)
             if dj_tune_open:
                 draw_dj_tune_panel(
                     text_cache,
