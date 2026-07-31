@@ -343,6 +343,19 @@ surface on the 4.8 inch panel:
 - The S-meter uses saturated royal blue for S1-S9 and deep red for the upper
   range. Its peak holds for 2 seconds, then decays at 9 dB/s.
 
+## Globe Experiment
+
+`Home > Tests > Globe` opens an experimental spatial public-receiver picker.
+It fetches the public Kiwi map feed, which includes receiver GPS coordinates
+and stream URLs, then caches the result locally. The Globe is an orthographic
+view: drag to rotate, pinch to zoom, and tap a region to choose a nearby
+three-receiver triangle. The app auditions only the best health-ranked member
+through the normal waterfall and USB-audio path. The other two vertices are
+shown as geographic fallbacks; if the first receiver fails/retries after five
+seconds, the app tries the remaining triangle members in order. It never mixes
+three audio streams. A future TDoA version can use that same triangle for
+IQ/capture work, which requires timing-capable IQ data rather than audio.
+
 ## Dependencies
 
 The simple framebuffer path requires at least:
