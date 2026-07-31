@@ -319,6 +319,30 @@ vcgencmd measure_temp
 
 The service is configured with `Restart=always`, so the interface should return automatically after reboot or a transient failure.
 
+## Current UI Contract
+
+The production layout is frequency-first and designed for the 960 x 320 logical
+surface on the 4.8 inch panel:
+
+- Home is the single persistent left-side affordance. It opens and closes the
+  Home workspace; there is no timeout and no separate Exit tile.
+- Home is a semi-opaque, waterfall-scale, two-row/five-column touch grid. Its
+  eight current functions are left-justified, with the lower status/ruler area
+  intentionally covered while it is open.
+- The remaining top instrumentation is right-aligned as one cluster: mode and
+  digital annunciators, frequency, then the S-meter. The frequency readout
+  uses Liberation Sans Bold at 50 px and a subdued gray-cyan rather than pure
+  white.
+- Zoom and Scope/Filter retain subdued translucent charcoal controls. Their
+  touch-safe exclusion zone is 32 logical pixels, and a control gesture never
+  falls through into waterfall tuning.
+- Waterfall tuning is deliberate horizontal drag only: at least 14 px and
+  horizontally dominant. A stationary waterfall tap does not retune.
+- The tuned center is marked by an amber dashed guide and small top tick. The
+  gaps preserve visibility of a faint carrier directly at center.
+- The S-meter uses saturated royal blue for S1-S9 and deep red for the upper
+  range. Its peak holds for 2 seconds, then decays at 9 dB/s.
+
 ## Dependencies
 
 The simple framebuffer path requires at least:
