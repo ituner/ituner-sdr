@@ -48,8 +48,8 @@ SPECTRUM_PEAK_HOLD_SECONDS = 10.0
 # gently, and retain a brief, decaying indication of recent peaks.
 SMETER_ATTACK_SECONDS = 0.085
 SMETER_RELEASE_SECONDS = 0.70
-SMETER_PEAK_HOLD_SECONDS = 0.75
-SMETER_PEAK_DECAY_DB_PER_SECOND = 16.0
+SMETER_PEAK_HOLD_SECONDS = 2.0
+SMETER_PEAK_DECAY_DB_PER_SECOND = 9.0
 SMETER_READOUT_INTERVAL_SECONDS = 0.30
 # Kiwi delivers 512-frame raw packets at 12 kHz. Six packets make a 3072-frame
 # (256 ms) PipeWire quantum: enough to cover the observed 107 ms network gap
@@ -83,8 +83,15 @@ ZOOM_GROUP_BOX = (16, 194, 248, 260)
 FILTER_TOGGLE_BOX = (740, 190, 828, 262)
 SPECTRUM_TOGGLE_BOX = (850, 190, 938, 262)
 VIEW_GROUP_BOX = (742, 188, 946, 264)
-HOME_BOX = (15, 8, 87, 66)
-RADIO_SETUP_BOX = (530, 12, 590, 52)
+HOME_BOX = (30, 13, 102, 71)
+# The top instruments share one right alignment. Home is intentionally the
+# single left-anchored control.
+# The S legend sits left of the LED bars. Align to that true visual edge,
+# leaving a 28 px quiet gap before the meter typography rather than its bars.
+FREQUENCY_RIGHT_X = 590
+RADIO_SETUP_WIDTH = 74
+RADIO_SETUP_GAP = 10
+RADIO_SETUP_BOX = (260, 10, 334, 54)
 RADIO_PANEL_BOX = (12, 72, 948, 282)
 KIWI_MODE_PAGES = (
     ("STANDARD", ("AM", "AMN", "AMW", "USB", "LSB", "USN", "LSN", "CW", "CWN", "NBFM")),
@@ -139,6 +146,11 @@ FILTER_WIDTH_MINUS_BOX = (42, 230, 190, 280)
 FILTER_WIDTH_LABEL_BOX = (208, 230, 752, 280)
 FILTER_WIDTH_PLUS_BOX = (770, 230, 918, 280)
 FILTER_HANDLE_TOUCH_PX = 34
+# Thumb-safe exclusion around floating controls: nearby touches must never
+# become a waterfall retune.
+CONTROL_TOUCH_GUARD_PX = 32
+WATERFALL_DRAG_START_PX = 14
+WATERFALL_HORIZONTAL_DRAG_RATIO = 1.5
 FILTER_LIMIT_HZ = 12000
 FILTER_SNAP_HZ = 50
 FILTER_FINE_WIDTH_STEP_HZ = 100
@@ -166,9 +178,14 @@ DJ_RANGE_BOX = (258, 224, 456, 276)
 DJ_RATE_BOX = (474, 224, 672, 276)
 DJ_RETURN_BOX = (690, 224, 918, 276)
 GEAR_BOX = (892, 228, 958, 294)
-MENU_BOX = (12, 202, 948, 282)
+# Home is a temporary waterfall-scale workspace, leaving the top instrument
+# strip and its Home affordance visible.
+MENU_BOX = (12, 72, 948, LOGICAL_H)
+# Home remains visible above the overlay and is the single, unambiguous way
+# to close this temporary workspace.
 MENU_CLOSE_BOX = (0, 0, 0, 0)
-MENU_VISIBLE_ITEMS = 5
+MENU_COLS = 5
+MENU_ROWS = 2
 MENU_ITEMS = (
     ("rx", "RX"),
     ("audio", "AUDIO"),
@@ -461,14 +478,32 @@ def contains(box, x, y):
     return box[0] <= x <= box[2] and box[1] <= y <= box[3]
 
 
+def contains_with_guard(box, x, y, guard=CONTROL_TOUCH_GUARD_PX):
+    """Reserve a small touch-safe moat around overlay controls."""
+    return (
+        box[0] - guard <= x <= box[2] + guard
+        and box[1] - guard <= y <= box[3] + guard
+    )
+
+
 def is_waterfall_tune_touch(x, y):
     if not (WATERFALL_TUNE_X0 <= x <= WATERFALL_TUNE_X1 and WATERFALL_Y0 <= y <= WATERFALL_Y1):
         return False
-    return not contains(ZOOM_GROUP_BOX, x, y) and not contains(VIEW_GROUP_BOX, x, y)
+    return not contains_with_guard(ZOOM_GROUP_BOX, x, y) and not contains_with_guard(VIEW_GROUP_BOX, x, y)
 
 
 def is_waterfall_band_touch(x, y):
     return WATERFALL_TUNE_X0 <= x <= WATERFALL_TUNE_X1 and WATERFALL_Y0 <= y <= WATERFALL_Y1
+
+
+def is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
+    """Accept only an intentional horizontal waterfall-tuning gesture."""
+    dx = abs(x - start_x)
+    dy = abs(y - start_y)
+    return (
+        dx >= max(args.swipe_start_px, WATERFALL_DRAG_START_PX)
+        and dx >= dy * WATERFALL_HORIZONTAL_DRAG_RATIO
+    )
 
 
 def swipe_effective_sensitivity(speed_px_s, args):
@@ -1221,12 +1256,14 @@ def draw_control_group_background(text_cache, box, key, separators, alpha=1.0, s
             return int(round(value * scale))
 
         pill = pygame.Rect(p(1), p(2), p(w - 2), p(h - 4))
-        pygame.draw.rect(hi, (112, 125, 132, 52), pill, border_radius=p(24))
-        pygame.draw.rect(hi, (224, 234, 237, 45), pill, p(1), border_radius=p(24))
-        pygame.draw.line(hi, (255, 255, 255, 24), (p(21), p(8)), (p(w - 21), p(8)), p(1))
+        # A darkened glass substrate protects white icons from the active,
+        # high-luminance waterfall while retaining a light translucent feel.
+        pygame.draw.rect(hi, (13, 21, 28, 128), pill, border_radius=p(24))
+        pygame.draw.rect(hi, (202, 216, 220, 52), pill, p(1), border_radius=p(24))
+        pygame.draw.line(hi, (255, 255, 255, 38), (p(21), p(8)), (p(w - 21), p(8)), p(1))
         for separator_x in separators:
-            pygame.draw.line(hi, (4, 11, 16, 58), (p(separator_x), p(13)), (p(separator_x), p(h - separator_bottom)), p(1))
-            pygame.draw.line(hi, (235, 244, 247, 37), (p(separator_x + 1), p(13)), (p(separator_x + 1), p(h - separator_bottom)), p(1))
+            pygame.draw.line(hi, (1, 5, 8, 118), (p(separator_x), p(13)), (p(separator_x), p(h - separator_bottom)), p(1))
+            pygame.draw.line(hi, (235, 244, 247, 52), (p(separator_x + 1), p(13)), (p(separator_x + 1), p(h - separator_bottom)), p(1))
         surface = pygame.transform.smoothscale(hi, (w, h))
         cached = text_cache.surface_texture(key, surface)
     tex, tex_w, tex_h = cached
@@ -1382,8 +1419,18 @@ def draw_home_button(text_cache, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
-def draw_radio_setup_pill(text_cache, mode, digital, step_hz):
-    x0, y0, x1, y1 = RADIO_SETUP_BOX
+def top_instrument_layout(text_cache, freq_khz):
+    """Return a right-aligned mode/frequency cluster next to the S-meter."""
+    frequency_text = sdr_ui.format_freq(freq_khz)
+    frequency_width = text_cache.font(50, bold=True, family="Liberation Sans").size(frequency_text)[0]
+    frequency_left = FREQUENCY_RIGHT_X - frequency_width
+    radio_x1 = frequency_left - RADIO_SETUP_GAP
+    radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
+    return frequency_text, radio_box
+
+
+def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BOX):
+    x0, y0, x1, y1 = box
     gap = 4
     mid = (y0 + y1) / 2
     pills = ((y0 + 2, mid - gap / 2, mode.upper(), True), (mid + gap / 2, y1 - 2, digital.upper(), digital.upper() not in ("", "OFF", "NONE")))
@@ -1730,7 +1777,10 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
     # Cool cyan keeps the passband distinct without warming the waterfall.
     fill = (154, 159, 163, int(42 * alpha))
     edge = (221, 225, 227, int(184 * alpha))
-    center = (240, 242, 243, int(108 * alpha))
+    # Amber is deliberately reserved for the tuned RF center: it remains
+    # legible over blue/cyan waterfall energy without resembling a signal.
+    center_shadow = (2, 7, 11, int(128 * alpha))
+    center = (255, 192, 68, int(222 * alpha))
     if raw_right - raw_left < 10:
         # At wide waterfall spans the real filter can be sub-pixel narrow.
         # Show a compact bracket instead of visually falsifying its width.
@@ -1752,7 +1802,15 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
                 1,
             )
     if 0 <= center_x <= LOGICAL_W:
-        draw_logical_line(center_x, y0, center_x, y1, center, 1)
+        # A continuous marker masks a weak, perfectly tuned carrier. Use a
+        # fine dashed guide instead, with a clear top reference tick.
+        draw_logical_line(center_x - 6, y0 + 2, center_x + 6, y0 + 2, center, 1)
+        dash_h = 5
+        dash_period = 12
+        for dash_y in range(int(y0 + 8), int(y1), dash_period):
+            dash_end = min(dash_y + dash_h, y1)
+            draw_logical_line(center_x, dash_y, center_x, dash_end, center_shadow, 3)
+            draw_logical_line(center_x, dash_y, center_x, dash_end, center, 1)
 
 
 def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=False):
@@ -1878,24 +1936,28 @@ def station_at(x, y, stations, scroll):
 
 def menu_metrics():
     x0, y0, x1, y1 = MENU_BOX
-    pad = 4
-    gap = 8
-    header_h = 0
-    item_w = (x1 - x0 - 2 * pad - (MENU_VISIBLE_ITEMS - 1) * gap) / MENU_VISIBLE_ITEMS
-    item_h = y1 - y0 - header_h - 2 * pad
-    return x0, y0, x1, y1, pad, gap, item_w, item_h, header_h
+    pad = 12
+    gap = 10
+    item_w = (x1 - x0 - 2 * pad - (MENU_COLS - 1) * gap) / MENU_COLS
+    item_h = (y1 - y0 - 2 * pad - (MENU_ROWS - 1) * gap) / MENU_ROWS
+    return x0, y0, x1, y1, pad, gap, item_w, item_h
 
 
 def menu_max_scroll():
-    _x0, _y0, _x1, _y1, _pad, gap, item_w, _item_h, _header_h = menu_metrics()
-    overflow = max(0, len(MENU_ITEMS) - MENU_VISIBLE_ITEMS)
-    return overflow * (item_w + gap)
+    # The Home grid is deliberately finite: no hidden horizontal pages.
+    return 0.0
 
 
 def menu_item_box(index, scroll):
-    x0, y0, _x1, _y1, pad, gap, item_w, item_h, header_h = menu_metrics()
-    left = x0 + pad + index * (item_w + gap) - scroll
-    top = y0 + header_h + pad
+    x0, y0, _x1, _y1, pad, gap, item_w, item_h = menu_metrics()
+    col = index % MENU_COLS
+    row = index // MENU_COLS
+    if row >= MENU_ROWS:
+        return None
+    # The second row remains left-justified, like the first, so operators can
+    # scan a stable grid without a competing close target.
+    left = x0 + pad + col * (item_w + gap)
+    top = y0 + pad + row * (item_h + gap)
     return left, top, left + item_w, top + item_h
 
 
@@ -1904,7 +1966,7 @@ def menu_at(x, y, scroll):
         return None
     for idx in range(len(MENU_ITEMS)):
         box = menu_item_box(idx, scroll)
-        if contains(box, x, y):
+        if box and contains(box, x, y):
             return idx
     return None
 
@@ -1976,22 +2038,22 @@ def menu_icon_texture(text_cache, kind, label):
 
 def draw_main_menu(text_cache, scroll):
     x0, y0, x1, y1 = MENU_BOX
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 18, 214))
-    draw_logical_line(x0, y0, x1, y0, (151, 178, 184, 92), 1)
+    # Let the waterfall remain legible behind a single calm, temporary veil.
+    draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
+    draw_logical_line(x0 + 12, y0, x1 - 12, y0, (174, 201, 205, 72), 1)
     for idx, (kind, label) in enumerate(MENU_ITEMS):
-        bx0, by0, bx1, by1 = menu_item_box(idx, scroll)
+        box = menu_item_box(idx, scroll)
+        if box is None:
+            continue
+        bx0, by0, bx1, by1 = box
         if bx1 < x0 or bx0 > x1:
             continue
         tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label)
-        target_w = min(84, bx1 - bx0 - 8)
-        target_h = min(72, by1 - by0 - 2)
+        target_w = min(132, bx1 - bx0 - 12)
+        target_h = min(92, by1 - by0 - 4)
         target_x = bx0 + ((bx1 - bx0) - target_w) / 2
         target_y = by0 + ((by1 - by0) - target_h) / 2
         draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
-    if scroll > 2:
-        draw_text(text_cache, x0 + 18, (y0 + y1) / 2, "<", (226, 246, 249), 20, True, True, "cm")
-    if scroll < menu_max_scroll() - 2:
-        draw_text(text_cache, x1 - 18, (y0 + y1) / 2, ">", (226, 246, 249), 20, True, True, "cm")
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -2158,9 +2220,9 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     green = (222, 255, 228, 255)
     # Saturated, lower-luminance segment colors retain contrast on the dark
     # panel without the previous electric/white-hot appearance.
-    red = (218, 38, 52, 255)
+    red = (230, 20, 42, 255)
     rail = (220, 238, 232, 255)
-    blue = (0, 72, 204, 255)
+    blue = (0, 65, 235, 255)
     # Keep the bar tops fixed, while leaving four more pixels of clearance below.
     bar_bottom = (69 if scope_enabled else sdr_ui.TOP_H - 2) - 4
 
@@ -2354,8 +2416,8 @@ def draw_spectrum(y0, y1, values, peak_values=()):
         (index * (LOGICAL_W - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
         for index, value in enumerate(values)
     ]
-    draw_logical_area(points, bottom, (226, 240, 255, 218))
-    draw_logical_polyline(points, (255, 255, 255, 255), 1.4)
+    draw_logical_area(points, bottom, (161, 184, 196, 154))
+    draw_logical_polyline(points, (204, 219, 224, 208), 1.25)
 
 
 def draw_connection_annunciator(text_cache, status):
@@ -2425,12 +2487,13 @@ def draw_ui(
     # deliberately pure black until a requested visual comparison restores it.
     draw_logical_rect(0, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 255))
     draw_home_button(text_cache, 1.0)
-    draw_radio_setup_pill(text_cache, mode, digital, step_hz)
-    # Cantarell Bold is an upright humanist alternative with clean, plain
-    # zeros and visibly more open numeral forms than the prior DejaVu face.
-    # It remains left-anchored so its proportional figures do not move the
-    # readout's starting position during a tune.
-    draw_text(text_cache, 218, 39, sdr_ui.format_freq(freq_khz), (184, 202, 205), 48, True, False, "lm", family="Cantarell")
+    frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
+    draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
+    # Liberation Sans Bold stays clean and compact at the display's physical
+    # pixel density, leaving headroom inside the short instrument strip.
+    # Right alignment keeps this cluster locked to the S-meter while the
+    # number of MHz digits changes between bands.
+    draw_text(text_cache, FREQUENCY_RIGHT_X, 39, frequency_text, (169, 189, 193), 50, True, False, "rm", family="Liberation Sans")
     draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
@@ -2468,7 +2531,7 @@ def draw_ui(
     draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
     draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", controls_alpha)
     draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", controls_alpha)
-    draw_text(text_cache, 118, 227, "ZOOM", (211, 227, 231), 16, True, True, "cm", controls_alpha)
+    draw_text(text_cache, 132, 227, "ZOOM", (211, 227, 231), 16, True, True, "cm", controls_alpha)
     draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v3", (100,), controls_alpha)
     draw_filter_toggle_button(text_cache, controls_alpha)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, controls_alpha)
@@ -3406,7 +3469,7 @@ def main():
                                 gesture = "wake"
                             elif contains(HOME_BOX, x, y):
                                 gesture = "home"
-                            elif contains(RADIO_SETUP_BOX, x, y):
+                            elif contains(top_instrument_layout(text_cache, display_freq)[1], x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -3512,7 +3575,9 @@ def main():
                             row_delta = int(round((start_y - y) / row_h))
                             station_scroll = clamp(start_scroll + row_delta * PICKER_COLS, 0, station_page_max(stations))
                         elif gesture == "menu":
-                            menu_scroll = clamp(start_menu_scroll + (start_x - x), 0.0, menu_max_scroll())
+                            # The Home screen is a fixed two-row grid; keep a
+                            # finger within its original tile until release.
+                            pass
                         elif gesture == "audio_volume":
                             desired_volume = audio_volume_at_x(x)
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
@@ -3540,19 +3605,13 @@ def main():
                             if (next_low, next_high) != (low_cut, high_cut):
                                 filter_custom_width = True
                         elif gesture in ("zoom_plus", "zoom_minus"):
-                            if is_waterfall_band_touch(start_x, start_y) and abs(x - start_x) >= args.swipe_start_px:
-                                gesture = "waterfall"
-                                start_freq = display_freq
-                                start_span = display_span
-                                candidate_freq = start_freq
-                                last_move_x = start_x
-                                last_move_t = start_time
-                                swipe_velocity_px_s = 0.0
-                                begin_swipe(x)
-                                advance_waterfall_drag(x)
+                            # A control owns its entire touch from press to
+                            # release. It must never leak into waterfall
+                            # tuning, even if the finger slides away from it.
+                            pass
                         elif gesture == "waterfall":
                             last_x = x
-                            if not swipe_started and abs(x - start_x) >= args.swipe_start_px:
+                            if not swipe_started and is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
                                 begin_swipe(x)
                             if swipe_started:
                                 advance_waterfall_drag(x)
@@ -3909,9 +3968,10 @@ def main():
                             wake_controls()
                             moved = abs((last_x if last_x is not None else x) - start_x)
                             _server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            if not swipe_started and moved <= args.tap_px:
-                                candidate_freq = clamp(retune_from_tap(x, start_freq, start_span), 0.0, 30000.0)
-                            elif not swipe_started:
+                            if not swipe_started:
+                                # Tuning is drag-only. A tap now just wakes
+                                # the controls, preventing a thumb near an
+                                # overlay from jumping the receiver.
                                 candidate_freq = start_freq
                             live_step_hz = finger_tune_step_hz(zoom, tune_step_hz)
                             candidate_freq = clamp(
@@ -3977,9 +4037,6 @@ def main():
                 except (OSError, ValueError, TypeError):
                     station_health = {}
                 next_health_reload = now + 3.0
-            if menu_open and time.monotonic() - menu_opened_at >= 5.0:
-                menu_open = False
-                menu_scroll = 0.0
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
@@ -4018,7 +4075,9 @@ def main():
             bottom_ruler = True
             ruler_height = BOTTOM_RULER_H if bottom_ruler else sdr_ui.RULER_H
             ruler_y0 = LOGICAL_H - BOTTOM_STATUS_H - ruler_height if bottom_ruler else sdr_ui.TOP_H
-            ruler_background_alpha = 100 if bottom_ruler else 185
+            # The bottom ruler lives over live waterfall energy. Give its
+            # labels a steadier dark substrate without flattening the view.
+            ruler_background_alpha = 150 if bottom_ruler else 185
             normal_waterfall_y0 = spectrum_y0 + spectrum_h
             focus_waterfall_y0 = WATERFALL_FOCUS_Y0 + spectrum_h
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
