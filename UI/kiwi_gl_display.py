@@ -2874,7 +2874,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         ("+40", dbx(-33), red[:3], 14),
     )
     for text, x, color, size in labels:
-        draw_text(text_cache, x, 10, text, color, size, False, True, "cm")
+        draw_text(text_cache, x, 12, text, color, size, False, True, "cm")
 
     # Major calibration lines reach equally above and below the trace. The
     # short midpoint ticks use the same symmetric treatment, so the dBm row
@@ -2882,11 +2882,11 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     major_ticks = ((-121, tick), (-109, tick), (-97, tick), (-85, tick), (-73, tick), (-53, red), (-33, red))
     for dbm, color in major_ticks:
         x = dbx(dbm)
-        draw_logical_line(x, trace_y - 14, x, trace_y + 14, color, 2)
+        draw_logical_line(x, trace_y - 10, x, trace_y + 10, color, 2)
     for dbm in (-115, -103, -91, -79, -63, -43):
         x = dbx(dbm)
         tick_color = red if dbm in (-63, -43) else rail
-        draw_logical_line(x, trace_y - 6, x, trace_y + 6, tick_color, 1)
+        draw_logical_line(x, trace_y - 4, x, trace_y + 4, tick_color, 1)
 
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
@@ -2903,13 +2903,13 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # live marker, so a changing signal remains easy to read at a glance.
     if peak_dbm is not None and peak_dbm > smeter_dbm + 0.75:
         peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
-        draw_logical_line(peak_x, trace_y - 11, peak_x, trace_y + 11, (182, 197, 200, 178), 1)
+        draw_logical_line(peak_x, trace_y - 8, peak_x, trace_y + 8, (182, 197, 200, 178), 1)
 
     # A simple 20 dB cadence follows the reference instrument style. The
     # labels are calibrated through the same nonlinear S-unit mapping above.
     for dbm in (-120, -100, -80, -60, -40):
-        draw_text(text_cache, dbx(dbm), 65, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
-    draw_text(text_cache, meter_x1 + 16, 65, "dBm", dbm_color[:3], 13, True, True, "lm")
+        draw_text(text_cache, dbx(dbm), 62, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
+    draw_text(text_cache, meter_x1 + 16, 62, "dBm", dbm_color[:3], 13, True, True, "lm")
 
 
 def read_cpu_temp_c():
