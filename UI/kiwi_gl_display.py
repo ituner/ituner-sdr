@@ -2903,7 +2903,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # live marker, so a changing signal remains easy to read at a glance.
     if peak_dbm is not None and peak_dbm > smeter_dbm + 0.75:
         peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
-        draw_logical_line(peak_x, trace_y - 8, peak_x, trace_y + 8, (182, 197, 200, 178), 1)
+        draw_logical_line(peak_x, trace_y - 8, peak_x, trace_y + 8, (76, 232, 142, 245), 2)
 
     # A simple 20 dB cadence follows the reference instrument style. The
     # labels are calibrated through the same nonlinear S-unit mapping above.
