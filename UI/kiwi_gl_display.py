@@ -16,10 +16,16 @@ import threading
 import time
 import re
 import html
-import audioop
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+try:
+    # `audioop` was removed in Python 3.13. It is only needed for the local
+    # CoreAudio convenience player; the Pi's PipeWire path does not use it.
+    import audioop
+except ImportError:
+    audioop = None
 
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
 # on its native Cocoa backend so --desktop can open a normal dev window.
@@ -2841,9 +2847,9 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     tick = (192, 211, 214, 220)
     blue = (0, 76, 245, 255)
     dbm_color = (189, 198, 201, 225)
-    # Keep the calibration centered in the taller instrument strip rather
-    # than visually weighted toward the Scope below it.
-    trace_y = 36
+    # The trace is the optical center of one calibrated assembly: S-units
+    # above, dBm below. Keep every tick balanced around this datum.
+    trace_y = 39
 
     def dbx(dbm):
         return meter_x0 + round((meter_x1 - meter_x0) * (smeter_segment_position(dbm) / 36.0))
@@ -2861,16 +2867,16 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     for text, x, color, size in labels:
         draw_text(text_cache, x, 10, text, color, size, False, True, "cm")
 
-    # Major calibration lines reach above and below the trace, while the
-    # shorter intermediate lines make the scale feel continuous rather than
-    # like a row of LED pixels.
+    # Major calibration lines reach equally above and below the trace. The
+    # short midpoint ticks use the same symmetric treatment, so the dBm row
+    # does not accidentally read as the only side with fine graduation.
     major_ticks = ((-121, tick), (-109, tick), (-97, tick), (-85, tick), (-73, tick), (-53, red), (-33, red))
     for dbm, color in major_ticks:
         x = dbx(dbm)
-        draw_logical_line(x, 26, x, 51, color, 2)
+        draw_logical_line(x, trace_y - 14, x, trace_y + 14, color, 2)
     for dbm in (-115, -103, -91, -79, -63, -43):
         x = dbx(dbm)
-        draw_logical_line(x, 34, x, 50, rail, 1)
+        draw_logical_line(x, trace_y - 6, x, trace_y + 6, rail, 1)
 
     draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (124, 149, 156, 190), 2)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
@@ -2878,7 +2884,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_color, 6)
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
-    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 32, True, True, "rm")
+    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 28, True, True, "rm")
     draw_text(text_cache, meter_x0 - 32, trace_y, "dBm", (164, 184, 188), 13, True, True, "lm")
     draw_logical_circle(
         live_x,
@@ -2891,13 +2897,13 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # live marker, so a changing signal remains easy to read at a glance.
     if peak_dbm is not None and peak_dbm > smeter_dbm + 0.75:
         peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
-        draw_logical_line(peak_x, 30, peak_x, 52, (182, 197, 200, 178), 1)
+        draw_logical_line(peak_x, trace_y - 11, peak_x, trace_y + 11, (182, 197, 200, 178), 1)
 
     # A simple 20 dB cadence follows the reference instrument style. The
     # labels are calibrated through the same nonlinear S-unit mapping above.
     for dbm in (-120, -100, -80, -60, -40):
-        draw_text(text_cache, dbx(dbm), 62, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
-    draw_text(text_cache, meter_x1 + 16, 62, "dBm", dbm_color[:3], 13, True, True, "lm")
+        draw_text(text_cache, dbx(dbm), 65, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
+    draw_text(text_cache, meter_x1 + 16, 65, "dBm", dbm_color[:3], 13, True, True, "lm")
 
 
 def read_cpu_temp_c():
@@ -3238,7 +3244,7 @@ class DesktopAudioPlayer:
 
     def write(self, data):
         if data:
-            if DESKTOP_AUDIO_VOLUME < 0.995:
+            if audioop is not None and DESKTOP_AUDIO_VOLUME < 0.995:
                 data = audioop.mul(data, 2, DESKTOP_AUDIO_VOLUME)
             self.stream.write(data)
         return len(data)
