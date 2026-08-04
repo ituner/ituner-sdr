@@ -44,15 +44,22 @@ NATIVE_W = 400
 NATIVE_H = 960
 LOGICAL_W = 960
 LOGICAL_H = 320
+BASE_LOGICAL_W = LOGICAL_W
+BASE_LOGICAL_H = LOGICAL_H
 ACTIVE_H = 400
 VISIBLE_Y_OFFSET = ACTIVE_H - LOGICAL_H
 DESKTOP_MODE = False
+DESKTOP_1280_MODE = False
 DESKTOP_AUDIO_VOLUME = 1.0
 WATERFALL_Y0 = sdr_ui.TOP_H + sdr_ui.RULER_H - 12
 WATERFALL_Y1 = 292
 WATERFALL_FOCUS_Y0 = sdr_ui.TOP_H
 WATERFALL_FOCUS_Y1 = LOGICAL_H
+DESKTOP_1280_MAIN_W = 1024
+DESKTOP_1280_NAV_W = 256
+DESKTOP_1280_STATUS_Y = 452
 SPECTRUM_H = 70
+SPECTRUM_WIDE_H = 140
 SPECTRUM_RAISE_Y = 12
 SPECTRUM_BINS = 240
 SPECTRUM_PEAK_HOLD_SECONDS = 10.0
@@ -117,6 +124,20 @@ ZOOM_GROUP_BOX = (16, 194, 248, 260)
 FILTER_TOGGLE_BOX = (740, 190, 828, 262)
 SPECTRUM_TOGGLE_BOX = (850, 190, 938, 262)
 VIEW_GROUP_BOX = (742, 188, 946, 264)
+BASE_ZOOM_MINUS_BOX = ZOOM_MINUS_BOX
+BASE_ZOOM_PLUS_BOX = ZOOM_PLUS_BOX
+BASE_ZOOM_GROUP_BOX = ZOOM_GROUP_BOX
+BASE_FILTER_TOGGLE_BOX = FILTER_TOGGLE_BOX
+BASE_SPECTRUM_TOGGLE_BOX = SPECTRUM_TOGGLE_BOX
+BASE_VIEW_GROUP_BOX = VIEW_GROUP_BOX
+# The 480 px desktop test keeps its persistent ruler/status band at the
+# bottom. Place its transient view controls immediately above that band.
+WIDE_ZOOM_MINUS_BOX = (24, 345, 96, 405)
+WIDE_ZOOM_PLUS_BOX = (168, 345, 240, 405)
+WIDE_ZOOM_GROUP_BOX = (16, 342, 248, 408)
+WIDE_FILTER_TOGGLE_BOX = (780, 340, 868, 410)
+WIDE_SPECTRUM_TOGGLE_BOX = (890, 340, 978, 410)
+WIDE_VIEW_GROUP_BOX = (782, 338, 986, 412)
 HOME_BOX = (30, 13, 102, 71)
 # The top instruments share one right alignment. Home is intentionally the
 # single left-anchored control.
@@ -732,6 +753,51 @@ def search_key_at(x, y, mode):
     return None
 
 
+def frequency_entry_layout():
+    """Large temporary MHz keypad for the 1024x480 radio canvas."""
+    if not DESKTOP_1280_MODE:
+        return None
+    panel = (724, 0, 1024, 480)
+    entry = (757, 18, 991, 76)
+    commands = (
+        ("BACK", (757, 400, 827, 470)),
+        ("CLEAR", (839, 400, 909, 470)),
+        ("CANCEL", (921, 400, 991, 470)),
+    )
+    keys = []
+    labels = (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"), (".", "0", "ENTER"))
+    for row, row_labels in enumerate(labels):
+        y0 = 88 + row * 78
+        for column, label in enumerate(row_labels):
+            x0 = 757 + column * 82
+            keys.append((label, (x0, y0, x0 + 70, y0 + 70)))
+    return panel, entry, commands, tuple(keys)
+
+
+def frequency_entry_action_at(x, y):
+    layout = frequency_entry_layout()
+    if layout is None:
+        return None
+    _panel, _entry, commands, keys = layout
+    for label, box in commands:
+        if contains(box, x, y):
+            return label
+    for label, box in keys:
+        if contains(box, x, y):
+            return label
+    return None
+
+
+def parse_frequency_entry_mhz(value):
+    """Accept MHz primarily, while tolerating a pasted kHz value."""
+    try:
+        numeric = float(value.strip())
+    except (TypeError, ValueError):
+        return None
+    frequency_khz = numeric * 1000.0 if numeric <= 30.0 else numeric
+    return frequency_khz if 0.0 <= frequency_khz <= 30000.0 else None
+
+
 ZOOM_OSD_SECONDS = 1.4
 CONTROL_QUIET_SECONDS = 5.0
 CONTROL_FADE_SECONDS = 0.65
@@ -750,16 +816,44 @@ def set_display_orientation(orientation):
     DISPLAY_ORIENTATION = orientation
 
 
-def configure_output(desktop=False):
+def configure_output(desktop=False, desktop_1280=False):
     """Select the Pi framebuffer geometry or a native landscape desktop window."""
-    global NATIVE_W, NATIVE_H, ACTIVE_H, VISIBLE_Y_OFFSET, DESKTOP_MODE
+    global NATIVE_W, NATIVE_H, ACTIVE_H, VISIBLE_Y_OFFSET, DESKTOP_MODE, DESKTOP_1280_MODE
+    global LOGICAL_W, LOGICAL_H, WF_TEX_W, WF_TEX_H
+    global ZOOM_MINUS_BOX, ZOOM_PLUS_BOX, ZOOM_GROUP_BOX
+    global FILTER_TOGGLE_BOX, SPECTRUM_TOGGLE_BOX, VIEW_GROUP_BOX
     DESKTOP_MODE = bool(desktop)
-    if DESKTOP_MODE:
+    DESKTOP_1280_MODE = bool(desktop_1280)
+    if DESKTOP_1280_MODE:
+        ZOOM_MINUS_BOX, ZOOM_PLUS_BOX, ZOOM_GROUP_BOX = WIDE_ZOOM_MINUS_BOX, WIDE_ZOOM_PLUS_BOX, WIDE_ZOOM_GROUP_BOX
+        FILTER_TOGGLE_BOX, SPECTRUM_TOGGLE_BOX, VIEW_GROUP_BOX = WIDE_FILTER_TOGGLE_BOX, WIDE_SPECTRUM_TOGGLE_BOX, WIDE_VIEW_GROUP_BOX
+    else:
+        ZOOM_MINUS_BOX, ZOOM_PLUS_BOX, ZOOM_GROUP_BOX = BASE_ZOOM_MINUS_BOX, BASE_ZOOM_PLUS_BOX, BASE_ZOOM_GROUP_BOX
+        FILTER_TOGGLE_BOX, SPECTRUM_TOGGLE_BOX, VIEW_GROUP_BOX = BASE_FILTER_TOGGLE_BOX, BASE_SPECTRUM_TOGGLE_BOX, BASE_VIEW_GROUP_BOX
+    if DESKTOP_1280_MODE:
+        # This is a real wider UI canvas, not a scaled 960x320 image. The
+        # waterfall path receives 1024 samples and all controls stay 1:1.
+        LOGICAL_W, LOGICAL_H = DESKTOP_1280_MAIN_W, 480
+        WF_TEX_W, WF_TEX_H = LOGICAL_W, 480
+        kiwi.LOGICAL_W = LOGICAL_W
+        kiwi.LOGICAL_H = LOGICAL_H
+        NATIVE_W, NATIVE_H = DESKTOP_1280_MAIN_W + DESKTOP_1280_NAV_W, 480
+        ACTIVE_H = LOGICAL_H
+        VISIBLE_Y_OFFSET = 0
+    elif DESKTOP_MODE:
+        LOGICAL_W, LOGICAL_H = BASE_LOGICAL_W, BASE_LOGICAL_H
+        WF_TEX_W, WF_TEX_H = LOGICAL_W, 256
+        kiwi.LOGICAL_W = LOGICAL_W
+        kiwi.LOGICAL_H = LOGICAL_H
         # Desktop development uses the logical SDR orientation directly.
         NATIVE_W, NATIVE_H = LOGICAL_W, LOGICAL_H
         ACTIVE_H = LOGICAL_H
         VISIBLE_Y_OFFSET = 0
     else:
+        LOGICAL_W, LOGICAL_H = BASE_LOGICAL_W, BASE_LOGICAL_H
+        WF_TEX_W, WF_TEX_H = LOGICAL_W, 256
+        kiwi.LOGICAL_W = LOGICAL_W
+        kiwi.LOGICAL_H = LOGICAL_H
         NATIVE_W, NATIVE_H = 400, 960
         ACTIVE_H = 400
         VISIBLE_Y_OFFSET = ACTIVE_H - LOGICAL_H
@@ -791,6 +885,11 @@ def contains_with_guard(box, x, y, guard=CONTROL_TOUCH_GUARD_PX):
 
 
 def is_waterfall_tune_touch(x, y):
+    if DESKTOP_1280_MODE:
+        # The wider development display has enough room for its controls to
+        # coexist with direct tuning. Any pixel of the radio canvas may begin
+        # a swipe; exact control taps are handled earlier in the event chain.
+        return 0 <= x < DESKTOP_1280_MAIN_W and 0 <= y < LOGICAL_H
     if not (WATERFALL_TUNE_X0 <= x <= WATERFALL_TUNE_X1 and WATERFALL_Y0 <= y <= WATERFALL_Y1):
         return False
     return not contains_with_guard(ZOOM_GROUP_BOX, x, y) and not contains_with_guard(VIEW_GROUP_BOX, x, y)
@@ -1463,6 +1562,52 @@ def draw_textured_quad(tex, x0, y0, x1, y1, u0, v0, u1, v1, alpha=1.0):
     GL.glEnd()
 
 
+def draw_native_rect(x0, y0, x1, y1, color):
+    """Draw directly in the desktop-wide framebuffer coordinate system."""
+    GL.glDisable(GL.GL_TEXTURE_2D)
+    GL.glColor4f(*rgba(color))
+    GL.glBegin(GL.GL_QUADS)
+    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+        GL.glVertex2f(x, y)
+    GL.glEnd()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+
+
+def draw_native_line(x0, y0, x1, y1, color, width=1):
+    GL.glDisable(GL.GL_TEXTURE_2D)
+    GL.glColor4f(*rgba(color))
+    GL.glLineWidth(width)
+    GL.glBegin(GL.GL_LINES)
+    GL.glVertex2f(x0, y0)
+    GL.glVertex2f(x1, y1)
+    GL.glEnd()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+
+
+def draw_native_textured_quad(tex, x0, y0, x1, y1, u0=0, v0=0, u1=1, v1=1, alpha=1.0):
+    GL.glEnable(GL.GL_TEXTURE_2D)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+    GL.glColor4f(1, 1, 1, clamp(alpha, 0.0, 1.0))
+    GL.glBegin(GL.GL_QUADS)
+    for x, y, u, v in ((x0, y0, u0, v0), (x1, y0, u1, v0), (x1, y1, u1, v1), (x0, y1, u0, v1)):
+        GL.glTexCoord2f(u, v)
+        GL.glVertex2f(x, y)
+    GL.glEnd()
+
+
+def draw_native_text(text_cache, x, y, text, color, size, bold=False, mono=False, anchor="lt", alpha=1.0, family=None):
+    tex, width, height = text_cache.texture(text, size, color, bold=bold, mono=mono, family=family)
+    if "m" in anchor:
+        y -= height / 2
+    elif "b" in anchor:
+        y -= height
+    if "c" in anchor:
+        x -= width / 2
+    elif "r" in anchor:
+        x -= width
+    draw_native_textured_quad(tex, x, y, x + width, y + height, alpha=alpha)
+
+
 class WaterfallTexture:
     def __init__(self):
         self.tex = GL.glGenTextures(1)
@@ -1748,11 +1893,22 @@ def draw_home_button(text_cache, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
+def frequency_right_x():
+    """Keep the wide-layout frequency/meter cluster aligned as one unit."""
+    return FREQUENCY_RIGHT_X + (50 if DESKTOP_1280_MODE else 0)
+
+
+def frequency_display_box(text_cache, freq_khz):
+    frequency_text = sdr_ui.format_freq(freq_khz)
+    width = text_cache.font(50, bold=True, family="Liberation Sans").size(frequency_text)[0]
+    return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
+
+
 def top_instrument_layout(text_cache, freq_khz):
     """Return a right-aligned mode/frequency cluster next to the S-meter."""
     frequency_text = sdr_ui.format_freq(freq_khz)
     frequency_width = text_cache.font(50, bold=True, family="Liberation Sans").size(frequency_text)[0]
-    frequency_left = FREQUENCY_RIGHT_X - frequency_width
+    frequency_left = frequency_right_x() - frequency_width
     radio_x1 = frequency_left - RADIO_SETUP_GAP
     radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
     return frequency_text, radio_box
@@ -2675,6 +2831,34 @@ def draw_main_menu(text_cache, scroll):
         draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
+def desktop_1280_nav_box(index):
+    """Persistent 2-column Home navigation rail for the 1280x480 desktop test."""
+    col = index % 2
+    row = index // 2
+    x0 = DESKTOP_1280_MAIN_W + 7 + col * 125
+    y0 = 38 + row * 109
+    return x0, y0, x0 + 117, y0 + 101
+
+
+def draw_desktop_1280_navigation(text_cache):
+    if not DESKTOP_1280_MODE:
+        return
+    x0 = DESKTOP_1280_MAIN_W
+    draw_native_rect(x0, 0, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
+    draw_native_line(x0, 0, x0, NATIVE_H, (104, 124, 133, 170), 1)
+    draw_native_line(x0 + 12, 27, NATIVE_W - 12, 27, (124, 147, 157, 105), 1)
+    draw_native_text(text_cache, x0 + 14, 14, "NAV", (178, 202, 209), 14, True, True, "lm")
+    for index, (kind, label) in enumerate(MENU_ITEMS):
+        bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
+        draw_native_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
+        draw_native_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
+        draw_native_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
+        draw_native_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
+        draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
+        tex, _tex_w, _tex_h = menu_icon_texture(text_cache, kind, label)
+        draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
+
+
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
     x0, y0, x1, y1 = box
     fill = (72, 77, 81, 255) if selected else (38, 42, 46, 255)
@@ -2702,6 +2886,68 @@ def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mod
             box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
             label = "BACK" if key == "<" else ("ENTER" if key == ">" else ("SPACE" if key == "~" else key))
             draw_picker_button(text_cache, box, label, 19 if key in "<>~" else 26)
+
+
+def draw_frequency_keypad(text_cache, value, invalid=False):
+    """Render a focused frequency-entry workspace over the live waterfall."""
+    layout = frequency_entry_layout()
+    if layout is None:
+        return
+    panel, entry, commands, keys = layout
+    x0, y0, x1, y1 = panel
+    draw_logical_rect(x0, y0, x1, y1, (6, 17, 24, 235))
+    draw_logical_line(x0 + 12, y0, x1 - 12, y0, (132, 166, 175, 112), 1)
+    draw_logical_line(x0, y0 + 1, x0, y1, (52, 82, 91, 135), 1)
+    draw_logical_line(x1, y0 + 1, x1, y1, (52, 82, 91, 135), 1)
+    ex0, ey0, ex1, ey1 = entry
+    draw_logical_rect(ex0, ey0, ex1, ey1, (3, 10, 15, 240))
+    edge = (236, 142, 105, 255) if invalid else (112, 205, 188, 255)
+    draw_logical_line(ex0, ey0, ex1, ey0, edge, 2)
+    draw_logical_line(ex0, ey1, ex1, ey1, (83, 123, 131, 140), 1)
+    draw_logical_line(ex0, ey0, ex0, ey1, (52, 93, 102, 150), 1)
+    draw_logical_line(ex1, ey0, ex1, ey1, (52, 93, 102, 150), 1)
+    draw_text(
+        text_cache,
+        ex0 + 12,
+        (ey0 + ey1) / 2,
+        value or "0.000000",
+        (169, 189, 193),
+        32,
+        True,
+        False,
+        "lm",
+        family="Liberation Sans",
+    )
+    draw_text(text_cache, ex1 - 10, (ey0 + ey1) / 2, "MHz", (132, 151, 155), 13, True, False, "rm", family="Liberation Sans")
+
+    def draw_key(box, label, size, active=False):
+        bx0, by0, bx1, by1 = box
+        fill = (15, 38, 47, 238) if active else (13, 29, 37, 235)
+        top = (87, 205, 196, 195) if active else (109, 145, 153, 130)
+        side = (42, 78, 88, 165)
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        draw_logical_line(bx0, by0, bx1, by0, top, 1)
+        draw_logical_line(bx0, by0, bx0, by1, side, 1)
+        draw_logical_line(bx1, by0, bx1, by1, side, 1)
+        draw_logical_line(bx0, by1, bx1, by1, (27, 54, 62, 190), 1)
+        draw_text(
+            text_cache,
+            (bx0 + bx1) / 2,
+            (by0 + by1) / 2 + 1,
+            label,
+            (223, 238, 240),
+            size,
+            True,
+            False,
+            "cm",
+            family="Liberation Sans",
+        )
+
+    for label, box in commands:
+        caption = {"BACK": "DEL", "CLEAR": "CLR", "CANCEL": "X"}[label]
+        draw_key(box, caption, 13 if label != "CANCEL" else 22)
+    for label, box in keys:
+        draw_key(box, "OK" if label == "ENTER" else label, 17 if label == "ENTER" else 28, active=label == "ENTER")
 
 
 def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, family=None):
@@ -2838,9 +3084,13 @@ def smeter_dbm_at_segment(position):
 
 
 def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
-    meter_x0 = 690
+    # The 1024 px desktop canvas has a dedicated right-side instrument lane.
+    # Shift the complete calibrated assembly into it without changing the
+    # production 960 px layout.
+    smeter_x_offset = 50 if DESKTOP_1280_MODE else 0
+    meter_x0 = 690 + smeter_x_offset
     # Leave the usual right quiet margin while fitting a full calibrated scale.
-    meter_x1 = 915
+    meter_x1 = 915 + smeter_x_offset
     green = (222, 255, 228, 255)
     red = (230, 20, 42, 255)
     rail = (160, 178, 182, 155)
@@ -2849,7 +3099,10 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     dbm_color = (189, 198, 201, 225)
     # The trace is the optical center of one calibrated assembly: S-units
     # above, dBm below. Keep every tick balanced around this datum.
-    trace_y = 39
+    # The taller desktop scope gives this assembly a little more room below
+    # the frequency readout. Keep the entire calibrated instrument together.
+    smeter_y_offset = 6 if DESKTOP_1280_MODE else 0
+    trace_y = 39 + smeter_y_offset
 
     def dbx(dbm):
         return meter_x0 + round((meter_x1 - meter_x0) * (smeter_segment_position(dbm) / 36.0))
@@ -2858,10 +3111,13 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # level are the information; decorative glass treatment obscures both.
     draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (27, 43, 51, 230), 6)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
-    live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
     # The active trace belongs behind the scale too. The calibrated tick
-    # geometry must remain uninterrupted at every level.
-    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_color, 4)
+    # geometry must remain uninterrupted at every level. Blue covers the
+    # normal S range; only the explicitly red +20-and-up region turns red.
+    red_start_x = dbx(SMETER_PLUS20_DBM)
+    draw_logical_line(meter_x0, trace_y, min(live_x, red_start_x), trace_y, blue, 4)
+    if live_x > red_start_x:
+        draw_logical_line(red_start_x, trace_y, live_x, trace_y, red, 4)
 
     labels = (
         ("S", dbx(-121) - 40, green[:3], 14),
@@ -2874,7 +3130,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         ("+40", dbx(-33), red[:3], 14),
     )
     for text, x, color, size in labels:
-        draw_text(text_cache, x, 12, text, color, size, False, True, "cm")
+        draw_text(text_cache, x, 12 + smeter_y_offset, text, color, size, False, True, "cm")
 
     # Major calibration lines reach equally above and below the trace. The
     # short midpoint ticks use the same symmetric treatment, so the dBm row
@@ -2896,7 +3152,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         live_x,
         trace_y - 1,
         5,
-        (139, 234, 255, 255) if smeter_dbm < SMETER_S9_DBM else (255, 174, 178, 255),
+        (139, 234, 255, 255) if smeter_dbm < SMETER_PLUS20_DBM else (255, 174, 178, 255),
     )
     draw_logical_circle(live_x - 1, trace_y - 2.5, 1.6, (237, 254, 255, 245))
     # The retained peak is a quiet vertical reference, independent from the
@@ -2908,8 +3164,8 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # A simple 20 dB cadence follows the reference instrument style. The
     # labels are calibrated through the same nonlinear S-unit mapping above.
     for dbm in (-120, -100, -80, -60, -40):
-        draw_text(text_cache, dbx(dbm), 62, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
-    draw_text(text_cache, meter_x1 + 16, 62, "dBm", dbm_color[:3], 13, True, True, "lm")
+        draw_text(text_cache, dbx(dbm), 62 + smeter_y_offset, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
+    draw_text(text_cache, meter_x1 + 16, 62 + smeter_y_offset, "dBm", dbm_color[:3], 13, True, True, "lm")
 
 
 def read_cpu_temp_c():
@@ -3045,12 +3301,24 @@ def draw_ruler(
         hz += major_step_hz
 
 
-def draw_spectrum(y0, y1, values, peak_values=()):
-    """Draw a compact amplitude-versus-frequency trace from the Kiwi W/F bins."""
+def draw_spectrum(y0, y1, values, peak_values=(), text_cache=None):
+    """Draw the amplitude-versus-frequency trace from the Kiwi W/F bins."""
     draw_logical_rect(0, y0, LOGICAL_W, y1, (2, 7, 12, 236))
-    for fraction in (0.25, 0.50, 0.75):
+    show_dbm_scale = (y1 - y0) >= 120
+    scale_fractions = (0.0, 0.25, 0.50, 0.75, 1.0) if show_dbm_scale else (0.25, 0.50, 0.75)
+    for fraction in scale_fractions:
         y = y0 + (y1 - y0) * fraction
-        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 34), 1)
+        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 52 if show_dbm_scale else 34), 1)
+    if show_dbm_scale and text_cache is not None:
+        # This is a visual reference scale for the normalized Kiwi spectrum,
+        # not a calibrated RF-power measurement.
+        draw_logical_rect(0, y0, 47, y1, (3, 11, 17, 114))
+        for fraction, label in zip(scale_fractions, ("-40", "-60", "-80", "-100", "-120")):
+            y = y0 + (y1 - y0) * fraction
+            draw_logical_line(40, y, 51, y, (129, 176, 187, 150), 1)
+            label_y = clamp(y, y0 + 10, y1 - 10)
+            draw_text(text_cache, 36, label_y, label, (160, 194, 201), 13, True, True, "rm")
+        draw_text(text_cache, 42, y0 + 10, "dBm", (111, 161, 171), 10, True, True, "lm")
     if not values:
         return
     top = y0 + 3
@@ -3143,7 +3411,7 @@ def draw_ui(
     # pixel density, leaving headroom inside the short instrument strip.
     # Right alignment keeps this cluster locked to the S-meter while the
     # number of MHz digits changes between bands.
-    draw_text(text_cache, FREQUENCY_RIGHT_X, 39, frequency_text, (169, 189, 193), 50, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, frequency_right_x(), 39, frequency_text, (169, 189, 193), 50, True, False, "rm", family="Liberation Sans")
     draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
@@ -3181,7 +3449,18 @@ def draw_ui(
     draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
     draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", controls_alpha)
     draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", controls_alpha)
-    draw_text(text_cache, 132, 227, "ZOOM", (211, 227, 231), 16, True, True, "cm", controls_alpha)
+    draw_text(
+        text_cache,
+        (ZOOM_MINUS_BOX[2] + ZOOM_PLUS_BOX[0]) / 2,
+        (ZOOM_GROUP_BOX[1] + ZOOM_GROUP_BOX[3]) / 2,
+        "ZOOM",
+        (211, 227, 231),
+        16,
+        True,
+        True,
+        "cm",
+        controls_alpha,
+    )
     draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v3", (100,), controls_alpha)
     draw_filter_toggle_button(text_cache, controls_alpha)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, controls_alpha)
@@ -3825,6 +4104,8 @@ def main():
     parser.add_argument("--fps", type=float, default=60.0)
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
     parser.add_argument("--desktop", action="store_true", help="run locally in a mouse-driven 960x320 landscape development window")
+    parser.add_argument("--desktop-1280", action="store_true", help="run a local 1280x480 desktop test with a persistent 256 px navigation rail")
+    parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
@@ -3908,13 +4189,15 @@ def main():
     args.swipe_inertia_strength = max(0.0, args.swipe_inertia_strength)
     args.swipe_inertia_tau = max(0.05, args.swipe_inertia_tau)
 
+    if args.desktop_1280:
+        args.desktop = True
     if args.desktop:
         # Synthetic mouse events are already logical coordinates; do not apply
         # the touchscreen's hardware-specific axis corrections a second time.
         args.invert_x = False
         args.invert_y = False
         args.swap_x_y = False
-    configure_output(args.desktop)
+    configure_output(args.desktop, args.desktop_1280)
     set_display_orientation(args.orientation)
     setup_gl(args.desktop)
     print(
@@ -4056,6 +4339,10 @@ def main():
     filter_drag_audio_center = 0.0
     filter_drag_limit = FILTER_LIMIT_HZ
     filter_custom_width = False
+    frequency_entry_open = args.frequency_keypad_preview
+    frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
+    frequency_entry_invalid = False
+    frequency_entry_replace_on_digit = False
     station_scroll = 0
     digital_mode = "DIG"
     tune_step_hz = args.tune_step_hz
@@ -4113,7 +4400,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -4222,6 +4509,44 @@ def main():
         dj_current_khz = frequency
         dj_drag_remainder_hz = 0.0
         wake_controls()
+
+    def activate_navigation_item(index):
+        """Open a Home tool directly from the persistent 1280 desktop rail."""
+        nonlocal menu_open, picker_open, radio_setup_open, display_setup_open
+        nonlocal audio_panel_open, audio_volume, tests_panel_open, dj_tune_open
+        nonlocal filter_panel_open, station_scroll, station_query, station_sort
+        nonlocal stations, search_open
+        kind, label = MENU_ITEMS[index]
+        wake_controls()
+        menu_open = False
+        if kind == "rx":
+            picker_open = True
+            radio_setup_open = display_setup_open = audio_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+            station_scroll = 0
+            station_query = ""
+            station_sort = "location"
+            stations = filtered_stations(all_stations, station_query, station_sort)
+            search_open = False
+        elif kind == "display":
+            display_setup_open = True
+            picker_open = radio_setup_open = audio_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "radio":
+            radio_setup_open = True
+            picker_open = display_setup_open = audio_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "audio":
+            audio_volume = pipewire_default_volume()
+            audio_panel_open = True
+            picker_open = radio_setup_open = display_setup_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "tests":
+            tests_panel_open = True
+            picker_open = radio_setup_open = display_setup_open = audio_panel_open = False
+            dj_tune_open = filter_panel_open = False
+        else:
+            print(f"gl navigation {label} pending", flush=True)
 
     def restore_dj_origin(reason):
         nonlocal dj_current_khz, dj_drag_remainder_hz
@@ -4377,6 +4702,8 @@ def main():
         window_w, window_h = pygame.display.get_window_size()
         nx = clamp(round(position[0] * NATIVE_W / max(1, window_w)), 0, NATIVE_W - 1)
         ny = clamp(round(position[1] * NATIVE_H / max(1, window_h)), 0, NATIVE_H - 1)
+        if DESKTOP_1280_MODE:
+            return clamp(nx, 0, LOGICAL_W - 1), clamp(ny, 0, LOGICAL_H - 1)
         if DESKTOP_MODE:
             return nx, ny
         if args.orientation == "normal":
@@ -4408,6 +4735,19 @@ def main():
             write(kiwi.EV_KEY, kiwi.BTN_TOUCH, 0)
         write(kiwi.EV_SYN, kiwi.SYN_REPORT, 0)
 
+    def desktop_navigation_item(position):
+        if not DESKTOP_1280_MODE:
+            return None
+        window_w, window_h = pygame.display.get_window_size()
+        nx = round(position[0] * NATIVE_W / max(1, window_w))
+        ny = round(position[1] * NATIVE_H / max(1, window_h))
+        if nx < DESKTOP_1280_MAIN_W:
+            return None
+        for index in range(len(MENU_ITEMS)):
+            if contains(desktop_1280_nav_box(index), nx, ny):
+                return index
+        return None
+
 
     try:
         while not stop_event.is_set():
@@ -4416,6 +4756,8 @@ def main():
                     stop_event.set()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
+                elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and (nav_index := desktop_navigation_item(event.pos)) is not None:
+                    activate_navigation_item(nav_index)
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     desktop_pointer_down = True
                     emit_desktop_touch(event.pos, "down")
@@ -4500,12 +4842,18 @@ def main():
                             swipe_started = False
                             fast_sweep_zoom_applied = False
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open else freq_khz
+                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open and not frequency_entry_open else freq_khz
                             start_span = display_span
                             candidate_freq = start_freq
                             if waterfall_focus_progress() > 0.01:
                                 wake_controls()
                                 gesture = "wake"
+                            elif frequency_entry_open and (frequency_layout := frequency_entry_layout()) and contains(frequency_layout[0], x, y):
+                                gesture = "frequency_entry"
+                            elif frequency_entry_open:
+                                gesture = "frequency_entry_outside"
+                            elif DESKTOP_1280_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
+                                gesture = "frequency_entry_open"
                             elif contains(HOME_BOX, x, y):
                                 gesture = "home"
                             elif contains(top_instrument_layout(text_cache, display_freq)[1], x, y):
@@ -4684,7 +5032,62 @@ def main():
                             if swipe_started:
                                 advance_waterfall_drag(x)
                     else:
-                        if touch_started and gesture == "home":
+                        if touch_started and gesture == "frequency_entry":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = frequency_entry_action_at(x, y)
+                                if action == "BACK":
+                                    frequency_entry_value = frequency_entry_value[:-1]
+                                    frequency_entry_invalid = False
+                                    frequency_entry_replace_on_digit = False
+                                elif action == "CLEAR":
+                                    frequency_entry_value = ""
+                                    frequency_entry_invalid = False
+                                    frequency_entry_replace_on_digit = False
+                                elif action == "CANCEL":
+                                    frequency_entry_open = False
+                                    frequency_entry_invalid = False
+                                    frequency_entry_replace_on_digit = False
+                                elif action == "ENTER":
+                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value)
+                                    if entered_khz is None:
+                                        frequency_entry_invalid = True
+                                    else:
+                                        state.set_view(freq_khz=entered_khz)
+                                        display_freq = entered_khz
+                                        candidate_freq = entered_khz
+                                        animate_to(entered_khz, display_span, 0.16)
+                                        apply_band_default(entered_khz)
+                                        remember_current_view()
+                                        frequency_entry_open = False
+                                        frequency_entry_invalid = False
+                                        frequency_entry_replace_on_digit = False
+                                elif action and action in ".0123456789" and len(frequency_entry_value) < 12:
+                                    if frequency_entry_replace_on_digit:
+                                        frequency_entry_value = ""
+                                        frequency_entry_replace_on_digit = False
+                                    if action != "." or "." not in frequency_entry_value:
+                                        frequency_entry_value += action
+                                        frequency_entry_invalid = False
+                            wake_controls()
+                        elif touch_started and gesture == "frequency_entry_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                frequency_entry_open = False
+                                frequency_entry_invalid = False
+                                frequency_entry_replace_on_digit = False
+                            wake_controls()
+                        elif touch_started and gesture == "frequency_entry_open":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                frequency_entry_value = f"{display_freq / 1000.0:.6f}"
+                                frequency_entry_invalid = False
+                                frequency_entry_replace_on_digit = True
+                                frequency_entry_open = True
+                                menu_open = picker_open = radio_setup_open = display_setup_open = False
+                                audio_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "home":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 wake_controls()
@@ -5453,7 +5856,7 @@ def main():
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
-            spectrum_h = SPECTRUM_H if spectrum_enabled else 0
+            spectrum_h = (SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H) if spectrum_enabled else 0
             # Keep scope compact and behind the top instrumentation. Its lower
             # edge now sits beside the S-meter, freeing the waterfall below.
             spectrum_y0 = sdr_ui.TOP_H - 8 if spectrum_enabled else sdr_ui.TOP_H + sdr_ui.RULER_H * (1.0 - focus_progress) - SPECTRUM_RAISE_Y * (1.0 - focus_progress)
@@ -5475,7 +5878,7 @@ def main():
             row_offset = round(waterfall_y0 - focus_waterfall_y0)
             wf_texture.draw(0, waterfall_y0, LOGICAL_W, waterfall_y1, row_offset=row_offset)
             if spectrum_enabled:
-                draw_spectrum(spectrum_y0, spectrum_y1, spectrum_values, spectrum_peak_values)
+                draw_spectrum(spectrum_y0, spectrum_y1, spectrum_values, spectrum_peak_values, text_cache)
             overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
             draw_filter_overlay(
                 display_span,
@@ -5485,7 +5888,7 @@ def main():
                 waterfall_y1,
                 0.82,
             )
-            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open else controls_alpha(now)
+            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else controls_alpha(now)
             selected_station_name = next(
                 (
                     bottom_station_title(name, location)
@@ -5517,6 +5920,8 @@ def main():
                 station_name=selected_station_name,
                 connection_status=connection_status,
             )
+            if frequency_entry_open:
+                draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
             if picker_open:
@@ -5578,6 +5983,7 @@ def main():
                 if osd_remaining < fade:
                     alpha = int(220 * osd_remaining / fade)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
+            draw_desktop_1280_navigation(text_cache)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
