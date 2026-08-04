@@ -16,11 +16,15 @@ import threading
 import time
 import re
 import html
+import audioop
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-os.environ.setdefault("SDL_VIDEODRIVER", "kmsdrm")
+# The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
+# on its native Cocoa backend so --desktop can open a normal dev window.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "kmsdrm")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame
@@ -36,6 +40,8 @@ LOGICAL_W = 960
 LOGICAL_H = 320
 ACTIVE_H = 400
 VISIBLE_Y_OFFSET = ACTIVE_H - LOGICAL_H
+DESKTOP_MODE = False
+DESKTOP_AUDIO_VOLUME = 1.0
 WATERFALL_Y0 = sdr_ui.TOP_H + sdr_ui.RULER_H - 12
 WATERFALL_Y1 = 292
 WATERFALL_FOCUS_Y0 = sdr_ui.TOP_H
@@ -736,6 +742,22 @@ def set_display_orientation(orientation):
     DISPLAY_ORIENTATION = orientation
 
 
+def configure_output(desktop=False):
+    """Select the Pi framebuffer geometry or a same-orientation desktop window."""
+    global NATIVE_W, NATIVE_H, ACTIVE_H, VISIBLE_Y_OFFSET, DESKTOP_MODE
+    DESKTOP_MODE = bool(desktop)
+    if DESKTOP_MODE:
+        # This is the active 960x320 interface rotated into the requested
+        # physical 320x960 development window, with no Pi-only blank margin.
+        NATIVE_W, NATIVE_H = LOGICAL_H, LOGICAL_W
+        ACTIVE_H = LOGICAL_H
+        VISIBLE_Y_OFFSET = 0
+    else:
+        NATIVE_W, NATIVE_H = 400, 960
+        ACTIVE_H = 400
+        VISIBLE_Y_OFFSET = ACTIVE_H - LOGICAL_H
+
+
 def rgba(color):
     return tuple(channel / 255.0 for channel in color)
 
@@ -1323,10 +1345,13 @@ class TextCache:
         return cached
 
 
-def setup_gl():
+def setup_gl(desktop=False):
     pygame.init()
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-    screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), pygame.OPENGL | pygame.FULLSCREEN)
+    flags = pygame.OPENGL if desktop else pygame.OPENGL | pygame.FULLSCREEN
+    screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), flags)
+    if desktop:
+        pygame.display.set_caption("Kiwi SDR Desktop")
     GL.glViewport(0, 0, NATIVE_W, NATIVE_H)
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
@@ -3184,6 +3209,47 @@ def filter_view_offsets(low_cut, high_cut):
     return low_cut - center_hz, high_cut - center_hz
 
 
+class DesktopAudioPlayer:
+    """Small CoreAudio-backed PCM sink with the same write interface as pw-cat."""
+
+    def __init__(self, rate):
+        import sounddevice
+
+        self.stream = sounddevice.RawOutputStream(
+            samplerate=rate,
+            channels=1,
+            dtype="int16",
+            latency="low",
+        )
+        self.stream.start()
+        # Existing stream workers write to player.stdin. Point it back at this
+        # lightweight compatibility sink instead of forking their data path.
+        self.stdin = self
+
+    def write(self, data):
+        if data:
+            if DESKTOP_AUDIO_VOLUME < 0.995:
+                data = audioop.mul(data, 2, DESKTOP_AUDIO_VOLUME)
+            self.stream.write(data)
+        return len(data)
+
+    def close(self):
+        try:
+            self.stream.stop()
+            self.stream.close()
+        except Exception:
+            pass
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.close()
+
+    def wait(self, timeout=None):
+        return 0
+
+
 def start_audio_player(args):
     """Open the SDR's mono PCM stream on PipeWire's current default sink.
 
@@ -3193,6 +3259,12 @@ def start_audio_player(args):
     """
     if not args.audio:
         return None
+    if args.desktop:
+        try:
+            return DesktopAudioPlayer(args.audio_rate)
+        except Exception as exc:
+            print(f"gl desktop audio {exc}", flush=True)
+            return None
     try:
         return subprocess.Popen(
             [
@@ -3218,6 +3290,9 @@ def start_audio_player(args):
 def stop_audio_player(player):
     if not player:
         return
+    if isinstance(player, DesktopAudioPlayer):
+        player.close()
+        return
     try:
         if player.stdin:
             player.stdin.close()
@@ -3235,6 +3310,8 @@ def stop_audio_player(player):
 
 def pipewire_default_volume():
     """Read the real default-sink level used by the USB speaker path."""
+    if DESKTOP_MODE:
+        return DESKTOP_AUDIO_VOLUME
     try:
         result = subprocess.run(
             ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
@@ -3251,7 +3328,11 @@ def pipewire_default_volume():
 
 def set_pipewire_default_volume(volume):
     """Set the actual current default sink, not a UI-only volume value."""
+    global DESKTOP_AUDIO_VOLUME
     volume = clamp(float(volume), 0.0, 1.0)
+    if DESKTOP_MODE:
+        DESKTOP_AUDIO_VOLUME = volume
+        return volume
     try:
         result = subprocess.run(
             ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{volume:.2f}"],
@@ -3721,6 +3802,7 @@ def main():
     parser.add_argument("--spectrum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fps", type=float, default=60.0)
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
+    parser.add_argument("--desktop", action="store_true", help="run locally in a mouse-driven 320x960 macOS/Linux development window")
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
@@ -3804,8 +3886,15 @@ def main():
     args.swipe_inertia_strength = max(0.0, args.swipe_inertia_strength)
     args.swipe_inertia_tau = max(0.05, args.swipe_inertia_tau)
 
+    if args.desktop:
+        # Synthetic mouse events are already logical coordinates; do not apply
+        # the touchscreen's hardware-specific axis corrections a second time.
+        args.invert_x = False
+        args.invert_y = False
+        args.swap_x_y = False
+    configure_output(args.desktop)
     set_display_orientation(args.orientation)
-    setup_gl()
+    setup_gl(args.desktop)
     print(
         "OpenGL:",
         GL.glGetString(GL.GL_VENDOR).decode(),
@@ -3852,10 +3941,16 @@ def main():
     wf_thread.start()
     snd_thread.start()
 
-    event_path = args.event or kiwi.find_touch_event()
-    ev = event_path.open("rb", buffering=0)
+    desktop_event_writer = None
+    if args.desktop:
+        event_read_fd, desktop_event_writer = os.pipe()
+        ev = os.fdopen(event_read_fd, "rb", buffering=0)
+        print(f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, wheel zooms", flush=True)
+    else:
+        event_path = args.event or kiwi.find_touch_event()
+        ev = event_path.open("rb", buffering=0)
+        print(f"gl touch input {event_path}", flush=True)
     os.set_blocking(ev.fileno(), False)
-    print(f"gl touch input {event_path}", flush=True)
 
     clock = pygame.time.Clock()
     start = time.monotonic()
@@ -4249,6 +4344,42 @@ def main():
         last_swipe_time = now_swipe
         active_swipe_boost = 1.0 + repeat_swipe_count * args.swipe_repeat_boost
 
+    desktop_pointer_down = False
+
+    def desktop_logical_point(position):
+        """Map a mouse position in the rotated desktop window into UI space."""
+        window_w, window_h = pygame.display.get_window_size()
+        nx = clamp(round(position[0] * NATIVE_W / max(1, window_w)), 0, NATIVE_W - 1)
+        ny = clamp(round(position[1] * NATIVE_H / max(1, window_h)), 0, NATIVE_H - 1)
+        if args.orientation == "normal":
+            return clamp(ny, 0, LOGICAL_W - 1), clamp(ACTIVE_H - 1 - nx, 0, LOGICAL_H - 1)
+        return clamp(NATIVE_H - 1 - ny, 0, LOGICAL_W - 1), clamp(nx - VISIBLE_Y_OFFSET, 0, LOGICAL_H - 1)
+
+    def emit_desktop_touch(position, phase):
+        """Feed mouse input to the established EV_ABS touch gesture pipeline."""
+        if desktop_event_writer is None:
+            return
+        x, y = desktop_logical_point(position)
+
+        def write(kind, code, value):
+            os.write(desktop_event_writer, kiwi.EVENT_STRUCT.pack(0, 0, kind, code, int(value)))
+
+        write(kiwi.EV_ABS, kiwi.ABS_X, x)
+        write(kiwi.EV_ABS, kiwi.ABS_Y, y)
+        if phase == "down":
+            write(kiwi.EV_ABS, kiwi.ABS_MT_SLOT, 0)
+            write(kiwi.EV_ABS, kiwi.ABS_MT_TRACKING_ID, 1)
+            write(kiwi.EV_ABS, kiwi.ABS_MT_POSITION_X, x)
+            write(kiwi.EV_ABS, kiwi.ABS_MT_POSITION_Y, y)
+            write(kiwi.EV_KEY, kiwi.BTN_TOUCH, 1)
+        elif phase == "move":
+            write(kiwi.EV_ABS, kiwi.ABS_MT_POSITION_X, x)
+            write(kiwi.EV_ABS, kiwi.ABS_MT_POSITION_Y, y)
+        else:
+            write(kiwi.EV_ABS, kiwi.ABS_MT_TRACKING_ID, -1)
+            write(kiwi.EV_KEY, kiwi.BTN_TOUCH, 0)
+        write(kiwi.EV_SYN, kiwi.SYN_REPORT, 0)
+
 
     try:
         while not stop_event.is_set():
@@ -4257,6 +4388,16 @@ def main():
                     stop_event.set()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
+                elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    desktop_pointer_down = True
+                    emit_desktop_touch(event.pos, "down")
+                elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_pointer_down:
+                    emit_desktop_touch(event.pos, "move")
+                elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    emit_desktop_touch(event.pos, "up")
+                    desktop_pointer_down = False
+                elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
+                    change_zoom(1 if event.y > 0 else -1)
 
             while True:
                 try:
@@ -5430,6 +5571,8 @@ def main():
         scout_probe.stop()
         stop_event.set()
         ev.close()
+        if desktop_event_writer is not None:
+            os.close(desktop_event_writer)
         wf_thread.join(timeout=1.5)
         snd_thread.join(timeout=1.5)
         elapsed = max(0.001, time.monotonic() - start)
