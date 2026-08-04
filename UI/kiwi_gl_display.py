@@ -2854,6 +2854,12 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     def dbx(dbm):
         return meter_x0 + round((meter_x1 - meter_x0) * (smeter_segment_position(dbm) / 36.0))
 
+    # Put the passive channel behind the calibration. Its recess should not
+    # erase the midpoint of the vertical scale marks.
+    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 13, 21, 235), 8)
+    draw_logical_line(meter_x0, trace_y - 3, meter_x1, trace_y - 3, (112, 143, 152, 112), 1)
+    draw_logical_line(meter_x0, trace_y + 3, meter_x1, trace_y + 3, (1, 6, 11, 225), 1)
+
     labels = (
         ("S", dbx(-121) - 40, green[:3], 14),
         ("1", dbx(-121), green[:3], 14),
@@ -2878,11 +2884,6 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         x = dbx(dbm)
         draw_logical_line(x, trace_y - 6, x, trace_y + 6, rail, 1)
 
-    # A shallow, calibrated instrument channel. Keep the treatment precise;
-    # this is a measurement display, not an illuminated decorative capsule.
-    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 13, 21, 235), 8)
-    draw_logical_line(meter_x0, trace_y - 3, meter_x1, trace_y - 3, (112, 143, 152, 112), 1)
-    draw_logical_line(meter_x0, trace_y + 3, meter_x1, trace_y + 3, (1, 6, 11, 225), 1)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
     live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
     live_shadow = (94, 0, 16, 255) if smeter_dbm >= SMETER_S9_DBM else (0, 18, 116, 255)
