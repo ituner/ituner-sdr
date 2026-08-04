@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 54889)
-Total output lines: 4591
-
 #!/usr/bin/env python3
 import argparse
 from collections import deque
@@ -47,6 +44,28 @@ SPECTRUM_H = 70
 SPECTRUM_RAISE_Y = 12
 SPECTRUM_BINS = 240
 SPECTRUM_PEAK_HOLD_SECONDS = 10.0
+SCOUT_HEAT_REMANENCE_SECONDS = 1800.0
+SCOUT_RF_SAMPLE_SECONDS = 1.5
+SCOUT_RF_CONNECT_TIMEOUT_SECONDS = 7.0
+SCOUT_SNR_NOISE_SECONDS = 0.5
+SCOUT_SNR_OFFSET_KHZ = 5.0
+SCOUT_PROMOTION_MARGIN_DB = 8.0
+SCOUT_PROMOTION_COOLDOWN_SECONDS = 45.0
+SCOUT_PROMOTION_REVIEW_SECONDS = 8.0
+CONSTELLATION_MIN_SEPARATION_KM = 180.0
+CONSTELLATION_WARM_RADIUS_KM = 3218.7  # 2,000 statute miles
+SCOUT_INITIAL_HEAT_RADIUS_KM = 1609.3  # 1,000 statute miles
+SCOUT_SEARCH_START_KM = 805.0  # 500 statute miles
+SCOUT_SEARCH_STEP_KM = 805.0
+SCOUT_SEARCH_MAX_KM = 16000.0
+SCOUT_LOCAL_ROUNDS = 3
+SCOUT_GLOBAL_CELL_BONUS_KM = 3500.0
+# Each rendered SNR tile is four times the former area. This deliberately
+# favors a legible, receiver-backed field over a sparse cloud of tiny points.
+SCOUT_HEAT_GRID_PIXELS = 40.0
+SCOUT_HEAT_AREA_MULTIPLIER = 4.0
+SCOUT_ROTATION_SECONDS = 15.0
+SCOUT_MAX_TOTAL = 100
 # A responsive radio meter should rise nearly immediately, settle back more
 # gently, and retain a brief, decaying indication of recent peaks.
 SMETER_ATTACK_SECONDS = 0.085
@@ -91,7 +110,7 @@ HOME_BOX = (30, 13, 102, 71)
 # single left-anchored control.
 # The S legend sits left of the LED bars. Align to that true visual edge,
 # leaving a 28 px quiet gap before the meter typography rather than its bars.
-FREQUENCY_RIGHT_X = 590
+FREQUENCY_RIGHT_X = 570
 RADIO_SETUP_WIDTH = 74
 RADIO_SETUP_GAP = 10
 RADIO_SETUP_BOX = (260, 10, 334, 54)
@@ -176,8 +195,17 @@ TEST_DJ_BOX = (492, 112, 918, 166)
 TEST_PATTERN_BOX = (42, 178, 918, 224)
 TEST_RUN_BOX = (42, 236, 918, 280)
 GLOBE_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
-GLOBE_MAP_BOX = (20, 28, 576, 320)
-GLOBE_BACK_BOX = (770, 14, 930, 50)
+GLOBE_MAP_BOX = (12, 40, 580, 258)
+GLOBE_BACK_BOX = (466, 6, 578, 34)
+GLOBE_INFO_BOX = (594, 0, 948, LOGICAL_H)
+GLOBE_SCOUT_BAR_BOX = (12, 268, 580, 316)
+# Constellation keeps three listenable streams warm. The four scouts are
+# represented by the heat field, rather than a geometric receiver polygon.
+GLOBE_STATION_BOXES = (
+    (604, 46, 938, 126),
+    (604, 134, 938, 214),
+    (604, 222, 938, 302),
+)
 def load_globe_coastlines():
     """Load genuine Natural Earth land outlines, decimated for the small panel."""
     try:
@@ -255,7 +283,6 @@ PUBLIC_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.js
 STATION_HEALTH_CACHE = Path.home() / ".local/state/kiwi-gl-station-health.json"
 GLOBE_DIRECTORY_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
 GLOBE_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-globe-receivers.json"
-GLOBE_ACTION_RADIUS_KM = 805.0  # 500 statute miles
 station_health_write_lock = threading.Lock()
 
 
@@ -471,41 +498,148 @@ def globe_haversine_km(a, b):
     return 12742.0 * math.asin(min(1.0, math.sqrt(h)))
 
 
-def globe_destination(center, bearing_radians, distance_km):
-    """Return a point on a small geodesic action circle around a receiver."""
-    angular = distance_km / 6371.0
-    lat1, lon1 = math.radians(center["lat"]), math.radians(center["lon"])
-    lat2 = math.asin(math.sin(lat1) * math.cos(angular) + math.cos(lat1) * math.sin(angular) * math.cos(bearing_radians))
-    lon2 = lon1 + math.atan2(
-        math.sin(bearing_radians) * math.sin(angular) * math.cos(lat1),
-        math.cos(angular) - math.sin(lat1) * math.sin(lat2),
-    )
-    return {"lat": math.degrees(lat2), "lon": math.degrees(lon2)}
+def choose_constellation(center, receivers, health):
+    """Pick three warmed listeners and four nearby rotating scout targets.
+
+    Listener selection uses the persisted stream-readiness observation when it
+    exists, while keeping stations geographically distinct. Scouts deliberately
+    stay nearby so their heat field describes local reception alternatives, not
+    an arbitrary pentagon or other artificial shape.
+    """
+    if not center:
+        return [], []
+
+    def readiness(receiver):
+        return health.get(receiver["server"], {}).get("audio") is True
+
+    listeners = [center]
+    remaining = [receiver for receiver in receivers if receiver["server"] != center["server"]]
+    while remaining and len(listeners) < 3:
+        def stream_score(receiver):
+            anchor_distance = globe_haversine_km(center, receiver)
+            nearest_listener = min(globe_haversine_km(receiver, listener) for listener in listeners)
+            readiness_penalty = 0.0 if readiness(receiver) else 0.35
+            radius_penalty = abs(anchor_distance - CONSTELLATION_WARM_RADIUS_KM) / CONSTELLATION_WARM_RADIUS_KM
+            separation_penalty = max(0.0, CONSTELLATION_MIN_SEPARATION_KM - nearest_listener) / CONSTELLATION_MIN_SEPARATION_KM
+            return readiness_penalty + radius_penalty + separation_penalty
+
+        selected = min(remaining, key=stream_score)
+        listeners.append(selected)
+        remaining.remove(selected)
+
+    listener_servers = {receiver["server"] for receiver in listeners}
+    scouts = [
+        receiver for receiver in sorted(receivers, key=lambda receiver: globe_haversine_km(center, receiver))
+        if receiver["server"] not in listener_servers
+    ][:4]
+    return listeners, scouts
 
 
-def choose_globe_triangle(anchor, receivers, health):
-    """Choose a nearby, non-collinear receiver triangle with healthy audio first."""
-    pool = sorted((r for r in receivers if r["server"] != anchor["server"]), key=lambda r: globe_haversine_km(anchor, r))[:18]
-    if len(pool) < 2:
-        return [anchor] + pool
+def choose_scout_promotion(listeners, active_server, scouts, scout_measurements, listener_measurements, now):
+    """Return a materially stronger scout that can safely replace a standby."""
     best = None
-    for left_index, left in enumerate(pool[:-1]):
-        for right in pool[left_index + 1:]:
-            # Equirectangular local area is adequate for ranking nearby candidates.
-            x1 = (left["lon"] - anchor["lon"]) * math.cos(math.radians(anchor["lat"]))
-            y1 = left["lat"] - anchor["lat"]
-            x2 = (right["lon"] - anchor["lon"]) * math.cos(math.radians(anchor["lat"]))
-            y2 = right["lat"] - anchor["lat"]
-            area = abs(x1 * y2 - y1 * x2)
-            distance = globe_haversine_km(anchor, left) + globe_haversine_km(anchor, right)
-            score = area / max(400.0, distance)
-            if best is None or score > best[0]:
-                best = (score, left, right)
-    triangle = [anchor, best[1], best[2]] if best else [anchor] + pool[:2]
-    # First healthy known audio endpoint becomes the audition receiver. The
-    # remaining vertices stay in distance order as automatic fallbacks.
-    healthy = [r for r in triangle if health.get(r["server"], {}).get("audio") is True]
-    return healthy + [r for r in triangle if r not in healthy]
+    for scout in scouts:
+        scout_sample = scout_measurements.get(scout["server"], {})
+        scout_dbm = scout_sample.get("smeter")
+        if scout_dbm is None or now - scout_sample.get("sampled_at", 0.0) > 12.0:
+            continue
+        for index, listener in enumerate(listeners):
+            if listener["server"] == active_server:
+                continue
+            listener_sample = listener_measurements.get(listener["server"], {})
+            listener_dbm = listener_sample.get("smeter")
+            if listener_dbm is None or now - listener_sample.get("sampled_at", 0.0) > 12.0:
+                continue
+            remaining = listeners[:index] + listeners[index + 1:]
+            if not all(globe_haversine_km(scout, other) >= CONSTELLATION_MIN_SEPARATION_KM for other in remaining):
+                continue
+            improvement = scout_dbm - listener_dbm
+            if improvement < SCOUT_PROMOTION_MARGIN_DB:
+                continue
+            candidate = (improvement, index, scout, scout_dbm, listener_dbm)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+    return best
+
+
+def choose_expanding_scouts(anchor, receivers, listeners, scanned_servers, inner_radius_km):
+    """Select the next unscanned four receivers from the outward search front."""
+    listener_servers = {receiver["server"] for receiver in listeners}
+    available = [
+        receiver for receiver in receivers
+        if receiver["server"] not in listener_servers and receiver["server"] not in scanned_servers
+    ]
+    outer_radius_km = min(SCOUT_SEARCH_MAX_KM, inner_radius_km + SCOUT_SEARCH_STEP_KM)
+    in_front = [
+        receiver for receiver in available
+        if inner_radius_km < globe_haversine_km(anchor, receiver) <= outer_radius_km
+    ]
+    # Sparse receiver regions should continue outward, rather than revisit the
+    # same local stations simply because one annulus did not contain four sites.
+    farther = [receiver for receiver in available if globe_haversine_km(anchor, receiver) > outer_radius_km]
+    candidates = sorted(in_front, key=lambda receiver: globe_haversine_km(anchor, receiver))
+    candidates.extend(sorted(farther, key=lambda receiver: globe_haversine_km(anchor, receiver)))
+    references = [receiver for receiver in receivers if receiver["server"] in scanned_servers] + list(listeners)
+    return choose_tetris_coverage_scouts(candidates, references), outer_radius_km
+
+
+def scout_coverage_cell(receiver):
+    """Coarse geographic tile used only to avoid dense-city oversampling."""
+    return (int((receiver["lat"] + 90.0) // 20.0), int((receiver["lon"] + 180.0) // 30.0))
+
+
+def scout_heat_coverage_cells(receiver):
+    """Cells visually covered by one enlarged SNR square footprint."""
+    lat_cell = int((receiver["lat"] + 90.0) // 15.0)
+    lon_cell = int((receiver["lon"] + 180.0) // 15.0) % 24
+    # Four times the original area means twice its linear span.  The resulting
+    # 5 x 5 cell footprint lets the scout planner place tiles like a loose
+    # tessellation, rather than re-measuring the same city cluster.
+    return {
+        (max(0, min(11, lat_cell + d_lat)), (lon_cell + d_lon) % 24)
+        for d_lat in range(-2, 3)
+        for d_lon in range(-2, 3)
+    }
+
+
+def choose_tetris_coverage_scouts(candidates, references):
+    """Pick four sites that add the most previously uncovered heatmap area."""
+    available = list(candidates)
+    selected = []
+    covered = set().union(*(scout_heat_coverage_cells(receiver) for receiver in references)) if references else set()
+    while available and len(selected) < 4:
+        def coverage_score(receiver):
+            footprint = scout_heat_coverage_cells(receiver)
+            novel_cells = len(footprint - covered)
+            nearest_km = min((globe_haversine_km(receiver, point) for point in references + selected), default=0.0)
+            # New footprint is dominant; distance breaks ties so that equally
+            # useful tiles do not bunch around one another.
+            return novel_cells * 10000.0 + nearest_km
+
+        choice = max(available, key=coverage_score)
+        selected.append(choice)
+        covered.update(scout_heat_coverage_cells(choice))
+        available.remove(choice)
+    return selected
+
+
+def choose_global_coverage_scouts(receivers, listeners, scan_history, scanned_servers):
+    """Farthest-first sampling for a broad, receiver-backed global heatmap."""
+    listener_servers = {receiver["server"] for receiver in listeners}
+    available = [
+        receiver for receiver in receivers
+        if receiver["server"] not in listener_servers and receiver["server"] not in scanned_servers
+    ]
+    references = [receiver for receiver, _scanned_at, _smeter_dbm, _snr_db in scan_history] + list(listeners)
+    return choose_tetris_coverage_scouts(available, references)
+
+
+def format_scout_measurement(sample):
+    smeter_dbm = sample.get("smeter") if sample else None
+    snr_db = sample.get("snr") if sample else None
+    smeter_label = f"{smeter_dbm:.1f}dBm" if isinstance(smeter_dbm, (int, float)) else "pending"
+    snr_label = f"SNR{snr_db:+.1f}" if isinstance(snr_db, (int, float)) else "SNR?"
+    return f"{smeter_label}/{snr_label}"
 
 
 def filtered_stations(stations, query, sort_mode):
@@ -870,6 +1004,7 @@ class SharedState:
         # These map directly to Kiwi's existing SND `SET squelch` command.
         self.squelch_enabled = False
         self.audio_generation = 0
+        self.external_audio = False
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
@@ -1019,6 +1154,14 @@ class SharedState:
     def audio_snapshot(self):
         with self.lock:
             return self.squelch_enabled, self.audio_generation
+
+    def set_external_audio(self, enabled):
+        with self.lock:
+            self.external_audio = bool(enabled)
+
+    def external_audio_snapshot(self):
+        with self.lock:
+            return self.external_audio
 
     def set_squelch(self, enabled):
         with self.lock:
@@ -1499,7 +1642,2562 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
 
         color = (219, 223, 225, 178)
         dim = (174, 180, 184, 54)
-        baselin…24889 tokens truncated…pan {start_span:.1f} kHz", flush=True)
+        baseline = h / 2 - 1
+        left = w / 2 - 14
+        right = w / 2 + 14
+        pygame.draw.line(hi, dim, (p(10), p(baseline)), (p(w - 10), p(baseline)), p(1.2))
+        pygame.draw.rect(hi, dim, (p(left), p(baseline - 14), p(right - left), p(14)))
+        pygame.draw.line(hi, color, (p(left), p(baseline - 18)), (p(left), p(baseline)), p(2.0))
+        pygame.draw.line(hi, color, (p(right), p(baseline - 18)), (p(right), p(baseline)), p(2.0))
+        pygame.draw.line(hi, (221, 245, 246, 122), (p(w / 2), p(baseline - 20)), (p(w / 2), p(baseline + 2)), p(1.1))
+        label = text_cache.font(16 * scale, bold=True, mono=True).render("FILTER", True, color[:3])
+        hi.blit(label, ((hi.get_width() - label.get_width()) // 2, p(h - 27)))
+        surface = pygame.transform.smoothscale(hi, (w, h))
+        cached = text_cache.surface_texture(key, surface)
+    tex, tex_w, tex_h = cached
+    draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
+
+
+def draw_gear_button(text_cache):
+    x0, y0, x1, y1 = GEAR_BOX
+    draw_logical_rect(x0, y0, x1, y1, (3, 9, 14, 58))
+    cx = (x0 + x1) / 2
+    cy = (y0 + y1) / 2
+    ring = (206, 238, 242, 128)
+    color = (226, 246, 249, 210)
+    for ox, oy in ((0, 0), (1, 0), (0, 1)):
+        draw_logical_line(x0 + 8 + ox, y0 + 6 + oy, x1 - 8 + ox, y0 + 6 + oy, ring, 1)
+        draw_logical_line(x0 + 8 + ox, y1 - 6 + oy, x1 - 8 + ox, y1 - 6 + oy, ring, 1)
+        draw_logical_line(x0 + 6 + ox, y0 + 8 + oy, x0 + 6 + ox, y1 - 8 + oy, ring, 1)
+        draw_logical_line(x1 - 6 + ox, y0 + 8 + oy, x1 - 6 + ox, y1 - 8 + oy, ring, 1)
+    for angle in range(0, 360, 45):
+        radians = math.radians(angle)
+        r0 = 9 if angle % 90 == 0 else 8
+        r1 = 15 if angle % 90 == 0 else 13
+        draw_logical_line(
+            cx + math.sin(radians) * r0,
+            cy - math.cos(radians) * r0,
+            cx + math.sin(radians) * r1,
+            cy - math.cos(radians) * r1,
+            color,
+            3,
+        )
+    for angle0, angle1 in ((0, 50), (70, 140), (160, 230), (250, 340)):
+        prev = None
+        for angle in range(angle0, angle1 + 1, 10):
+            radians = math.radians(angle)
+            point = (cx + math.sin(radians) * 10, cy - math.cos(radians) * 10)
+            if prev is not None:
+                draw_logical_line(prev[0], prev[1], point[0], point[1], color, 2)
+            prev = point
+    draw_logical_rect(cx - 3, cy - 3, cx + 3, cy + 3, color)
+
+
+def draw_home_button(text_cache, alpha=1.0):
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = HOME_BOX
+    w, h, scale = int(x1 - x0), int(y1 - y0), 3
+    hi = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
+    def p(value):
+        return int(round(value * scale))
+    # Material-style Home: large outline, calm boundary, no label or filled tile.
+    cx, cy = w / 2, h / 2 + 2
+    color = (231, 235, 237, 238)
+    roof = [(p(cx - 25), p(cy - 3)), (p(cx), p(cy - 25)), (p(cx + 25), p(cy - 3))]
+    pygame.draw.lines(hi, color, False, roof, p(3))
+    pygame.draw.line(hi, color, (p(cx - 18), p(cy - 2)), (p(cx - 18), p(cy + 18)), p(3))
+    pygame.draw.line(hi, color, (p(cx + 18), p(cy - 2)), (p(cx + 18), p(cy + 18)), p(3))
+    pygame.draw.line(hi, color, (p(cx - 18), p(cy + 18)), (p(cx + 18), p(cy + 18)), p(3))
+    pygame.draw.line(hi, color, (p(cx - 5), p(cy + 18)), (p(cx - 5), p(cy + 7)), p(3))
+    pygame.draw.line(hi, color, (p(cx + 5), p(cy + 18)), (p(cx + 5), p(cy + 7)), p(3))
+    surface = pygame.transform.smoothscale(hi, (w, h))
+    tex, tex_w, tex_h = text_cache.surface_texture("home_button_v11", surface)
+    draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
+
+
+def top_instrument_layout(text_cache, freq_khz):
+    """Return a right-aligned mode/frequency cluster next to the S-meter."""
+    frequency_text = sdr_ui.format_freq(freq_khz)
+    frequency_width = text_cache.font(50, bold=True, family="Liberation Sans").size(frequency_text)[0]
+    frequency_left = FREQUENCY_RIGHT_X - frequency_width
+    radio_x1 = frequency_left - RADIO_SETUP_GAP
+    radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
+    return frequency_text, radio_box
+
+
+def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BOX):
+    x0, y0, x1, y1 = box
+    gap = 4
+    mid = (y0 + y1) / 2
+    pills = ((y0 + 2, mid - gap / 2, mode.upper(), True), (mid + gap / 2, y1 - 2, digital.upper(), digital.upper() not in ("", "OFF", "NONE")))
+    for py0, py1, label, active in pills:
+        fill = (48, 122, 72, 155) if active else (67, 72, 76, 100)
+        edge = (95, 232, 132, 210) if active else (143, 149, 153, 125)
+        draw_logical_rect(x0 + 2, py0, x1 - 2, py1, fill)
+        draw_logical_line(x0 + 8, py0 + 1, x1 - 8, py0 + 1, edge, 1)
+        text_color = (232, 255, 238) if active else (150, 155, 158)
+        draw_text(text_cache, (x0 + x1) / 2, (py0 + py1) / 2, label, text_color, 13, True, True, "cm")
+
+
+def radio_option_at(x, y, mode_page):
+    if contains(RADIO_MODE_PREV_BOX, x, y):
+        return "mode_page", -1
+    if contains(RADIO_MODE_NEXT_BOX, x, y):
+        return "mode_page", 1
+    _page_label, modes = KIWI_MODE_PAGES[mode_page]
+    for mode, box in zip(modes, RADIO_MODE_BOXES):
+        if contains(box, x, y):
+            return "mode", mode
+    for digital, box in RADIO_DIGITAL_OPTIONS:
+        if contains(box, x, y):
+            return "digital", digital
+    for step_hz, box in RADIO_STEP_OPTIONS:
+        if contains(box, x, y):
+            return "step", step_hz
+    return None
+
+
+def draw_radio_option(text_cache, box, label, active):
+    x0, y0, x1, y1 = box
+    fill = (32, 87, 89, 220) if active else (18, 29, 38, 184)
+    line = (94, 235, 225, 220) if active else (115, 140, 151, 78)
+    color = (238, 252, 250) if active else (173, 196, 201)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    if active:
+        draw_logical_line(x0 + 12, y1 - 5, x1 - 12, y1 - 5, (91, 242, 227, 230), 2)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 16, True, True, "cm")
+
+
+def draw_radio_setup_panel(text_cache, mode, digital, step_hz, mode_page):
+    x0, y0, x1, y1 = RADIO_PANEL_BOX
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    page_label, modes = KIWI_MODE_PAGES[mode_page]
+    draw_text(text_cache, 32, 94, "RADIO", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 32, 106, page_label, (139, 180, 187), 12, True, True, "lm")
+    draw_display_control(text_cache, RADIO_MODE_PREV_BOX, "<", False)
+    draw_text(text_cache, 846, 93, f"{mode_page + 1}/{len(KIWI_MODE_PAGES)}", (169, 194, 199), 13, True, True, "cm")
+    draw_display_control(text_cache, RADIO_MODE_NEXT_BOX, ">", False)
+    draw_text(text_cache, 32, 221, "DIGITAL", (139, 180, 187), 12, True, True, "lm")
+    draw_text(text_cache, 354, 221, "STEP", (139, 180, 187), 12, True, True, "lm")
+    for option, box in zip(modes, RADIO_MODE_BOXES):
+        draw_radio_option(text_cache, box, option, option == mode)
+    for option, box in RADIO_DIGITAL_OPTIONS:
+        draw_radio_option(text_cache, box, option, option == digital)
+    for option, box in RADIO_STEP_OPTIONS:
+        label = f"{option // 1000}k" if option >= 1000 else str(option)
+        draw_radio_option(text_cache, box, label, option == step_hz)
+
+
+def display_option_at(x, y):
+    if contains(DISPLAY_SPECTRUM_BOX, x, y):
+        return "spectrum", None
+    if contains(DISPLAY_AUTO_BOX, x, y):
+        return "auto", None
+    for name, box, delta in (
+        ("floor", DISPLAY_FLOOR_MINUS_BOX, -4),
+        ("floor", DISPLAY_FLOOR_PLUS_BOX, 4),
+        ("ceil", DISPLAY_CEIL_MINUS_BOX, -4),
+        ("ceil", DISPLAY_CEIL_PLUS_BOX, 4),
+    ):
+        if contains(box, x, y):
+            return name, delta
+    for rate, box, _label in DISPLAY_RATE_BOXES:
+        if contains(box, x, y):
+            return "rate", rate
+    for palette, box, _label in DISPLAY_PALETTE_BOXES:
+        if contains(box, x, y):
+            return "palette", palette
+    return None
+
+
+def draw_display_control(text_cache, box, label, active=False):
+    x0, y0, x1, y1 = box
+    fill = (86, 91, 95, 214) if active else (18, 29, 38, 152)
+    line = (213, 218, 221, 194) if active else (118, 143, 151, 78)
+    color = (236, 239, 241) if active else (177, 199, 204)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    size = 42 if label in ("-", "+") else 15
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, size, True, True, "cm")
+
+
+def audio_volume_at_x(x):
+    x0, _y0, x1, _y1 = AUDIO_VOLUME_BOX
+    return clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
+
+
+def draw_audio_panel(text_cache, volume, squelch_enabled, low_cut, high_cut, output_available):
+    """Touch-first controls backed by the live PipeWire and Kiwi SND state."""
+    x0, y0, x1, y1 = AUDIO_PANEL_BOX
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 92, "AUDIO", (229, 243, 246), 18, True, True, "lm")
+    output_label = "USB SPEAKER" if output_available else "OUTPUT UNAVAILABLE"
+    output_color = (104, 230, 151) if output_available else (242, 163, 104)
+    draw_text(text_cache, 148, 92, output_label, output_color, 13, True, True, "lm")
+    # AGC is actively configured in the current Kiwi SND setup; present it as
+    # status rather than offering unsupported manual gain semantics.
+    draw_text(text_cache, 906, 92, "AGC AUTO", (151, 180, 187), 13, False, True, "rm")
+
+    vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
+    level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
+    track_y = (vy0 + vy1) / 2 + 8
+    draw_text(text_cache, vx0, vy0 + 4, "SPEAKER VOLUME", (164, 193, 198), 14, True, True, "lt")
+    draw_text(text_cache, vx1, vy0 + 4, f"{round(level * 100):.0f}%", (232, 246, 248), 22, True, True, "rt")
+    draw_logical_rect(vx0, track_y - 7, vx1, track_y + 7, (22, 35, 43, 230))
+    draw_logical_rect(vx0, track_y - 7, vx0 + (vx1 - vx0) * level, track_y + 7, (68, 209, 151, 226))
+    knob_x = vx0 + (vx1 - vx0) * level
+    draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, (226, 246, 246, 255))
+
+    def panel_button(box, title, detail, active=False):
+        bx0, by0, bx1, by1 = box
+        fill = (28, 78, 67, 230) if active else (18, 29, 38, 210)
+        line = (92, 229, 174, 220) if active else (115, 140, 151, 78)
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        draw_logical_line(bx0, by0, bx1, by0, line, 1)
+        draw_logical_line(bx0, by1, bx1, by1, line, 1)
+        draw_logical_line(bx0, by0, bx0, by1, line, 1)
+        draw_logical_line(bx1, by0, bx1, by1, line, 1)
+        draw_text(text_cache, bx0 + 20, by0 + 23, title, (230, 246, 247), 16, True, True, "lm")
+        draw_text(text_cache, bx0 + 20, by0 + 51, detail, (112, 223, 169) if active else (153, 185, 191), 13, False, True, "lm")
+
+    panel_button(AUDIO_SQUELCH_BOX, "SQUELCH", "ON" if squelch_enabled else "OFF", squelch_enabled)
+    panel_button(AUDIO_FILTER_BOX, "AUDIO FILTER", format_filter_width(high_cut - low_cut), False)
+
+
+def tests_option_at(x, y):
+    if contains(TEST_GLOBE_BOX, x, y):
+        return "globe"
+    if contains(TEST_DJ_BOX, x, y):
+        return "dj"
+    if contains(TEST_PATTERN_BOX, x, y):
+        return "pattern"
+    if contains(TEST_RUN_BOX, x, y):
+        return "run"
+    return None
+
+
+def draw_tests_button(text_cache, box, title, detail, active=False):
+    x0, y0, x1, y1 = box
+    fill = (104, 53, 20, 204) if active else (18, 29, 38, 210)
+    line = (255, 184, 83, 220) if active else (115, 140, 151, 78)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, (237, 248, 248), 20, True, True, "lm")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm")
+
+
+def draw_tests_panel(text_cache, pattern_index, sweep):
+    """Dedicated, extensible diagnostics workspace; Audio remains listening-only."""
+    x0, y0, x1, y1 = TEST_PANEL_BOX
+    pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
+    _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 94, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
+    draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
+    draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
+    if sweep is None:
+        draw_tests_button(text_cache, TEST_RUN_BOX, "RUN TEST", "LIVE KIWI WATERFALL + USB AUDIO")
+    else:
+        draw_tests_button(
+            text_cache,
+            TEST_RUN_BOX,
+            "STOP",
+            f"{sweep.name}  {sweep.index}/{sweep.command_count}",
+            active=True,
+        )
+
+
+def flat_map_project(receiver, center_lon, center_lat, box, scale, longitude_offset=None):
+    """Equirectangular map projection for an unfolded, direct-manipulation world."""
+    x0, y0, x1, y1 = box
+    view_lon = 360.0 / scale
+    # Keep longitude and latitude at the same geographic scale even though
+    # this unusually wide display crops polar space at the base view.
+    view_lat = min(180.0, view_lon * (y1 - y0) / (x1 - x0))
+    raw_delta_lon = receiver["lon"] - center_lon
+    delta_lon = (
+        (raw_delta_lon + 540.0) % 360.0 - 180.0
+        if longitude_offset is None
+        else raw_delta_lon + longitude_offset
+    )
+    delta_lat = receiver["lat"] - center_lat
+    if abs(delta_lon) > view_lon / 2 or abs(delta_lat) > view_lat / 2:
+        return None
+    return (
+        (x0 + x1) / 2 + delta_lon / view_lon * (x1 - x0),
+        (y0 + y1) / 2 - delta_lat / view_lat * (y1 - y0),
+    )
+
+
+def draw_flat_coastlines(center_lon, center_lat, box, scale):
+    """Real coastlines, split at projection seams and map edges."""
+    width = box[2] - box[0]
+    # At the lower zooms the edges repeat the world, just like an unfolded
+    # cylindrical map: America can sit between Europe and Asia without voids.
+    for longitude_offset in (-360.0, 0.0, 360.0):
+        for coastline in GLOBE_COASTLINES:
+            segment = []
+            for lat, lon in coastline:
+                point = flat_map_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale, longitude_offset)
+                if point is None or (segment and abs(point[0] - segment[-1][0]) > width * 0.32):
+                    draw_logical_polyline(segment, (96, 187, 181, 166), 1)
+                    segment = []
+                if point is not None:
+                    segment.append(point)
+            draw_logical_polyline(segment, (96, 187, 181, 166), 1)
+
+
+def scout_rf_strength(smeter_dbm):
+    """Map Kiwi's useful S-meter range onto an opacity weight."""
+    if smeter_dbm is None:
+        return 0.16
+    return clamp((smeter_dbm - SMETER_FLOOR_DBM) / (SMETER_S9_DBM - SMETER_FLOOR_DBM), 0.10, 1.0)
+
+
+def scout_heat_strength(smeter_dbm, snr_db):
+    """Only measured SNR contributes to the SNR heatmap."""
+    if snr_db is None:
+        return 0.0
+    return clamp((snr_db + 5.0) / 25.0, 0.08, 1.0)
+
+
+def scout_snr_color(snr_db):
+    """Contrast bands calibrated to the observed adjacent-channel SNR proxy."""
+    if snr_db < -4.0:
+        return (111, 74, 175)
+    if snr_db < -1.0:
+        return (76, 125, 220)
+    if snr_db < 2.0:
+        return (61, 201, 194)
+    if snr_db < 5.0:
+        return (255, 186, 63)
+    return (239, 88, 75)
+
+
+def scout_heat_radius_pixels(box, scale):
+    """Approximate the enlarged readable SNR tile footprint in this view."""
+    view_lon = 360.0 / scale
+    view_lat = min(180.0, view_lon * (box[3] - box[1]) / (box[2] - box[0]))
+    pixels_per_latitude_degree = (box[3] - box[1]) / view_lat
+    return clamp(
+        (SCOUT_INITIAL_HEAT_RADIUS_KM * math.sqrt(SCOUT_HEAT_AREA_MULTIPLIER)) / 111.32 * pixels_per_latitude_degree,
+        8.0,
+        min(box[2] - box[0], box[3] - box[1]) / 2,
+    )
+
+
+def draw_constellation_heatmap(scouts, scan_history, measurements, center_lon, center_lat, box, scale, now):
+    """Render a normalized SNR surface: one value per map cell, never density."""
+    outer_radius = scout_heat_radius_pixels(box, scale)
+
+    def add_sample(receiver, smeter_dbm, snr_db, recency, samples):
+        if snr_db is None:
+            return
+        point = flat_map_project(receiver, center_lon, center_lat, box, scale)
+        if not point:
+            return
+        samples.append((point, snr_db, scout_heat_strength(smeter_dbm, snr_db), recency))
+
+    samples = []
+    for receiver, scanned_at, smeter_dbm, snr_db in scan_history:
+        age = max(0.0, now - scanned_at)
+        if age < SCOUT_HEAT_REMANENCE_SECONDS:
+            add_sample(receiver, smeter_dbm, snr_db, 0.18 + 0.52 * (1.0 - age / SCOUT_HEAT_REMANENCE_SECONDS), samples)
+    for receiver in scouts:
+        sample = measurements.get(receiver["server"], {})
+        add_sample(receiver, sample.get("smeter"), sample.get("snr"), 1.0, samples)
+
+    if not samples:
+        return
+    # Collapse nearby samples before interpolation. This keeps the Pi workload
+    # bounded and retains the best SNR in a geographic neighborhood instead of
+    # rewarding its receiver count.
+    reduced = {}
+    sample_cell_size = outer_radius * 1.5
+    for sample in samples:
+        (sample_x, sample_y), snr_db, _strength, recency = sample
+        cell = (int((sample_x - box[0]) // sample_cell_size), int((sample_y - box[1]) // sample_cell_size))
+        previous = reduced.get(cell)
+        if previous is None or (snr_db, recency) > (previous[1], previous[3]):
+            reduced[cell] = sample
+    samples = list(reduced.values())
+    # The numerator and denominator use the same distance kernel. This is a
+    # weighted average, not an additive blend: testing ten stations in one
+    # place cannot create a hotter patch than one equally good station.
+    grid = SCOUT_HEAT_GRID_PIXELS
+    for y in range(int(box[1]), int(box[3]), int(grid)):
+        for x in range(int(box[0]), int(box[2]), int(grid)):
+            center_x, center_y = x + grid / 2, y + grid / 2
+            numerator = denominator = coverage = 0.0
+            for (sample_x, sample_y), snr_db, strength, recency in samples:
+                distance = math.hypot(center_x - sample_x, center_y - sample_y)
+                if distance >= outer_radius:
+                    continue
+                weight = (1.0 - distance / outer_radius) ** 2 * recency
+                numerator += snr_db * weight
+                denominator += weight
+                coverage = max(coverage, weight)
+            if denominator <= 0.0:
+                continue
+            snr_db = numerator / denominator
+            heat_color = scout_snr_color(snr_db)
+            # Keep weak but valid SNR samples visible. Alpha is based on the
+            # nearest kernel only, so this boosts readability without making
+            # dense receiver regions look stronger.
+            quality = scout_heat_strength(None, snr_db)
+            alpha = int(72 + 178 * coverage * (0.35 + 0.65 * quality))
+            draw_logical_rect(x, y, min(x + grid, box[2]), min(y + grid, box[3]), (*heat_color, alpha))
+
+
+def nearby_scout_snr(receiver, scouts, scout_history, scout_measurements):
+    """Estimate the local SNR field at a warm receiver without retuning audio."""
+    samples = [
+        (other, snr_db)
+        for other, _at, _rf, snr_db in scout_history
+        if snr_db is not None
+    ]
+    samples.extend(
+        (other, sample.get("snr"))
+        for other in scouts
+        if (sample := scout_measurements.get(other["server"], {})).get("snr") is not None
+    )
+    radius_km = SCOUT_INITIAL_HEAT_RADIUS_KM * math.sqrt(SCOUT_HEAT_AREA_MULTIPLIER)
+    numerator = denominator = 0.0
+    for other, snr_db in samples:
+        weight = max(0.0, 1.0 - globe_haversine_km(receiver, other) / radius_km) ** 2
+        numerator += snr_db * weight
+        denominator += weight
+    return numerator / denominator if denominator else None
+
+
+def scouted_receiver_at_tap(x, y, scouts, scout_history, scout_measurements, center_lon, center_lat, box, scale):
+    """Return the measured scout represented by a heat tile under a map tap."""
+    samples = [(receiver, sampled_at) for receiver, sampled_at, _rf, snr_db in scout_history if snr_db is not None]
+    samples.extend(
+        (receiver, time.monotonic())
+        for receiver in scouts
+        if scout_measurements.get(receiver["server"], {}).get("snr") is not None
+    )
+    candidates = []
+    for receiver, sampled_at in samples:
+        for longitude_offset in (-360.0, 0.0, 360.0):
+            point = flat_map_project(receiver, center_lon, center_lat, box, scale, longitude_offset)
+            if point:
+                candidates.append((math.hypot(point[0] - x, point[1] - y), -sampled_at, receiver))
+    if not candidates:
+        return None
+    distance, _age, receiver = min(candidates)
+    # A tile is 40 logical pixels wide; accepting one tile radius makes a tap
+    # anywhere on its visible SNR square select the actual measured receiver.
+    return receiver if distance <= SCOUT_HEAT_GRID_PIXELS * 1.15 else None
+
+
+def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listener_measurements, scouts, scout_history, scout_measurements, replacement_slots, scout_total, active_server, anchor, status):
+    """Constellation receiver model with listener streams and scout heatmaps."""
+    x0, y0, x1, y1 = GLOBE_PANEL_BOX
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 0, 0, 174))
+    draw_logical_rect(x0, y0, x1, y1, (6, 13, 20, 220))
+    draw_logical_line(x0, y0, x1, y0, (116, 170, 183, 100), 1)
+    draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
+    draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
+    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
+    map_box = GLOBE_MAP_BOX
+    draw_logical_rect(*map_box, (10, 35, 55, 245))
+    draw_logical_line(map_box[0], map_box[1], map_box[2], map_box[1], (86, 173, 195, 150), 1)
+    draw_logical_line(map_box[0], map_box[3], map_box[2], map_box[3], (86, 173, 195, 150), 1)
+    center_lon, center_lat = math.degrees(yaw), math.degrees(pitch)
+    for latitude in (-60, -30, 0, 30, 60):
+        a = flat_map_project({"lat": latitude, "lon": center_lon - 180 / scale}, center_lon, center_lat, map_box, scale)
+        b = flat_map_project({"lat": latitude, "lon": center_lon + 180 / scale}, center_lon, center_lat, map_box, scale)
+        if a and b:
+            draw_logical_line(a[0], a[1], b[0], b[1], (80, 148, 170, 42), 1)
+    draw_flat_coastlines(center_lon, center_lat, map_box, scale)
+    draw_constellation_heatmap(scouts, scout_history, scout_measurements, center_lon, center_lat, map_box, scale, time.monotonic())
+    legend_x = 42
+    draw_text(text_cache, legend_x, 54, "SNR", (180, 204, 208), 13, True, True, "lm")
+    for color, label, offset in (
+        ((111, 74, 175), "<-4", 34),
+        ((76, 125, 220), "-4–-1", 78),
+        ((61, 201, 194), "-1–2", 134),
+        ((255, 186, 63), "2–5", 186),
+        ((239, 88, 75), ">5 dB", 232),
+    ):
+        draw_logical_circle(legend_x + offset, 54, 3.5, (*color, 235), 12)
+        draw_text(text_cache, legend_x + offset + 8, 54, label, (180, 204, 208), 13, False, True, "lm")
+    listener_servers = {receiver["server"] for receiver in listeners}
+    for receiver in receivers:
+        for longitude_offset in (-360.0, 0.0, 360.0):
+            p = flat_map_project(receiver, center_lon, center_lat, map_box, scale, longitude_offset)
+            if not p:
+                continue
+            dot_color = (116, 228, 201, 240) if receiver["server"] in listener_servers else (90, 219, 228, 48)
+            dot_radius = 3.2 if receiver["server"] in listener_servers else 0.9
+            if receiver["server"] == active_server:
+                draw_logical_circle(p[0], p[1], 10, (91, 242, 180, 180), 18, True)
+                dot_color = (104, 239, 171, 255)
+                dot_radius = 4.2
+            draw_logical_circle(p[0], p[1], dot_radius, dot_color, 10)
+    draw_text(text_cache, (map_box[0] + map_box[2]) / 2, map_box[3] - 10, "DRAG / PINCH   •   TAP TO START", (154, 201, 210), 13, True, True, "cm")
+    right_x = 610
+    draw_logical_rect(*GLOBE_INFO_BOX, (5, 13, 19, 232))
+    draw_logical_line(GLOBE_INFO_BOX[0], GLOBE_INFO_BOX[1], GLOBE_INFO_BOX[2], GLOBE_INFO_BOX[1], (104, 180, 188, 104), 1)
+    draw_text(text_cache, right_x, 22, "HOT RECEIVERS", (239, 248, 248), 19, True, True, "lm")
+    draw_text(text_cache, 932, 22, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
+    if not receivers:
+        draw_text(text_cache, right_x, 96, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
+    elif not listeners:
+        draw_text(text_cache, right_x, 96, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
+        draw_text(text_cache, right_x, 126, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
+    else:
+        for index, receiver in enumerate(listeners):
+            bx0, by0, bx1, by1 = GLOBE_STATION_BOXES[index]
+            active = receiver["server"] == active_server
+            draw_logical_rect(bx0, by0, bx1, by1, (26, 79, 68, 205) if active else (18, 34, 43, 204))
+            draw_logical_line(bx0, by0, bx1, by0, (98, 226, 172, 210) if active else (120, 169, 181, 108), 1)
+            title = bottom_station_title(receiver["name"], receiver["location"])[:21]
+            draw_text(text_cache, bx0 + 12, by0 + 16, f"{index + 1}. {title}", (239, 248, 248), 21, True, True, "lm")
+            smeter_dbm = listener_measurements.get(receiver["server"], {}).get("smeter")
+            slot = replacement_slots[index] if index < len(replacement_slots) else {}
+            snr_db = slot.get("snr") if slot.get("current_server") == receiver["server"] else None
+            snr_is_direct = snr_db is not None
+            if snr_db is None:
+                snr_db = nearby_scout_snr(receiver, scouts, scout_history, scout_measurements)
+            # A warmed audio stream supplies a direct RF S-meter, but it must
+            # not be retuned for an SNR baseline. Show an SNR only when this
+            # receiver was first measured by a silent scout.
+            rf_label = f"RF {smeter_dbm:.0f} dBm" if smeter_dbm is not None else "RF WARMING"
+            snr_label = (
+                f"SNR {snr_db:+.1f} dB" if snr_is_direct
+                else (f"MAP SNR~ {snr_db:+.1f}" if snr_db is not None else "MAP SNR —")
+            )
+            draw_text(text_cache, bx0 + 12, by0 + 43, f"{rf_label}   {snr_label}", (107, 229, 168) if active else (185, 212, 217), 16, True, True, "lm")
+            if slot.get("reason") == "scout":
+                previous = slot.get("previous_name", "original")[:19]
+                detail = f"SCOUT REPLACED {previous}  +{slot.get('gain_db', 0):.0f} dB"
+                detail_color = (255, 202, 107)
+            elif slot.get("reason") == "failed":
+                detail = "REPLACED AFTER RECEIVER FAILURE"
+                detail_color = (255, 169, 114)
+            else:
+                detail = "ORIGINAL HOT RECEIVER" if not active else "ORIGINAL HOT • LIVE AUDIO"
+                detail_color = (141, 184, 193)
+            draw_text(text_cache, bx0 + 12, by0 + 65, detail, detail_color, 13, True, True, "lm")
+
+    # Keep the active scouts and accumulated coverage in one large bottom bar,
+    # leaving the three warm receiver cards readable at a glance.
+    bar = GLOBE_SCOUT_BAR_BOX
+    draw_logical_rect(*bar, (5, 13, 19, 236))
+    draw_logical_line(bar[0], bar[1], bar[2], bar[1], (255, 190, 93, 160), 1)
+    draw_text(text_cache, 24, 282, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
+    draw_text(text_cache, 250, 282, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
+    scan_mode = "LOCAL EXPANSION" if "expanding locally" in status else "MAXIMIZING MAP COVERAGE"
+    draw_text(text_cache, 26, 304, scan_mode, (176, 208, 213), 14, True, True, "lm")
+
+
+def draw_dj_control(text_cache, box, title, detail, active=False):
+    x0, y0, x1, y1 = box
+    fill = (27, 76, 70, 210) if active else (18, 29, 38, 210)
+    line = (94, 230, 178, 210) if active else (115, 140, 151, 78)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - 9, title, (232, 247, 247), 16, True, True, "cm")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 14, detail, (126, 225, 183), 13, False, True, "cm")
+
+
+def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, link_rate_hz):
+    """Finger-driven, detented tune laboratory that always has an origin."""
+    x0, y0, x1, y1 = DJ_PANEL_BOX
+    tx0, ty0, tx1, ty1 = DJ_TRACK_BOX
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 94, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
+    delta_hz = round((current_khz - origin_khz) * 1000)
+    delta_label = f"{delta_hz:+d} Hz" if delta_hz else "CENTRE"
+    draw_text(text_cache, 918, 94, delta_label, (110, 230, 180), 16, True, True, "rm")
+    draw_text(text_cache, LOGICAL_W / 2, 114, sdr_ui.format_freq(current_khz), (232, 246, 247), 28, True, False, "cm")
+    draw_logical_rect(tx0, ty0, tx1, ty1, (10, 23, 29, 232))
+    mid_x = (tx0 + tx1) / 2
+    draw_logical_line(mid_x, ty0 + 7, mid_x, ty1 - 7, (113, 239, 187, 235), 2)
+    for tick in range(-10, 11):
+        x = mid_x + tick * (tx1 - tx0) / 20
+        height = 22 if tick % 5 == 0 else 12
+        draw_logical_line(x, (ty0 + ty1) / 2 - height / 2, x, (ty0 + ty1) / 2 + height / 2, (132, 167, 174, 130), 1)
+    marker_x = clamp(mid_x + (current_khz - origin_khz) / range_khz * (tx1 - tx0) / 2, tx0, tx1)
+    draw_logical_line(marker_x, ty0 + 5, marker_x, ty1 - 5, (244, 224, 151, 255), 3)
+    draw_dj_control(text_cache, DJ_STEP_BOX, "STEP", f"{step_hz} Hz", step_hz == 100)
+    draw_dj_control(text_cache, DJ_RANGE_BOX, "RANGE", f"+/-{range_khz:.1f} kHz")
+    draw_dj_control(text_cache, DJ_RATE_BOX, "LINK RATE", f"{link_rate_hz} Hz", link_rate_hz != 50)
+    draw_dj_control(text_cache, DJ_RETURN_BOX, "RETURN", sdr_ui.format_freq(origin_khz))
+
+
+def draw_filter_width_control(text_cache, box, label):
+    """Large neutral controls that stay legible over the cool waterfall."""
+    x0, y0, x1, y1 = box
+    fill = (54, 57, 60, 96)
+    line = (183, 188, 192, 156)
+    color = (236, 239, 241)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, line, 1)
+    draw_logical_line(x0, y1, x1, y1, line, 1)
+    draw_logical_line(x0, y0, x0, y1, line, 1)
+    draw_logical_line(x1, y0, x1, y1, line, 1)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 42, True, True, "cm")
+
+
+def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, spectrum_enabled):
+    x0, y0, x1, y1 = DISPLAY_PANEL_BOX
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_text(text_cache, 36, 101, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
+    draw_display_control(text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM", spectrum_enabled)
+    draw_display_control(text_cache, DISPLAY_AUTO_BOX, "AUTO SCALE", auto)
+    draw_logical_line(32, 120, 928, 120, (149, 171, 177, 56), 1)
+    draw_text(text_cache, 36, 155, "FLOOR", (139, 180, 187), 14, True, True, "lm")
+    draw_display_control(text_cache, DISPLAY_FLOOR_MINUS_BOX, "-", False)
+    draw_text(text_cache, 276, 155, f"{floor:.0f}", (224, 241, 243), 22, True, True, "cm")
+    draw_display_control(text_cache, DISPLAY_FLOOR_PLUS_BOX, "+", False)
+    draw_text(text_cache, 460, 155, "CEILING", (139, 180, 187), 14, True, True, "lm")
+    draw_display_control(text_cache, DISPLAY_CEIL_MINUS_BOX, "-", False)
+    draw_text(text_cache, 704, 155, f"{ceiling:.0f}", (224, 241, 243), 22, True, True, "cm")
+    draw_display_control(text_cache, DISPLAY_CEIL_PLUS_BOX, "+", False)
+    draw_text(text_cache, 36, 202, "RATE", (139, 180, 187), 13, True, True, "lm")
+    for rate, box, label in DISPLAY_RATE_BOXES:
+        draw_display_control(text_cache, box, label, rate == speed)
+    draw_text(text_cache, 548, 202, "PALETTE", (139, 180, 187), 13, True, True, "lm")
+    for option, box, label in DISPLAY_PALETTE_BOXES:
+        draw_display_control(text_cache, box, label, option == palette)
+
+
+def format_filter_width(width_hz):
+    if width_hz < 1000:
+        return f"{width_hz:.0f} Hz"
+    return f"{width_hz / 1000:.1f} k"
+
+
+def filter_preset_index(width_hz):
+    for index, (_name, preset_width_hz) in enumerate(FILTER_WIDTH_PRESETS):
+        if abs(preset_width_hz - width_hz) <= FILTER_SNAP_HZ / 2:
+            return index
+    return None
+
+
+def next_filter_preset(width_hz):
+    index = filter_preset_index(width_hz)
+    return FILTER_WIDTH_PRESETS[0] if index is None else FILTER_WIDTH_PRESETS[(index + 1) % len(FILTER_WIDTH_PRESETS)]
+
+
+def fine_filter_width(width_hz, delta):
+    return clamp(width_hz + delta * FILTER_FINE_WIDTH_STEP_HZ, FILTER_SNAP_HZ, FILTER_LIMIT_HZ)
+
+
+def symmetric_filter_bounds(low_cut, high_cut, width_hz):
+    half_width = width_hz / 2.0
+    center = clamp(
+        (low_cut + high_cut) / 2.0,
+        -FILTER_LIMIT_HZ + half_width,
+        FILTER_LIMIT_HZ - half_width,
+    )
+    return center - half_width, center + half_width
+
+
+def format_filter_cut(cut_hz):
+    sign = "+" if cut_hz >= 0 else "-"
+    return f"{sign}{abs(cut_hz) / 1000:.2f}k"
+
+
+def filter_x(cut_hz, x0, x1, limit_hz=FILTER_LIMIT_HZ, center_hz=0.0):
+    return x0 + (cut_hz - center_hz + limit_hz) / (2 * limit_hz) * (x1 - x0)
+
+
+def filter_cut_at_x(x, x0, x1, limit_hz=FILTER_LIMIT_HZ, center_hz=0.0):
+    fraction = clamp((x - x0) / max(1.0, x1 - x0), 0.0, 1.0)
+    return int(round((center_hz + (fraction * 2.0 - 1.0) * limit_hz) / FILTER_SNAP_HZ) * FILTER_SNAP_HZ)
+
+
+def filter_edit_limit(low_cut, high_cut):
+    # Scale the editor around the selected RF center (0 Hz).
+    outer_cut = max(abs(low_cut), abs(high_cut), 500.0)
+    return int(clamp(math.ceil(outer_cut * 1.25 / 500) * 500, 1500, FILTER_LIMIT_HZ))
+
+
+def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
+    if alpha <= 0.01:
+        return
+    hz_per_px = max(1.0, span_khz * 1000.0 / LOGICAL_W)
+    center_x = LOGICAL_W / 2
+    low_x = center_x + low_cut / hz_per_px
+    high_x = center_x + high_cut / hz_per_px
+    raw_left = min(low_x, high_x)
+    raw_right = max(low_x, high_x)
+    left = clamp(raw_left, 0.0, float(LOGICAL_W))
+    right = clamp(raw_right, 0.0, float(LOGICAL_W))
+    if right <= left:
+        return
+    # Cool cyan keeps the passband distinct without warming the waterfall.
+    fill = (154, 159, 163, int(42 * alpha))
+    edge = (221, 225, 227, int(184 * alpha))
+    # Amber is deliberately reserved for the tuned RF center: it remains
+    # legible over blue/cyan waterfall energy without resembling a signal.
+    center_shadow = (2, 7, 11, int(128 * alpha))
+    center = (255, 192, 68, int(222 * alpha))
+    if raw_right - raw_left < 10:
+        # At wide waterfall spans the real filter can be sub-pixel narrow.
+        # Show a compact bracket instead of visually falsifying its width.
+        bracket_x = clamp((low_x + high_x) / 2, 6.0, LOGICAL_W - 6.0)
+        for edge_x in (bracket_x - 4, bracket_x + 4):
+            draw_logical_line(edge_x, y0, edge_x, y1, edge, 1)
+            draw_logical_line(edge_x, y0 + 5, bracket_x, y0 + 5, edge, 1)
+    else:
+        draw_logical_rect(left, y0, right, y1, fill)
+        for edge_x, cap_direction in ((low_x, 1), (high_x, -1)):
+            clipped_edge_x = clamp(edge_x, 0.0, float(LOGICAL_W))
+            draw_logical_line(clipped_edge_x, y0, clipped_edge_x, y1, edge, 1)
+            draw_logical_line(
+                clipped_edge_x,
+                y0 + 5,
+                clipped_edge_x + cap_direction * 5,
+                y0 + 5,
+                edge,
+                1,
+            )
+    if 0 <= center_x <= LOGICAL_W:
+        # A continuous marker masks a weak, perfectly tuned carrier. Use a
+        # fine dashed guide instead, with a clear top reference tick.
+        draw_logical_line(center_x - 6, y0 + 2, center_x + 6, y0 + 2, center, 1)
+        dash_h = 5
+        dash_period = 12
+        for dash_y in range(int(y0 + 8), int(y1), dash_period):
+            dash_end = min(dash_y + dash_h, y1)
+            draw_logical_line(center_x, dash_y, center_x, dash_end, center_shadow, 3)
+            draw_logical_line(center_x, dash_y, center_x, dash_end, center, 1)
+
+
+def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=False):
+    x0, y0, x1, y1 = FILTER_PANEL_BOX
+    draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 174))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 132), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 132), 1)
+    draw_text(text_cache, 34, y0 + 22, f"FILTER  {mode}", (229, 243, 246), 24, True, True, "lm")
+    width_hz = high_cut - low_cut
+    draw_text(text_cache, 926, y0 + 22, f"BW {width_hz / 1000:.2f} kHz", (205, 210, 213), 24, True, True, "rm")
+
+    sx0, sy0, sx1, sy1 = FILTER_EDIT_BOX
+    view_low_cut, view_high_cut = filter_view_offsets(low_cut, high_cut)
+    edit_limit = filter_edit_limit(view_low_cut, view_high_cut)
+    carrier_hz = 0.0
+    zero_x = filter_x(carrier_hz, sx0, sx1, edit_limit, carrier_hz)
+    low_x = filter_x(view_low_cut, sx0, sx1, edit_limit, carrier_hz)
+    high_x = filter_x(view_high_cut, sx0, sx1, edit_limit, carrier_hz)
+    block_y0 = sy0 + 52
+    block_y1 = sy1 - 17
+    draw_logical_rect(sx0, sy0, sx1, sy1, (3, 17, 25, 174))
+    draw_logical_line(sx0, block_y0, sx1, block_y0, (83, 128, 141, 96), 1)
+    draw_logical_line(sx0, block_y1, sx1, block_y1, (83, 128, 141, 96), 1)
+    draw_logical_line(zero_x, sy0 + 6, zero_x, sy1 - 6, (185, 220, 224, 150), 2)
+    draw_logical_rect(low_x, block_y0, high_x, block_y1, (112, 118, 122, 104))
+    draw_logical_line(low_x, block_y0, low_x, block_y1, (207, 213, 216, 255), 3)
+    draw_logical_line(high_x, block_y0, high_x, block_y1, (207, 213, 216, 255), 3)
+    for handle_x in (low_x, high_x):
+        draw_logical_rect(handle_x - 12, block_y0 - 8, handle_x + 12, block_y1 + 8, (166, 172, 176, 188))
+        draw_logical_line(handle_x - 4, block_y0 + 5, handle_x - 4, block_y1 - 5, (47, 51, 54, 220), 2)
+        draw_logical_line(handle_x + 4, block_y0 + 5, handle_x + 4, block_y1 - 5, (47, 51, 54, 220), 2)
+    draw_text(text_cache, (low_x + high_x) / 2, (block_y0 + block_y1) / 2, "PASSBAND", (236, 239, 241), 14, True, True, "cm")
+    draw_text(text_cache, sx0 + 8, sy0 + 13, "LEFT EDGE", (202, 208, 211), 13, True, True, "lm")
+    draw_text(text_cache, sx1 - 8, sy0 + 13, "RIGHT EDGE", (202, 208, 211), 13, True, True, "rm")
+    draw_text(text_cache, sx0 + 8, sy0 + 29, format_filter_cut(view_low_cut), (225, 229, 231), 23, True, True, "lm")
+    draw_text(text_cache, sx1 - 8, sy0 + 29, format_filter_cut(view_high_cut), (225, 229, 231), 23, True, True, "rm")
+    draw_text(text_cache, zero_x, sy1 - 7, "CARRIER", (152, 181, 187), 12, True, True, "cm")
+    preset_index = filter_preset_index(width_hz)
+    is_preset = preset_index is not None and not custom_width
+    draw_filter_width_control(text_cache, FILTER_WIDTH_MINUS_BOX, "-")
+    draw_filter_width_control(text_cache, FILTER_WIDTH_PLUS_BOX, "+")
+    label_color = (236, 239, 241) if is_preset else (199, 204, 207)
+    label_fill = (86, 91, 95, 104) if is_preset else (54, 58, 62, 78)
+    label_line = (190, 196, 199, 172) if is_preset else (143, 149, 153, 126)
+    lx0, ly0, lx1, ly1 = FILTER_WIDTH_LABEL_BOX
+    draw_logical_rect(lx0, ly0, lx1, ly1, label_fill)
+    draw_logical_line(lx0, ly0, lx1, ly0, label_line, 1)
+    draw_logical_line(lx0, ly1, lx1, ly1, label_line, 1)
+    draw_logical_line(lx0, ly0, lx0, ly1, label_line, 1)
+    draw_logical_line(lx1, ly0, lx1, ly1, label_line, 1)
+    if is_preset:
+        choice_name, choice_width = FILTER_WIDTH_PRESETS[preset_index]
+        label = f"{choice_name}  {format_filter_width(choice_width)}"
+    else:
+        label = f"CUSTOM  {format_filter_width(width_hz)}"
+    draw_text(text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2, label, label_color, 24, True, True, "cm")
+
+
+def format_zoom_span(span_khz):
+    if span_khz >= 1000:
+        return f"{span_khz / 1000:.1f} MHz"
+    return f"{span_khz:.1f} kHz"
+
+
+def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = 240, 63, 720, 161
+    green = (72, 255, 122, alpha)
+    dim = (72, 255, 122, int(alpha * 0.18))
+    soft = (72, 255, 122, int(alpha * 0.35))
+    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
+    for offset, line_alpha in ((32, 0.20), (64, 0.12)):
+        y = y0 + offset
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
+    draw_text(text_cache, x0 + 18, y0 + 22, "ZOOM", green[:3], 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, format_zoom_span(span_khz), green[:3], 28, True, True, "rm")
+
+    track_x0 = x0 + 24
+    track_x1 = x1 - 24
+    base_y = y0 + 81
+    draw_logical_line(track_x0, base_y, track_x1, base_y, soft, 3)
+    bar_w = 17
+    for level in range(15):
+        x = int(round(track_x0 + (track_x1 - track_x0) * level / 14))
+        fill = green if level <= zoom else dim
+        h = 36 if level == zoom else 24
+        draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
+
+
+def station_page_max(stations):
+    visible = PICKER_COLS * PICKER_ROWS
+    return max(0, len(stations) - visible)
+
+
+def station_tile(index, scroll):
+    visible_index = index - scroll
+    if visible_index < 0 or visible_index >= PICKER_COLS * PICKER_ROWS:
+        return None
+    x0, y0, x1, y1 = PICKER_BOX
+    pad = 4
+    header_h = 0
+    gap = 3
+    grid_x0 = x0 + pad
+    grid_y0 = y0 + header_h + pad
+    cell_w = (x1 - x0 - 2 * pad - (PICKER_COLS - 1) * gap) // PICKER_COLS
+    cell_h = (y1 - grid_y0 - pad - (PICKER_ROWS - 1) * gap) // PICKER_ROWS
+    col = visible_index % PICKER_COLS
+    row = visible_index // PICKER_COLS
+    left = grid_x0 + col * (cell_w + gap)
+    top = grid_y0 + row * (cell_h + gap)
+    return left, top, left + cell_w, top + cell_h
+
+
+def station_at(x, y, stations, scroll):
+    for idx, _station in enumerate(stations):
+        box = station_tile(idx, scroll)
+        if box and contains(box, x, y):
+            return idx
+    return None
+
+
+def menu_metrics():
+    x0, y0, x1, y1 = MENU_BOX
+    pad = 12
+    gap = 10
+    item_w = (x1 - x0 - 2 * pad - (MENU_COLS - 1) * gap) / MENU_COLS
+    item_h = (y1 - y0 - 2 * pad - (MENU_ROWS - 1) * gap) / MENU_ROWS
+    return x0, y0, x1, y1, pad, gap, item_w, item_h
+
+
+def menu_max_scroll():
+    # The Home grid is deliberately finite: no hidden horizontal pages.
+    return 0.0
+
+
+def menu_item_box(index, scroll):
+    x0, y0, _x1, _y1, pad, gap, item_w, item_h = menu_metrics()
+    col = index % MENU_COLS
+    row = index // MENU_COLS
+    if row >= MENU_ROWS:
+        return None
+    # The second row remains left-justified, like the first, so operators can
+    # scan a stable grid without a competing close target.
+    left = x0 + pad + col * (item_w + gap)
+    top = y0 + pad + row * (item_h + gap)
+    return left, top, left + item_w, top + item_h
+
+
+def menu_at(x, y, scroll):
+    if not contains(MENU_BOX, x, y):
+        return None
+    for idx in range(len(MENU_ITEMS)):
+        box = menu_item_box(idx, scroll)
+        if box and contains(box, x, y):
+            return idx
+    return None
+
+
+def draw_menu_icon(surface, kind, cx, cy, color, dim):
+    if kind == "rx":
+        pygame.draw.circle(surface, color, (cx, cy - 2), 13, 3)
+        pygame.draw.line(surface, color, (cx, cy + 12), (cx, cy + 28), 3)
+        pygame.draw.arc(surface, dim, (cx - 35, cy - 28, 70, 56), math.radians(130), math.radians(230), 3)
+        pygame.draw.arc(surface, dim, (cx - 35, cy - 28, 70, 56), math.radians(-50), math.radians(50), 3)
+    elif kind == "radio":
+        pygame.draw.rect(surface, color, (cx - 27, cy - 17, 54, 36), 3, border_radius=5)
+        pygame.draw.line(surface, color, (cx - 17, cy - 24), (cx + 18, cy - 36), 3)
+        pygame.draw.circle(surface, dim, (cx + 14, cy + 1), 8, 3)
+        pygame.draw.line(surface, dim, (cx - 18, cy - 3), (cx - 2, cy - 3), 3)
+        pygame.draw.line(surface, dim, (cx - 18, cy + 8), (cx - 4, cy + 8), 3)
+    elif kind == "display":
+        for offset, knob_x in ((-16, -8), (0, 15), (16, -18)):
+            pygame.draw.line(surface, color, (cx - 28, cy + offset), (cx + 28, cy + offset), 3)
+            pygame.draw.circle(surface, dim, (cx + knob_x, cy + offset), 7, 3)
+    elif kind == "filter":
+        pygame.draw.line(surface, dim, (cx - 32, cy + 18), (cx + 32, cy + 18), 2)
+        pygame.draw.rect(surface, (74, 222, 225, 76), (cx - 15, cy - 20, 30, 38))
+        pygame.draw.line(surface, color, (cx - 15, cy - 24), (cx - 15, cy + 22), 3)
+        pygame.draw.line(surface, color, (cx + 15, cy - 24), (cx + 15, cy + 22), 3)
+        pygame.draw.line(surface, dim, (cx, cy - 30), (cx, cy + 25), 2)
+    elif kind == "audio":
+        pygame.draw.polygon(surface, color, ((cx - 28, cy + 4), (cx - 13, cy + 4), (cx + 6, cy - 15), (cx + 6, cy + 23), (cx - 13, cy + 4)))
+        pygame.draw.arc(surface, dim, (cx, cy - 21, 36, 48), math.radians(-45), math.radians(45), 3)
+        pygame.draw.arc(surface, dim, (cx + 9, cy - 30, 50, 66), math.radians(-45), math.radians(45), 3)
+    elif kind == "tests":
+        pygame.draw.rect(surface, color, (cx - 26, cy - 23, 52, 48), 3, border_radius=5)
+        pygame.draw.line(surface, dim, (cx - 14, cy - 10), (cx + 14, cy - 10), 3)
+        pygame.draw.line(surface, dim, (cx - 14, cy), (cx + 8, cy), 3)
+        pygame.draw.line(surface, dim, (cx - 14, cy + 10), (cx + 2, cy + 10), 3)
+        pygame.draw.circle(surface, color, (cx + 15, cy + 11), 10, 3)
+        pygame.draw.line(surface, color, (cx + 15, cy + 4), (cx + 15, cy + 12), 2)
+        pygame.draw.line(surface, color, (cx + 15, cy + 12), (cx + 21, cy + 16), 2)
+    elif kind == "decode":
+        for offset in (-18, 0, 18):
+            pygame.draw.line(surface, color, (cx + offset, cy - 24), (cx + offset, cy + 24), 3)
+        pygame.draw.line(surface, dim, (cx - 30, cy - 12), (cx + 30, cy - 12), 2)
+        pygame.draw.line(surface, dim, (cx - 30, cy + 12), (cx + 30, cy + 12), 2)
+    elif kind == "network":
+        points = ((cx, cy - 24), (cx - 25, cy + 18), (cx + 25, cy + 18))
+        for a, b in ((0, 1), (0, 2), (1, 2)):
+            pygame.draw.line(surface, dim, points[a], points[b], 3)
+        for point in points:
+            pygame.draw.circle(surface, color, point, 8, 3)
+    else:
+        pygame.draw.circle(surface, color, (cx, cy), 24, 3)
+        pygame.draw.line(surface, color, (cx, cy - 4), (cx, cy + 20), 3)
+        pygame.draw.circle(surface, color, (cx, cy - 20), 3)
+
+
+def menu_icon_texture(text_cache, kind, label):
+    key = f"menu_{kind}_{label}"
+    cached = text_cache.cache.get(("surface", key))
+    if cached is not None:
+        return cached
+    surface = pygame.Surface((132, 112), pygame.SRCALPHA)
+    color = (232, 248, 250, 232)
+    dim = (82, 235, 231, 150)
+    draw_menu_icon(surface, kind, 66, 44, color, dim)
+    label_surface = text_cache.font(16, bold=True, mono=True).render(label, True, (232, 246, 248))
+    surface.blit(label_surface, ((132 - label_surface.get_width()) // 2, 86))
+    return text_cache.surface_texture(key, surface)
+
+
+def draw_main_menu(text_cache, scroll):
+    x0, y0, x1, y1 = MENU_BOX
+    # Let the waterfall remain legible behind a single calm, temporary veil.
+    draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
+    draw_logical_line(x0 + 12, y0, x1 - 12, y0, (174, 201, 205, 72), 1)
+    for idx, (kind, label) in enumerate(MENU_ITEMS):
+        box = menu_item_box(idx, scroll)
+        if box is None:
+            continue
+        bx0, by0, bx1, by1 = box
+        if bx1 < x0 or bx0 > x1:
+            continue
+        tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label)
+        target_w = min(132, bx1 - bx0 - 12)
+        target_h = min(92, by1 - by0 - 4)
+        target_x = bx0 + ((bx1 - bx0) - target_w) / 2
+        target_y = by0 + ((by1 - by0) - target_h) / 2
+        draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
+
+
+def draw_picker_button(text_cache, box, label, size=16, selected=False):
+    x0, y0, x1, y1 = box
+    fill = (72, 77, 81, 255) if selected else (38, 42, 46, 255)
+    outline = (220, 223, 225, 235) if selected else (150, 155, 159, 220)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    draw_logical_line(x0, y0, x1, y0, outline, 1)
+    draw_logical_line(x0, y1, x1, y1, outline, 1)
+    draw_logical_line(x0, y0, x0, y1, outline, 1)
+    draw_logical_line(x1, y0, x1, y1, outline, 1)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
+
+
+def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mode):
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
+    draw_logical_rect(18, 8, 596, 64, (36, 40, 44, 255))
+    draw_logical_line(18, 8, 596, 8, (166, 171, 175, 210), 1)
+    draw_logical_line(18, 64, 596, 64, (166, 171, 175, 210), 1)
+    draw_text(text_cache, 34, 36, query or "Country, city, call sign, or station name", (240, 242, 244) if query else (166, 171, 175), 23, False, False, "lm")
+    draw_picker_button(text_cache, SEARCH_CASE_BOX, "aA", 16, keyboard_mode != "numeric")
+    draw_picker_button(text_cache, SEARCH_MODE_BOX, "123" if keyboard_mode != "numeric" else "ABC", 14, keyboard_mode == "numeric")
+    draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
+    draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
+    for keys, x0, y0, key_w in keyboard_rows(keyboard_mode):
+        for index, key in enumerate(keys):
+            box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
+            label = "BACK" if key == "<" else ("ENTER" if key == ">" else ("SPACE" if key == "~" else key))
+            draw_picker_button(text_cache, box, label, 19 if key in "<>~" else 26)
+
+
+def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, family=None):
+    """Ellipsize a row label to its measured slot, not an arbitrary count."""
+    if text_cache.texture(text, size, (255, 255, 255), bold=bold, mono=mono, family=family)[1] <= max_width:
+        return text
+    ellipsis = "…"
+    while text and text_cache.texture(text + ellipsis, size, (255, 255, 255), bold=bold, mono=mono, family=family)[1] > max_width:
+        text = text[:-1]
+    return text + ellipsis if text else ellipsis
+
+
+def draw_station_picker(text_cache, stations, scroll, selected_server, query, sort_mode, station_health):
+    x0, y0, x1, y1 = PICKER_BOX
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
+    draw_logical_rect(794, 0, LOGICAL_W, LOGICAL_H, (18, 21, 24, 255))
+    draw_logical_line(794, 0, 794, LOGICAL_H, (138, 143, 147, 185), 1)
+    draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 23)
+    draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
+              f"{scroll + 1}–{min(len(stations), scroll + PICKER_ROWS)} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
+    draw_picker_button(text_cache, PICKER_SORT_LOCATION_BOX, "LOCATION", 20, sort_mode == "location")
+    draw_picker_button(text_cache, PICKER_SORT_NAME_BOX, "NAME", 20, sort_mode == "name")
+    draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 20)
+
+    for idx, (name, location, server, listener_used, listener_total) in enumerate(stations):
+        box = station_tile(idx, scroll)
+        if not box:
+            continue
+        selected = server == selected_server
+        entry_health = station_health.get(server, {})
+        checked = entry_health.get("checked", 0)
+        health_fresh = time.time() - checked <= 86400
+        active = health_fresh and entry_health.get("audio") is True
+        if selected:
+            fill = (72, 77, 81, 235)
+            outline = (212, 216, 219, 230)
+        elif active:
+            fill = (30, 34, 38, 220)
+            outline = (136, 142, 146, 170)
+        else:
+            fill = (20, 23, 26, 205)
+            outline = (83, 88, 92, 135)
+        draw_logical_rect(*box, fill)
+        draw_logical_line(box[0], box[1], box[2], box[1], outline, 1)
+        draw_logical_line(box[0], box[3], box[2], box[3], outline, 1)
+        draw_logical_line(box[0], box[1], box[0], box[3], outline, 1)
+        draw_logical_line(box[2], box[1], box[2], box[3], outline, 1)
+        marker_y = (box[1] + box[3]) / 2
+        draw_station_health_icons(text_cache, box[0] + 17, marker_y, entry_health, health_fresh)
+        generic_name = "0-30" in name.lower() and "sdr" in name.lower()
+        if generic_name:
+            # Keep the useful suffix for otherwise generic directory labels;
+            # e.g. the two Julussdalen receivers must not both appear only as
+            # "Elverum, Norway" when their #1/#2 endpoints differ.
+            identifier = re.sub(r"^0-30\s*mhz\s*kiwisdr\s*,?\s*", "", name, flags=re.I)
+            identifier = re.split(r"\s+-\s+", identifier, maxsplit=1)[0].strip()
+            identifier = identifier.split(",", 1)[0].strip()
+            station_label = f"{location}  ·  {identifier}" if identifier else location
+        else:
+            station_label = f"{name}  ·  {location}"
+        title_color = (238, 240, 242) if active or selected else (137, 142, 146)
+        host_color = (129, 134, 138) if active or selected else (82, 87, 91)
+        capacity_color = (198, 202, 205) if active or selected else (110, 115, 119)
+        # Reserve a fixed, generously padded glyph lane. This prevents long
+        # station titles from ever colliding with the audio/waterfall symbols.
+        title_x = box[0] + 90
+        station_label = fit_station_text(text_cache, station_label, box[2] - title_x - 76, 20, True)
+        draw_text(text_cache, title_x, marker_y - 10, station_label, title_color, 20, True, False, "lm")
+        parsed = urlparse(server if "://" in server else "http://" + server)
+        host = (parsed.hostname or server)[:24]
+        draw_text(text_cache, title_x, marker_y + 11, host, host_color, 11, False, False, "lm")
+        capacity = f"{listener_used}/{listener_total}" if listener_used is not None and listener_total is not None else "–/–"
+        draw_text(text_cache, box[2] - 16, marker_y - 10, capacity, capacity_color, 17, True, True, "rm")
+
+
+def station_health_color(entry, key, fresh):
+    if not fresh or entry.get(key) is not True:
+        return (112, 117, 121, 255)
+    return (72, 194, 104, 255)
+
+
+def draw_station_health_icons(text_cache, x, y, entry, fresh):
+    """Draw separate shape-first audio and waterfall availability indicators."""
+    audio = station_health_color(entry, "audio", fresh)
+    waterfall = station_health_color(entry, "waterfall", fresh)
+    # Speaker: cone plus two compact sound-wave arcs.
+    draw_logical_line(x - 8, y, x - 3, y, audio, 3)
+    draw_logical_line(x - 3, y, x + 3, y - 6, audio, 3)
+    draw_logical_line(x - 3, y, x + 3, y + 6, audio, 3)
+    draw_logical_line(x + 3, y - 6, x + 3, y + 6, audio, 3)
+    draw_logical_line(x + 8, y - 5, x + 12, y, audio, 2)
+    draw_logical_line(x + 12, y, x + 8, y + 5, audio, 2)
+    # Waterfall: descending intensity bars, visually distinct from the speaker.
+    wx = x + 39
+    for offset, height in ((0, 4), (5, 7), (10, 10)):
+        draw_logical_line(wx + offset, y - height / 2, wx + offset, y + height / 2, waterfall, 3)
+
+
+def smeter_segment_position(dbm):
+    """Map true dBm to the deliberately non-linear 36-segment display."""
+    if dbm <= SMETER_FLOOR_DBM:
+        return 0.0
+    if dbm <= SMETER_S9_DBM:
+        return (dbm - SMETER_FLOOR_DBM) / (SMETER_S9_DBM - SMETER_FLOOR_DBM) * SMETER_S1_TO_S9_SEGMENTS
+    if dbm <= SMETER_PLUS20_DBM:
+        return SMETER_S1_TO_S9_SEGMENTS + (dbm - SMETER_S9_DBM) / (SMETER_PLUS20_DBM - SMETER_S9_DBM) * SMETER_S9_TO_PLUS20_SEGMENTS
+    if dbm <= SMETER_CEILING_DBM:
+        return (
+            SMETER_S1_TO_S9_SEGMENTS
+            + SMETER_S9_TO_PLUS20_SEGMENTS
+            + (dbm - SMETER_PLUS20_DBM) / (SMETER_CEILING_DBM - SMETER_PLUS20_DBM) * SMETER_PLUS20_TO_PLUS40_SEGMENTS
+        )
+    return float(SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS + SMETER_PLUS20_TO_PLUS40_SEGMENTS)
+
+
+def smeter_dbm_at_segment(position):
+    """Inverse display map used only to color the correct segment range."""
+    total_segments = SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS + SMETER_PLUS20_TO_PLUS40_SEGMENTS
+    position = clamp(position, 0.0, float(total_segments))
+    if position <= SMETER_S1_TO_S9_SEGMENTS:
+        return SMETER_FLOOR_DBM + position / SMETER_S1_TO_S9_SEGMENTS * (SMETER_S9_DBM - SMETER_FLOOR_DBM)
+    if position <= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS:
+        return SMETER_S9_DBM + (position - SMETER_S1_TO_S9_SEGMENTS) / SMETER_S9_TO_PLUS20_SEGMENTS * (SMETER_PLUS20_DBM - SMETER_S9_DBM)
+    return SMETER_PLUS20_DBM + (position - SMETER_S1_TO_S9_SEGMENTS - SMETER_S9_TO_PLUS20_SEGMENTS) / SMETER_PLUS20_TO_PLUS40_SEGMENTS * (SMETER_CEILING_DBM - SMETER_PLUS20_DBM)
+
+
+def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
+    meter_x0 = 690
+    # Leave the usual right quiet margin while fitting a full calibrated scale.
+    meter_x1 = 915
+    green = (222, 255, 228, 255)
+    red = (230, 20, 42, 255)
+    rail = (160, 178, 182, 155)
+    tick = (192, 211, 214, 220)
+    blue = (0, 76, 245, 255)
+    dbm_color = (189, 198, 201, 225)
+    # Keep the calibration centered in the taller instrument strip rather
+    # than visually weighted toward the Scope below it.
+    trace_y = 36
+
+    def dbx(dbm):
+        return meter_x0 + round((meter_x1 - meter_x0) * (smeter_segment_position(dbm) / 36.0))
+
+    labels = (
+        ("S", dbx(-121) - 40, green[:3], 14),
+        ("1", dbx(-121), green[:3], 14),
+        ("3", dbx(-109), green[:3], 14),
+        ("5", dbx(-97), green[:3], 14),
+        ("7", dbx(-85), green[:3], 14),
+        ("9", dbx(-73), green[:3], 14),
+        ("+20", dbx(-53), red[:3], 14),
+        ("+40", dbx(-33), red[:3], 14),
+    )
+    for text, x, color, size in labels:
+        draw_text(text_cache, x, 10, text, color, size, False, True, "cm")
+
+    # Major calibration lines reach above and below the trace, while the
+    # shorter intermediate lines make the scale feel continuous rather than
+    # like a row of LED pixels.
+    major_ticks = ((-121, tick), (-109, tick), (-97, tick), (-85, tick), (-73, tick), (-53, red), (-33, red))
+    for dbm, color in major_ticks:
+        x = dbx(dbm)
+        draw_logical_line(x, 26, x, 51, color, 2)
+    for dbm in (-115, -103, -91, -79, -63, -43):
+        x = dbx(dbm)
+        draw_logical_line(x, 34, x, 50, rail, 1)
+
+    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (124, 149, 156, 190), 2)
+    live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
+    live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
+    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_color, 6)
+    # A single-line reading is quickest to parse. The scale begins farther
+    # right so the large value and its unit do not touch the live trace.
+    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 32, True, True, "rm")
+    draw_text(text_cache, meter_x0 - 32, trace_y, "dBm", (164, 184, 188), 13, True, True, "lm")
+    draw_logical_circle(
+        live_x,
+        trace_y,
+        6,
+        (139, 234, 255, 255) if smeter_dbm < SMETER_S9_DBM else (255, 174, 178, 255),
+    )
+    draw_logical_circle(live_x, trace_y, 2, (237, 254, 255, 255))
+    # The retained peak is a quiet vertical reference, independent from the
+    # live marker, so a changing signal remains easy to read at a glance.
+    if peak_dbm is not None and peak_dbm > smeter_dbm + 0.75:
+        peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
+        draw_logical_line(peak_x, 30, peak_x, 52, (182, 197, 200, 178), 1)
+
+    # A simple 20 dB cadence follows the reference instrument style. The
+    # labels are calibrated through the same nonlinear S-unit mapping above.
+    for dbm in (-120, -100, -80, -60, -40):
+        draw_text(text_cache, dbx(dbm), 62, f"{dbm}", dbm_color[:3], 13, True, True, "cm")
+    draw_text(text_cache, meter_x1 + 16, 62, "dBm", dbm_color[:3], 13, True, True, "lm")
+
+
+def read_cpu_temp_c():
+    try:
+        raw = Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
+        return float(raw) / 1000.0
+    except Exception:
+        return None
+
+
+def read_total_cpu_percent(previous_sample=None):
+    """Return whole-system CPU use across all cores from /proc/stat."""
+    try:
+        fields = [int(value) for value in Path("/proc/stat").read_text().splitlines()[0].split()[1:]]
+        total = sum(fields)
+        idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+        current_sample = (total, idle)
+        if previous_sample is None:
+            return None, current_sample
+        total_delta = total - previous_sample[0]
+        idle_delta = idle - previous_sample[1]
+        if total_delta <= 0:
+            return None, current_sample
+        return 100.0 * (1.0 - idle_delta / total_delta), current_sample
+    except Exception:
+        return None, previous_sample
+
+
+def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0):
+    parts = []
+    if cpu_percent is not None:
+        parts.append(f"CPU {cpu_percent:.0f}%")
+    if temp_c is not None:
+        parts.append(f"{temp_c:.0f}C")
+    if not parts:
+        return
+    # Keep this in the reserved gap between IQ and DECODER; right-aligning it
+    # at the decoder area made the two annunciators draw over one another.
+    draw_text(text_cache, 575, y, " ".join(parts), (118, 218, 229), size, False, False, "lm", alpha, family="Cantarell")
+
+
+def format_smeter_readout(smeter_dbm):
+    value = int(round(smeter_dbm))
+    return f"−{abs(value)} dBm" if value < 0 else f"+{value} dBm"
+
+
+def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, alpha=1.0):
+    if alpha <= 0.01:
+        return
+    compact = y1 - y0 < 28
+    # One typography family, weight and vertical center makes this read as a
+    # deliberate single status bar instead of independent overlay labels.
+    size = 14 if compact else 16
+    status_mid_y = (y0 + y1) / 2
+    draw_logical_rect(0, y0, LOGICAL_W, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
+    if station_name:
+        # The station is deliberately limited to 40% of the logical display,
+        # leaving a permanent clear lane before the right-side status readouts.
+        title = fit_station_text(text_cache, station_name, LOGICAL_W * 0.40, size, False, False, family="Cantarell")
+        draw_text(text_cache, 18, status_mid_y, title, (151, 160, 165), size, False, False, "lm", alpha, family="Cantarell")
+    if smeter_readout_dbm is not None:
+        # Center this calm numeric readout in the permanent lane between the
+        # 40%-wide station title and the CPU/decoder status on the right.
+        draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
+    draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
+    draw_text(text_cache, 730, status_mid_y, "DECODER", (229, 236, 239), size, False, False, "lm", alpha, family="Cantarell")
+    draw_text(text_cache, 838, status_mid_y, "NO SYNC", (255, 178, 105), size, False, False, "lm", alpha, family="Cantarell")
+
+
+def draw_ruler(
+    text_cache,
+    center_khz,
+    span_khz,
+    alpha=1.0,
+    y0=sdr_ui.TOP_H,
+    height=sdr_ui.RULER_H,
+    background_alpha=185,
+    subdued=False,
+):
+    if alpha <= 0.01:
+        return
+    draw_logical_rect(
+        0,
+        y0,
+        LOGICAL_W,
+        y0 + height,
+        (10, 15, 21, int(background_alpha * alpha)),
+    )
+    span_hz = max(1, int(round(span_khz * 1000)))
+    center_hz = int(round(center_khz * 1000))
+    start_hz = center_hz - span_hz // 2
+    end_hz = center_hz + span_hz // 2
+    hz_per_px = span_hz / LOGICAL_W
+    major_step_hz = sdr_ui.ruler_major_step_hz(span_khz)
+    minor_step_hz = max(50, major_step_hz // 5)
+    minor_start_hz = int(math.ceil(start_hz / minor_step_hz) * minor_step_hz)
+    major_start_hz = int(math.ceil(start_hz / major_step_hz) * major_step_hz)
+    # The bottom ruler sits over live spectrum/waterfall content. Keep it
+    # visibly separate from the brighter cyan/white telemetry status layer.
+    minor_color = (103, 128, 142, 150) if subdued else (142, 158, 166, 215)
+    major_color = (133, 161, 174, 178) if subdued else (196, 210, 216, 255)
+    label_color = (145, 178, 191) if subdued else (231, 240, 244)
+    label_alpha = 0.84 if subdued else 1.0
+
+    hz = minor_start_hz
+    while hz <= end_hz:
+        if hz % major_step_hz:
+            x = int(round((hz - start_hz) / hz_per_px))
+            if 0 <= x < LOGICAL_W:
+                draw_logical_line(x, y0 + 2, x, y0 + 5, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1)
+        hz += minor_step_hz
+
+    hz = major_start_hz
+    last_label_x = -999
+    while hz <= end_hz:
+        x = int(round((hz - start_hz) / hz_per_px))
+        if 0 <= x < LOGICAL_W:
+            draw_logical_line(x, y0 + 2, x, y0 + 8, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2)
+            if x - last_label_x > 140:
+                draw_text(
+                    text_cache,
+                    x,
+                    y0 + 18,
+                    sdr_ui.format_ruler_label(hz, major_step_hz),
+                    label_color,
+                    15,
+                    True,
+                    True,
+                    "cm",
+                    alpha * label_alpha,
+                )
+                last_label_x = x
+        hz += major_step_hz
+
+
+def draw_spectrum(y0, y1, values, peak_values=()):
+    """Draw a compact amplitude-versus-frequency trace from the Kiwi W/F bins."""
+    draw_logical_rect(0, y0, LOGICAL_W, y1, (2, 7, 12, 236))
+    for fraction in (0.25, 0.50, 0.75):
+        y = y0 + (y1 - y0) * fraction
+        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 34), 1)
+    if not values:
+        return
+    top = y0 + 3
+    bottom = y1 - 3
+    if len(peak_values) == len(values):
+        peak_points = [
+            (index * (LOGICAL_W - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
+            for index, value in enumerate(peak_values)
+        ]
+        draw_logical_area(peak_points, bottom, (145, 159, 168, 76))
+        draw_logical_polyline(peak_points, (174, 187, 194, 142), 1.0)
+    points = [
+        (index * (LOGICAL_W - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
+        for index, value in enumerate(values)
+    ]
+    draw_logical_area(points, bottom, (161, 184, 196, 154))
+    draw_logical_polyline(points, (204, 219, 224, 208), 1.25)
+
+
+def draw_connection_annunciator(text_cache, status):
+    if not status:
+        return
+    labels = {
+        "connecting": "CONNECTING",
+        "retrying": "RETRYING",
+        "connected": "CONNECTED",
+        "audio_wf_retry": "AUDIO OK · WF RETRY",
+        "waterfall_audio_retry": "WF OK · AUDIO RETRY",
+        "no_waterfall": "NO WATERFALL AVAILABLE",
+        "failed": "CONNECTION FAILED",
+    }
+    colors = {
+        "connecting": (94, 216, 152, 255),
+        "retrying": (112, 222, 160, 255),
+        "connected": (72, 236, 126, 255),
+        "audio_wf_retry": (112, 222, 160, 255),
+        "waterfall_audio_retry": (112, 222, 160, 255),
+        "no_waterfall": (255, 184, 105, 255),
+        "failed": (246, 144, 100, 255),
+    }
+    label = labels.get(status)
+    if not label:
+        return
+    color = colors[status]
+    x0, y0, x1, y1 = 520, 72, 942, 114
+    alert = status in ("failed", "no_waterfall")
+    draw_logical_rect(x0, y0, x1, y1, (4, 17, 13, 228) if not alert else (32, 12, 9, 230))
+    draw_logical_line(x0, y0, x1, y0, color, 2)
+    draw_logical_line(x0, y1, x1, y1, color, 2)
+    if status == "connected":
+        draw_logical_line(x0 + 15, y0 + 22, x0 + 23, y0 + 30, color, 4)
+        draw_logical_line(x0 + 23, y0 + 30, x0 + 38, y0 + 12, color, 4)
+    elif alert:
+        draw_logical_line(x0 + 16, y0 + 11, x0 + 34, y0 + 31, color, 3)
+        draw_logical_line(x0 + 34, y0 + 11, x0 + 16, y0 + 31, color, 3)
+    else:
+        draw_logical_rect(x0 + 16, y0 + 15, x0 + 30, y0 + 29, color)
+    draw_text(text_cache, x0 + 54, (y0 + y1) / 2, label, color[:3], 20, True, True, "lm")
+
+
+def draw_ui(
+    text_cache,
+    freq_khz,
+    span_khz,
+    smeter_dbm,
+    smeter_peak_dbm,
+    smeter_readout_dbm,
+    mode,
+    digital,
+    step_hz,
+    controls_alpha=1.0,
+    focus_progress=0.0,
+    ruler_y0=sdr_ui.TOP_H,
+    ruler_height=sdr_ui.RULER_H,
+    ruler_background_alpha=185,
+    bottom_ruler=False,
+    spectrum_enabled=False,
+    cpu_percent=None,
+    temp_c=None,
+    station_name="",
+    connection_status=None,
+):
+    # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
+    # deliberately pure black until a requested visual comparison restores it.
+    draw_logical_rect(0, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 255))
+    draw_home_button(text_cache, 1.0)
+    frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
+    draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
+    # Liberation Sans Bold stays clean and compact at the display's physical
+    # pixel density, leaving headroom inside the short instrument strip.
+    # Right alignment keeps this cluster locked to the S-meter while the
+    # number of MHz digits changes between bands.
+    draw_text(text_cache, FREQUENCY_RIGHT_X, 39, frequency_text, (169, 189, 193), 50, True, False, "rm", family="Liberation Sans")
+    draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
+    instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
+    draw_ruler(
+        text_cache,
+        freq_khz,
+        span_khz,
+        instrument_alpha,
+        y0=ruler_y0,
+        height=ruler_height,
+        background_alpha=ruler_background_alpha,
+        subdued=bottom_ruler,
+    )
+    if bottom_ruler:
+        draw_lower_status(
+            text_cache,
+            cpu_percent,
+            temp_c,
+            ruler_y0 + ruler_height,
+            LOGICAL_H,
+            station_name=station_name,
+            smeter_readout_dbm=None,
+            alpha=instrument_alpha,
+        )
+    else:
+        draw_lower_status(
+            text_cache,
+            cpu_percent,
+            temp_c,
+            WATERFALL_Y1,
+            LOGICAL_H,
+            station_name=station_name,
+            smeter_readout_dbm=None,
+            alpha=instrument_alpha,
+        )
+    draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
+    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", controls_alpha)
+    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", controls_alpha)
+    draw_text(text_cache, 132, 227, "ZOOM", (211, 227, 231), 16, True, True, "cm", controls_alpha)
+    draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v3", (100,), controls_alpha)
+    draw_filter_toggle_button(text_cache, controls_alpha)
+    draw_spectrum_toggle_button(text_cache, spectrum_enabled, controls_alpha)
+    draw_connection_annunciator(text_cache, connection_status)
+
+
+def drain_queue(line_queue):
+    while True:
+        try:
+            line_queue.get_nowait()
+        except queue.Empty:
+            return
+
+
+def kiwi_mode_filter(mode):
+    mode = mode.lower()
+    if mode in ("usb", "usn"):
+        return 300, 2700
+    if mode in ("lsb", "lsn"):
+        return -2700, -300
+    if mode in ("cw", "cwn"):
+        return -500, 500
+    if mode in ("nbfm", "nnfm"):
+        return -6000, 6000
+    if mode == "iq":
+        return -12000, 12000
+    return -5000, 5000
+
+
+def default_sideband_mode(freq_khz):
+    """Use conventional HF sideband defaults until an operator chooses a mode."""
+    return "USB" if freq_khz >= 10000.0 else "LSB"
+
+
+def filter_center_hz(low_cut, high_cut):
+    return (low_cut + high_cut) / 2.0
+
+
+def snd_carrier_khz(view_center_khz, low_cut, high_cut):
+    """Place the actual SND passband around the waterfall's selected RF center."""
+    return view_center_khz - filter_center_hz(low_cut, high_cut) / 1000.0
+
+
+def filter_view_offsets(low_cut, high_cut):
+    """Return passband edges relative to the selected waterfall center."""
+    center_hz = filter_center_hz(low_cut, high_cut)
+    return low_cut - center_hz, high_cut - center_hz
+
+
+def start_audio_player(args):
+    """Open the SDR's mono PCM stream on PipeWire's current default sink.
+
+    PipeWire/WirePlumber owns the output choice, so a USB sink selected as the
+    system default continues to receive this stream without pinning a volatile
+    numeric node id in the renderer configuration.
+    """
+    if not args.audio:
+        return None
+    try:
+        return subprocess.Popen(
+            [
+                "pw-cat",
+                "--playback",
+                "--raw",
+                "--rate", str(args.audio_rate),
+                "--channels", "1",
+                "--format", "s16",
+                "--latency", PIPEWIRE_AUDIO_LATENCY,
+                "-",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+    except OSError as exc:
+        print(f"gl audio player {exc}", flush=True)
+        return None
+
+
+def stop_audio_player(player):
+    if not player:
+        return
+    try:
+        if player.stdin:
+            player.stdin.close()
+    except OSError:
+        pass
+    try:
+        player.terminate()
+        player.wait(timeout=1.0)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            player.kill()
+        except OSError:
+            pass
+
+
+def pipewire_default_volume():
+    """Read the real default-sink level used by the USB speaker path."""
+    try:
+        result = subprocess.run(
+            ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+        match = re.search(r"Volume:\s+([0-9.]+)", result.stdout)
+        return clamp(float(match.group(1)), 0.0, 1.0) if match else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def set_pipewire_default_volume(volume):
+    """Set the actual current default sink, not a UI-only volume value."""
+    volume = clamp(float(volume), 0.0, 1.0)
+    try:
+        result = subprocess.run(
+            ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{volume:.2f}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=0.5,
+            check=False,
+        )
+        return volume if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def snd_meter_worker(args, stop_event, state):
+    seen_view_generation = -1
+    seen_radio_generation = -1
+    seen_server_generation = -1
+    seen_audio_generation = -1
+    player = None
+    while not stop_event.is_set():
+        ws = None
+        try:
+            if state.external_audio_snapshot():
+                stop_audio_player(player)
+                player = None
+                stop_event.wait(0.10)
+                continue
+            if args.audio and (player is None or player.poll() is not None):
+                stop_audio_player(player)
+                player = start_audio_player(args)
+            server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+            state.connection_attempt(server_generation, "audio")
+            radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
+            squelch_enabled, audio_generation = state.audio_snapshot()
+            ws = kiwi.KiwiWebSocket.connect(server, "SND")
+            kiwi.send_kiwi_setup(ws, "kiwi", args.user)
+            configured = False
+            last_keepalive = 0
+            next_view_send_at = 0.0
+            while not stop_event.is_set():
+                if state.external_audio_snapshot():
+                    break
+                server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+                radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
+                squelch_enabled, audio_generation = state.audio_snapshot()
+                live_tune_interval = 1.0 / state.tune_rate_snapshot()
+                if server_generation != seen_server_generation:
+                    seen_server_generation = server_generation
+                    break
+                now_monotonic = time.monotonic()
+                if (
+                    configured
+                    and (view_generation != seen_view_generation or radio_generation != seen_radio_generation)
+                    and now_monotonic >= next_view_send_at
+                ):
+                    snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
+                    kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut)
+                    ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                    seen_view_generation = view_generation
+                    seen_radio_generation = radio_generation
+                    seen_audio_generation = audio_generation
+                    next_view_send_at = now_monotonic + live_tune_interval
+                    print(
+                        f"gl snd mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
+                        flush=True,
+                    )
+
+                now = int(time.time())
+                if now != last_keepalive:
+                    ws.send_text("SET keepalive")
+                    last_keepalive = now
+                try:
+                    readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
+                    if not readable:
+                        continue
+                    message = ws.recv()
+                except socket.timeout:
+                    continue
+                if message[:3] == b"MSG":
+                    params = kiwi.parse_msg_params(message)
+                    if "audio_rate" in params:
+                        # Kiwi's raw, uncompressed SND packets remain at the
+                        # receiver's 12 kHz PCM cadence. Retain the normal
+                        # browser-output acknowledgement, while feeding the
+                        # locally measured raw rate to PipeWire below.
+                        ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
+                    if "sample_rate" in params and not configured:
+                        snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
+                        kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut)
+                        ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                        configured = True
+                        seen_view_generation = view_generation
+                        seen_radio_generation = radio_generation
+                        seen_audio_generation = audio_generation
+                        next_view_send_at = time.monotonic() + live_tune_interval
+                        print(
+                            f"gl snd setup mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
+                            flush=True,
+                        )
+                        if state.connection_ready(server_generation, "audio"):
+                            persist_live_station_health(server, "audio", True)
+                    continue
+                if configured and audio_generation != seen_audio_generation:
+                    ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                    seen_audio_generation = audio_generation
+                if message[:3] != b"SND" or len(message) < 10:
+                    continue
+                body = message[3:]
+                flags, _sequence = struct.unpack("<BI", body[:5])
+                smeter, = struct.unpack(">H", body[5:7])
+                state.set_smeter(0.1 * smeter - 127.0, source="snd")
+                # Kiwi sends signed PCM after the seven-byte SND header. The
+                # legacy aplay path expected big-endian samples; pw-cat uses
+                # native S16, so convert only the normal big-endian packets.
+                audio = body[7:]
+                if player and player.stdin and not (flags & kiwi.SND_FLAG_COMPRESSED) and not (flags & kiwi.SND_FLAG_STEREO):
+                    if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
+                        audio = kiwi.swap_s16_bytes(audio)
+                    try:
+                        player.stdin.write(audio)
+                    except (BrokenPipeError, OSError):
+                        stop_audio_player(player)
+                        player = None
+        except Exception as exc:
+            print(f"gl SND {exc}", flush=True)
+            if state.connection_failed(server_generation, "audio"):
+                persist_live_station_health(server, "audio", False)
+            if stop_event.wait(2.0):
+                break
+        finally:
+            if ws:
+                ws.send_close()
+    stop_audio_player(player)
+
+
+class GlobeAudioMixer:
+    """Three prewarmed listener streams with one selected PipeWire output."""
+    def __init__(self, args, state):
+        self.args, self.state = args, state
+        self.lock = threading.Lock()
+        self.stop_event = None
+        self.player = None
+        self.active_server = None
+        self.pending_server = None
+        self.ready_servers = set()
+        self.source_smeters = {}
+        self.events = queue.Queue()
+        self.servers = ()
+
+    def start(self, receivers, active_server):
+        self.stop()
+        self.stop_event = threading.Event()
+        self.servers = tuple(receiver["server"] for receiver in receivers[:3])
+        self.active_server = active_server
+        self.pending_server = active_server
+        self.ready_servers = set()
+        self.source_smeters = {}
+        # Keep normal audio alive until a Globe source has proved it can
+        # deliver PCM. This avoids turning a failed public endpoint into silence.
+        self.state.set_external_audio(False)
+        self.player = start_audio_player(self.args)
+        for server in self.servers:
+            threading.Thread(target=self._source_worker, args=(server, self.stop_event), daemon=True).start()
+
+    def stop(self):
+        if self.stop_event:
+            self.stop_event.set()
+        self.stop_event = None
+        stop_audio_player(self.player)
+        self.player = None
+        self.servers = ()
+        self.ready_servers = set()
+        self.source_smeters = {}
+        self.pending_server = None
+        self.state.set_external_audio(False)
+
+    def select(self, server):
+        with self.lock:
+            if server not in self.servers:
+                return False
+            self.pending_server = server
+            if server in self.ready_servers:
+                self.active_server = server
+                self.state.set_external_audio(True)
+                return True
+            return False
+
+    def _source_ready(self, server):
+        with self.lock:
+            newly_ready = server not in self.ready_servers
+            self.ready_servers.add(server)
+            if self.pending_server == server or self.active_server == server:
+                self.active_server = server
+                self.pending_server = None
+                self.state.set_external_audio(True)
+        if newly_ready:
+            self.events.put(("ready", server))
+
+    def smeter_snapshot(self):
+        with self.lock:
+            return {server: dict(sample) for server, sample in self.source_smeters.items()}
+
+    def ready_snapshot(self):
+        with self.lock:
+            return set(self.ready_servers)
+
+    def _write_active(self, server, audio):
+        with self.lock:
+            active = server == self.active_server
+            player = self.player
+        if active and player and player.stdin:
+            try:
+                player.stdin.write(audio)
+            except (BrokenPipeError, OSError):
+                pass
+
+    def _source_worker(self, server, stop_event):
+        ws = None
+        try:
+            ws = kiwi.KiwiWebSocket.connect(server, "SND")
+            kiwi.send_kiwi_setup(ws, "kiwi", self.args.user)
+            configured = False
+            seen_view = seen_radio = -1
+            last_keepalive = 0
+            while not stop_event.is_set():
+                _server, freq_khz, _zoom, _smeter, view_generation, _server_generation = self.state.snapshot()
+                radio_mode, low_cut, high_cut, radio_generation = self.state.radio_snapshot()
+                if configured and (view_generation != seen_view or radio_generation != seen_radio):
+                    kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
+                    seen_view, seen_radio = view_generation, radio_generation
+                now = int(time.time())
+                if now != last_keepalive:
+                    ws.send_text("SET keepalive")
+                    last_keepalive = now
+                readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
+                if not readable:
+                    continue
+                message = ws.recv()
+                if message[:3] == b"MSG":
+                    params = kiwi.parse_msg_params(message)
+                    if "audio_rate" in params:
+                        ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
+                    if "sample_rate" in params and not configured:
+                        kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
+                        configured = True
+                        seen_view, seen_radio = view_generation, radio_generation
+                    continue
+                if not configured or message[:3] != b"SND" or len(message) < 10:
+                    continue
+                body = message[3:]
+                flags, _sequence = struct.unpack("<BI", body[:5])
+                smeter, = struct.unpack(">H", body[5:7])
+                with self.lock:
+                    self.source_smeters[server] = {
+                        "smeter": 0.1 * smeter - 127.0,
+                        "sampled_at": time.monotonic(),
+                    }
+                audio = body[7:]
+                if flags & kiwi.SND_FLAG_COMPRESSED or flags & kiwi.SND_FLAG_STEREO:
+                    continue
+                if not flags & kiwi.SND_FLAG_LITTLE_ENDIAN:
+                    audio = kiwi.swap_s16_bytes(audio)
+                self._source_ready(server)
+                self._write_active(server, audio)
+        except Exception as exc:
+            print(f"gl globe audio {server}: {exc}", flush=True)
+            self.events.put(("failed", server))
+        finally:
+            if ws:
+                ws.send_close()
+
+
+class ConstellationScoutProbe:
+    """Silent SND probes returning tuned RF level and an offset-noise SNR proxy."""
+    def __init__(self, args, state):
+        self.args, self.state = args, state
+        self.stop_event = None
+        self.events = queue.Queue()
+
+    def scan(self, receivers):
+        self.stop()
+        self.stop_event = threading.Event()
+        for receiver in receivers[:4]:
+            print(f"gl scout start {receiver['server']}", flush=True)
+            threading.Thread(
+                target=self._scan_worker,
+                args=(receiver["server"], self.stop_event),
+                daemon=True,
+            ).start()
+
+    def stop(self):
+        if self.stop_event:
+            self.stop_event.set()
+        self.stop_event = None
+
+    def _scan_worker(self, server, stop_event):
+        ws = None
+        signal_readings = []
+        noise_readings = []
+        try:
+            _active_server, freq_khz, _zoom, _smeter, _view_generation, _server_generation = self.state.snapshot()
+            radio_mode, low_cut, high_cut, _radio_generation = self.state.radio_snapshot()
+            ws = kiwi.KiwiWebSocket.connect(server, "SND")
+            kiwi.send_kiwi_setup(ws, "kiwi", self.args.user)
+            configured = False
+            last_keepalive = 0
+            connect_deadline = time.monotonic() + SCOUT_RF_CONNECT_TIMEOUT_SECONDS
+            sample_deadline = None
+            phase = "signal"
+            while not stop_event.is_set() and time.monotonic() < connect_deadline:
+                now = int(time.time())
+                if now != last_keepalive:
+                    ws.send_text("SET keepalive")
+                    last_keepalive = now
+                readable, _writable, _errors = select.select([ws.sock], [], [], 0.20)
+                if not readable:
+                    continue
+                message = ws.recv()
+                if message[:3] == b"MSG":
+                    params = kiwi.parse_msg_params(message)
+                    if "audio_rate" in params:
+                        ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
+                    if "sample_rate" in params and not configured:
+                        kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
+                        configured = True
+                        sample_deadline = time.monotonic() + SCOUT_RF_SAMPLE_SECONDS
+                    continue
+                if not configured or message[:3] != b"SND" or len(message) < 10:
+                    continue
+                body = message[3:]
+                smeter, = struct.unpack(">H", body[5:7])
+                readings = signal_readings if phase == "signal" else noise_readings
+                readings.append(0.1 * smeter - 127.0)
+                if sample_deadline and time.monotonic() >= sample_deadline and len(readings) >= 3:
+                    if phase == "signal":
+                        # A short adjacent-channel sample estimates the local
+                        # noise floor. It is a practical SNR proxy, not a
+                        # calibrated lab measurement.
+                        noise_freq_khz = clamp(freq_khz + SCOUT_SNR_OFFSET_KHZ, 0.0, 30000.0)
+                        kiwi.send_snd_setup(ws, snd_carrier_khz(noise_freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
+                        phase = "noise"
+                        sample_deadline = time.monotonic() + SCOUT_SNR_NOISE_SECONDS
+                    else:
+                        break
+            if signal_readings:
+                signal_ordered = sorted(signal_readings)
+                signal_dbm = signal_ordered[len(signal_ordered) // 2]
+                if noise_readings:
+                    noise_ordered = sorted(noise_readings)
+                    noise_dbm = noise_ordered[len(noise_ordered) // 2]
+                    snr_db = signal_dbm - noise_dbm
+                else:
+                    snr_db = None
+                snr_label = f" snr={snr_db:+.1f}dB" if snr_db is not None else " snr=unavailable"
+                print(f"gl scout sample {server} signal={signal_dbm:.1f}dBm{snr_label}", flush=True)
+                self.events.put(("sample", server, signal_dbm, snr_db))
+            else:
+                self.events.put(("failed", server, None, None))
+        except Exception as exc:
+            print(f"gl scout RF {server}: {exc}", flush=True)
+            self.events.put(("failed", server, None, None))
+        finally:
+            if ws:
+                ws.send_close()
+
+
+def waterfall_worker(args, line_queue, stop_event, state):
+    while not stop_event.is_set():
+        ws = None
+        try:
+            server, freq_khz, zoom, _smeter_dbm, seen_generation, seen_server_generation = state.snapshot()
+            state.connection_attempt(seen_server_generation, "waterfall")
+            wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, seen_wf_generation = state.waterfall_snapshot()
+            mapper = waterfall_mapper(wf_palette)
+            leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
+            ws = kiwi.KiwiWebSocket.connect(server, "W/F")
+            kiwi.send_kiwi_setup(ws, "kiwi", args.user)
+            kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+            last_keepalive = 0
+            last_frame_at = time.monotonic()
+            next_view_send_at = 0.0
+            print(f"gl wf setup: {server} {freq_khz:.3f} kHz zoom {zoom}", flush=True)
+            while not stop_event.is_set():
+                server, freq_khz, zoom, _smeter_dbm, generation, server_generation = state.snapshot()
+                next_floor, next_ceil, next_speed, next_auto, next_palette, wf_generation = state.waterfall_snapshot()
+                live_tune_interval = 1.0 / state.tune_rate_snapshot()
+                if server_generation != seen_server_generation:
+                    seen_server_generation = server_generation
+                    drain_queue(line_queue)
+                    break
+                now_monotonic = time.monotonic()
+                if generation != seen_generation and now_monotonic >= next_view_send_at:
+                    seen_generation = generation
+                    drain_queue(line_queue)
+                    kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+                    next_view_send_at = now_monotonic + live_tune_interval
+                    print(f"gl wf retune: {freq_khz:.3f} kHz zoom {zoom}", flush=True)
+                if wf_generation != seen_wf_generation:
+                    seen_wf_generation = wf_generation
+                    wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
+                    leveler.floor = wf_floor
+                    leveler.ceiling = wf_ceil
+                    leveler.auto = wf_auto
+                    mapper = waterfall_mapper(wf_palette)
+                    ws.send_text(f"SET wf_speed={wf_speed}")
+                    print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
+
+                if time.monotonic() - last_frame_at > WATERFALL_STARTUP_TIMEOUT_SECONDS:
+                    raise RuntimeError("waterfall startup timeout")
+                now = int(time.time())
+                if now != last_keepalive:
+                    ws.send_text("SET keepalive")
+                    last_keepalive = now
+                try:
+                    readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
+                    if not readable:
+                        continue
+                    message = ws.recv()
+                except socket.timeout:
+                    continue
+                if message[:3] == b"W/F" and len(message) > 16:
+                    last_frame_at = time.monotonic()
+                    if state.connection_ready(seen_server_generation, "waterfall"):
+                        persist_live_station_health(server, "waterfall", True)
+                    samples = message[16:]
+                    floor, ceiling = leveler.levels_for(samples)
+                    line = kiwi.waterfall_line(samples, mapper, floor, ceiling)
+                    state.update_spectrum(samples, floor, ceiling)
+                    row_span = kiwi.zoom_to_span_khz(zoom)
+                    row_item = (line, freq_khz, row_span)
+                    for _ in range(args.wf_row_pixels):
+                        try:
+                            line_queue.put_nowait(row_item)
+                        except queue.Full:
+                            try:
+                                line_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            line_queue.put_nowait(row_item)
+                    if samples:
+                        sorted_samples = sorted(samples)
+                        p95 = sorted_samples[min(len(sorted_samples) - 1, int(len(sorted_samples) * 0.95))]
+                        state.set_smeter(p95 - 268)
+        except Exception as exc:
+            print(f"gl WF {exc}", flush=True)
+            if state.connection_failed(seen_server_generation, "waterfall"):
+                persist_live_station_health(server, "waterfall", False)
+            if stop_event.wait(2.0):
+                break
+        finally:
+            if ws:
+                ws.send_close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
+    parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
+    parser.add_argument("--receiver-state-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-receiver.json")
+    parser.add_argument("--remember-receiver", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--screenshot-path", type=Path, default=Path("/tmp/kiwi-gl-display.png"), help=argparse.SUPPRESS)
+    parser.add_argument("--freq-khz", type=float, default=7075.794)
+    parser.add_argument("--zoom", type=int, default=13)
+    parser.add_argument("--wf-speed", type=int, default=4)
+    parser.add_argument("--wf-row-pixels", type=int, default=1)
+    parser.add_argument("--wf-floor", type=int, default=142)
+    parser.add_argument("--wf-ceil", type=int, default=245)
+    parser.add_argument("--spectrum", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fps", type=float, default=60.0)
+    parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
+    parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
+    parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
+    parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--invert-y", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--swap-x-y", action="store_true")
+    parser.add_argument("--invert-tune", action="store_true")
+    parser.add_argument(
+        "--finger-tune-positional",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="map finger distance to the active zoom span independently of drag velocity",
+    )
+    parser.add_argument("--tap-px", type=int, default=12)
+    parser.add_argument("--swipe-start-px", type=int, default=4)
+    parser.add_argument("--swipe-sensitivity", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--swipe-velocity-gain", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--swipe-velocity-low-px-s", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--swipe-velocity-high-px-s", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--swipe-fine-sensitivity", type=float, default=0.12)
+    parser.add_argument("--swipe-fine-px-s", type=float, default=130.0)
+    parser.add_argument("--swipe-slow-sensitivity", type=float, default=1.15)
+    parser.add_argument("--swipe-fast-sensitivity", type=float, default=2.4)
+    parser.add_argument("--swipe-fast-px-s", type=float, default=420.0)
+    parser.add_argument("--swipe-fast-zoom-px-s", type=float, default=1400.0)
+    parser.add_argument("--swipe-fast-zoom-distance-px", type=int, default=180)
+    parser.add_argument("--swipe-fast-zoom-out", type=int, default=5)
+    parser.add_argument("--swipe-fast-zoom-min", type=int, default=4)
+    parser.add_argument("--swipe-auto-zoom-budget", type=int, default=5)
+    parser.add_argument("--swipe-repeat-window-s", type=float, default=1.4)
+    parser.add_argument("--swipe-repeat-boost", type=float, default=0.65)
+    parser.add_argument("--swipe-repeat-max", type=int, default=3)
+    parser.add_argument("--swipe-repeat-zoom-out", type=int, default=1)
+    parser.add_argument("--swipe-repeat-zoom-threshold", type=int, default=2)
+    parser.add_argument("--swipe-repeat-zoom-min", type=int, default=11)
+    parser.add_argument("--swipe-inertia-min-px-s", type=float, default=520.0)
+    parser.add_argument("--swipe-inertia-strength", type=float, default=0.0)
+    parser.add_argument("--swipe-inertia-tau", type=float, default=0.30)
+    parser.add_argument("--max-zoom", type=int, default=14)
+    parser.add_argument("--station-zoom", type=int, default=13)
+    parser.add_argument("--tune-step-hz", type=int, default=100)
+    parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
+    parser.add_argument("--user", default="Codex OpenGL SDR display")
+    parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
+    parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
+    args = parser.parse_args()
+    remembered_radio_mode = None
+    if args.remember_receiver:
+        remembered_view = load_remembered_view(args.receiver_state_file)
+        if remembered_view:
+            args.server = remembered_view["server"]
+            args.freq_khz = remembered_view.get("freq_khz", args.freq_khz)
+            args.zoom = remembered_view.get("zoom", args.zoom)
+            remembered_radio_mode = remembered_view.get("radio_mode")
+            print(
+                f"gl remembered receiver: {args.server} "
+                f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
+                flush=True,
+            )
+    args.max_zoom = clamp(args.max_zoom, 0, 14)
+    args.station_zoom = clamp(args.station_zoom, 0, 14)
+    if args.swipe_sensitivity is not None:
+        args.swipe_slow_sensitivity = args.swipe_sensitivity
+    args.swipe_slow_sensitivity = max(0.1, args.swipe_slow_sensitivity)
+    args.swipe_fine_sensitivity = clamp(args.swipe_fine_sensitivity, 0.02, args.swipe_slow_sensitivity)
+    args.swipe_fine_px_s = clamp(args.swipe_fine_px_s, 10.0, max(11.0, args.swipe_fast_px_s - 1.0))
+    args.swipe_fast_sensitivity = max(args.swipe_slow_sensitivity, args.swipe_fast_sensitivity)
+    args.swipe_fast_px_s = max(50.0, args.swipe_fast_px_s)
+    args.swipe_fast_zoom_px_s = max(args.swipe_fast_px_s, args.swipe_fast_zoom_px_s)
+    args.swipe_fast_zoom_distance_px = max(args.swipe_start_px, args.swipe_fast_zoom_distance_px)
+    args.swipe_fast_zoom_out = max(0, args.swipe_fast_zoom_out)
+    args.swipe_fast_zoom_min = clamp(args.swipe_fast_zoom_min, 0, args.max_zoom)
+    args.swipe_auto_zoom_budget = max(0, args.swipe_auto_zoom_budget)
+    args.swipe_repeat_window_s = max(0.2, args.swipe_repeat_window_s)
+    args.swipe_repeat_boost = max(0.0, args.swipe_repeat_boost)
+    args.swipe_repeat_max = max(0, args.swipe_repeat_max)
+    args.swipe_repeat_zoom_out = max(0, args.swipe_repeat_zoom_out)
+    args.swipe_repeat_zoom_threshold = max(1, args.swipe_repeat_zoom_threshold)
+    args.swipe_repeat_zoom_min = clamp(args.swipe_repeat_zoom_min, 0, args.max_zoom)
+    args.tune_step_hz = max(1, args.tune_step_hz)
+    args.swipe_inertia_min_px_s = max(0.0, args.swipe_inertia_min_px_s)
+    args.swipe_inertia_strength = max(0.0, args.swipe_inertia_strength)
+    args.swipe_inertia_tau = max(0.05, args.swipe_inertia_tau)
+
+    set_display_orientation(args.orientation)
+    setup_gl()
+    print(
+        "OpenGL:",
+        GL.glGetString(GL.GL_VENDOR).decode(),
+        GL.glGetString(GL.GL_RENDERER).decode(),
+        GL.glGetString(GL.GL_VERSION).decode(),
+        f"orientation={args.orientation}",
+        flush=True,
+    )
+    text_cache = TextCache()
+    wf_texture = WaterfallTexture()
+    line_queue = queue.Queue(maxsize=96)
+    stop_event = threading.Event()
+    screenshot_requested = threading.Event()
+    zoom_osd_requested = threading.Event()
+
+    def request_screenshot(_signum, _frame):
+        screenshot_requested.set()
+
+    def request_zoom_osd(_signum, _frame):
+        zoom_osd_requested.set()
+
+    signal.signal(signal.SIGUSR1, request_screenshot)
+    signal.signal(signal.SIGUSR2, request_zoom_osd)
+    radio_mode = remembered_radio_mode or default_sideband_mode(args.freq_khz)
+    auto_sideband_mode = radio_mode
+    manual_radio_mode = remembered_radio_mode is not None
+    state = SharedState(
+        args.server,
+        args.freq_khz,
+        args.zoom,
+        -95.0,
+        args.wf_floor,
+        args.wf_ceil,
+        args.wf_speed,
+        radio_mode.lower(),
+        args.spectrum,
+    )
+    globe_mixer = GlobeAudioMixer(args, state)
+    scout_probe = ConstellationScoutProbe(args, state)
+    if args.remember_receiver:
+        save_remembered_view(args.receiver_state_file, args.server, args.freq_khz, args.zoom, radio_mode, manual_radio_mode)
+    wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
+    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state), daemon=True)
+    wf_thread.start()
+    snd_thread.start()
+
+    event_path = args.event or kiwi.find_touch_event()
+    ev = event_path.open("rb", buffering=0)
+    os.set_blocking(ev.fileno(), False)
+    print(f"gl touch input {event_path}", flush=True)
+
+    clock = pygame.time.Clock()
+    start = time.monotonic()
+    frames = 0
+    display_freq = args.freq_khz
+    display_span = kiwi.zoom_to_span_khz(args.zoom)
+    anim_from_freq = display_freq
+    anim_from_span = display_span
+    anim_to_freq = display_freq
+    anim_to_span = display_span
+    anim_start = 0.0
+    anim_duration = 0.20
+    zoom_osd_until = 0.0
+    next_system_sample = 0.0
+    next_smeter_readout_update = 0.0
+    smeter_readout_dbm = -121.0
+    cpu_percent = None
+    cpu_sample = None
+    temp_c = None
+    controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
+    all_stations = STATIONS
+    station_query = ""
+    station_sort = "location"
+    stations = filtered_stations(all_stations, station_query, station_sort)
+    station_health = {}
+    next_health_reload = 0.0
+    menu_open = False
+    menu_opened_at = 0.0
+    menu_scroll = 0.0
+    picker_open = False
+    search_open = False
+    keyboard_mode = "lower"
+    radio_setup_open = False
+    display_setup_open = False
+    audio_panel_open = False
+    audio_volume = pipewire_default_volume()
+    audio_volume_last_apply = 0.0
+    tests_panel_open = False
+    globe_open = False
+    globe_receivers = load_globe_receivers()
+    globe_result_queue = queue.Queue(maxsize=1)
+    globe_fetch_started = False
+    globe_yaw = math.radians(-20)
+    globe_pitch = math.radians(18)
+    globe_scale = 0.72
+    globe_listeners = []
+    globe_replacement_slots = []
+    globe_scouts = []
+    globe_scout_history = []
+    globe_scout_measurements = {}
+    globe_next_scout_rotation = 0.0
+    globe_next_scout_promotion = 0.0
+    globe_next_scout_review = 0.0
+    globe_scout_search_radius_km = SCOUT_SEARCH_START_KM
+    globe_scout_scanned_servers = set()
+    globe_scout_local_rounds = 0
+    globe_heat_frequency_khz = None
+    globe_heat_radio_mode = None
+    globe_anchor = None
+    globe_active_server = None
+    globe_status = "Tap a region to warm 3 listeners and launch 4 scouts"
+    globe_start_yaw = globe_yaw
+    globe_start_pitch = globe_pitch
+    globe_pinch_distance = None
+    globe_failed_servers = set()
+    retune_pattern_index = 0
+    retune_sweep = None
+    dj_tune_open = False
+    dj_origin_khz = args.freq_khz
+    dj_current_khz = args.freq_khz
+    dj_step_hz = 100
+    dj_range_khz = 5.0
+    dj_drag_remainder_hz = 0.0
+    filter_panel_open = False
+    filter_drag_edge = None
+    filter_drag_center = 0.0
+    filter_drag_audio_center = 0.0
+    filter_drag_limit = FILTER_LIMIT_HZ
+    filter_custom_width = False
+    station_scroll = 0
+    digital_mode = "DIG"
+    tune_step_hz = args.tune_step_hz
+    radio_mode_page = 0
+
+    active = False
+    raw_x = raw_y = None
+    current_slot = 0
+    mt_slots = {}
+    touch_started = False
+    gesture = None
+    swipe_started = False
+    start_x = start_freq = None
+    start_y = 0
+    start_scroll = 0
+    start_menu_scroll = 0.0
+    start_time = 0.0
+    last_move_x = 0.0
+    last_move_t = 0.0
+    swipe_velocity_px_s = 0.0
+    last_swipe_direction = 0
+    last_swipe_time = 0.0
+    repeat_swipe_count = 0
+    active_swipe_boost = 1.0
+    repeat_zoom_applied = False
+    repeat_zoom_changed = False
+    fast_sweep_zoom_applied = False
+    auto_zoom_levels_used = 0
+    inertia_velocity_khz_s = 0.0
+    inertia_last_t = time.monotonic()
+    start_span = display_span
+    candidate_freq = display_freq
+    last_x = None
+
+    def remember_current_view():
+        if not args.remember_receiver:
+            return
+        server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
+        save_remembered_view(args.receiver_state_file, server, freq_khz, zoom, radio_mode, manual_radio_mode)
+
+    def apply_band_default(freq_khz):
+        """Follow the conventional 10 MHz split until the operator takes over."""
+        nonlocal radio_mode, auto_sideband_mode
+        # The retune test is observational. It must not unexpectedly change
+        # the current demodulator while it crosses a nearby band threshold.
+        if retune_sweep is not None:
+            return
+        desired_mode = default_sideband_mode(freq_khz)
+        if manual_radio_mode or desired_mode == auto_sideband_mode:
+            return
+        radio_mode = desired_mode
+        auto_sideband_mode = desired_mode
+        state.set_radio_mode(radio_mode)
+        print(f"gl auto sideband {radio_mode.lower()} freq={freq_khz:.3f}", flush=True)
+
+    def controls_alpha(now=None):
+        now = now or time.monotonic()
+        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or now <= controls_active_until:
+            return 1.0
+        fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
+        return clamp(1.0 - fade_t, 0.0, 1.0)
+
+    def controls_quiet(now=None):
+        return controls_alpha(now) <= 0.05
+
+    def waterfall_focus_progress(now=None):
+        """Keep the waterfall stable; touch only reveals controls."""
+        return 0.0
+
+    def wake_controls():
+        nonlocal controls_active_until
+        controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
+
+    def animate_to(freq_khz, span_khz, duration=0.20):
+        nonlocal anim_from_freq, anim_from_span, anim_to_freq, anim_to_span, anim_start, anim_duration
+        nonlocal display_freq, display_span
+        anim_from_freq = display_freq
+        anim_from_span = display_span
+        anim_to_freq = freq_khz
+        anim_to_span = span_khz
+        anim_start = time.monotonic()
+        anim_duration = max(0.001, duration)
+
+    def update_animation():
+        nonlocal display_freq, display_span, anim_start
+        if anim_start <= 0:
+            return
+        t = (time.monotonic() - anim_start) / anim_duration
+        if t >= 1.0:
+            display_freq = anim_to_freq
+            display_span = anim_to_span
+            anim_start = 0.0
+            return
+        e = ease_out_cubic(t)
+        display_freq = anim_from_freq + (anim_to_freq - anim_from_freq) * e
+        display_span = anim_from_span + (anim_to_span - anim_from_span) * e
+
+    def change_zoom(delta):
+        nonlocal zoom_osd_until, auto_zoom_levels_used
+        wake_controls()
+        _server, freq_khz, zoom, _smeter, _gen, _server_gen = state.snapshot()
+        new_zoom = clamp(zoom + delta, 0, args.max_zoom)
+        if new_zoom == zoom:
+            zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
+            return
+        freq_khz, new_zoom, _gen = state.set_view(zoom=new_zoom)
+        remember_current_view()
+        auto_zoom_levels_used = 0
+        animate_to(freq_khz, kiwi.zoom_to_span_khz(new_zoom), 0.22)
+        zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
+        print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
+
+    def set_test_frequency(freq_khz):
+        """Publish a fresh desired tune; workers consume state, not a queue."""
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        frequency = clamp(freq_khz, 0.0, 30000.0)
+        state.set_view(freq_khz=frequency)
+        display_freq = frequency
+        candidate_freq = frequency
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+
+    def start_retune_sweep():
+        nonlocal retune_sweep, display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        _server, freq_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        retune_sweep = RetuneSweep(freq_khz, retune_pattern_index, time.monotonic())
+        display_freq = freq_khz
+        candidate_freq = freq_khz
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+        wake_controls()
+        print(f"gl test start {retune_sweep.name} {retune_sweep.command_count} at {freq_khz:.3f} kHz", flush=True)
+
+    def stop_retune_sweep(reason):
+        nonlocal retune_sweep
+        if retune_sweep is None:
+            return
+        start_khz = retune_sweep.start_khz
+        retune_sweep = None
+        set_test_frequency(start_khz)
+        remember_current_view()
+        print(f"gl test {reason}; restored {start_khz:.3f} kHz", flush=True)
+
+    def advance_retune_sweep(now):
+        nonlocal retune_sweep
+        if retune_sweep is None:
+            return
+        step = retune_sweep.advance(now)
+        if step is None:
+            return
+        frequency, done = step
+        set_test_frequency(frequency)
+        if done:
+            finished = retune_sweep
+            retune_sweep = None
+            remember_current_view()
+            print(f"gl test complete {finished.name}; restored {frequency:.3f} kHz", flush=True)
+
+    def open_dj_tune():
+        nonlocal dj_tune_open, dj_origin_khz, dj_current_khz, dj_drag_remainder_hz
+        _server, frequency, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        dj_tune_open = True
+        dj_origin_khz = frequency
+        dj_current_khz = frequency
+        dj_drag_remainder_hz = 0.0
+        wake_controls()
+
+    def restore_dj_origin(reason):
+        nonlocal dj_current_khz, dj_drag_remainder_hz
+        set_test_frequency(dj_origin_khz)
+        dj_current_khz = dj_origin_khz
+        dj_drag_remainder_hz = 0.0
+        remember_current_view()
+        print(f"gl dj {reason}; restored {dj_origin_khz:.3f} kHz", flush=True)
+
+    def advance_dj_tune(delta_px):
+        nonlocal dj_current_khz, dj_drag_remainder_hz, display_freq, candidate_freq
+        hz_per_px = 2.0 * dj_range_khz * 1000.0 / (DJ_TRACK_BOX[2] - DJ_TRACK_BOX[0])
+        dj_drag_remainder_hz += delta_px * hz_per_px
+        steps = math.trunc(dj_drag_remainder_hz / dj_step_hz)
+        if not steps:
+            return
+        target = clamp(
+            dj_current_khz + steps * dj_step_hz / 1000.0,
+            dj_origin_khz - dj_range_khz,
+            dj_origin_khz + dj_range_khz,
+        )
+        if target == dj_current_khz:
+            dj_drag_remainder_hz = 0.0
+            return
+        dj_drag_remainder_hz -= steps * dj_step_hz
+        dj_current_khz = target
+        state.set_view(freq_khz=target)
+        display_freq = target
+        candidate_freq = target
+
+    def advance_waterfall_drag(x):
+        nonlocal candidate_freq, display_freq, last_move_x, last_move_t, swipe_velocity_px_s
+        nonlocal start_span, zoom_osd_until, fast_sweep_zoom_applied, auto_zoom_levels_used
+        nonlocal repeat_zoom_applied, repeat_zoom_changed
+        now_move = time.monotonic()
+        dt = max(0.006, now_move - last_move_t)
+        dx = x - last_move_x
+        instant_velocity = dx / dt
+        # Decelerating must feel immediate: a slow finger movement takes
+        # precedence over the preceding quick swipe within the next samples.
+        velocity_blend = 0.72 if abs(instant_velocity) < abs(swipe_velocity_px_s) else 0.46
+        swipe_velocity_px_s = (1.0 - velocity_blend) * swipe_velocity_px_s + velocity_blend * instant_velocity
+
+        # Consecutive gestures only widen the view once this gesture itself is
+        # moving decisively. That leaves a deliberate slow follow-up drag as
+        # fine tuning, even directly after travelling quickly.
+        if (
+            not args.finger_tune_positional
+            and not repeat_zoom_applied
+            and repeat_swipe_count >= args.swipe_repeat_zoom_threshold
+            and abs(swipe_velocity_px_s) >= args.swipe_fast_px_s
+            and abs(x - start_x) >= args.swipe_fast_zoom_distance_px
+            and args.swipe_repeat_zoom_out
+        ):
+            _server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
+            new_zoom = (
+                max(
+                    args.swipe_repeat_zoom_min,
+                    zoom - min(args.swipe_repeat_zoom_out, max(0, args.swipe_auto_zoom_budget - auto_zoom_levels_used)),
+                )
+                if zoom > args.swipe_repeat_zoom_min
+                else zoom
+            )
+            applied_levels = zoom - new_zoom
+            if applied_levels:
+                state.set_view(zoom=new_zoom)
+                remember_current_view()
+                start_span = kiwi.zoom_to_span_khz(new_zoom)
+                animate_to(candidate_freq, start_span, 0.18)
+                zoom_osd_until = now_move + args.zoom_osd_seconds
+                auto_zoom_levels_used += applied_levels
+                repeat_zoom_changed = True
+                print(f"gl repeat swipe: zoom {new_zoom} span {start_span:.1f} kHz", flush=True)
+            repeat_zoom_applied = True
+
+        if (
+            not args.finger_tune_positional
+            and not fast_sweep_zoom_applied
+            and repeat_zoom_applied
+            and abs(swipe_velocity_px_s) >= args.swipe_fast_zoom_px_s
+            and abs(x - start_x) >= args.swipe_fast_zoom_distance_px
+            and args.swipe_fast_zoom_out
+        ):
+            _server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
+            if zoom > args.swipe_fast_zoom_min:
+                remaining_levels = max(0, args.swipe_fast_zoom_out - (1 if repeat_zoom_changed else 0))
+                allowed_levels = min(remaining_levels, max(0, args.swipe_auto_zoom_budget - auto_zoom_levels_used))
+                new_zoom = max(args.swipe_fast_zoom_min, zoom - allowed_levels)
+                applied_levels = zoom - new_zoom
+                if applied_levels:
+                    state.set_view(zoom=new_zoom)
+                    remember_current_view()
+                    start_span = kiwi.zoom_to_span_khz(new_zoom)
+                    animate_to(candidate_freq, start_span, 0.18)
+                    zoom_osd_until = now_move + args.zoom_osd_seconds
+                    auto_zoom_levels_used += applied_levels
+                    print(f"gl fast swipe: zoom {new_zoom} span {start_span:.1f} kHz", flush=True)
             fast_sweep_zoom_applied = True
         # Travel boost is tied to live velocity, not merely to the fact that
         # recent swipes were fast. It fades to exactly 1x during fine motion.
@@ -1665,7 +4363,9 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                                 gesture = "dj_tune_outside"
                             elif globe_open and contains(GLOBE_BACK_BOX, x, y):
                                 gesture = "globe_back"
-                            elif globe_open and contains(GLOBE_PANEL_BOX, x, y):
+                            elif globe_open and any(contains(box, x, y) for box in GLOBE_STATION_BOXES):
+                                gesture = "globe_station"
+                            elif globe_open and contains(GLOBE_MAP_BOX, x, y) and not contains(GLOBE_INFO_BOX, x, y):
                                 globe_start_yaw = globe_yaw
                                 globe_start_pitch = globe_pitch
                                 globe_pinch_distance = None
@@ -1779,14 +4479,14 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                                 else:
                                     # Regional receiver selection needs far more than a
                                     # whole-hemisphere view. Allow a continent-scale closeup.
-                                    globe_scale = clamp(globe_scale * (distance / globe_pinch_distance), 0.60, 3.50)
+                                    globe_scale = clamp(globe_scale * (distance / globe_pinch_distance), 0.55, 10.0)
                                     globe_pinch_distance = max(1.0, distance)
                             else:
                                 globe_pinch_distance = None
                                 # Treat the sphere as a direct-manipulation object:
                                 # dragging right/down carries its visible surface right/down.
-                                globe_yaw = globe_start_yaw - (x - start_x) * 0.011
-                                globe_pitch = clamp(globe_start_pitch + (y - start_y) * 0.008, math.radians(-48), math.radians(48))
+                                globe_yaw = (globe_start_yaw - (x - start_x) * 0.011 + math.pi) % math.tau - math.pi
+                                globe_pitch = clamp(globe_start_pitch + (y - start_y) * 0.008, math.radians(-80), math.radians(80))
                         elif gesture == "filter_drag" and contains(FILTER_EDIT_BOX, x, y):
                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                             cut_hz = filter_cut_at_x(
@@ -1827,6 +4527,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                                 audio_panel_open = False
                                 tests_panel_open = False
                                 globe_open = False
+                                globe_mixer.stop()
+                                scout_probe.stop()
                                 if dj_tune_open:
                                     restore_dj_origin("closed")
                                     dj_tune_open = False
@@ -1844,6 +4546,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                                 audio_panel_open = False
                                 tests_panel_open = False
                                 globe_open = False
+                                globe_mixer.stop()
+                                scout_probe.stop()
                                 if dj_tune_open:
                                     restore_dj_origin("closed")
                                     dj_tune_open = False
@@ -1906,31 +4610,109 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                             if moved <= args.tap_px:
                                 globe_open = False
                                 tests_panel_open = True
+                                globe_mixer.stop()
+                                scout_probe.stop()
                             wake_controls()
-                        elif touch_started and gesture == "globe":
+                        elif touch_started and gesture == "globe_station":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px and globe_receivers:
-                                # Resolve against visible dots. This naturally selects the
-                                # receiver cluster under the operator's finger.
-                                candidates = []
-                                for receiver in globe_receivers:
-                                    point = globe_project(receiver, globe_yaw, globe_pitch, 300, 174, 139 * globe_scale)
-                                    if point:
-                                        candidates.append((math.hypot(point[0] - x, point[1] - y), receiver))
-                                if candidates:
-                                    _distance, anchor = min(candidates, key=lambda item: item[0])
-                                    globe_anchor = anchor
-                                    globe_triangle = choose_globe_triangle(anchor, globe_receivers, station_health)
-                                    globe_failover = list(globe_triangle)
-                                    selected = globe_failover.pop(0)
-                                    globe_status = "Connecting live audio; triangle has two ready fallbacks"
+                            if moved <= args.tap_px:
+                                selected_index = next((index for index, box in enumerate(GLOBE_STATION_BOXES) if contains(box, x, y)), None)
+                                if selected_index is not None and selected_index < len(globe_listeners):
+                                    selected = globe_listeners[selected_index]
+                                    globe_active_server = selected["server"]
+                                    globe_mixer.select(selected["server"])
+                                    globe_status = "Switching live waterfall and audio"
                                     _server, freq_khz, zoom, _gen, _server_gen = state.set_server(selected["server"])
                                     remember_current_view()
                                     drain_queue(line_queue)
                                     wf_texture.clear()
                                     animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
-                                    globe_failover_deadline = time.monotonic() + 5.0
-                                    print(f"gl globe audition {selected['name']}: {selected['server']}", flush=True)
+                                    print(f"gl globe select {selected['name']}: {selected['server']}", flush=True)
+                            wake_controls()
+                        elif touch_started and gesture == "globe":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px and globe_receivers:
+                                # A measured SNR tile takes precedence over a nearby
+                                # directory dot. That makes a tap on past coverage turn
+                                # the actual scouted receiver into warm listener #1.
+                                anchor = scouted_receiver_at_tap(
+                                    x, y, globe_scouts, globe_scout_history, globe_scout_measurements,
+                                    math.degrees(globe_yaw), math.degrees(globe_pitch),
+                                    GLOBE_MAP_BOX, globe_scale,
+                                )
+                                # Otherwise resolve against visible directory dots. This
+                                # naturally selects the receiver cluster under the finger.
+                                candidates = []
+                                if anchor is None:
+                                    for receiver in globe_receivers:
+                                        point = flat_map_project(
+                                            receiver,
+                                            math.degrees(globe_yaw),
+                                            math.degrees(globe_pitch),
+                                            GLOBE_MAP_BOX,
+                                            globe_scale,
+                                        )
+                                        if point:
+                                            candidates.append((math.hypot(point[0] - x, point[1] - y), receiver))
+                                    if candidates:
+                                        _distance, anchor = min(candidates, key=lambda item: item[0])
+                                if anchor is not None:
+                                    _map_server, map_freq_khz, _map_zoom, _map_smeter, _map_view_gen, _map_server_gen = state.snapshot()
+                                    map_radio_mode, _map_low_cut, _map_high_cut, _map_radio_gen = state.radio_snapshot()
+                                    retain_heat = (
+                                        globe_heat_frequency_khz is not None
+                                        and abs(map_freq_khz - globe_heat_frequency_khz) < 0.001
+                                        and map_radio_mode == globe_heat_radio_mode
+                                    )
+                                    if not retain_heat:
+                                        globe_scout_history = []
+                                        globe_scout_scanned_servers = set()
+                                    globe_heat_frequency_khz = map_freq_khz
+                                    globe_heat_radio_mode = map_radio_mode
+                                    globe_anchor = anchor
+                                    globe_listeners, globe_scouts = choose_constellation(anchor, globe_receivers, station_health)
+                                    remaining_scout_budget = max(0, SCOUT_MAX_TOTAL - len(globe_scout_scanned_servers))
+                                    globe_scouts = [
+                                        scout for scout in globe_scouts
+                                        if scout["server"] not in globe_scout_scanned_servers
+                                    ][:remaining_scout_budget]
+                                    globe_replacement_slots = [
+                                        {
+                                            "current_server": receiver["server"],
+                                            "original_server": receiver["server"],
+                                            "previous_name": bottom_station_title(receiver["name"], receiver["location"]),
+                                            "reason": None,
+                                            "gain_db": 0.0,
+                                            "snr": None,
+                                        }
+                                        for receiver in globe_listeners
+                                    ]
+                                    globe_scout_measurements = {}
+                                    globe_scout_search_radius_km = max(
+                                        SCOUT_SEARCH_START_KM,
+                                        max((globe_haversine_km(anchor, scout) for scout in globe_scouts), default=0.0),
+                                    )
+                                    globe_scout_scanned_servers.update(scout["server"] for scout in globe_scouts)
+                                    globe_scout_local_rounds = 0
+                                    globe_next_scout_rotation = time.monotonic() + SCOUT_ROTATION_SECONDS
+                                    globe_next_scout_promotion = time.monotonic() + 10.0
+                                    globe_next_scout_review = time.monotonic() + 10.0
+                                    globe_failed_servers.clear()
+                                    globe_active_server = globe_listeners[0]["server"] if globe_listeners else None
+                                    if globe_active_server:
+                                        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(globe_active_server)
+                                        remember_current_view()
+                                        drain_queue(line_queue)
+                                        wf_texture.clear()
+                                        animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+                                        globe_mixer.start(globe_listeners, globe_active_server)
+                                        heat_label = "retaining prior heat cloud; " if retain_heat else "new heat cloud; "
+                                        if globe_scouts:
+                                            scout_probe.scan(globe_scouts)
+                                            globe_status = f"{heat_label}{len(globe_listeners)}/3 listeners warming"
+                                        else:
+                                            scout_probe.stop()
+                                            globe_status = f"Scout cap ({SCOUT_MAX_TOTAL}) reached; heat cloud retained"
                             wake_controls()
                         elif touch_started and gesture == "globe_outside":
                             wake_controls()
@@ -2287,16 +5069,191 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"
-            if globe_failover and now >= globe_failover_deadline and state.connection_snapshot() in ("failed", "retrying"):
-                fallback = globe_failover.pop(0)
-                _server, freq_khz, zoom, _gen, _server_gen = state.set_server(fallback["server"])
-                remember_current_view()
-                drain_queue(line_queue)
-                wf_texture.clear()
-                animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
-                globe_status = "Previous receiver unavailable; auditioning triangle fallback"
-                globe_failover_deadline = now + 5.0
-                print(f"gl globe fallback {fallback['name']}: {fallback['server']}", flush=True)
+            while True:
+                try:
+                    globe_event, globe_server = globe_mixer.events.get_nowait()
+                except queue.Empty:
+                    break
+                if globe_event == "ready":
+                    ready_count = len(globe_mixer.ready_servers)
+                    globe_status = f"{ready_count}/{len(globe_listeners)} listener streams warmed; 4 scouts sampling"
+                elif globe_event == "failed" and globe_server in {r["server"] for r in globe_listeners}:
+                    globe_failed_servers.add(globe_server)
+                    if globe_server == globe_active_server:
+                        ready_servers = globe_mixer.ready_snapshot()
+                        standbys = [
+                            receiver for receiver in globe_listeners
+                            if receiver["server"] != globe_server and receiver["server"] not in globe_failed_servers
+                        ]
+                        # Prefer a stream already producing PCM; if neither is
+                        # ready, select the first survivor so it becomes active
+                        # as soon as its warm connection finishes.
+                        fallback = next((receiver for receiver in standbys if receiver["server"] in ready_servers), None)
+                        fallback = fallback or (standbys[0] if standbys else None)
+                        if fallback:
+                            globe_active_server = fallback["server"]
+                            globe_mixer.select(fallback["server"])
+                            _server, freq_khz, zoom, _gen, _server_gen = state.set_server(fallback["server"])
+                            remember_current_view()
+                            drain_queue(line_queue)
+                            wf_texture.clear()
+                            animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+                            print(
+                                f"gl globe failover {globe_server} -> {fallback['server']} "
+                                f"ready={fallback['server'] in ready_servers}",
+                                flush=True,
+                            )
+                        else:
+                            globe_status = "Active receiver failed; no warm standby available"
+                            continue
+                    replace_index = next(i for i, receiver in enumerate(globe_listeners) if receiver["server"] == globe_server)
+                    occupied = {receiver["server"] for receiver in globe_listeners} | globe_failed_servers
+                    candidates = sorted(
+                        (receiver for receiver in globe_receivers if receiver["server"] not in occupied),
+                        key=lambda receiver: globe_haversine_km(globe_anchor, receiver),
+                    ) if globe_anchor else []
+                    if candidates:
+                        replacement = candidates[0]
+                        globe_listeners[replace_index] = replacement
+                        if replace_index < len(globe_replacement_slots):
+                            globe_replacement_slots[replace_index].update({
+                                "current_server": replacement["server"],
+                                "reason": "failed",
+                                "snr": None,
+                            })
+                        if globe_active_server == globe_server:
+                            globe_active_server = replacement["server"]
+                            _server, freq_khz, zoom, _gen, _server_gen = state.set_server(replacement["server"])
+                            animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+                        globe_status = "Active failed — switched to warm standby; replenishing listener"
+                        globe_mixer.start(globe_listeners, globe_active_server)
+                        globe_next_scout_promotion = now + 10.0
+                        globe_next_scout_review = now + 10.0
+            while True:
+                try:
+                    scout_event, scout_server, scout_smeter_dbm, scout_snr_db = scout_probe.events.get_nowait()
+                except queue.Empty:
+                    break
+                if scout_server in {receiver["server"] for receiver in globe_scouts}:
+                    globe_scout_measurements[scout_server] = {
+                        "smeter": scout_smeter_dbm if scout_event == "sample" else None,
+                        "snr": scout_snr_db if scout_event == "sample" else None,
+                        "sampled_at": now,
+                    }
+                    if scout_event == "sample":
+                        # Persist each completed probe immediately. A listener
+                        # promotion can start a fresh scout batch before the
+                        # next scheduled rotation; committing only at rotation
+                        # used to throw those valid SNR readings away.
+                        globe_scout_history.append((
+                            next(receiver for receiver in globe_scouts if receiver["server"] == scout_server),
+                            now,
+                            scout_smeter_dbm,
+                            scout_snr_db,
+                        ))
+                        globe_scout_scanned_servers.add(scout_server)
+                        snr_label = f", SNR~{scout_snr_db:+.0f} dB" if scout_snr_db is not None else ""
+                        globe_status = f"Scout RF measured at {scout_smeter_dbm:.0f} dBm{snr_label}"
+            if globe_anchor and now >= globe_next_scout_promotion and now >= globe_next_scout_review:
+                listener_measurements = globe_mixer.smeter_snapshot()
+                promotion = choose_scout_promotion(
+                    globe_listeners,
+                    globe_active_server,
+                    globe_scouts,
+                    globe_scout_measurements,
+                    listener_measurements,
+                    now,
+                )
+                standby_report = ", ".join(
+                    f"{receiver['server']}={format_scout_measurement(listener_measurements.get(receiver['server']))}"
+                    for receiver in globe_listeners if receiver["server"] != globe_active_server
+                ) or "none"
+                scout_report = ", ".join(
+                    f"{receiver['server']}={format_scout_measurement(globe_scout_measurements.get(receiver['server']))}"
+                    for receiver in globe_scouts
+                ) or "none"
+                if promotion:
+                    improvement, listener_index, scout, scout_dbm, listener_dbm = promotion
+                    displaced = globe_listeners[listener_index]
+                    scout_index = next(index for index, receiver in enumerate(globe_scouts) if receiver["server"] == scout["server"])
+                    globe_listeners[listener_index] = scout
+                    if listener_index < len(globe_replacement_slots):
+                        globe_replacement_slots[listener_index].update({
+                            "current_server": scout["server"],
+                            "previous_name": bottom_station_title(displaced["name"], displaced["location"]),
+                            "reason": "scout",
+                            "gain_db": improvement,
+                            "snr": globe_scout_measurements.get(scout["server"], {}).get("snr"),
+                        })
+                    globe_scouts[scout_index] = displaced
+                    globe_scout_scanned_servers.add(displaced["server"])
+                    globe_scout_measurements = {}
+                    globe_mixer.start(globe_listeners, globe_active_server)
+                    scout_probe.scan(globe_scouts)
+                    globe_next_scout_promotion = now + SCOUT_PROMOTION_COOLDOWN_SECONDS
+                    globe_status = f"Scout promoted: {scout_dbm:.0f} dBm replaces {listener_dbm:.0f} dBm standby"
+                    print(
+                        f"gl scout promote {scout['server']} {scout_dbm:.1f}dBm -> "
+                        f"{displaced['server']} {listener_dbm:.1f}dBm gain={improvement:.1f}dB",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"gl scout review no-promotion active={globe_active_server} "
+                        f"standbys=[{standby_report}] scouts=[{scout_report}] "
+                        f"margin={SCOUT_PROMOTION_MARGIN_DB:.1f}dB cooldown_until={globe_next_scout_promotion:.1f}",
+                        flush=True,
+                    )
+                globe_next_scout_review = now + SCOUT_PROMOTION_REVIEW_SECONDS
+            if globe_anchor and now >= globe_next_scout_rotation and globe_receivers:
+                # Preserve previous scout samples in the same heat cloud, then
+                # move the four live scouts through the next nearby candidates.
+                globe_scout_history = [
+                    (receiver, scanned_at, smeter_dbm, snr_db)
+                    for receiver, scanned_at, smeter_dbm, snr_db in globe_scout_history
+                    if now - scanned_at < SCOUT_HEAT_REMANENCE_SECONDS
+                ]
+                globe_scout_scanned_servers.update(
+                    receiver["server"] for receiver, _scanned_at, _smeter_dbm, _snr_db in globe_scout_history
+                )
+                if len(globe_scout_scanned_servers) >= SCOUT_MAX_TOTAL:
+                    globe_scouts = []
+                    globe_scout_measurements = {}
+                    scout_probe.stop()
+                    globe_next_scout_rotation = now + 3600.0
+                    globe_status = f"Scout cap reached: {SCOUT_MAX_TOTAL} locations mapped"
+                    print(f"gl scout cap reached total={SCOUT_MAX_TOTAL}", flush=True)
+                else:
+                    if globe_scout_local_rounds < SCOUT_LOCAL_ROUNDS:
+                        next_scouts, globe_scout_search_radius_km = choose_expanding_scouts(
+                            globe_anchor,
+                            globe_receivers,
+                            globe_listeners,
+                            globe_scout_scanned_servers,
+                            globe_scout_search_radius_km,
+                        )
+                        globe_scout_local_rounds += 1
+                        scout_status = f"4 scouts expanding locally to {globe_scout_search_radius_km / 1.609344:.0f} MI"
+                    else:
+                        next_scouts = choose_global_coverage_scouts(
+                            globe_receivers,
+                            globe_listeners,
+                            globe_scout_history,
+                            globe_scout_scanned_servers,
+                        )
+                        scout_status = "4 scouts maximizing global heatmap coverage"
+                    remaining_scout_budget = SCOUT_MAX_TOTAL - len(globe_scout_scanned_servers)
+                    globe_scouts = next_scouts[:remaining_scout_budget]
+                    globe_scout_scanned_servers.update(scout["server"] for scout in globe_scouts)
+                    globe_scout_measurements = {}
+                    if globe_scouts:
+                        scout_probe.scan(globe_scouts)
+                        globe_next_scout_rotation = now + SCOUT_ROTATION_SECONDS
+                        globe_status = scout_status
+                    else:
+                        scout_probe.stop()
+                        globe_next_scout_rotation = now + 3600.0
+                        globe_status = f"Scout cap reached: {SCOUT_MAX_TOTAL} locations mapped"
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
@@ -2427,7 +5384,13 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
             if globe_open:
-                draw_globe_panel(text_cache, globe_receivers, globe_yaw, globe_pitch, globe_scale, globe_triangle, globe_anchor, globe_status)
+                draw_globe_panel(
+                    text_cache, globe_receivers, globe_yaw, globe_pitch, globe_scale,
+                    globe_listeners, globe_mixer.smeter_snapshot(), globe_scouts,
+                    globe_scout_history, globe_scout_measurements,
+                    globe_replacement_slots, len(globe_scout_scanned_servers),
+                    globe_active_server, globe_anchor, globe_status,
+                )
             if dj_tune_open:
                 draw_dj_tune_panel(
                     text_cache,
@@ -2463,6 +5426,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
                 break
             clock.tick(args.fps)
     finally:
+        globe_mixer.stop()
+        scout_probe.stop()
         stop_event.set()
         ev.close()
         wf_thread.join(timeout=1.5)
