@@ -387,7 +387,7 @@ def recv_exact(sock, count):
 def send_kiwi_setup(ws, client_type, user):
     ws.send_text(f"SET auth t={client_type} p=")
     ws.send_text(f"SET ident_user={user}")
-    ws.send_text("SET geo=Codex display")
+    ws.send_text("SET geo=Ituner receiver")
 
 
 def send_wf_setup(ws, freq_khz, zoom, wf_speed):
