@@ -2880,22 +2880,22 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
 
     # Recessed glass channel: the active level sits inside this darker track
     # instead of reading as a flat UI rule.
-    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 14, 23, 235), 10)
-    draw_logical_line(meter_x0, trace_y - 3, meter_x1, trace_y - 3, (102, 132, 145, 105), 1)
-    draw_logical_line(meter_x0, trace_y + 3, meter_x1, trace_y + 3, (2, 7, 13, 220), 1)
+    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 14, 23, 235), 13)
+    draw_logical_line(meter_x0, trace_y - 4, meter_x1, trace_y - 4, (102, 132, 145, 105), 1)
+    draw_logical_line(meter_x0, trace_y + 4, meter_x1, trace_y + 4, (2, 7, 13, 220), 1)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
     live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
     live_shadow = (94, 0, 16, 255) if smeter_dbm >= SMETER_S9_DBM else (0, 18, 116, 255)
     live_highlight = (255, 202, 208, 235) if smeter_dbm >= SMETER_S9_DBM else (150, 232, 255, 235)
     # Layered, rounded strokes give the active line a low half-cylinder
     # profile: shaded underside, saturated body, then a glass highlight.
-    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_shadow, 9)
-    draw_logical_circle(meter_x0, trace_y, 4.5, live_shadow)
-    draw_logical_circle(live_x, trace_y, 4.5, live_shadow)
-    draw_logical_line(meter_x0, trace_y - 1, live_x, trace_y - 1, live_color, 6)
-    draw_logical_circle(meter_x0, trace_y - 1, 3, live_color)
-    draw_logical_circle(live_x, trace_y - 1, 3, live_color)
-    draw_logical_line(meter_x0 + 2, trace_y - 3, max(meter_x0 + 2, live_x - 2), trace_y - 3, live_highlight, 1)
+    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_shadow, 12)
+    draw_logical_circle(meter_x0, trace_y, 6, live_shadow)
+    draw_logical_circle(live_x, trace_y, 6, live_shadow)
+    draw_logical_line(meter_x0, trace_y - 1, live_x, trace_y - 1, live_color, 8)
+    draw_logical_circle(meter_x0, trace_y - 1, 4, live_color)
+    draw_logical_circle(live_x, trace_y - 1, 4, live_color)
+    draw_logical_line(meter_x0 + 3, trace_y - 4, max(meter_x0 + 3, live_x - 3), trace_y - 4, live_highlight, 1)
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
     draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 28, True, True, "rm")
@@ -2903,7 +2903,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     draw_logical_circle(
         live_x,
         trace_y - 1,
-        6.5,
+        7,
         (139, 234, 255, 255) if smeter_dbm < SMETER_S9_DBM else (255, 174, 178, 255),
     )
     draw_logical_circle(live_x - 1, trace_y - 3, 2.2, (237, 254, 255, 245))
