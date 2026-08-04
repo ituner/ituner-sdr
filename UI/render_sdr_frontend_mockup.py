@@ -15,7 +15,9 @@ SYS = Path("/sys/class/graphics/fb0")
 FB = Path("/dev/fb0")
 LW, LH = 960, 320
 ACTIVE_H = 400
-TOP_H = 66
+# The calibrated live S-meter needs a distinct dBm scale below its trace.
+# Reserve enough black instrument-strip height for that scale to stay legible.
+TOP_H = 78
 RULER_H = 24
 DEFAULT_FREQ_KHZ = 7032.5
 DEFAULT_SPAN_KHZ = 64.0
