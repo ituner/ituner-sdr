@@ -75,6 +75,16 @@ python3 /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/tools/p5_li
 
 It refreshes at 2 fps by default, which is gentle on the Pi while remaining useful for live UI work. Use `--fps 3` through `--fps 5` when a faster preview is needed.
 
+### Local Desktop Development
+
+The OpenGL receiver can also run entirely on the Mac, without the Pi or its framebuffer:
+
+```sh
+python3 /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/tools/kiwi_gl_display.py --desktop --fps 30
+```
+
+`--desktop` opens the same interface in a native `320x960` portrait window, matching the panel orientation. It connects directly to the selected KiwiSDR receiver and uses CoreAudio for normal receiver audio. Left-click and drag is the touch gesture; the mouse wheel changes zoom; `Esc` or `q` closes the window. Use `--no-audio` for silent visual-only testing.
+
 It uses Pillow to compose a full `960x320` SDR image, then converts it to the native rotated framebuffer layout and writes `/dev/fb0` through `mmap`. It established the principal visual language:
 
 - A large centered mono-spaced frequency readout.
