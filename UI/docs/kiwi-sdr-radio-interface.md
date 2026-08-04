@@ -67,6 +67,14 @@ open /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/renders/p5-liv
 
 This asks the live OpenGL service for a framebuffer screenshot, so it includes the actual receiver, waterfall, controls, and any active overlay rather than a separate mockup.
 
+For a continuously refreshing Mac window of that same framebuffer, use:
+
+```sh
+python3 /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/tools/p5_live_preview.py
+```
+
+It refreshes at 2 fps by default, which is gentle on the Pi while remaining useful for live UI work. Use `--fps 3` through `--fps 5` when a faster preview is needed.
+
 It uses Pillow to compose a full `960x320` SDR image, then converts it to the native rotated framebuffer layout and writes `/dev/fb0` through `mmap`. It established the principal visual language:
 
 - A large centered mono-spaced frequency readout.
