@@ -2854,20 +2854,14 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     def dbx(dbm):
         return meter_x0 + round((meter_x1 - meter_x0) * (smeter_segment_position(dbm) / 36.0))
 
-    # Put the passive channel behind the calibration. Its recess should not
-    # erase the midpoint of the vertical scale marks.
-    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 13, 21, 235), 8)
-    draw_logical_line(meter_x0, trace_y - 3, meter_x1, trace_y - 3, (112, 143, 152, 112), 1)
-    draw_logical_line(meter_x0, trace_y + 3, meter_x1, trace_y + 3, (1, 6, 11, 225), 1)
+    # Keep the rail deliberately neutral and flat. The calibration and live
+    # level are the information; decorative glass treatment obscures both.
+    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (27, 43, 51, 230), 6)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
     live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
-    live_shadow = (94, 0, 16, 255) if smeter_dbm >= SMETER_S9_DBM else (0, 18, 116, 255)
-    live_highlight = (255, 202, 208, 235) if smeter_dbm >= SMETER_S9_DBM else (150, 232, 255, 235)
     # The active trace belongs behind the scale too. The calibrated tick
     # geometry must remain uninterrupted at every level.
-    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_shadow, 6)
-    draw_logical_line(meter_x0, trace_y - 1, live_x, trace_y - 1, live_color, 4)
-    draw_logical_line(meter_x0 + 1, trace_y - 2.5, max(meter_x0 + 1, live_x - 2), trace_y - 2.5, live_highlight, 1)
+    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_color, 4)
 
     labels = (
         ("S", dbx(-121) - 40, green[:3], 14),
