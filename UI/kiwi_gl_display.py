@@ -2859,6 +2859,15 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (5, 13, 21, 235), 8)
     draw_logical_line(meter_x0, trace_y - 3, meter_x1, trace_y - 3, (112, 143, 152, 112), 1)
     draw_logical_line(meter_x0, trace_y + 3, meter_x1, trace_y + 3, (1, 6, 11, 225), 1)
+    live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
+    live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
+    live_shadow = (94, 0, 16, 255) if smeter_dbm >= SMETER_S9_DBM else (0, 18, 116, 255)
+    live_highlight = (255, 202, 208, 235) if smeter_dbm >= SMETER_S9_DBM else (150, 232, 255, 235)
+    # The active trace belongs behind the scale too. The calibrated tick
+    # geometry must remain uninterrupted at every level.
+    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_shadow, 6)
+    draw_logical_line(meter_x0, trace_y - 1, live_x, trace_y - 1, live_color, 4)
+    draw_logical_line(meter_x0 + 1, trace_y - 2.5, max(meter_x0 + 1, live_x - 2), trace_y - 2.5, live_highlight, 1)
 
     labels = (
         ("S", dbx(-121) - 40, green[:3], 14),
@@ -2882,17 +2891,9 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         draw_logical_line(x, trace_y - 14, x, trace_y + 14, color, 2)
     for dbm in (-115, -103, -91, -79, -63, -43):
         x = dbx(dbm)
-        draw_logical_line(x, trace_y - 6, x, trace_y + 6, rail, 1)
+        tick_color = red if dbm in (-63, -43) else rail
+        draw_logical_line(x, trace_y - 6, x, trace_y + 6, tick_color, 1)
 
-    live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
-    live_color = red if smeter_dbm >= SMETER_S9_DBM else blue
-    live_shadow = (94, 0, 16, 255) if smeter_dbm >= SMETER_S9_DBM else (0, 18, 116, 255)
-    live_highlight = (255, 202, 208, 235) if smeter_dbm >= SMETER_S9_DBM else (150, 232, 255, 235)
-    # A compact three-layer trace gives a gentle bevel without making the
-    # signal look like a glossy control. The level marker carries the focus.
-    draw_logical_line(meter_x0, trace_y, live_x, trace_y, live_shadow, 6)
-    draw_logical_line(meter_x0, trace_y - 1, live_x, trace_y - 1, live_color, 4)
-    draw_logical_line(meter_x0 + 1, trace_y - 2.5, max(meter_x0 + 1, live_x - 2), trace_y - 2.5, live_highlight, 1)
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
     draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 28, True, True, "rm")
