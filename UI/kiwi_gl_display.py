@@ -732,6 +732,8 @@ CONTROL_FADE_SECONDS = 0.65
 
 
 def logical_to_native(x, y):
+    if DESKTOP_MODE:
+        return x, y
     if DISPLAY_ORIENTATION == "normal":
         return ACTIVE_H - y, x
     return y + VISIBLE_Y_OFFSET, NATIVE_H - x
@@ -743,13 +745,12 @@ def set_display_orientation(orientation):
 
 
 def configure_output(desktop=False):
-    """Select the Pi framebuffer geometry or a same-orientation desktop window."""
+    """Select the Pi framebuffer geometry or a native landscape desktop window."""
     global NATIVE_W, NATIVE_H, ACTIVE_H, VISIBLE_Y_OFFSET, DESKTOP_MODE
     DESKTOP_MODE = bool(desktop)
     if DESKTOP_MODE:
-        # This is the active 960x320 interface rotated into the requested
-        # physical 320x960 development window, with no Pi-only blank margin.
-        NATIVE_W, NATIVE_H = LOGICAL_H, LOGICAL_W
+        # Desktop development uses the logical SDR orientation directly.
+        NATIVE_W, NATIVE_H = LOGICAL_W, LOGICAL_H
         ACTIVE_H = LOGICAL_H
         VISIBLE_Y_OFFSET = 0
     else:
@@ -2707,6 +2708,14 @@ def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, 
     return text + ellipsis if text else ellipsis
 
 
+def station_fields(station):
+    """Return a consistent station row for both directory and fallback data."""
+    name, location, server = station[:3]
+    listener_used = station[3] if len(station) > 3 else None
+    listener_total = station[4] if len(station) > 4 else None
+    return name, location, server, listener_used, listener_total
+
+
 def draw_station_picker(text_cache, stations, scroll, selected_server, query, sort_mode, station_health):
     x0, y0, x1, y1 = PICKER_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
@@ -2719,7 +2728,8 @@ def draw_station_picker(text_cache, stations, scroll, selected_server, query, so
     draw_picker_button(text_cache, PICKER_SORT_NAME_BOX, "NAME", 20, sort_mode == "name")
     draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 20)
 
-    for idx, (name, location, server, listener_used, listener_total) in enumerate(stations):
+    for idx, station in enumerate(stations):
+        name, location, server, listener_used, listener_total = station_fields(station)
         box = station_tile(idx, scroll)
         if not box:
             continue
@@ -3802,7 +3812,7 @@ def main():
     parser.add_argument("--spectrum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fps", type=float, default=60.0)
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
-    parser.add_argument("--desktop", action="store_true", help="run locally in a mouse-driven 320x960 macOS/Linux development window")
+    parser.add_argument("--desktop", action="store_true", help="run locally in a mouse-driven 960x320 landscape development window")
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
@@ -3944,6 +3954,10 @@ def main():
     desktop_event_writer = None
     if args.desktop:
         event_read_fd, desktop_event_writer = os.pipe()
+        # The Pygame loop creates the synthetic touch events for this pipe.
+        # It must therefore never wait here for an event that it has not yet
+        # had a chance to poll from the desktop window.
+        os.set_blocking(event_read_fd, False)
         ev = os.fdopen(event_read_fd, "rb", buffering=0)
         print(f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, wheel zooms", flush=True)
     else:
@@ -4347,10 +4361,12 @@ def main():
     desktop_pointer_down = False
 
     def desktop_logical_point(position):
-        """Map a mouse position in the rotated desktop window into UI space."""
+        """Map a desktop mouse position directly into logical UI space."""
         window_w, window_h = pygame.display.get_window_size()
         nx = clamp(round(position[0] * NATIVE_W / max(1, window_w)), 0, NATIVE_W - 1)
         ny = clamp(round(position[1] * NATIVE_H / max(1, window_h)), 0, NATIVE_H - 1)
+        if DESKTOP_MODE:
+            return nx, ny
         if args.orientation == "normal":
             return clamp(ny, 0, LOGICAL_W - 1), clamp(ACTIVE_H - 1 - nx, 0, LOGICAL_H - 1)
         return clamp(NATIVE_H - 1 - ny, 0, LOGICAL_W - 1), clamp(nx - VISIBLE_Y_OFFSET, 0, LOGICAL_H - 1)
@@ -5561,6 +5577,11 @@ def main():
                 frame = pygame.image.frombuffer(pixels, (NATIVE_W, NATIVE_H), "RGBA")
                 pygame.image.save(pygame.transform.flip(frame, False, True), "/tmp/kiwi-gl-screenshot.png")
                 Path("/tmp/kiwi-gl-screenshot").unlink(missing_ok=True)
+            # macOS's SDL OpenGL path can leave the composited window black
+            # even though glReadPixels sees a complete backbuffer. Explicitly
+            # flush before the swap so the drawable is presented to Cocoa.
+            if DESKTOP_MODE:
+                GL.glFlush()
             pygame.display.flip()
             frames += 1
             if args.duration and time.monotonic() - start >= args.duration:
