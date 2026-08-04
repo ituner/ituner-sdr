@@ -49,6 +49,36 @@ Optional settings:
 sudo ituner-sdr-configure --frequency-khz 7075.794 --orientation flipped
 ```
 
+## Run Locally on macOS
+
+The active OpenGL radio can run directly on a Mac for UI development and receiver testing. It opens the SDR canvas as a normal `960x320` landscape window; it does not need the Pi, DSI display, or touch controller.
+
+Use Python 3.9 through 3.12:
+
+```bash
+git clone https://github.com/ituner/ituner-sdr.git
+cd ituner-sdr/UI
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install pygame PyOpenGL sounddevice
+python kiwi_gl_display.py --desktop --fps 30
+```
+
+On macOS where Anaconda shadows the desired interpreter, use the system Python explicitly:
+
+```bash
+/usr/bin/python3 -m venv .venv
+```
+
+Desktop controls:
+
+- Left-click and drag: touch-style tuning, menus, filter, and passband controls.
+- Mouse wheel: zoom.
+- `Esc` or `q`: close the application.
+- `--no-audio`: run without CoreAudio output.
+
+The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
+
 ## Boot services and status
 
 After reboot, the following services are enabled:
