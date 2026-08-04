@@ -2890,7 +2890,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
 
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
-    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 28, True, True, "rm")
+    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 24, True, True, "rm")
     draw_text(text_cache, meter_x0 - 32, trace_y, "dBm", (164, 184, 188), 13, True, True, "lm")
     draw_logical_circle(
         live_x,
