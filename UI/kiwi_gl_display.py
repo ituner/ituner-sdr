@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from collections import deque
+import ctypes
 import errno
 import json
 import math
@@ -364,7 +365,8 @@ FILTER_WIDTH_PRESETS = (
 )
 AUDIO_PANEL_BOX = (12, 34, 948, 316)
 AUDIO_VOLUME_BOX = (42, 76, 692, 128)
-AUDIO_MUTE_BOX = (716, 76, 918, 128)
+AUDIO_MUTE_BOX = (716, 76, 814, 128)
+AUDIO_VOICE_CLEAN_BOX = (826, 76, 918, 128)
 AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
 AUDIO_AGC_BOX = (268, 154, 482, 210)
 AUDIO_BLANKER_BOX = (494, 154, 706, 210)
@@ -379,6 +381,13 @@ DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
 # A clear, no-extra-controls loudness recovery curve. It reaches the requested
 # 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
 DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
+# RNNoise is intentionally kept local to the Pi. The public Kiwi receiver
+# remains responsible for demodulation while this optional stage cleans the
+# received mono PCM before it reaches PipeWire/USB audio.
+RNNOISE_LIBRARY = Path(os.environ.get(
+    "ITUNER_RNNOISE_LIBRARY",
+    "/home/ituner/codex-sdr-display/vendor/rnnoise-install/lib/librnnoise.so",
+))
 PREFERENCES_WRITE_IDLE_SECONDS = 1.5
 FREQUENCY_WRITE_IDLE_SECONDS = 60.0
 PREFERENCES_POLL_SECONDS = 0.25
@@ -440,7 +449,7 @@ POPUP_LAYOUT_BASE = {
                 DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES),
     "filter": (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
                FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX),
-    "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX,
+    "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX,
               AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
               AUDIO_FILTER_BOX, AUDIO_RESET_BOX),
@@ -464,7 +473,7 @@ def configure_popup_layout():
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
-    global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX
+    global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX
@@ -497,7 +506,7 @@ def configure_popup_layout():
     )
 
     dy = offset("audio")
-    (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX,
+    (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX,
      AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
      AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
      AUDIO_FILTER_BOX, AUDIO_RESET_BOX) = (
@@ -1395,6 +1404,7 @@ class SharedState:
         self.nb_algo = 0
         self.nr_algo = 1
         self.denoise_level = 0
+        self.voice_clean_enabled = False
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
@@ -1569,6 +1579,7 @@ class SharedState:
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
+                "voice_clean": self.voice_clean_enabled,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1594,7 +1605,7 @@ class SharedState:
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-            "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
+            "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
         }
         with self.lock:
             changed = False
@@ -1611,6 +1622,7 @@ class SharedState:
             self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
             self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
+            self.voice_clean_enabled = bool(self.voice_clean_enabled)
             if changed:
                 self.audio_generation += 1
             return {
@@ -1629,6 +1641,7 @@ class SharedState:
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
+                "voice_clean": self.voice_clean_enabled,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1637,7 +1650,7 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, autonotch_enabled=False,
+            nr_algo=1, denoise_level=0, voice_clean_enabled=False, autonotch_enabled=False,
         )
 
     def set_filter(self, low_cut=None, high_cut=None):
@@ -2586,9 +2599,73 @@ def apply_denoise_makeup_gain(audio, gain_db):
     return struct.pack(f"<{sample_count}h", *boosted)
 
 
+class RNNoiseVoiceCleaner:
+    """A small 12 kHz Kiwi PCM adapter for RNNoise's 48 kHz frame API."""
+
+    INPUT_FRAME_SAMPLES = 120
+    RNNOISE_FRAME_SAMPLES = 480
+
+    def __init__(self, library_path=RNNOISE_LIBRARY):
+        self.library = ctypes.CDLL(str(library_path))
+        self.library.rnnoise_create.argtypes = [ctypes.c_void_p]
+        self.library.rnnoise_create.restype = ctypes.c_void_p
+        self.library.rnnoise_destroy.argtypes = [ctypes.c_void_p]
+        self.library.rnnoise_destroy.restype = None
+        self.library.rnnoise_process_frame.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(ctypes.c_float),
+        ]
+        self.library.rnnoise_process_frame.restype = ctypes.c_float
+        self.state = self.library.rnnoise_create(None)
+        if not self.state:
+            raise RuntimeError("rnnoise_create failed")
+        self.pending = bytearray()
+
+    def close(self):
+        if self.state:
+            self.library.rnnoise_destroy(self.state)
+            self.state = None
+
+    def process_pcm(self, audio):
+        """Clean native little-endian mono S16 PCM with about 10 ms latency."""
+        if not audio:
+            return audio
+        self.pending.extend(audio)
+        frame_bytes = self.INPUT_FRAME_SAMPLES * 2
+        output = bytearray()
+        while len(self.pending) >= frame_bytes:
+            frame = bytes(self.pending[:frame_bytes])
+            del self.pending[:frame_bytes]
+            samples = struct.unpack(f"<{self.INPUT_FRAME_SAMPLES}h", frame)
+            rn_input = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)()
+            for index, current in enumerate(samples):
+                following = samples[index + 1] if index + 1 < len(samples) else current
+                base = index * 4
+                delta = following - current
+                rn_input[base] = float(current)
+                rn_input[base + 1] = float(current + delta * 0.25)
+                rn_input[base + 2] = float(current + delta * 0.50)
+                rn_input[base + 3] = float(current + delta * 0.75)
+            rn_output = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)()
+            self.library.rnnoise_process_frame(self.state, rn_output, rn_input)
+            cleaned = (
+                int(clamp(round(rn_output[index * 4]), -32768, 32767))
+                for index in range(self.INPUT_FRAME_SAMPLES)
+            )
+            output.extend(struct.pack(f"<{self.INPUT_FRAME_SAMPLES}h", *cleaned))
+        return bytes(output)
+
+
+def rnnoise_voice_mode(radio_mode):
+    """RNNoise is a speech enhancer, not a useful DSP stage for digital/IQ."""
+    return str(radio_mode).lower() in ("am", "sam", "lsb", "usb")
+
+
 def audio_option_at(x, y):
     for name, box in (
-        ("mute", AUDIO_MUTE_BOX), ("squelch", AUDIO_SQUELCH_BOX),
+        ("mute", AUDIO_MUTE_BOX), ("voice_clean", AUDIO_VOICE_CLEAN_BOX),
+        ("squelch", AUDIO_SQUELCH_BOX),
         ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
         ("notch", AUDIO_NOTCH_BOX),
         ("deemphasis", AUDIO_DEEMP_BOX), ("filter", AUDIO_FILTER_BOX),
@@ -2652,10 +2729,10 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         knob_x = track_x0 + (track_x1 - track_x0) * fraction
         draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, (229, 246, 246, 245))
 
-    def denoise_slider(box, level):
+    def denoise_slider(box, level, bypassed=False):
         bx0, by0, bx1, by1 = box
         level = int(clamp(level, 0, len(kiwi.DENOISE_PRESETS) - 1))
-        active = level > 0
+        active = level > 0 and not bypassed
         draw_logical_rect(bx0, by0, bx1, by1, (24, 63, 57, 224) if active else (18, 29, 38, 220))
         line = (93, 235, 174, 184) if active else (115, 140, 151, 82)
         for line_y in (by0, by1):
@@ -2663,7 +2740,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_logical_line(bx0, by0, bx0, by1, line, 1)
         draw_logical_line(bx1, by0, bx1, by1, line, 1)
         draw_text(text_cache, bx0 + 14, by0 + 16, "DENOISE", (230, 246, 247), 14, True, True, "lm", family="Liberation Sans")
-        label = kiwi.DENOISE_PRESETS[level][0]
+        label = "BYPASS" if bypassed else kiwi.DENOISE_PRESETS[level][0]
         draw_text(text_cache, bx1 - 14, by0 + 16, label, (112, 235, 175) if active else (153, 185, 191), 14, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
         denoise_track_y = by1 - 15
@@ -2678,6 +2755,14 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
+    voice_clean = bool(controls.get("voice_clean", False))
+    panel_button(
+        AUDIO_VOICE_CLEAN_BOX,
+        "VOICE",
+        "CLEAN" if voice_clean else "OFF",
+        voice_clean,
+        (123, 193, 250, 230),
+    )
     sq = int(controls["squelch_level"])
     panel_slider(AUDIO_SQUELCH_BOX, "SQUELCH", sq, 99)
     agc_detail = "AUTO" if controls["agc"] and not controls["agc_hang"] else ("AUTO HANG" if controls["agc"] else f"MAN {controls['agc_manual_gain']} dB")
@@ -2685,7 +2770,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
     panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
     denoise_level = int(controls["denoise_level"])
-    denoise_slider(AUDIO_DENOISE_BOX, denoise_level)
+    denoise_slider(AUDIO_DENOISE_BOX, denoise_level, voice_clean)
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
@@ -4404,6 +4489,8 @@ def snd_meter_worker(args, stop_event, state):
     seen_audio_generation = -1
     player = None
     player_channels = None
+    voice_cleaner = None
+    voice_clean_requested = None
     while not stop_event.is_set():
         ws = None
         try:
@@ -4438,6 +4525,22 @@ def snd_meter_worker(args, stop_event, state):
                     player = start_audio_player(args, desired_channels) if desired_channels else None
                     player_channels = desired_channels
                 audio_controls, audio_generation = state.audio_controls_snapshot()
+                want_voice_clean = (
+                    bool(audio_controls.get("voice_clean", False))
+                    and desired_channels == 1
+                    and rnnoise_voice_mode(radio_mode)
+                )
+                if want_voice_clean != voice_clean_requested:
+                    if voice_cleaner is not None:
+                        voice_cleaner.close()
+                        voice_cleaner = None
+                    voice_clean_requested = want_voice_clean
+                    if want_voice_clean:
+                        try:
+                            voice_cleaner = RNNoiseVoiceCleaner()
+                            print("gl RNNoise voice clean enabled", flush=True)
+                        except (OSError, RuntimeError) as exc:
+                            print(f"gl RNNoise unavailable: {exc}", flush=True)
                 live_tune_interval = 1.0 / state.tune_rate_snapshot()
                 if server_generation != seen_server_generation:
                     seen_server_generation = server_generation
@@ -4525,8 +4628,12 @@ def snd_meter_worker(args, stop_event, state):
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
                     denoise_level = int(audio_controls.get("denoise_level", 0))
-                    if denoise_level > 0:
+                    if voice_cleaner is not None:
+                        audio = voice_cleaner.process_pcm(audio)
+                    elif denoise_level > 0:
                         audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
+                    if not audio:
+                        continue
                     try:
                         player.stdin.write(audio)
                     except (BrokenPipeError, OSError):
@@ -4542,6 +4649,8 @@ def snd_meter_worker(args, stop_event, state):
         finally:
             if ws:
                 ws.send_close()
+    if voice_cleaner is not None:
+        voice_cleaner.close()
     stop_audio_player(player)
 
 
@@ -5055,7 +5164,7 @@ def main():
                 if name in {
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-                    "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
+                    "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
                 }
             })
     globe_mixer = GlobeAudioMixer(args, state)
@@ -5235,6 +5344,7 @@ def main():
                 "nb_algo": audio_controls["nb_algo"],
                 "nr_algo": audio_controls["nr_algo"],
                 "denoise_level": audio_controls["denoise_level"],
+                "voice_clean_enabled": audio_controls["voice_clean"],
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -5932,6 +6042,7 @@ def main():
                             state.set_audio_controls(
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
+                                voice_clean_enabled=False,
                             )
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
@@ -6091,6 +6202,7 @@ def main():
                             state.set_audio_controls(
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
+                                voice_clean_enabled=False,
                             )
                             wake_controls()
                         elif touch_started and gesture == "audio_control":
@@ -6100,6 +6212,8 @@ def main():
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 if choice == "mute":
                                     state.set_audio_controls(audio_mute=not controls["mute"])
+                                elif choice == "voice_clean":
+                                    state.set_audio_controls(voice_clean_enabled=not controls["voice_clean"])
                                 elif choice == "agc":
                                     if not controls["agc"]:
                                         state.set_audio_controls(agc_enabled=True, agc_hang=False)

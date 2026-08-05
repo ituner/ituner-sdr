@@ -477,7 +477,12 @@ def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
     nr_algo = int(audio_controls.get("nr_algo", 1))
     denoise_level = int(audio_controls.get("denoise_level", int(bool(audio_controls.get("denoise", False)))))
     denoise_level = max(0, min(len(DENOISE_PRESETS) - 1, denoise_level))
-    denoise = denoise_level > 0
+    # Local RNNoise replaces Kiwi's denoiser for an A/B-friendly voice-clean
+    # path. Keep the user's selected Kiwi level intact so it returns on toggle.
+    voice_clean_mode = str(mode).lower() in ("am", "sam", "lsb", "usb")
+    denoise = denoise_level > 0 and not (
+        bool(audio_controls.get("voice_clean", False)) and voice_clean_mode
+    )
     autonotch = bool(audio_controls.get("autonotch", False))
     ws.send_text(f"SET nr algo={nr_algo}")
     if nr_algo == 1:
