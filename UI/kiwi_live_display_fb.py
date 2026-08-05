@@ -45,6 +45,25 @@ ABS_MT_TRACKING_ID = 0x39
 SND_FLAG_COMPRESSED = 0x10
 SND_FLAG_STEREO = 0x08
 SND_FLAG_LITTLE_ENDIAN = 0x80
+# Four deliberately distinct, radio-friendly WDSP denoiser positions. Kiwi's
+# browser expresses gain/leakage as 1-based slider values; convert them to the
+# DSP coefficients when configuring a receiver stream.
+DENOISE_PRESETS = (
+    ("OFF", None),
+    ("LIGHT", (48, 12, 8, 6)),
+    ("NORMAL", (64, 16, 10, 7)),
+    ("STRONG", (96, 24, 13, 9)),
+)
+
+
+def wdsp_noise_params(taps, delay, gain, leakage):
+    """Match Kiwi's WDSP noise-filter slider conversion."""
+    return (
+        taps,
+        delay,
+        8.192e-2 / (2 ** (20 - gain)),
+        8192 / (2 ** (23 - leakage)),
+    )
 GEAR_BOX = (910, 244, 956, 290)
 ZOOM_PLUS_BOX = (10, 108, 72, 170)
 ZOOM_MINUS_BOX = (10, 190, 72, 252)
@@ -164,8 +183,29 @@ class KiwiWebSocket:
             self.sock.sendall(header + mask + masked)
 
 
+KIWI_MAX_ZOOM = 14
+DIGITAL_ZOOM_LEVEL = 15
+DIGITAL_ZOOM_FACTORS = {
+    15: 4.0,
+    16: 8.0,
+}
+DISPLAY_MAX_ZOOM = max(DIGITAL_ZOOM_FACTORS)
+
+
+def kiwi_zoom_level(zoom):
+    """Return the highest zoom value the Kiwi receiver itself accepts."""
+    return clamp(int(zoom), 0, KIWI_MAX_ZOOM)
+
+
+def zoom_source_span_khz(zoom):
+    """RF span delivered by Kiwi before any local display magnification."""
+    return 30000.0 / (2 ** kiwi_zoom_level(zoom))
+
+
 def zoom_to_span_khz(zoom):
-    return 30000.0 / (2 ** clamp(int(zoom), 0, 14))
+    """Visible span, including the local magnifier past Kiwi zoom 14."""
+    source_span = zoom_source_span_khz(zoom)
+    return source_span / DIGITAL_ZOOM_FACTORS.get(int(zoom), 1.0)
 
 
 def span_to_zoom(span_khz):
@@ -173,7 +213,7 @@ def span_to_zoom(span_khz):
         return 9
     best_zoom = 0
     best_error = float("inf")
-    for zoom in range(15):
+    for zoom in range(DISPLAY_MAX_ZOOM + 1):
         error = abs(zoom_to_span_khz(zoom) - span_khz)
         if error < best_error:
             best_zoom = zoom
@@ -391,18 +431,64 @@ def send_kiwi_setup(ws, client_type, user):
 
 
 def send_wf_setup(ws, freq_khz, zoom, wf_speed):
-    ws.send_text(f"SET zoom={zoom} cf={freq_khz:.3f}")
+    # Zooms 15/16 are deliberately local-only: Kiwi's W/F protocol ends at 14.
+    ws.send_text(f"SET zoom={kiwi_zoom_level(zoom)} cf={freq_khz:.3f}")
     ws.send_text("SET maxdb=-10 mindb=-110")
     ws.send_text(f"SET wf_speed={wf_speed}")
     ws.send_text("SET wf_comp=0")
     ws.send_text("SET interp=13")
 
 
-def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut):
+def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
+    """Configure a Kiwi SND stream, including optional live listening controls."""
+    audio_controls = audio_controls or {}
     ws.send_text("SET compression=0")
     ws.send_text(f"SET mod={mode} low_cut={low_cut} high_cut={high_cut} freq={freq_khz:.3f}")
-    ws.send_text("SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50")
-    ws.send_text("SET squelch=0 max=0")
+    ws.send_text(
+        "SET agc={agc} hang={hang} thresh={threshold} slope={slope} decay={decay} manGain={gain}".format(
+            agc=int(bool(audio_controls.get("agc", True))),
+            hang=int(bool(audio_controls.get("agc_hang", False))),
+            threshold=int(audio_controls.get("agc_threshold", -100)),
+            slope=int(audio_controls.get("agc_slope", 6)),
+            decay=int(audio_controls.get("agc_decay", 1000)),
+            gain=int(audio_controls.get("agc_manual_gain", 50)),
+        )
+    )
+    squelch = int(audio_controls.get("squelch_level", 0))
+    is_nbfm = str(mode).lower() in ("nbfm", "nnfm")
+    squelch_param = 0.0 if is_nbfm else float(audio_controls.get("squelch_tail", 0.25))
+    ws.send_text(f"SET squelch={squelch} param={squelch_param:.2f}")
+    ws.send_text(f"SET mute={int(bool(audio_controls.get('mute', False)))}")
+    ws.send_text(f"SET de_emp={int(audio_controls.get('deemphasis', 0))} nfm={int(is_nbfm)}")
+
+    nb_algo = int(audio_controls.get("nb_algo", 0))
+    ws.send_text(f"SET nb algo={nb_algo}")
+    if nb_algo == 1:
+        ws.send_text("SET nb type=0 param=0 pval=100")
+        ws.send_text("SET nb type=0 param=1 pval=50")
+    elif nb_algo == 2:
+        ws.send_text("SET nb type=0 param=0 pval=0.95")
+        ws.send_text("SET nb type=0 param=1 pval=10")
+        ws.send_text("SET nb type=0 param=2 pval=7")
+    ws.send_text(f"SET nb type=0 en={int(nb_algo > 0)}")
+
+    nr_algo = int(audio_controls.get("nr_algo", 1))
+    denoise_level = int(audio_controls.get("denoise_level", int(bool(audio_controls.get("denoise", False)))))
+    denoise_level = max(0, min(len(DENOISE_PRESETS) - 1, denoise_level))
+    denoise = denoise_level > 0
+    autonotch = bool(audio_controls.get("autonotch", False))
+    ws.send_text(f"SET nr algo={nr_algo}")
+    if nr_algo == 1:
+        denoise_preset = DENOISE_PRESETS[denoise_level][1] or DENOISE_PRESETS[2][1]
+        params_by_type = (
+            wdsp_noise_params(*denoise_preset),
+            wdsp_noise_params(64, 16, 10, 7),
+        )
+        for nr_type, params in enumerate(params_by_type):
+            for parameter, value in enumerate(params):
+                ws.send_text(f"SET nr type={nr_type} param={parameter} pval={value}")
+    ws.send_text(f"SET nr type=0 en={int(denoise and nr_algo > 0)}")
+    ws.send_text(f"SET nr type=1 en={int(autonotch and nr_algo > 0)}")
 
 
 def parse_msg_params(message):

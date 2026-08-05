@@ -67,8 +67,14 @@ _RENDERER_DIR = Path(__file__).resolve().parent
 _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
 SPECTRUM_H = 70
-SPECTRUM_WIDE_H = 140
+# 109 px is a 22.1% reduction from the original 140 px wide scope, returning
+# the recovered vertical space directly to the live waterfall.
+SPECTRUM_WIDE_H = 109
+SPECTRUM_WIDE_RAISE_Y = 10
 SPECTRUM_RAISE_Y = 12
+# In the wide display's Waterfall-only view, let live RF content occupy the
+# unused scope space behind the fixed top instrumentation.
+WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
 SPECTRUM_PEAK_HOLD_SECONDS = 10.0
 SCOUT_HEAT_REMANENCE_SECONDS = 1800.0
@@ -155,36 +161,166 @@ FREQUENCY_RIGHT_X = 570
 RADIO_SETUP_WIDTH = 74
 RADIO_SETUP_GAP = 10
 RADIO_SETUP_BOX = (260, 10, 334, 54)
-RADIO_PANEL_BOX = (12, 72, 948, 282)
-KIWI_MODE_PAGES = (
-    ("STANDARD", ("AM", "AMN", "AMW", "USB", "LSB", "USN", "LSN", "CW", "CWN", "NBFM")),
-    ("SPECIAL", ("NNFM", "DRM", "IQ", "SAM", "SAU", "SAL", "SAS", "QAM")),
+RADIO_PANEL_BOX = (12, 66, 948, 316)
+# All Kiwi demodulators are reached through eight large touch families. A
+# family opens a second, full-width choice tray when it has variants.
+KIWI_MODE_FAMILIES = (
+    ("AM", ("AM", "AMN", "AMW")),
+    ("SYNC AM", ("SAM", "SAU", "SAL", "SAS", "QAM")),
+    ("USB", ("USB", "USN")),
+    ("LSB", ("LSB", "LSN")),
+    ("CW", ("CW", "CWN")),
+    ("FM", ("NBFM", "NNFM")),
+    ("I/Q", ("IQ",)),
+    ("DRM", ("DRM",)),
 )
-KIWI_RADIO_MODES = frozenset(mode for _page, modes in KIWI_MODE_PAGES for mode in modes)
-RADIO_MODE_BOXES = (
-    (32, 118, 205, 158),
-    (217, 118, 390, 158),
-    (402, 118, 575, 158),
-    (587, 118, 760, 158),
-    (772, 118, 945, 158),
-    (32, 166, 205, 206),
-    (217, 166, 390, 206),
-    (402, 166, 575, 206),
-    (587, 166, 760, 206),
-    (772, 166, 945, 206),
-)
-RADIO_MODE_PREV_BOX = (760, 78, 812, 108)
-RADIO_MODE_NEXT_BOX = (880, 78, 932, 108)
-RADIO_DIGITAL_OPTIONS = (
-    ("DIG", (32, 232, 172, 274)),
-    ("IQ", (184, 232, 324, 274)),
-)
+KIWI_RADIO_MODES = frozenset(mode for _family, modes in KIWI_MODE_FAMILIES for mode in modes)
+KIWI_MODE_LABELS = {
+    "AM": "AM",
+    "AMN": "AM NARROW",
+    "AMW": "AM WIDE",
+    "SAM": "SYNC AM",
+    "SAU": "SYNC USB",
+    "SAL": "SYNC LSB",
+    "SAS": "PSEUDO ST",
+    "QAM": "C-QUAM",
+    "USB": "USB",
+    "USN": "USB NARROW",
+    "LSB": "LSB",
+    "LSN": "LSB NARROW",
+    "CW": "CW",
+    "CWN": "CW NARROW",
+    "NBFM": "NBFM",
+    "NNFM": "NFM NARROW",
+    "IQ": "I/Q",
+    "DRM": "DRM",
+}
+KIWI_MODE_CONTEXT = {
+    "AM": "AM",
+    "AMN": "AMN · AM NARROW",
+    "AMW": "AMW · AM WIDE",
+    "SAM": "SAM · SYNCHRONOUS AM",
+    "SAU": "SAU · SYNC UPPER",
+    "SAL": "SAL · SYNC LOWER",
+    "SAS": "SAS · PSEUDO STEREO",
+    "QAM": "C-QUAM · AM STEREO",
+    "USB": "USB",
+    "USN": "USN · USB NARROW",
+    "LSB": "LSB",
+    "LSN": "LSN · LSB NARROW",
+    "CW": "CW",
+    "CWN": "CWN · CW NARROW",
+    "NBFM": "NBFM",
+    "NNFM": "NNFM · FM NARROW",
+    "IQ": "I/Q · COMPLEX",
+    "DRM": "DRM · EXTENSION",
+}
+KIWI_MODE_FAMILY = {
+    "AM": "AM", "AMN": "AM", "AMW": "AM",
+    "SAM": "SAM", "SAU": "SAM", "SAL": "SAM", "SAS": "SAM", "QAM": "SAM",
+    "USB": "USB", "USN": "USB",
+    "LSB": "LSB", "LSN": "LSB",
+    "CW": "CW", "CWN": "CW",
+    "NBFM": "NBFM", "NNFM": "NBFM",
+    "IQ": "IQ", "DRM": "DRM",
+}
+# Defaults match Kiwi's mode_hbw/mode_offset table. Values are the actual
+# low_cut/high_cut sent to the SND stream and remain user-adjustable afterward.
+KIWI_MODE_FILTERS = {
+    "am": (-4900, 4900),
+    "amn": (-2500, 2500),
+    "amw": (-6000, 6000),
+    "sam": (-4900, 4900),
+    "sau": (-4900, 4900),
+    "sal": (-4900, 4900),
+    "sas": (-4900, 4900),
+    "qam": (-4900, 4900),
+    "usb": (300, 2700),
+    "usn": (300, 2400),
+    "lsb": (-2700, -300),
+    "lsn": (-2400, -300),
+    "cw": (-200, 200),
+    "cwn": (-30, 30),
+    "nbfm": (-6000, 6000),
+    "nnfm": (-3000, 3000),
+    "iq": (-5000, 5000),
+    "drm": (-5000, 5000),
+}
+KIWI_STEREO_AUDIO_MODES = frozenset(("sas", "qam"))
+KIWI_NON_AUDIO_MODES = frozenset(("iq", "drm"))
+RADIO_FAMILY_GRID_X0 = 30
+RADIO_FAMILY_GRID_X1 = 934
+RADIO_FAMILY_GRID_Y0 = 112
+RADIO_FAMILY_COLS = 4
+RADIO_FAMILY_BUTTON_H = 78
+RADIO_FAMILY_BUTTON_GAP = 10
+RADIO_VARIANT_MENU_W = 420
+RADIO_VARIANT_BUTTON_H = 52
+RADIO_VARIANT_BUTTON_GAP = 8
+RADIO_VARIANT_COLS = 2
 RADIO_STEP_OPTIONS = (
-    (10, (474, 232, 576, 274)),
-    (100, (588, 232, 690, 274)),
-    (1000, (702, 232, 804, 274)),
-    (5000, (816, 232, 918, 274)),
+    (10, (590, 74, 670, 100)),
+    (100, (678, 74, 758, 100)),
+    (1000, (766, 74, 846, 100)),
+    (5000, (854, 74, 934, 100)),
 )
+
+
+def radio_popup_offset_x():
+    """Center the 960 px radio modal over the 1024 px wide waterfall."""
+    return (DESKTOP_1280_MAIN_W - BASE_LOGICAL_W) // 2 if DESKTOP_1280_MODE else 0
+
+
+def radio_popup_offset_y():
+    """Keep the radio panel on the lower edge in both display geometries."""
+    return max(0, LOGICAL_H - BASE_LOGICAL_H)
+
+
+def radio_popup_x(x):
+    return x + radio_popup_offset_x()
+
+
+def radio_popup_y(y):
+    return y + radio_popup_offset_y()
+
+
+def radio_popup_box(box):
+    x0, y0, x1, y1 = box
+    return radio_popup_x(x0), radio_popup_y(y0), radio_popup_x(x1), radio_popup_y(y1)
+
+
+def radio_step_options():
+    for step_hz, box in RADIO_STEP_OPTIONS:
+        yield step_hz, radio_popup_box(box)
+
+
+def radio_panel_box():
+    return radio_popup_box(RADIO_PANEL_BOX)
+
+
+def radio_family_button_width():
+    available = RADIO_FAMILY_GRID_X1 - RADIO_FAMILY_GRID_X0
+    return (available - RADIO_FAMILY_BUTTON_GAP * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
+
+
+def radio_variant_popup_box(modes):
+    """Return a compact two-column context menu near the selected family."""
+    family = next((family for family, options in KIWI_MODE_FAMILIES if options == modes), "")
+    family_box = next((box for label, _options, box in radio_mode_layout() if label == family), radio_panel_box())
+    cols = min(RADIO_VARIANT_COLS, len(modes))
+    rows = math.ceil(len(modes) / cols)
+    width = RADIO_VARIANT_MENU_W
+    height = 42 + rows * RADIO_VARIANT_BUTTON_H + (rows - 1) * RADIO_VARIANT_BUTTON_GAP + 16
+    panel_x0, _panel_y0, panel_x1, panel_y1 = radio_panel_box()
+    x0 = min(max((family_box[0] + family_box[2] - width) / 2, panel_x0 + 8), panel_x1 - width - 8)
+    y0 = panel_y1 - height - 8
+    return x0, y0, x0 + width, y0 + height
+
+
+def radio_variant_back_box(modes):
+    x0, y0, _x1, _y1 = radio_variant_popup_box(modes)
+    return x0 + 12, y0 + 7, x0 + 112, y0 + 35
+
 DISPLAY_PANEL_BOX = (12, 72, 948, 282)
 DISPLAY_SPECTRUM_BOX = (510, 82, 736, 120)
 DISPLAY_AUTO_BOX = (754, 82, 924, 120)
@@ -226,10 +362,17 @@ FILTER_WIDTH_PRESETS = (
     ("WIDE 9k", 9000),
     ("KIWI MAX", 12000),
 )
-AUDIO_PANEL_BOX = (12, 72, 948, 288)
-AUDIO_VOLUME_BOX = (42, 108, 918, 166)
-AUDIO_SQUELCH_BOX = (42, 190, 380, 266)
-AUDIO_FILTER_BOX = (400, 190, 918, 266)
+AUDIO_PANEL_BOX = (12, 34, 948, 316)
+AUDIO_VOLUME_BOX = (42, 76, 692, 128)
+AUDIO_MUTE_BOX = (716, 76, 918, 128)
+AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
+AUDIO_AGC_BOX = (268, 154, 482, 210)
+AUDIO_BLANKER_BOX = (494, 154, 706, 210)
+AUDIO_DENOISE_BOX = (718, 154, 918, 210)
+AUDIO_NOTCH_BOX = (42, 224, 256, 280)
+AUDIO_DEEMP_BOX = (268, 224, 482, 280)
+AUDIO_FILTER_BOX = (494, 224, 706, 280)
+AUDIO_RESET_BOX = (718, 224, 918, 280)
 TEST_PANEL_BOX = (12, 72, 948, 288)
 TEST_GLOBE_BOX = (42, 112, 468, 166)
 TEST_DJ_BOX = (492, 112, 918, 166)
@@ -277,6 +420,88 @@ DJ_STEP_BOX = (42, 224, 240, 276)
 DJ_RANGE_BOX = (258, 224, 456, 276)
 DJ_RATE_BOX = (474, 224, 672, 276)
 DJ_RETURN_BOX = (690, 224, 918, 276)
+POPUP_BOTTOM_INSET = 4
+# These temporary workspaces have intentionally different heights, but they
+# should all end on the same lower visual edge. Keep immutable source geometry
+# here so desktop/Pi mode changes never accumulate offsets.
+POPUP_LAYOUT_BASE = {
+    "display": (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
+                DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
+                DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
+                DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES),
+    "filter": (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
+               FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX),
+    "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX,
+              AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
+              AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
+              AUDIO_FILTER_BOX, AUDIO_RESET_BOX),
+    "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX,
+              TEST_RUN_BOX),
+    "dj": (DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX,
+           DJ_RATE_BOX, DJ_RETURN_BOX),
+}
+
+
+def popup_shift_box(box, offset_y):
+    x0, y0, x1, y1 = box
+    return x0, y0 + offset_y, x1, y1 + offset_y
+
+
+def configure_popup_layout():
+    """Bottom-align every temporary workspace and its touch geometry."""
+    global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
+    global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
+    global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
+    global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
+    global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
+    global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
+    global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX
+    global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
+    global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
+    global AUDIO_FILTER_BOX, AUDIO_RESET_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX, TEST_RUN_BOX
+    global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
+
+    def offset(kind):
+        panel = POPUP_LAYOUT_BASE[kind][0]
+        return LOGICAL_H - POPUP_BOTTOM_INSET - panel[3]
+
+    dy = offset("display")
+    (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
+     DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
+     DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
+     base_rates, base_palettes) = POPUP_LAYOUT_BASE["display"]
+    DISPLAY_PANEL_BOX = popup_shift_box(DISPLAY_PANEL_BOX, dy)
+    DISPLAY_SPECTRUM_BOX = popup_shift_box(DISPLAY_SPECTRUM_BOX, dy)
+    DISPLAY_AUTO_BOX = popup_shift_box(DISPLAY_AUTO_BOX, dy)
+    DISPLAY_FLOOR_MINUS_BOX = popup_shift_box(DISPLAY_FLOOR_MINUS_BOX, dy)
+    DISPLAY_FLOOR_PLUS_BOX = popup_shift_box(DISPLAY_FLOOR_PLUS_BOX, dy)
+    DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
+    DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
+    DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
+    DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
+
+    dy = offset("filter")
+    (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
+     FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX) = (
+        popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["filter"]
+    )
+
+    dy = offset("audio")
+    (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX,
+     AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
+     AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
+     AUDIO_FILTER_BOX, AUDIO_RESET_BOX) = (
+        popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["audio"]
+    )
+
+    dy = offset("tests")
+    (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX,
+     TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+
+    dy = offset("dj")
+    (DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX,
+     DJ_RATE_BOX, DJ_RETURN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["dj"])
 GEAR_BOX = (892, 228, 958, 294)
 # Home is a temporary waterfall-scale workspace, leaving the top instrument
 # strip and its Home affordance visible.
@@ -865,6 +1090,7 @@ def configure_output(desktop=False, desktop_1280=False):
         NATIVE_W, NATIVE_H = 400, 960
         ACTIVE_H = 400
         VISIBLE_Y_OFFSET = ACTIVE_H - LOGICAL_H
+    configure_popup_layout()
 
 
 def rgba(color):
@@ -957,6 +1183,8 @@ def snap_frequency_khz(freq_khz, step_hz):
 def finger_tune_step_hz(zoom, base_step_hz):
     """Use close zoom levels as a fine VFO without changing the base setting."""
     zoom = int(zoom)
+    if zoom >= kiwi.DIGITAL_ZOOM_LEVEL:
+        return min(int(base_step_hz), 1)
     if zoom >= 14:
         return min(int(base_step_hz), 5)
     if zoom >= 13:
@@ -1070,7 +1298,7 @@ def load_remembered_view(path):
             if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= 30000.0:
                 view["freq_khz"] = float(freq_khz)
             zoom = saved.get("zoom")
-            if isinstance(zoom, int) and 0 <= zoom <= 14:
+            if isinstance(zoom, int) and 0 <= zoom <= kiwi.DISPLAY_MAX_ZOOM:
                 view["zoom"] = zoom
             radio_mode = saved.get("radio_mode")
             if isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
@@ -1091,7 +1319,7 @@ def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_r
         saved = {
             "freq_khz": round(float(freq_khz), 3),
             "server": server,
-            "zoom": clamp(int(zoom), 0, 14),
+            "zoom": clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM),
         }
         if manual_radio_mode and isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
             saved["radio_mode"] = radio_mode.upper()
@@ -1117,7 +1345,7 @@ class SharedState:
         self.lock = threading.Lock()
         self.server = server
         self.freq_khz = freq_khz
-        self.zoom = clamp(int(zoom), 0, 14)
+        self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
         self.smeter_dbm = smeter_dbm
         self.smeter_peak_dbm = smeter_dbm
         self.smeter_source = "wf"
@@ -1137,8 +1365,22 @@ class SharedState:
         self.radio_mode = radio_mode
         self.low_cut, self.high_cut = kiwi_mode_filter(radio_mode)
         self.radio_generation = 0
-        # These map directly to Kiwi's existing SND `SET squelch` command.
+        # Listening controls map directly to Kiwi's live SND command set.
         self.squelch_enabled = False
+        self.squelch_level = 0
+        self.squelch_tail = 0.25
+        self.audio_mute = False
+        self.agc_enabled = True
+        self.agc_hang = False
+        self.agc_threshold = -100
+        self.agc_slope = 6
+        self.agc_decay = 1000
+        self.agc_manual_gain = 50
+        self.deemphasis = 0
+        self.nb_algo = 0
+        self.nr_algo = 1
+        self.denoise_level = 0
+        self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
         self.spectrum_enabled = bool(spectrum_enabled)
@@ -1163,7 +1405,7 @@ class SharedState:
             if freq_khz is not None:
                 self.freq_khz = freq_khz
             if zoom is not None:
-                self.zoom = clamp(int(zoom), 0, 14)
+                self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
             self.spectrum_peak_values = ()
             self.spectrum_peak_history.clear()
             self.view_generation += 1
@@ -1182,7 +1424,7 @@ class SharedState:
         with self.lock:
             self.server = server
             if zoom is not None:
-                self.zoom = clamp(int(zoom), 0, 14)
+                self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
             self.smeter_dbm = -110.0
             self.smeter_peak_dbm = -110.0
             self.smeter_source = "none"
@@ -1281,6 +1523,9 @@ class SharedState:
             return self.radio_mode, self.low_cut, self.high_cut, self.radio_generation
 
     def set_radio_mode(self, radio_mode):
+        radio_mode = radio_mode.upper()
+        if radio_mode not in KIWI_RADIO_MODES:
+            raise ValueError(f"unsupported Kiwi mode: {radio_mode}")
         with self.lock:
             self.radio_mode = radio_mode.lower()
             self.low_cut, self.high_cut = kiwi_mode_filter(self.radio_mode)
@@ -1290,6 +1535,27 @@ class SharedState:
     def audio_snapshot(self):
         with self.lock:
             return self.squelch_enabled, self.audio_generation
+
+    def audio_controls_snapshot(self):
+        with self.lock:
+            return {
+                "squelch_enabled": self.squelch_enabled,
+                "squelch_level": self.squelch_level,
+                "squelch_tail": self.squelch_tail,
+                "mute": self.audio_mute,
+                "agc": self.agc_enabled,
+                "agc_hang": self.agc_hang,
+                "agc_threshold": self.agc_threshold,
+                "agc_slope": self.agc_slope,
+                "agc_decay": self.agc_decay,
+                "agc_manual_gain": self.agc_manual_gain,
+                "deemphasis": self.deemphasis,
+                "nb_algo": self.nb_algo,
+                "nr_algo": self.nr_algo,
+                "denoise_level": self.denoise_level,
+                "denoise": self.denoise_level > 0,
+                "autonotch": self.autonotch_enabled,
+            }, self.audio_generation
 
     def set_external_audio(self, enabled):
         with self.lock:
@@ -1302,10 +1568,62 @@ class SharedState:
     def set_squelch(self, enabled):
         with self.lock:
             enabled = bool(enabled)
+            self.squelch_level = 20 if enabled else 0
             if enabled != self.squelch_enabled:
                 self.squelch_enabled = enabled
                 self.audio_generation += 1
             return self.squelch_enabled, self.audio_generation
+
+    def set_audio_controls(self, **changes):
+        """Apply a small audio control change and notify the active SND worker."""
+        allowed = {
+            "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
+            "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
+            "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
+        }
+        with self.lock:
+            changed = False
+            for name, value in changes.items():
+                if name not in allowed:
+                    continue
+                if getattr(self, name) != value:
+                    setattr(self, name, value)
+                    changed = True
+            self.squelch_level = int(clamp(int(self.squelch_level), 0, 99))
+            self.squelch_enabled = self.squelch_level > 0
+            self.squelch_tail = clamp(float(self.squelch_tail), 0.0, 5.0)
+            self.deemphasis = int(clamp(int(self.deemphasis), 0, 2))
+            self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
+            self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
+            self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
+            if changed:
+                self.audio_generation += 1
+            return {
+                "squelch_enabled": self.squelch_enabled,
+                "squelch_level": self.squelch_level,
+                "squelch_tail": self.squelch_tail,
+                "mute": self.audio_mute,
+                "agc": self.agc_enabled,
+                "agc_hang": self.agc_hang,
+                "agc_threshold": self.agc_threshold,
+                "agc_slope": self.agc_slope,
+                "agc_decay": self.agc_decay,
+                "agc_manual_gain": self.agc_manual_gain,
+                "deemphasis": self.deemphasis,
+                "nb_algo": self.nb_algo,
+                "nr_algo": self.nr_algo,
+                "denoise_level": self.denoise_level,
+                "denoise": self.denoise_level > 0,
+                "autonotch": self.autonotch_enabled,
+            }, self.audio_generation
+
+    def reset_audio_controls(self):
+        return self.set_audio_controls(
+            squelch_level=0, squelch_tail=0.25, audio_mute=False,
+            agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
+            agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
+            nr_algo=1, denoise_level=0, autonotch_enabled=False,
+        )
 
     def set_filter(self, low_cut=None, high_cut=None):
         with self.lock:
@@ -1666,7 +1984,7 @@ class WaterfallTexture:
 
     def draw(self, x0, y0, x1, y1, center_khz=None, span_khz=None, row_offset=0):
         if center_khz is not None and span_khz is not None:
-            self._draw_frequency_aligned(x0, y0, x1, y1, center_khz, span_khz)
+            self._draw_frequency_aligned(x0, y0, x1, y1, center_khz, span_khz, row_offset)
             return
         height = int(y1 - y0)
         start_row = (self.row + max(0, int(row_offset))) % WF_TEX_H
@@ -1682,28 +2000,49 @@ class WaterfallTexture:
         v1 = tex_y1 / WF_TEX_H
         draw_textured_quad(self.tex, x0, y0, x1, y1, 0, v0, 1, v1)
 
-    def _draw_frequency_aligned(self, x0, y0, x1, y1, center_khz, span_khz):
+    def _draw_frequency_aligned(self, x0, y0, x1, y1, center_khz, span_khz, row_offset=0):
+        """Map each stored Kiwi row into the current RF view.
+
+        At display zoom 15/16, the current view is the central quarter/eighth
+        of a native Kiwi zoom-14 row. Mapping source and display spans
+        separately makes that a true digital magnifier instead of stretching
+        the entire waterfall texture.
+        """
         height = int(y1 - y0)
-        hz_per_px = max(0.001, span_khz * 1000 / LOGICAL_W)
+        view_low_khz = center_khz - span_khz / 2.0
+        view_high_khz = center_khz + span_khz / 2.0
         GL.glEnable(GL.GL_TEXTURE_2D)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glColor4f(1, 1, 1, 1)
         GL.glBegin(GL.GL_QUADS)
         for logical_y in range(height):
-            tex_row = (self.row + logical_y) % WF_TEX_H
+            tex_row = (self.row + max(0, int(row_offset)) + logical_y) % WF_TEX_H
             row_center = self.row_center_khz[tex_row]
             if row_center is None:
                 row_center = center_khz
-            dx = clamp((row_center - center_khz) * 1000 / hz_per_px, -LOGICAL_W, LOGICAL_W)
+            row_span = self.row_span_khz[tex_row]
+            if not row_span or row_span <= 0:
+                row_span = span_khz
+            row_low_khz = row_center - row_span / 2.0
+            u0 = (view_low_khz - row_low_khz) / row_span
+            u1 = (view_high_khz - row_low_khz) / row_span
+            if u1 <= 0.0 or u0 >= 1.0 or u1 <= u0:
+                continue
+            clipped_u0 = clamp(u0, 0.0, 1.0)
+            clipped_u1 = clamp(u1, 0.0, 1.0)
+            t0 = (clipped_u0 - u0) / (u1 - u0)
+            t1 = (clipped_u1 - u0) / (u1 - u0)
+            draw_x0 = x0 + (x1 - x0) * t0
+            draw_x1 = x0 + (x1 - x0) * t1
             ly0 = y0 + logical_y
             ly1 = ly0 + 1
             v0 = tex_row / WF_TEX_H
             v1 = (tex_row + 1) / WF_TEX_H
             vertices = (
-                (x0 + dx, ly0, 0, v0),
-                (x1 + dx, ly0, 1, v0),
-                (x1 + dx, ly1, 1, v1),
-                (x0 + dx, ly1, 0, v1),
+                (draw_x0, ly0, clipped_u0, v0),
+                (draw_x1, ly0, clipped_u1, v0),
+                (draw_x1, ly1, clipped_u1, v1),
+                (draw_x0, ly1, clipped_u0, v1),
             )
             for x, y, u, v in vertices:
                 GL.glTexCoord2f(u, v)
@@ -1946,8 +2285,21 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
     draw_native_line(x0, y0, x0, y1, (93, 120, 132, 155), 1)
     draw_native_line(x1, y0, x1, y1, (32, 50, 61, 215), 1)
     draw_native_line(x0, y1, x1, y1, (53, 88, 98, 210), 1)
-    active_mode = mode.upper()
-    active_mode = {"AMN": "AM", "AMW": "AM", "CWN": "CW", "NNFM": "NBFM", "SAU": "SAM", "SAL": "SAM", "SAS": "SAM", "SASD": "SAM"}.get(active_mode, active_mode)
+    exact_mode = mode.upper()
+    active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
+    context_label = KIWI_MODE_CONTEXT.get(exact_mode, exact_mode)
+    draw_native_text(
+        text_cache,
+        (x0 + x1) / 2,
+        y0 + 13,
+        context_label,
+        (214, 238, 233),
+        11 if len(context_label) > 20 else 12,
+        True,
+        False,
+        "cm",
+        family="Liberation Sans",
+    )
     grid_x = x0 + 7
     grid_w = x1 - x0 - 14
     cell_w = grid_w / 4
@@ -1985,19 +2337,50 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
     draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", (192, 218, 222), 12, True, False, "rm", family="Liberation Sans")
 
 
-def radio_option_at(x, y, mode_page):
-    if contains(RADIO_MODE_PREV_BOX, x, y):
-        return "mode_page", -1
-    if contains(RADIO_MODE_NEXT_BOX, x, y):
-        return "mode_page", 1
-    _page_label, modes = KIWI_MODE_PAGES[mode_page]
-    for mode, box in zip(modes, RADIO_MODE_BOXES):
+def radio_mode_layout():
+    """Yield eight simple, readable entry points for all Kiwi modes."""
+    grid_x0 = radio_popup_x(RADIO_FAMILY_GRID_X0)
+    grid_x1 = radio_popup_x(RADIO_FAMILY_GRID_X1)
+    available = grid_x1 - grid_x0
+    button_w = (available - RADIO_FAMILY_BUTTON_GAP * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
+    for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
+        col = index % RADIO_FAMILY_COLS
+        row = index // RADIO_FAMILY_COLS
+        x0 = grid_x0 + col * (button_w + RADIO_FAMILY_BUTTON_GAP)
+        y0 = radio_popup_y(RADIO_FAMILY_GRID_Y0 + row * (RADIO_FAMILY_BUTTON_H + RADIO_FAMILY_BUTTON_GAP))
+        yield family, modes, (x0, y0, x0 + button_w, y0 + RADIO_FAMILY_BUTTON_H)
+
+
+def radio_variant_layout(modes):
+    """Lay variants out in a compact two-column context menu."""
+    popup_x0, popup_y0, popup_x1, _popup_y1 = radio_variant_popup_box(modes)
+    cols = min(RADIO_VARIANT_COLS, len(modes))
+    button_w = (popup_x1 - popup_x0 - 24 - (cols - 1) * RADIO_VARIANT_BUTTON_GAP) / cols
+    grid_w = cols * button_w + (cols - 1) * RADIO_VARIANT_BUTTON_GAP
+    grid_x0 = (popup_x0 + popup_x1 - grid_w) / 2
+    grid_y0 = popup_y0 + 42
+    for index, mode in enumerate(modes):
+        col = index % cols
+        row = index // cols
+        x0 = grid_x0 + col * (button_w + RADIO_VARIANT_BUTTON_GAP)
+        y0 = grid_y0 + row * (RADIO_VARIANT_BUTTON_H + RADIO_VARIANT_BUTTON_GAP)
+        yield mode, (x0, y0, x0 + button_w, y0 + RADIO_VARIANT_BUTTON_H)
+
+
+def radio_option_at(x, y, family_open=None):
+    if family_open is not None:
+        modes = next((modes for family, modes in KIWI_MODE_FAMILIES if family == family_open), ())
+        if contains(radio_variant_back_box(modes), x, y):
+            return "back", None
+        for mode, box in radio_variant_layout(modes):
+            if contains(box, x, y):
+                return "mode", mode
+        if contains(radio_variant_popup_box(modes), x, y):
+            return None
+    for _family, modes, box in radio_mode_layout():
         if contains(box, x, y):
-            return "mode", mode
-    for digital, box in RADIO_DIGITAL_OPTIONS:
-        if contains(box, x, y):
-            return "digital", digital
-    for step_hz, box in RADIO_STEP_OPTIONS:
+            return "mode_family", (_family, modes)
+    for step_hz, box in radio_step_options():
         if contains(box, x, y):
             return "step", step_hz
     return None
@@ -2015,30 +2398,103 @@ def draw_radio_option(text_cache, box, label, active):
     draw_logical_line(x1, y0, x1, y1, line, 1)
     if active:
         draw_logical_line(x0 + 12, y1 - 5, x1 - 12, y1 - 5, (91, 242, 227, 230), 2)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 16, True, True, "cm")
+    font_size = 12 if len(label) > 10 else (13 if len(label) > 8 else 15)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, font_size, True, True, "cm")
 
 
-def draw_radio_setup_panel(text_cache, mode, digital, step_hz, mode_page):
-    x0, y0, x1, y1 = RADIO_PANEL_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
-    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    page_label, modes = KIWI_MODE_PAGES[mode_page]
-    draw_text(text_cache, 32, 94, "RADIO", (229, 243, 246), 18, True, True, "lm")
-    draw_text(text_cache, 32, 106, page_label, (139, 180, 187), 12, True, True, "lm")
-    draw_display_control(text_cache, RADIO_MODE_PREV_BOX, "<", False)
-    draw_text(text_cache, 846, 93, f"{mode_page + 1}/{len(KIWI_MODE_PAGES)}", (169, 194, 199), 13, True, True, "cm")
-    draw_display_control(text_cache, RADIO_MODE_NEXT_BOX, ">", False)
-    draw_text(text_cache, 32, 221, "DIGITAL", (139, 180, 187), 12, True, True, "lm")
-    draw_text(text_cache, 354, 221, "STEP", (139, 180, 187), 12, True, True, "lm")
-    for option, box in zip(modes, RADIO_MODE_BOXES):
-        draw_radio_option(text_cache, box, option, option == mode)
-    for option, box in RADIO_DIGITAL_OPTIONS:
-        draw_radio_option(text_cache, box, option, option == digital)
-    for option, box in RADIO_STEP_OPTIONS:
+def draw_radio_family_option(text_cache, box, family, modes, active_mode):
+    """Draw a large mode-family button without cramming its variants inside."""
+    x0, y0, x1, y1 = box
+    active = active_mode in modes
+    fill = (32, 87, 89, 220) if active else (18, 29, 38, 184)
+    line = (94, 235, 225, 220) if active else (115, 140, 151, 78)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    for ax0, ay0, ax1, ay1 in (
+        (x0, y0, x1, y0),
+        (x0, y1, x1, y1),
+        (x0, y0, x0, y1),
+        (x1, y0, x1, y1),
+    ):
+        draw_logical_line(ax0, ay0, ax1, ay1, line, 1)
+    if active:
+        draw_logical_line(x0 + 12, y1 - 5, x1 - 12, y1 - 5, (91, 242, 227, 230), 2)
+    draw_text(
+        text_cache,
+        (x0 + x1) / 2,
+        (y0 + y1) / 2 - 4,
+        family,
+        (238, 252, 250) if active else (190, 211, 215),
+        21 if len(family) <= 6 else 19,
+        True,
+        False,
+        "cm",
+        family="Liberation Sans",
+    )
+    if active:
+        draw_text(text_cache, (x0 + x1) / 2, y1 - 16, active_mode, (174, 244, 228), 14, True, False, "cm", family="Liberation Sans")
+    elif len(modes) > 1:
+        # A generously sized, two-stroke chevron reads as a touch disclosure,
+        # rather than as a tiny text character.
+        chevron_x = x1 - 24
+        chevron_y = y1 - 21
+        chevron_color = (116, 202, 201, 210)
+        draw_logical_line(chevron_x - 10, chevron_y - 6, chevron_x, chevron_y + 4, chevron_color, 2)
+        draw_logical_line(chevron_x, chevron_y + 4, chevron_x + 10, chevron_y - 6, chevron_color, 2)
+
+
+def draw_radio_variant_option(text_cache, box, mode, active):
+    """Render one readable option in the compact second-level popover."""
+    x0, y0, x1, y1 = box
+    fill = (32, 87, 89, 226) if active else (20, 34, 43, 226)
+    line = (94, 235, 225, 230) if active else (129, 157, 168, 150)
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
+        draw_logical_line(ax0, ay0, ax1, ay1, line, 1)
+    if active:
+        draw_logical_line(x0 + 14, y1 - 6, x1 - 14, y1 - 6, (91, 242, 227, 235), 3)
+    label = KIWI_MODE_LABELS.get(mode, mode)
+    draw_text(
+        text_cache,
+        (x0 + x1) / 2,
+        (y0 + y1) / 2,
+        label,
+        (240, 254, 251) if active else (213, 231, 233),
+        17 if len(label) <= 11 else 15,
+        True,
+        False,
+        "cm",
+        family="Liberation Sans",
+    )
+
+
+def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None):
+    x0, y0, x1, y1 = radio_panel_box()
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
+    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 242))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
+    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 112), 1)
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Choose a mode family", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, radio_popup_x(532), radio_popup_y(87), "STEP", (145, 183, 190), 13, True, False, "lm", family="Liberation Sans")
+    active_mode = mode.upper()
+    for family, modes, box in radio_mode_layout():
+        draw_radio_family_option(text_cache, box, family, modes, active_mode)
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
+    for option, box in radio_step_options():
         label = f"{option // 1000}k" if option >= 1000 else str(option)
         draw_radio_option(text_cache, box, label, option == step_hz)
+    if family_open is not None:
+        modes = next((options for family, options in KIWI_MODE_FAMILIES if family == family_open), ())
+        vx0, vy0, vx1, vy1 = radio_variant_popup_box(modes)
+        draw_logical_rect(vx0, vy0, vx1, vy1, (6, 18, 25, 248))
+        draw_logical_line(vx0, vy0, vx1, vy0, (122, 196, 200, 204), 1)
+        draw_logical_line(vx0, vy1, vx1, vy1, (122, 196, 200, 204), 1)
+        draw_logical_line(vx0, vy0, vx0, vy1, (122, 196, 200, 204), 1)
+        draw_logical_line(vx1, vy0, vx1, vy1, (122, 196, 200, 204), 1)
+        draw_radio_option(text_cache, radio_variant_back_box(modes), "BACK", False)
+        draw_text(text_cache, (vx0 + vx1) / 2, vy0 + 20, family_open, (231, 246, 247), 18, True, False, "cm", family="Liberation Sans")
+        for option, box in radio_variant_layout(modes):
+            draw_radio_variant_option(text_cache, box, option, option == active_mode)
 
 
 def display_option_at(x, y):
@@ -2082,45 +2538,92 @@ def audio_volume_at_x(x):
     return clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
 
 
-def draw_audio_panel(text_cache, volume, squelch_enabled, low_cut, high_cut, output_available):
-    """Touch-first controls backed by the live PipeWire and Kiwi SND state."""
+def audio_squelch_at_x(x):
+    x0, _y0, x1, _y1 = AUDIO_SQUELCH_BOX
+    return int(round(clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0) * 99))
+
+
+def audio_option_at(x, y):
+    for name, box in (
+        ("mute", AUDIO_MUTE_BOX), ("squelch", AUDIO_SQUELCH_BOX),
+        ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
+        ("denoise", AUDIO_DENOISE_BOX), ("notch", AUDIO_NOTCH_BOX),
+        ("deemphasis", AUDIO_DEEMP_BOX), ("filter", AUDIO_FILTER_BOX),
+        ("reset", AUDIO_RESET_BOX),
+    ):
+        if contains(box, x, y):
+            return name
+    return None
+
+
+def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available):
+    """One readable Audio workspace, with the real Kiwi SND path behind it."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, 92, "AUDIO", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 19, "AUDIO", (229, 243, 246), 18, True, True, "lm", family="Liberation Sans")
     output_label = "USB SPEAKER" if output_available else "OUTPUT UNAVAILABLE"
     output_color = (104, 230, 151) if output_available else (242, 163, 104)
-    draw_text(text_cache, 148, 92, output_label, output_color, 13, True, True, "lm")
-    # AGC is actively configured in the current Kiwi SND setup; present it as
-    # status rather than offering unsupported manual gain semantics.
-    draw_text(text_cache, 906, 92, "AGC AUTO", (151, 180, 187), 13, False, True, "rm")
+    draw_text(text_cache, 148, y0 + 19, output_label, output_color, 13, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 906, y0 + 19, "RAW PCM", (151, 180, 187), 12, False, True, "rm", family="Liberation Sans")
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
-    track_y = (vy0 + vy1) / 2 + 8
-    draw_text(text_cache, vx0, vy0 + 4, "SPEAKER VOLUME", (164, 193, 198), 14, True, True, "lt")
-    draw_text(text_cache, vx1, vy0 + 4, f"{round(level * 100):.0f}%", (232, 246, 248), 22, True, True, "rt")
+    track_y = (vy0 + vy1) / 2 + 9
+    draw_text(text_cache, vx0, vy0 + 2, "VOLUME", (164, 193, 198), 14, True, True, "lt", family="Liberation Sans")
+    draw_text(text_cache, vx1, vy0 + 2, f"{round(level * 100):.0f}%", (232, 246, 248), 22, True, True, "rt", family="Liberation Sans")
     draw_logical_rect(vx0, track_y - 7, vx1, track_y + 7, (22, 35, 43, 230))
     draw_logical_rect(vx0, track_y - 7, vx0 + (vx1 - vx0) * level, track_y + 7, (68, 209, 151, 226))
     knob_x = vx0 + (vx1 - vx0) * level
     draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, (226, 246, 246, 255))
 
-    def panel_button(box, title, detail, active=False):
+    def panel_button(box, title, detail, active=False, accent=(92, 229, 174, 220)):
         bx0, by0, bx1, by1 = box
         fill = (28, 78, 67, 230) if active else (18, 29, 38, 210)
-        line = (92, 229, 174, 220) if active else (115, 140, 151, 78)
+        line = accent if active else (115, 140, 151, 78)
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         draw_logical_line(bx0, by0, bx1, by0, line, 1)
         draw_logical_line(bx0, by1, bx1, by1, line, 1)
         draw_logical_line(bx0, by0, bx0, by1, line, 1)
         draw_logical_line(bx1, by0, bx1, by1, line, 1)
-        draw_text(text_cache, bx0 + 20, by0 + 23, title, (230, 246, 247), 16, True, True, "lm")
-        draw_text(text_cache, bx0 + 20, by0 + 51, detail, (112, 223, 169) if active else (153, 185, 191), 13, False, True, "lm")
+        draw_text(text_cache, bx0 + 14, by0 + 17, title, (230, 246, 247), 14, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, by0 + 39, detail, (112, 223, 169) if active else (153, 185, 191), 13, False, True, "lm", family="Liberation Sans")
 
-    panel_button(AUDIO_SQUELCH_BOX, "SQUELCH", "ON" if squelch_enabled else "OFF", squelch_enabled)
-    panel_button(AUDIO_FILTER_BOX, "AUDIO FILTER", format_filter_width(high_cut - low_cut), False)
+    def panel_slider(box, title, value, maximum):
+        bx0, by0, bx1, by1 = box
+        fraction = clamp(value / maximum, 0.0, 1.0)
+        draw_logical_rect(bx0, by0, bx1, by1, (18, 29, 38, 220))
+        for line_y in (by0, by1):
+            draw_logical_line(bx0, line_y, bx1, line_y, (115, 140, 151, 82), 1)
+        draw_logical_line(bx0, by0, bx0, by1, (115, 140, 151, 82), 1)
+        draw_logical_line(bx1, by0, bx1, by1, (115, 140, 151, 82), 1)
+        draw_text(text_cache, bx0 + 14, by0 + 16, title, (230, 246, 247), 14, True, True, "lm", family="Liberation Sans")
+        label = "OFF" if value <= 0 else f"{value:02d}"
+        draw_text(text_cache, bx1 - 14, by0 + 16, label, (112, 223, 169) if value else (153, 185, 191), 15, True, True, "rm", family="Liberation Sans")
+        track_x0, track_x1 = bx0 + 14, bx1 - 14
+        track_y = by1 - 15
+        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (31, 48, 57, 255))
+        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * fraction, track_y + 3, (76, 221, 159, 230))
+        knob_x = track_x0 + (track_x1 - track_x0) * fraction
+        draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, (229, 246, 246, 245))
+
+    muted = controls["mute"]
+    panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
+    sq = int(controls["squelch_level"])
+    panel_slider(AUDIO_SQUELCH_BOX, "SQUELCH", sq, 99)
+    agc_detail = "AUTO" if controls["agc"] and not controls["agc_hang"] else ("AUTO HANG" if controls["agc"] else f"MAN {controls['agc_manual_gain']} dB")
+    panel_button(AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"]))
+    blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
+    panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
+    denoise_level = int(controls["denoise_level"])
+    panel_button(AUDIO_DENOISE_BOX, "DENOISE", kiwi.DENOISE_PRESETS[denoise_level][0], denoise_level > 0)
+    panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
+    deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
+    panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
+    panel_button(AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False)
+    panel_button(AUDIO_RESET_BOX, "RESTORE", "KIWI DEFAULTS", False)
 
 
 def tests_option_at(x, y):
@@ -2157,7 +2660,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, 94, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
@@ -2481,11 +2984,11 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, 94, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 22, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
     delta_hz = round((current_khz - origin_khz) * 1000)
     delta_label = f"{delta_hz:+d} Hz" if delta_hz else "CENTRE"
-    draw_text(text_cache, 918, 94, delta_label, (110, 230, 180), 16, True, True, "rm")
-    draw_text(text_cache, LOGICAL_W / 2, 114, sdr_ui.format_freq(current_khz), (232, 246, 247), 28, True, False, "cm")
+    draw_text(text_cache, 918, y0 + 22, delta_label, (110, 230, 180), 16, True, True, "rm")
+    draw_text(text_cache, LOGICAL_W / 2, y0 + 42, sdr_ui.format_freq(current_khz), (232, 246, 247), 28, True, False, "cm")
     draw_logical_rect(tx0, ty0, tx1, ty1, (10, 23, 29, 232))
     mid_x = (tx0 + tx1) / 2
     draw_logical_line(mid_x, ty0 + 7, mid_x, ty1 - 7, (113, 239, 187, 235), 2)
@@ -2521,22 +3024,22 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, 101, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 29, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM", spectrum_enabled)
     draw_display_control(text_cache, DISPLAY_AUTO_BOX, "AUTO SCALE", auto)
-    draw_logical_line(32, 120, 928, 120, (149, 171, 177, 56), 1)
-    draw_text(text_cache, 36, 155, "FLOOR", (139, 180, 187), 14, True, True, "lm")
+    draw_logical_line(32, y0 + 48, 928, y0 + 48, (149, 171, 177, 56), 1)
+    draw_text(text_cache, 36, y0 + 83, "FLOOR", (139, 180, 187), 14, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_FLOOR_MINUS_BOX, "-", False)
-    draw_text(text_cache, 276, 155, f"{floor:.0f}", (224, 241, 243), 22, True, True, "cm")
+    draw_text(text_cache, 276, y0 + 83, f"{floor:.0f}", (224, 241, 243), 22, True, True, "cm")
     draw_display_control(text_cache, DISPLAY_FLOOR_PLUS_BOX, "+", False)
-    draw_text(text_cache, 460, 155, "CEILING", (139, 180, 187), 14, True, True, "lm")
+    draw_text(text_cache, 460, y0 + 83, "CEILING", (139, 180, 187), 14, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_CEIL_MINUS_BOX, "-", False)
-    draw_text(text_cache, 704, 155, f"{ceiling:.0f}", (224, 241, 243), 22, True, True, "cm")
+    draw_text(text_cache, 704, y0 + 83, f"{ceiling:.0f}", (224, 241, 243), 22, True, True, "cm")
     draw_display_control(text_cache, DISPLAY_CEIL_PLUS_BOX, "+", False)
-    draw_text(text_cache, 36, 202, "RATE", (139, 180, 187), 13, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 130, "RATE", (139, 180, 187), 13, True, True, "lm")
     for rate, box, label in DISPLAY_RATE_BOXES:
         draw_display_control(text_cache, box, label, rate == speed)
-    draw_text(text_cache, 548, 202, "PALETTE", (139, 180, 187), 13, True, True, "lm")
+    draw_text(text_cache, 548, y0 + 130, "PALETTE", (139, 180, 187), 13, True, True, "lm")
     for option, box, label in DISPLAY_PALETTE_BOXES:
         draw_display_control(text_cache, box, label, option == palette)
 
@@ -2719,7 +3222,9 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     for offset, line_alpha in ((32, 0.20), (64, 0.12)):
         y = y0 + offset
         draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
-    draw_text(text_cache, x0 + 18, y0 + 22, "ZOOM", green[:3], 28, True, True, "lm")
+    digital_factor = kiwi.DIGITAL_ZOOM_FACTORS.get(int(zoom))
+    zoom_label = f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM"
+    draw_text(text_cache, x0 + 18, y0 + 22, zoom_label, green[:3], 28, True, True, "lm")
     draw_text(text_cache, x1 - 18, y0 + 22, format_zoom_span(span_khz), green[:3], 28, True, True, "rm")
 
     track_x0 = x0 + 24
@@ -2727,8 +3232,8 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     base_y = y0 + 81
     draw_logical_line(track_x0, base_y, track_x1, base_y, soft, 3)
     bar_w = 17
-    for level in range(15):
-        x = int(round(track_x0 + (track_x1 - track_x0) * level / 14))
+    for level in range(kiwi.DISPLAY_MAX_ZOOM + 1):
+        x = int(round(track_x0 + (track_x1 - track_x0) * level / kiwi.DISPLAY_MAX_ZOOM))
         fill = green if level <= zoom else dim
         h = 36 if level == zoom else 24
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
@@ -3410,24 +3915,72 @@ def draw_ruler(
         hz += major_step_hz
 
 
-def draw_spectrum(y0, y1, values, peak_values=(), text_cache=None):
+def zoomed_spectrum_values(values, source_span_khz, visible_span_khz):
+    """Resample the central source span for the local 4x display zoom."""
+    if not values or source_span_khz <= visible_span_khz:
+        return values
+    source_fraction = clamp(visible_span_khz / source_span_khz, 0.001, 1.0)
+    left = (1.0 - source_fraction) / 2.0
+    last = len(values) - 1
+    result = []
+    for index in range(len(values)):
+        source_index = (left + source_fraction * index / max(1, last)) * last
+        low = int(math.floor(source_index))
+        high = min(last, low + 1)
+        amount = source_index - low
+        result.append(values[low] + (values[high] - values[low]) * amount)
+    return tuple(result)
+
+
+def draw_spectrum(
+    y0,
+    y1,
+    values,
+    peak_values=(),
+    text_cache=None,
+    foreground=False,
+    source_span_khz=None,
+    visible_span_khz=None,
+):
     """Draw the amplitude-versus-frequency trace from the Kiwi W/F bins."""
-    draw_logical_rect(0, y0, LOGICAL_W, y1, (2, 7, 12, 236))
+    # In the wide layout the scope intentionally sits over the lower edge of
+    # the information strip. Keep its field translucent there so the reading
+    # remains behind the live trace rather than becoming a separate hard box.
+    field_alpha = 156 if foreground else 236
+    draw_logical_rect(0, y0, LOGICAL_W, y1, (2, 7, 12, field_alpha))
     show_dbm_scale = (y1 - y0) >= 120
     scale_fractions = (0.0, 0.25, 0.50, 0.75, 1.0) if show_dbm_scale else (0.25, 0.50, 0.75)
     for fraction in scale_fractions:
         y = y0 + (y1 - y0) * fraction
-        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 52 if show_dbm_scale else 34), 1)
+        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 48 if show_dbm_scale else 34), 1)
     if show_dbm_scale and text_cache is not None:
         # This is a visual reference scale for the normalized Kiwi spectrum,
-        # not a calibrated RF-power measurement.
-        draw_logical_rect(0, y0, 47, y1, (3, 11, 17, 114))
-        for fraction, label in zip(scale_fractions, ("-40", "-60", "-80", "-100", "-120")):
+        # not a calibrated RF-power meter. Keep it as a compact left-edge
+        # instrument ruler, separated from the live trace by its own gutter.
+        axis_x = 8
+        label_x = 30
+        draw_logical_rect(0, y0, 68, y1, (3, 11, 17, 102))
+        draw_logical_line(axis_x, y0 + 4, axis_x, y1 - 4, (125, 169, 181, 118), 1)
+        for index in range(17):
+            fraction = index / 16
             y = y0 + (y1 - y0) * fraction
-            draw_logical_line(40, y, 51, y, (129, 176, 187, 150), 1)
-            label_y = clamp(y, y0 + 10, y1 - 10)
-            draw_text(text_cache, 36, label_y, label, (160, 194, 201), 13, True, True, "rm")
-        draw_text(text_cache, 42, y0 + 10, "dBm", (111, 161, 171), 10, True, True, "lm")
+            major = index % 4 == 0
+            tick_length = 14 if major else 6
+            tick_color = (163, 203, 211, 172) if major else (100, 151, 165, 106)
+            draw_logical_line(axis_x, y, axis_x + tick_length, y, tick_color, 1)
+            if major:
+                label = f"{-40 - index * 5}"
+                if index == 0:
+                    label += " dBm"
+                # Font ascenders/figures look fractionally low when centered
+                # on a 1 px rule, so lift the label optically, not the tick.
+                # Let end labels overhang the field slightly rather than
+                # distorting their value-to-tick alignment with a clamp.
+                label_y = y - 2
+                draw_text(text_cache, label_x, label_y, label, (180, 207, 211), 13, True, True, "lm")
+    if source_span_khz is not None and visible_span_khz is not None:
+        values = zoomed_spectrum_values(values, source_span_khz, visible_span_khz)
+        peak_values = zoomed_spectrum_values(peak_values, source_span_khz, visible_span_khz)
     if not values:
         return
     top = y0 + 3
@@ -3593,18 +4146,31 @@ def drain_queue(line_queue):
 
 
 def kiwi_mode_filter(mode):
+    """Return Kiwi's native default passband for every selectable mode."""
     mode = mode.lower()
-    if mode in ("usb", "usn"):
-        return 300, 2700
-    if mode in ("lsb", "lsn"):
-        return -2700, -300
-    if mode in ("cw", "cwn"):
-        return -500, 500
-    if mode in ("nbfm", "nnfm"):
-        return -6000, 6000
-    if mode == "iq":
-        return -12000, 12000
-    return -5000, 5000
+    if mode not in KIWI_MODE_FILTERS:
+        raise ValueError(f"unsupported Kiwi mode: {mode}")
+    return KIWI_MODE_FILTERS[mode]
+
+
+def kiwi_audio_channels(mode):
+    """Return playable channel count; zero denotes complex/extension data."""
+    mode = mode.lower()
+    if mode in KIWI_STEREO_AUDIO_MODES:
+        return 2
+    if mode in KIWI_NON_AUDIO_MODES:
+        return 0
+    return 1
+
+
+def stereo_s16le_to_mono(data):
+    """Downmix interleaved little-endian stereo PCM for the Globe monitor."""
+    frame_count = len(data) // 4
+    if frame_count <= 0:
+        return b""
+    samples = struct.unpack(f"<{frame_count * 2}h", data[:frame_count * 4])
+    mono = tuple((samples[index] + samples[index + 1]) // 2 for index in range(0, len(samples), 2))
+    return struct.pack(f"<{frame_count}h", *mono)
 
 
 def default_sideband_mode(freq_khz):
@@ -3630,12 +4196,12 @@ def filter_view_offsets(low_cut, high_cut):
 class DesktopAudioPlayer:
     """Small CoreAudio-backed PCM sink with the same write interface as pw-cat."""
 
-    def __init__(self, rate):
+    def __init__(self, rate, channels=1):
         import sounddevice
 
         self.stream = sounddevice.RawOutputStream(
             samplerate=rate,
-            channels=1,
+            channels=channels,
             dtype="int16",
             latency="low",
         )
@@ -3668,8 +4234,8 @@ class DesktopAudioPlayer:
         return 0
 
 
-def start_audio_player(args):
-    """Open the SDR's mono PCM stream on PipeWire's current default sink.
+def start_audio_player(args, channels=1):
+    """Open the SDR's PCM stream on PipeWire's current default sink.
 
     PipeWire/WirePlumber owns the output choice, so a USB sink selected as the
     system default continues to receive this stream without pinning a volatile
@@ -3679,7 +4245,7 @@ def start_audio_player(args):
         return None
     if args.desktop:
         try:
-            return DesktopAudioPlayer(args.audio_rate)
+            return DesktopAudioPlayer(args.audio_rate, channels)
         except Exception as exc:
             print(f"gl desktop audio {exc}", flush=True)
             return None
@@ -3690,7 +4256,7 @@ def start_audio_player(args):
                 "--playback",
                 "--raw",
                 "--rate", str(args.audio_rate),
-                "--channels", "1",
+                "--channels", str(channels),
                 "--format", "s16",
                 "--latency", PIPEWIRE_AUDIO_LATENCY,
                 "-",
@@ -3770,21 +4336,25 @@ def snd_meter_worker(args, stop_event, state):
     seen_server_generation = -1
     seen_audio_generation = -1
     player = None
+    player_channels = None
     while not stop_event.is_set():
         ws = None
         try:
             if state.external_audio_snapshot():
                 stop_audio_player(player)
                 player = None
+                player_channels = None
                 stop_event.wait(0.10)
                 continue
-            if args.audio and (player is None or player.poll() is not None):
-                stop_audio_player(player)
-                player = start_audio_player(args)
             server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
             state.connection_attempt(server_generation, "audio")
             radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
-            squelch_enabled, audio_generation = state.audio_snapshot()
+            desired_channels = kiwi_audio_channels(radio_mode)
+            if desired_channels != player_channels or (player is not None and player.poll() is not None):
+                stop_audio_player(player)
+                player = start_audio_player(args, desired_channels) if desired_channels else None
+                player_channels = desired_channels
+            audio_controls, audio_generation = state.audio_controls_snapshot()
             ws = kiwi.KiwiWebSocket.connect(server, "SND")
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             configured = False
@@ -3795,7 +4365,12 @@ def snd_meter_worker(args, stop_event, state):
                     break
                 server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
                 radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
-                squelch_enabled, audio_generation = state.audio_snapshot()
+                desired_channels = kiwi_audio_channels(radio_mode)
+                if desired_channels != player_channels or (player is not None and player.poll() is not None):
+                    stop_audio_player(player)
+                    player = start_audio_player(args, desired_channels) if desired_channels else None
+                    player_channels = desired_channels
+                audio_controls, audio_generation = state.audio_controls_snapshot()
                 live_tune_interval = 1.0 / state.tune_rate_snapshot()
                 if server_generation != seen_server_generation:
                     seen_server_generation = server_generation
@@ -3807,8 +4382,7 @@ def snd_meter_worker(args, stop_event, state):
                     and now_monotonic >= next_view_send_at
                 ):
                     snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
-                    kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut)
-                    ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                    kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut, audio_controls)
                     seen_view_generation = view_generation
                     seen_radio_generation = radio_generation
                     seen_audio_generation = audio_generation
@@ -3839,8 +4413,7 @@ def snd_meter_worker(args, stop_event, state):
                         ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
                     if "sample_rate" in params and not configured:
                         snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
-                        kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut)
-                        ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                        kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut, audio_controls)
                         configured = True
                         seen_view_generation = view_generation
                         seen_radio_generation = radio_generation
@@ -3854,7 +4427,7 @@ def snd_meter_worker(args, stop_event, state):
                             persist_live_station_health(server, "audio", True)
                     continue
                 if configured and audio_generation != seen_audio_generation:
-                    ws.send_text(f"SET squelch={int(squelch_enabled)} max=0")
+                    kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut, audio_controls)
                     seen_audio_generation = audio_generation
                 if message[:3] != b"SND" or len(message) < 10:
                     continue
@@ -3866,7 +4439,22 @@ def snd_meter_worker(args, stop_event, state):
                 # legacy aplay path expected big-endian samples; pw-cat uses
                 # native S16, so convert only the normal big-endian packets.
                 audio = body[7:]
-                if player and player.stdin and not (flags & kiwi.SND_FLAG_COMPRESSED) and not (flags & kiwi.SND_FLAG_STEREO):
+                packet_is_stereo = bool(flags & kiwi.SND_FLAG_STEREO)
+                playable_packet = (
+                    not (flags & kiwi.SND_FLAG_COMPRESSED)
+                    and (
+                        (packet_is_stereo and radio_mode in KIWI_STEREO_AUDIO_MODES)
+                        or (
+                            not packet_is_stereo
+                            and radio_mode not in KIWI_NON_AUDIO_MODES
+                            and desired_channels == 1
+                        )
+                    )
+                )
+                # Keep mute local as well as informing Kiwi. Some public
+                # receivers continue sending raw PCM after SET mute, and this
+                # is the final path into PipeWire/the USB audio device.
+                if player and player.stdin and playable_packet and not audio_controls.get("mute", False):
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
                     try:
@@ -3874,6 +4462,7 @@ def snd_meter_worker(args, stop_event, state):
                     except (BrokenPipeError, OSError):
                         stop_audio_player(player)
                         player = None
+                        player_channels = None
         except Exception as exc:
             print(f"gl SND {exc}", flush=True)
             if state.connection_failed(server_generation, "audio"):
@@ -4009,10 +4598,16 @@ class GlobeAudioMixer:
                         "sampled_at": time.monotonic(),
                     }
                 audio = body[7:]
-                if flags & kiwi.SND_FLAG_COMPRESSED or flags & kiwi.SND_FLAG_STEREO:
+                if flags & kiwi.SND_FLAG_COMPRESSED or radio_mode in KIWI_NON_AUDIO_MODES:
                     continue
                 if not flags & kiwi.SND_FLAG_LITTLE_ENDIAN:
                     audio = kiwi.swap_s16_bytes(audio)
+                if flags & kiwi.SND_FLAG_STEREO:
+                    if radio_mode not in KIWI_STEREO_AUDIO_MODES:
+                        continue
+                    # Globe uses one monitor sink for three prewarmed receivers.
+                    # Preserve seamless switching by downmixing stereo modes here.
+                    audio = stereo_s16le_to_mono(audio)
                 self._source_ready(server)
                 self._write_active(server, audio)
         except Exception as exc:
@@ -4129,6 +4724,8 @@ def waterfall_worker(args, line_queue, stop_event, state):
             ws = kiwi.KiwiWebSocket.connect(server, "W/F")
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+            sent_freq_khz = freq_khz
+            sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
             last_keepalive = 0
             last_frame_at = time.monotonic()
             next_view_send_at = 0.0
@@ -4144,10 +4741,17 @@ def waterfall_worker(args, line_queue, stop_event, state):
                 now_monotonic = time.monotonic()
                 if generation != seen_generation and now_monotonic >= next_view_send_at:
                     seen_generation = generation
-                    drain_queue(line_queue)
-                    kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
-                    next_view_send_at = now_monotonic + live_tune_interval
-                    print(f"gl wf retune: {freq_khz:.3f} kHz zoom {zoom}", flush=True)
+                    next_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
+                    # Display zooms 15/16 are local crops of Kiwi zoom-14
+                    # data, so moving among them must not flush/restart the
+                    # live waterfall. A real RF move still goes to Kiwi.
+                    if freq_khz != sent_freq_khz or next_kiwi_zoom != sent_kiwi_zoom:
+                        drain_queue(line_queue)
+                        kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+                        sent_freq_khz = freq_khz
+                        sent_kiwi_zoom = next_kiwi_zoom
+                        next_view_send_at = now_monotonic + live_tune_interval
+                        print(f"gl wf retune: {freq_khz:.3f} kHz zoom {zoom}", flush=True)
                 if wf_generation != seen_wf_generation:
                     seen_wf_generation = wf_generation
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
@@ -4179,7 +4783,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     floor, ceiling = leveler.levels_for(samples)
                     line = kiwi.waterfall_line(samples, mapper, floor, ceiling)
                     state.update_spectrum(samples, floor, ceiling)
-                    row_span = kiwi.zoom_to_span_khz(zoom)
+                    row_span = kiwi.zoom_source_span_khz(zoom)
                     row_item = (line, freq_khz, row_span)
                     for _ in range(args.wf_row_pixels):
                         try:
@@ -4260,7 +4864,7 @@ def main():
     parser.add_argument("--swipe-inertia-min-px-s", type=float, default=520.0)
     parser.add_argument("--swipe-inertia-strength", type=float, default=0.0)
     parser.add_argument("--swipe-inertia-tau", type=float, default=0.30)
-    parser.add_argument("--max-zoom", type=int, default=14)
+    parser.add_argument("--max-zoom", type=int, default=kiwi.DISPLAY_MAX_ZOOM)
     parser.add_argument("--station-zoom", type=int, default=13)
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
@@ -4281,8 +4885,8 @@ def main():
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
                 flush=True,
             )
-    args.max_zoom = clamp(args.max_zoom, 0, 14)
-    args.station_zoom = clamp(args.station_zoom, 0, 14)
+    args.max_zoom = clamp(args.max_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
+    args.station_zoom = clamp(args.station_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
     if args.swipe_sensitivity is not None:
         args.swipe_slow_sensitivity = args.swipe_sensitivity
     args.swipe_slow_sensitivity = max(0.1, args.swipe_slow_sensitivity)
@@ -4410,6 +5014,7 @@ def main():
     search_open = False
     keyboard_mode = "lower"
     radio_setup_open = False
+    radio_family_open = None
     display_setup_open = False
     audio_panel_open = False
     audio_volume = pipewire_default_volume()
@@ -4463,8 +5068,6 @@ def main():
     station_scroll = 0
     digital_mode = "DIG"
     tune_step_hz = args.tune_step_hz
-    radio_mode_page = 0
-
     active = False
     raw_x = raw_y = None
     current_slot = 0
@@ -4632,7 +5235,7 @@ def main():
         nonlocal menu_open, picker_open, radio_setup_open, display_setup_open
         nonlocal audio_panel_open, audio_volume, tests_panel_open, dj_tune_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort
-        nonlocal stations, search_open
+        nonlocal stations, search_open, radio_family_open
         kind, label = MENU_ITEMS[index]
         wake_controls()
         menu_open = False
@@ -4651,6 +5254,7 @@ def main():
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind in ("settings", "digital"):
             radio_setup_open = True
+            radio_family_open = None
             picker_open = display_setup_open = audio_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "audio":
@@ -4984,9 +5588,9 @@ def main():
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
                             elif audio_panel_open and contains(AUDIO_SQUELCH_BOX, x, y):
-                                gesture = "audio_squelch"
-                            elif audio_panel_open and contains(AUDIO_FILTER_BOX, x, y):
-                                gesture = "audio_filter"
+                                gesture = "audio_squelch_level"
+                            elif audio_panel_open and audio_option_at(x, y) is not None:
+                                gesture = "audio_control"
                             elif audio_panel_open:
                                 gesture = "audio_panel_outside"
                             elif dj_tune_open and contains(DJ_TRACK_BOX, x, y):
@@ -5053,7 +5657,7 @@ def main():
                                 gesture = "filter_idle"
                             elif filter_panel_open:
                                 gesture = "filter_edit_outside"
-                            elif radio_setup_open and contains(RADIO_PANEL_BOX, x, y):
+                            elif radio_setup_open and contains(radio_panel_box(), x, y):
                                 gesture = "radio_setup"
                             elif radio_setup_open:
                                 gesture = "radio_setup_outside"
@@ -5106,6 +5710,8 @@ def main():
                                 if applied_volume is not None:
                                     audio_volume = applied_volume
                                     audio_volume_last_apply = time.monotonic()
+                        elif gesture == "audio_squelch_level":
+                            state.set_audio_controls(squelch_level=audio_squelch_at_x(x))
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
@@ -5235,6 +5841,7 @@ def main():
                             if moved <= args.tap_px:
                                 wake_controls()
                                 radio_setup_open = not radio_setup_open
+                                radio_family_open = None
                                 menu_open = False
                                 picker_open = False
                                 display_setup_open = False
@@ -5253,17 +5860,42 @@ def main():
                                 audio_volume = applied_volume
                                 audio_volume_last_apply = time.monotonic()
                             wake_controls()
-                        elif touch_started and gesture == "audio_squelch":
+                        elif touch_started and gesture == "audio_squelch_level":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                squelch_enabled, _audio_generation = state.audio_snapshot()
-                                state.set_squelch(not squelch_enabled)
+                                controls, _audio_generation = state.audio_controls_snapshot()
+                                state.set_audio_controls(squelch_level=0 if controls["squelch_level"] else 20)
                             wake_controls()
-                        elif touch_started and gesture == "audio_filter":
+                        elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                audio_panel_open = False
-                                filter_panel_open = True
+                                choice = audio_option_at(x, y)
+                                controls, _audio_generation = state.audio_controls_snapshot()
+                                if choice == "mute":
+                                    state.set_audio_controls(audio_mute=not controls["mute"])
+                                elif choice == "agc":
+                                    if not controls["agc"]:
+                                        state.set_audio_controls(agc_enabled=True, agc_hang=False)
+                                    elif not controls["agc_hang"]:
+                                        state.set_audio_controls(agc_hang=True)
+                                    else:
+                                        state.set_audio_controls(agc_enabled=False, agc_hang=False)
+                                elif choice == "blanker":
+                                    state.set_audio_controls(nb_algo=(int(controls["nb_algo"]) + 1) % 3)
+                                elif choice == "denoise":
+                                    state.set_audio_controls(
+                                        nr_algo=1,
+                                        denoise_level=(int(controls["denoise_level"]) + 1) % len(kiwi.DENOISE_PRESETS),
+                                    )
+                                elif choice == "notch":
+                                    state.set_audio_controls(nr_algo=1, autonotch_enabled=not controls["autonotch"])
+                                elif choice == "deemphasis":
+                                    state.set_audio_controls(deemphasis=(int(controls["deemphasis"]) + 1) % 3)
+                                elif choice == "filter":
+                                    audio_panel_open = False
+                                    filter_panel_open = True
+                                elif choice == "reset":
+                                    state.reset_audio_controls()
                             wake_controls()
                         elif touch_started and gesture == "audio_panel_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -5440,24 +6072,30 @@ def main():
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = radio_option_at(x, y, radio_mode_page)
+                                choice = radio_option_at(x, y, radio_family_open)
                                 if choice is not None:
                                     kind, value = choice
-                                    if kind == "mode":
+                                    if kind == "mode_family":
+                                        family, modes = value
+                                        if len(modes) > 1:
+                                            radio_family_open = family
+                                        else:
+                                            radio_mode = modes[0]
+                                            manual_radio_mode = True
+                                            filter_custom_width = False
+                                            digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
+                                            state.set_radio_mode(radio_mode)
+                                            remember_current_view()
+                                    elif kind == "mode":
                                         radio_mode = value
+                                        radio_family_open = None
                                         manual_radio_mode = True
                                         filter_custom_width = False
-                                        digital_mode = "IQ" if value == "IQ" else "DIG"
+                                        digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
                                         state.set_radio_mode(radio_mode)
                                         remember_current_view()
-                                    elif kind == "mode_page":
-                                        radio_mode_page = clamp(
-                                            radio_mode_page + value,
-                                            0,
-                                            len(KIWI_MODE_PAGES) - 1,
-                                        )
-                                    elif kind == "digital":
-                                        digital_mode = value
+                                    elif kind == "back":
+                                        radio_family_open = None
                                     else:
                                         tune_step_hz = value
                                     wake_controls()
@@ -5466,6 +6104,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 radio_setup_open = False
+                                radio_family_open = None
                                 wake_controls()
                         elif touch_started and gesture == "filter_controls":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -5914,10 +6553,12 @@ def main():
                 try:
                     item = line_queue.get_nowait()
                     if isinstance(item, tuple):
-                        line = item[0]
+                        line, row_center_khz, row_span_khz = item
                     else:
                         line = item
-                    wf_texture.push_line(line, display_freq, display_span)
+                        row_center_khz = display_freq
+                        row_span_khz = display_span
+                    wf_texture.push_line(line, row_center_khz, row_span_khz)
                     consumed += 1
                 except queue.Empty:
                     break
@@ -5932,7 +6573,19 @@ def main():
             # Keep scope compact and behind the top instrumentation. Its lower
             # edge now sits beside the S-meter, freeing the waterfall below.
             top_instrument_h = DESKTOP_1280_TOP_H if DESKTOP_1280_MODE else sdr_ui.TOP_H
-            spectrum_y0 = top_instrument_h if spectrum_enabled else top_instrument_h + sdr_ui.RULER_H * (1.0 - focus_progress) - SPECTRUM_RAISE_Y * (1.0 - focus_progress)
+            spectrum_raise_y = SPECTRUM_WIDE_RAISE_Y if DESKTOP_1280_MODE else 0
+            spectrum_y0 = (
+                top_instrument_h - spectrum_raise_y
+                if spectrum_enabled
+                else top_instrument_h
+                + sdr_ui.RULER_H * (1.0 - focus_progress)
+                - (
+                    WATERFALL_ONLY_WIDE_RAISE_Y
+                    if DESKTOP_1280_MODE
+                    else SPECTRUM_RAISE_Y
+                )
+                * (1.0 - focus_progress)
+            )
             spectrum_y1 = spectrum_y0 + spectrum_h
             bottom_ruler = True
             ruler_height = BOTTOM_RULER_H if bottom_ruler else sdr_ui.RULER_H
@@ -5949,9 +6602,26 @@ def main():
             # waterfall then covers rows under the ruler/status strip instead
             # of remapping the visible texture and making it appear to scroll up.
             row_offset = round(waterfall_y0 - focus_waterfall_y0)
-            wf_texture.draw(0, waterfall_y0, LOGICAL_W, waterfall_y1, row_offset=row_offset)
-            if spectrum_enabled:
-                draw_spectrum(spectrum_y0, spectrum_y1, spectrum_values, spectrum_peak_values, text_cache)
+            wf_texture.draw(
+                0,
+                waterfall_y0,
+                LOGICAL_W,
+                waterfall_y1,
+                center_khz=display_freq,
+                span_khz=display_span,
+                row_offset=row_offset,
+            )
+            spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE
+            if spectrum_enabled and not spectrum_foreground:
+                draw_spectrum(
+                    spectrum_y0,
+                    spectrum_y1,
+                    spectrum_values,
+                    spectrum_peak_values,
+                    text_cache,
+                    source_span_khz=kiwi.zoom_source_span_khz(zoom),
+                    visible_span_khz=display_span,
+                )
             overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
             draw_filter_overlay(
                 display_span,
@@ -5994,6 +6664,17 @@ def main():
                 connection_status=connection_status,
                 bandwidth_hz=high_cut - low_cut,
             )
+            if spectrum_foreground:
+                draw_spectrum(
+                    spectrum_y0,
+                    spectrum_y1,
+                    spectrum_values,
+                    spectrum_peak_values,
+                    text_cache,
+                    foreground=True,
+                    source_span_khz=kiwi.zoom_source_span_khz(zoom),
+                    visible_span_khz=display_span,
+                )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if menu_open:
@@ -6005,7 +6686,7 @@ def main():
                     visible_stations = health_prioritized_stations(stations, station_health, station_sort)
                     draw_station_picker(text_cache, visible_stations, station_scroll, server, station_query, station_sort, station_health)
             if radio_setup_open:
-                draw_radio_setup_panel(text_cache, radio_mode, digital_mode, tune_step_hz, radio_mode_page)
+                draw_radio_setup_panel(text_cache, radio_mode, digital_mode, tune_step_hz, radio_family_open)
             if display_setup_open:
                 wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, _wf_generation = state.waterfall_snapshot()
                 spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
@@ -6019,12 +6700,12 @@ def main():
                     spectrum_enabled,
                 )
             if audio_panel_open:
-                squelch_enabled, _audio_generation = state.audio_snapshot()
+                audio_controls, _audio_generation = state.audio_controls_snapshot()
                 _audio_mode, audio_low_cut, audio_high_cut, _audio_radio_generation = state.radio_snapshot()
                 draw_audio_panel(
                     text_cache,
                     audio_volume,
-                    squelch_enabled,
+                    audio_controls,
                     audio_low_cut,
                     audio_high_cut,
                     audio_volume is not None,
