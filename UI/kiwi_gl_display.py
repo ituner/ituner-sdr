@@ -58,6 +58,14 @@ WATERFALL_FOCUS_Y1 = LOGICAL_H
 DESKTOP_1280_MAIN_W = 1024
 DESKTOP_1280_NAV_W = 256
 DESKTOP_1280_STATUS_Y = 452
+DESKTOP_1280_TOP_H = 96
+# The wide layout's radio-status control deliberately shares the exact outer
+# bounds of the two-column navigation rail beneath it. It is one touch target.
+DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
+DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NBFM", "IQ")
+_RENDERER_DIR = Path(__file__).resolve().parent
+_MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
+MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
 SPECTRUM_H = 70
 SPECTRUM_WIDE_H = 140
 SPECTRUM_RAISE_Y = 12
@@ -279,14 +287,14 @@ MENU_CLOSE_BOX = (0, 0, 0, 0)
 MENU_COLS = 5
 MENU_ROWS = 2
 MENU_ITEMS = (
-    ("rx", "RX"),
+    ("rx", "RECEIVERS"),
+    ("rf", "RF"),
     ("audio", "AUDIO"),
-    ("tests", "TESTS"),
-    ("radio", "RADIO"),
-    ("display", "DISP"),
-    ("decode", "DEC"),
-    ("network", "NET"),
-    ("about", "INFO"),
+    ("display", "DISPLAY"),
+    ("apps", "APPS"),
+    ("digital", "DIGI"),
+    ("stats", "STATS"),
+    ("settings", "SETTINGS"),
 )
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
@@ -1928,6 +1936,55 @@ def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BO
         draw_text(text_cache, (x0 + x1) / 2, (py0 + py1) / 2, label, text_color, 13, True, True, "cm")
 
 
+def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz):
+    """One unified radio-status button above the persistent navigation rail."""
+    if not DESKTOP_1280_MODE:
+        return
+    x0, y0, x1, y1 = DESKTOP_1280_ANNUNCIATOR_BOX
+    draw_native_rect(x0, y0, x1, y1, (15, 31, 39, 244))
+    draw_native_line(x0, y0, x1, y0, (125, 147, 158, 168), 1)
+    draw_native_line(x0, y0, x0, y1, (93, 120, 132, 155), 1)
+    draw_native_line(x1, y0, x1, y1, (32, 50, 61, 215), 1)
+    draw_native_line(x0, y1, x1, y1, (53, 88, 98, 210), 1)
+    active_mode = mode.upper()
+    active_mode = {"AMN": "AM", "AMW": "AM", "CWN": "CW", "NNFM": "NBFM", "SAU": "SAM", "SAL": "SAM", "SAS": "SAM", "SASD": "SAM"}.get(active_mode, active_mode)
+    grid_x = x0 + 7
+    grid_w = x1 - x0 - 14
+    cell_w = grid_w / 4
+    for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+        col = index % 4
+        row = index // 4
+        bx0 = grid_x + col * cell_w
+        bx1 = grid_x + (col + 1) * cell_w
+        # Keep the mode matrix clear of the top edge of the wide status button.
+        by0 = y0 + 26 + row * 23
+        by1 = by0 + 20
+        active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+        if active:
+            draw_native_rect(bx0 + 3, by0 + 1, bx1 - 3, by1 - 1, (43, 121, 81, 205))
+            # Layered underlines give the selected mode a readable neon halo
+            # without introducing a blur texture in this compact strip.
+            draw_native_line(bx0 + 5, by1 - 1, bx1 - 5, by1 - 1, (47, 255, 123, 105), 7)
+            draw_native_line(bx0 + 5, by1 - 1, bx1 - 5, by1 - 1, (82, 255, 147, 190), 3)
+            draw_native_line(bx0 + 5, by1 - 1, bx1 - 5, by1 - 1, (119, 255, 162, 245), 1)
+        draw_native_text(
+            text_cache,
+            bx0 + 7,
+            (by0 + by1) / 2 + 1,
+            label,
+            (235, 255, 239) if active else (130, 151, 157),
+            12,
+            True,
+            False,
+            "lm",
+            family="Liberation Sans",
+        )
+    footer_y = y0 + 75
+    draw_native_line(x0 + 9, footer_y, x1 - 9, footer_y, (64, 103, 112, 150), 1)
+    draw_native_text(text_cache, grid_x + 7, y1 - 9, f"BW  {format_filter_width(bandwidth_hz)}", (192, 218, 222), 12, True, False, "lm", family="Liberation Sans")
+    draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", (192, 218, 222), 12, True, False, "rm", family="Liberation Sans")
+
+
 def radio_option_at(x, y, mode_page):
     if contains(RADIO_MODE_PREV_BOX, x, y):
         return "mode_page", -1
@@ -2748,10 +2805,28 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "rx":
-        pygame.draw.circle(surface, color, (cx, cy - 2), 13, 3)
-        pygame.draw.line(surface, color, (cx, cy + 12), (cx, cy + 28), 3)
-        pygame.draw.arc(surface, dim, (cx - 35, cy - 28, 70, 56), math.radians(130), math.radians(230), 3)
-        pygame.draw.arc(surface, dim, (cx - 35, cy - 28, 70, 56), math.radians(-50), math.radians(50), 3)
+        # A compact, swept spherical wireframe based on the receiver-globe
+        # reference, not a set of free-floating orbital rings.
+        mono = (218, 228, 230, 225)
+        globe_y = cy - 2
+
+        def quadratic_curve(start, control, end, width):
+            points = []
+            for index in range(21):
+                t = index / 20
+                inv_t = 1 - t
+                points.append((round(inv_t * inv_t * start[0] + 2 * inv_t * t * control[0] + t * t * end[0]), round(inv_t * inv_t * start[1] + 2 * inv_t * t * control[1] + t * t * end[1])))
+            pygame.draw.lines(surface, mono, False, points, width)
+
+        pygame.draw.circle(surface, mono, (cx, globe_y), 25, 2)
+        # Four diagonal bands echo the attached woven-globe mark.
+        quadratic_curve((cx - 18, globe_y - 18), (cx, globe_y - 30), (cx + 20, globe_y - 14), 3)
+        quadratic_curve((cx - 25, globe_y - 8), (cx, globe_y + 5), (cx + 25, globe_y - 1), 3)
+        quadratic_curve((cx - 25, globe_y + 5), (cx, globe_y + 18), (cx + 22, globe_y + 13), 3)
+        quadratic_curve((cx - 17, globe_y + 18), (cx, globe_y + 30), (cx + 18, globe_y + 20), 3)
+        # The angled meridians complete the woven spherical form.
+        quadratic_curve((cx - 7, globe_y - 24), (cx - 21, globe_y - 1), (cx - 5, globe_y + 25), 3)
+        quadratic_curve((cx + 8, globe_y - 24), (cx + 22, globe_y + 1), (cx + 7, globe_y + 24), 3)
     elif kind == "radio":
         pygame.draw.rect(surface, color, (cx - 27, cy - 17, 54, 36), 3, border_radius=5)
         pygame.draw.line(surface, color, (cx - 17, cy - 24), (cx + 18, cy - 36), 3)
@@ -2769,45 +2844,80 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.line(surface, color, (cx + 15, cy - 24), (cx + 15, cy + 22), 3)
         pygame.draw.line(surface, dim, (cx, cy - 30), (cx, cy + 25), 2)
     elif kind == "audio":
-        pygame.draw.polygon(surface, color, ((cx - 28, cy + 4), (cx - 13, cy + 4), (cx + 6, cy - 15), (cx + 6, cy + 23), (cx - 13, cy + 4)))
-        pygame.draw.arc(surface, dim, (cx, cy - 21, 36, 48), math.radians(-45), math.radians(45), 3)
-        pygame.draw.arc(surface, dim, (cx + 9, cy - 30, 50, 66), math.radians(-45), math.radians(45), 3)
-    elif kind == "tests":
-        pygame.draw.rect(surface, color, (cx - 26, cy - 23, 52, 48), 3, border_radius=5)
-        pygame.draw.line(surface, dim, (cx - 14, cy - 10), (cx + 14, cy - 10), 3)
-        pygame.draw.line(surface, dim, (cx - 14, cy), (cx + 8, cy), 3)
-        pygame.draw.line(surface, dim, (cx - 14, cy + 10), (cx + 2, cy + 10), 3)
-        pygame.draw.circle(surface, color, (cx + 15, cy + 11), 10, 3)
-        pygame.draw.line(surface, color, (cx + 15, cy + 4), (cx + 15, cy + 12), 2)
-        pygame.draw.line(surface, color, (cx + 15, cy + 12), (cx + 21, cy + 16), 2)
-    elif kind == "decode":
-        for offset in (-18, 0, 18):
-            pygame.draw.line(surface, color, (cx + offset, cy - 24), (cx + offset, cy + 24), 3)
-        pygame.draw.line(surface, dim, (cx - 30, cy - 12), (cx + 30, cy - 12), 2)
-        pygame.draw.line(surface, dim, (cx - 30, cy + 12), (cx + 30, cy + 12), 2)
-    elif kind == "network":
-        points = ((cx, cy - 24), (cx - 25, cy + 18), (cx + 25, cy + 18))
-        for a, b in ((0, 1), (0, 2), (1, 2)):
-            pygame.draw.line(surface, dim, points[a], points[b], 3)
-        for point in points:
-            pygame.draw.circle(surface, color, point, 8, 3)
+        # Supplied speaker mark, retained as an outlined horn with two open
+        # broadcast arcs and simply inverted for this dark instrument surface.
+        speaker = (232, 242, 244, 240)
+        pygame.draw.rect(surface, speaker, (cx - 30, cy - 15, 18, 30), 5, border_radius=7)
+        pygame.draw.lines(surface, speaker, True, ((cx - 13, cy - 15), (cx + 11, cy - 31), (cx + 11, cy + 31), (cx - 13, cy + 15)), 5)
+        pygame.draw.arc(surface, speaker, (cx - 10, cy - 22, 38, 44), math.radians(-58), math.radians(58), 6)
+        pygame.draw.arc(surface, speaker, (cx - 17, cy - 34, 62, 68), math.radians(-58), math.radians(58), 6)
+    elif kind == "apps":
+        # A tic-tac-toe board is a compact, neutral launcher metaphor.
+        for offset in (-15, 15):
+            pygame.draw.line(surface, color, (cx + offset, cy - 27), (cx + offset, cy + 27), 3)
+            pygame.draw.line(surface, color, (cx - 27, cy + offset), (cx + 27, cy + offset), 3)
+        pygame.draw.line(surface, dim, (cx - 22, cy - 22), (cx - 8, cy - 8), 3)
+        pygame.draw.line(surface, dim, (cx - 8, cy - 22), (cx - 22, cy - 8), 3)
+        pygame.draw.circle(surface, dim, (cx + 14, cy + 14), 8, 3)
+    elif kind == "settings":
+        pygame.draw.circle(surface, color, (cx, cy), 17, 3)
+        pygame.draw.circle(surface, dim, (cx, cy), 6, 3)
+        for angle in range(0, 360, 45):
+            radians = math.radians(angle)
+            x0 = cx + round(math.cos(radians) * 20)
+            y0 = cy + round(math.sin(radians) * 20)
+            x1 = cx + round(math.cos(radians) * 27)
+            y1 = cy + round(math.sin(radians) * 27)
+            pygame.draw.line(surface, color, (x0, y0), (x1, y1), 4)
+    elif kind == "digital":
+        # An intentionally simple sampled square-wave mark for digital modes.
+        points = ((cx - 29, cy + 15), (cx - 19, cy + 15), (cx - 19, cy - 15), (cx - 2, cy - 15), (cx - 2, cy + 15), (cx + 15, cy + 15), (cx + 15, cy - 15), (cx + 29, cy - 15))
+        pygame.draw.lines(surface, color, False, points, 4)
+        pygame.draw.circle(surface, dim, (cx - 21, cy - 23), 3)
+        pygame.draw.circle(surface, dim, (cx + 18, cy + 23), 3)
+    elif kind == "rf":
+        # Broadcast antenna: signal elements belong at the mast's upper end.
+        pygame.draw.line(surface, color, (cx, cy - 22), (cx, cy + 16), 4)
+        pygame.draw.line(surface, color, (cx - 19, cy + 25), (cx + 19, cy + 25), 3)
+        pygame.draw.line(surface, color, (cx - 17, cy + 25), (cx, cy + 7), 3)
+        pygame.draw.line(surface, color, (cx + 17, cy + 25), (cx, cy + 7), 3)
+        pygame.draw.line(surface, color, (cx - 12, cy - 25), (cx, cy - 16), 3)
+        pygame.draw.line(surface, color, (cx + 12, cy - 25), (cx, cy - 16), 3)
+        pygame.draw.circle(surface, color, (cx, cy - 23), 3)
+    elif kind == "stats":
+        # Three compact instrument bars denote live receiver/system telemetry.
+        for offset, height in ((-20, 17), (0, 29), (20, 39)):
+            pygame.draw.rect(surface, color, (cx + offset - 6, cy + 24 - height, 12, height), 3, border_radius=2)
+        pygame.draw.line(surface, dim, (cx - 31, cy + 25), (cx + 31, cy + 25), 2)
     else:
         pygame.draw.circle(surface, color, (cx, cy), 24, 3)
         pygame.draw.line(surface, color, (cx, cy - 4), (cx, cy + 20), 3)
         pygame.draw.circle(surface, color, (cx, cy - 20), 3)
 
 
-def menu_icon_texture(text_cache, kind, label):
-    key = f"menu_{kind}_{label}"
+def menu_icon_texture(text_cache, kind, label, width=132, height=112):
+    """Build a menu tile at its eventual raster size to avoid texture blur."""
+    key = f"menu_asset_{kind}_{label}_{width}x{height}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
-    surface = pygame.Surface((132, 112), pygame.SRCALPHA)
-    color = (232, 248, 250, 232)
-    dim = (82, 235, 231, 150)
-    draw_menu_icon(surface, kind, 66, 44, color, dim)
-    label_surface = text_cache.font(16, bold=True, mono=True).render(label, True, (232, 246, 248))
-    surface.blit(label_surface, ((132 - label_surface.get_width()) // 2, 86))
+    surface = pygame.Surface((width, height), pygame.SRCALPHA)
+    asset_path = MENU_ICON_ASSET_DIR / f"{kind}.png"
+    try:
+        icon = pygame.image.load(str(asset_path)).convert_alpha()
+        # Keep the supplied vector-derived art deliberately understated in the
+        # compact menu. Its transparent alpha allows one clean 30% reduction.
+        icon_size = round(icon.get_width() * 0.70)
+        icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+        icon_y = max(0, (height - 26 - icon_size) // 2)
+        surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
+    except (pygame.error, OSError):
+        # Keep development builds usable if the optional icon package is absent.
+        color = (232, 248, 250, 232)
+        dim = (82, 235, 231, 150)
+        draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12), color, dim)
+    label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(label, True, (207, 221, 224))
+    surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - 26))
     return text_cache.surface_texture(key, surface)
 
 
@@ -2823,11 +2933,11 @@ def draw_main_menu(text_cache, scroll):
         bx0, by0, bx1, by1 = box
         if bx1 < x0 or bx0 > x1:
             continue
-        tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label)
         target_w = min(132, bx1 - bx0 - 12)
         target_h = min(92, by1 - by0 - 4)
         target_x = bx0 + ((bx1 - bx0) - target_w) / 2
         target_y = by0 + ((by1 - by0) - target_h) / 2
+        tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label, int(target_w), int(target_h))
         draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
@@ -2836,18 +2946,15 @@ def desktop_1280_nav_box(index):
     col = index % 2
     row = index // 2
     x0 = DESKTOP_1280_MAIN_W + 7 + col * 125
-    y0 = 38 + row * 109
-    return x0, y0, x0 + 117, y0 + 101
+    y0 = DESKTOP_1280_TOP_H + 8 + row * 96
+    return x0, y0, x0 + 117, y0 + 88
 
 
 def draw_desktop_1280_navigation(text_cache):
     if not DESKTOP_1280_MODE:
         return
     x0 = DESKTOP_1280_MAIN_W
-    draw_native_rect(x0, 0, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
-    draw_native_line(x0, 0, x0, NATIVE_H, (104, 124, 133, 170), 1)
-    draw_native_line(x0 + 12, 27, NATIVE_W - 12, 27, (124, 147, 157, 105), 1)
-    draw_native_text(text_cache, x0 + 14, 14, "NAV", (178, 202, 209), 14, True, True, "lm")
+    draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
         draw_native_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
@@ -2855,7 +2962,9 @@ def draw_desktop_1280_navigation(text_cache):
         draw_native_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
         draw_native_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
         draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
-        tex, _tex_w, _tex_h = menu_icon_texture(text_cache, kind, label)
+        tile_w = bx1 - bx0 - 8
+        tile_h = by1 - by0 - 8
+        tex, _tex_w, _tex_h = menu_icon_texture(text_cache, kind, label, tile_w, tile_h)
         draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
 
 
@@ -3400,13 +3509,21 @@ def draw_ui(
     temp_c=None,
     station_name="",
     connection_status=None,
+    bandwidth_hz=2400,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
+    if DESKTOP_1280_MODE:
+        # The wide unit has one uninterrupted instrument strip spanning the
+        # receiver canvas and the navigation rail.
+        draw_native_rect(0, 0, NATIVE_W, DESKTOP_1280_TOP_H, (0, 0, 0, 255))
     draw_logical_rect(0, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 255))
     draw_home_button(text_cache, 1.0)
     frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
-    draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
+    if DESKTOP_1280_MODE:
+        draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
+    else:
+        draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
     # Liberation Sans Bold stays clean and compact at the display's physical
     # pixel density, leaving headroom inside the short instrument strip.
     # Right alignment keeps this cluster locked to the S-meter while the
@@ -4532,7 +4649,7 @@ def main():
             display_setup_open = True
             picker_open = radio_setup_open = audio_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "radio":
+        elif kind in ("settings", "digital"):
             radio_setup_open = True
             picker_open = display_setup_open = audio_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -4541,7 +4658,7 @@ def main():
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "tests":
+        elif kind == "apps":
             tests_panel_open = True
             picker_open = radio_setup_open = display_setup_open = audio_panel_open = False
             dj_tune_open = filter_panel_open = False
@@ -4741,6 +4858,8 @@ def main():
         window_w, window_h = pygame.display.get_window_size()
         nx = round(position[0] * NATIVE_W / max(1, window_w))
         ny = round(position[1] * NATIVE_H / max(1, window_h))
+        if contains(DESKTOP_1280_ANNUNCIATOR_BOX, nx, ny):
+            return "annunciators"
         if nx < DESKTOP_1280_MAIN_W:
             return None
         for index in range(len(MENU_ITEMS)):
@@ -4756,11 +4875,15 @@ def main():
                     stop_event.set()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
-                elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and (nav_index := desktop_navigation_item(event.pos)) is not None:
-                    activate_navigation_item(nav_index)
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    desktop_pointer_down = True
-                    emit_desktop_touch(event.pos, "down")
+                    nav_index = desktop_navigation_item(event.pos)
+                    if nav_index == "annunciators":
+                        activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
+                    elif nav_index is not None:
+                        activate_navigation_item(nav_index)
+                    else:
+                        desktop_pointer_down = True
+                        emit_desktop_touch(event.pos, "down")
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_pointer_down:
                     emit_desktop_touch(event.pos, "move")
                 elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -5420,58 +5543,7 @@ def main():
                             if moved <= args.tap_px:
                                 idx = menu_at(x, y, menu_scroll)
                                 if idx is not None:
-                                    kind, label = MENU_ITEMS[idx]
-                                    wake_controls()
-                                    if kind == "rx":
-                                        picker_open = True
-                                        menu_open = False
-                                        radio_setup_open = False
-                                        display_setup_open = False
-                                        audio_panel_open = False
-                                        tests_panel_open = False
-                                        dj_tune_open = False
-                                        filter_panel_open = False
-                                        station_scroll = 0
-                                        station_query = ""
-                                        station_sort = "location"
-                                        stations = filtered_stations(all_stations, station_query, station_sort)
-                                        search_open = False
-                                    elif kind == "display":
-                                        display_setup_open = True
-                                        menu_open = False
-                                        radio_setup_open = False
-                                        audio_panel_open = False
-                                        tests_panel_open = False
-                                        dj_tune_open = False
-                                        filter_panel_open = False
-                                    elif kind == "radio":
-                                        radio_setup_open = True
-                                        menu_open = False
-                                        display_setup_open = False
-                                        audio_panel_open = False
-                                        tests_panel_open = False
-                                        dj_tune_open = False
-                                        filter_panel_open = False
-                                    elif kind == "audio":
-                                        audio_volume = pipewire_default_volume()
-                                        audio_panel_open = True
-                                        menu_open = False
-                                        radio_setup_open = False
-                                        display_setup_open = False
-                                        tests_panel_open = False
-                                        dj_tune_open = False
-                                        filter_panel_open = False
-                                    elif kind == "tests":
-                                        tests_panel_open = True
-                                        menu_open = False
-                                        picker_open = False
-                                        radio_setup_open = False
-                                        display_setup_open = False
-                                        audio_panel_open = False
-                                        dj_tune_open = False
-                                        filter_panel_open = False
-                                    else:
-                                        print(f"gl menu {label} pending", flush=True)
+                                    activate_navigation_item(idx)
                         elif touch_started and gesture in ("menu_close", "menu_outside"):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -5859,7 +5931,8 @@ def main():
             spectrum_h = (SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H) if spectrum_enabled else 0
             # Keep scope compact and behind the top instrumentation. Its lower
             # edge now sits beside the S-meter, freeing the waterfall below.
-            spectrum_y0 = sdr_ui.TOP_H - 8 if spectrum_enabled else sdr_ui.TOP_H + sdr_ui.RULER_H * (1.0 - focus_progress) - SPECTRUM_RAISE_Y * (1.0 - focus_progress)
+            top_instrument_h = DESKTOP_1280_TOP_H if DESKTOP_1280_MODE else sdr_ui.TOP_H
+            spectrum_y0 = top_instrument_h if spectrum_enabled else top_instrument_h + sdr_ui.RULER_H * (1.0 - focus_progress) - SPECTRUM_RAISE_Y * (1.0 - focus_progress)
             spectrum_y1 = spectrum_y0 + spectrum_h
             bottom_ruler = True
             ruler_height = BOTTOM_RULER_H if bottom_ruler else sdr_ui.RULER_H
@@ -5919,6 +5992,7 @@ def main():
                 temp_c=temp_c,
                 station_name=selected_station_name,
                 connection_status=connection_status,
+                bandwidth_hz=high_cut - low_cut,
             )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
