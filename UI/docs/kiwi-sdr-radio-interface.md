@@ -278,6 +278,17 @@ Some public Kiwi receivers can limit concurrent `W/F` and `SND` connections. The
 
 `AUDIO` is the listening-control sheet. Its `SPEAKER VOLUME` slider reads and writes the real PipeWire default-sink volume, while squelch and Audio Filter control the live SND path.
 
+The lower-right `ASR` readout is also a touch control. It opens a five-choice
+caption-engine selector: `OFF`, `VOSK`, `MOON`, `PARA`, and `WHISPER`. The selection is
+remembered with the receiver preferences. `VOSK` uses the lightweight live
+Kaldi model, `MOON` uses Moonshine Base INT8 through sherpa-onnx (falling back
+to Moonshine Tiny if Base is unavailable) and is the preferred local option on
+the 2 GB Pi 5. `PARA` uses NVIDIA Parakeet TDT-CTC 110M INT8 through
+sherpa-onnx in short bounded windows, and `WHISPER` uses Whisper.cpp Tiny
+English in the same bounded-batch style. All engines use the normal Kiwi `SND`
+PCM path and USB-audio playback continues independently. Offline engines drop
+stale audio rather than accumulating delayed captions.
+
 `TESTS` is a separate, extensible diagnostics sheet. `DJ TUNE` is the live finger-driven tuning bench: it uses the **same** selected receiver, `W/F` waterfall connection, and `SND` audio path as normal listening.
 
 - Drag the dedicated strip left or right to issue real tuning changes in 100 Hz detents. It starts at the current frequency, has a bounded `+/-5.0 kHz` working range, and shows the live offset from centre.

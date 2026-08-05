@@ -13,10 +13,12 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import re
 import html
+import wave
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -32,6 +34,16 @@ try:
     import vosk
 except ImportError:
     vosk = None
+
+try:
+    import sherpa_onnx
+except ImportError:
+    sherpa_onnx = None
+
+try:
+    import moonshine_voice
+except ImportError:
+    moonshine_voice = None
 
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
 # on its native Cocoa backend so --desktop can open a normal dev window.
@@ -72,6 +84,10 @@ DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NBFM"
 _RENDERER_DIR = Path(__file__).resolve().parent
 _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
+MENU_ICON_FILENAMES = {
+    "rx": "receivers.png",
+    "digital": "digi.png",
+}
 SPECTRUM_H = 70
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
 # the recovered vertical space directly to the live waterfall.
@@ -135,7 +151,15 @@ SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 BOTTOM_RULER_H = 30
 BOTTOM_STATUS_H = 28
-VOSK_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
+ASR_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
+# This replaces the old one-bit Vosk switch with deliberate, readable
+# choices. It is transient and leaves the radio view visible beneath it.
+ASR_PANEL_BOX = (244, 186, 716, 244)
+ASR_ENGINES = ("off", "vosk", "moonshine", "parakeet", "whisper")
+ASR_ENGINE_LABELS = {
+    "off": "OFF", "vosk": "VOSK", "moonshine": "MOON",
+    "parakeet": "PARA", "whisper": "WHISPER",
+}
 VOSK_CAPTION_BOX = (16, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 108, 944, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
 VOSK_MODEL_OVERRIDE = os.environ.get("ITUNER_VOSK_MODEL")
 VOSK_MODEL_PATHS = (
@@ -144,6 +168,23 @@ VOSK_MODEL_PATHS = (
     # over 3x behind real time on this 2 GB Pi and must not be the live default.
     Path("/home/ituner/codex-sdr-display/vendor/vosk-model-en-us-0.22-lgraph"),
 )
+# Moonshine Base has materially better English recognition than Tiny. The
+# smaller model remains a no-touch fallback for installs with tighter storage.
+MOONSHINE_MODEL_DIRS = (
+    Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-moonshine-base-en-int8"),
+    Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-moonshine-tiny-en-int8"),
+)
+MOONSHINE_STREAMING_MODEL_DIR = Path(
+    "/home/ituner/codex-sdr-display/vendor/moonshine-voice/"
+    "download.moonshine.ai/model/small-streaming-en/quantized"
+)
+# The official Small Streaming model is installed for controlled benchmarks,
+# but on this Pi it measured 1.53x real time and starved live captions. Keep
+# it opt-in only; the Base engine is the production Moonshine setting.
+MOONSHINE_SMALL_STREAMING_TRIAL = os.environ.get("ITUNER_MOONSHINE_SMALL_STREAMING") == "1"
+WHISPER_CLI = Path("/home/ituner/codex-sdr-display/vendor/whisper.cpp/build/bin/whisper-cli")
+WHISPER_MODEL = Path("/home/ituner/codex-sdr-display/vendor/whisper.cpp/models/ggml-tiny.en.bin")
+PARAKEET_MODEL_DIR = Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
 WF_TEX_W = 960
 WF_TEX_H = 256
 DISPLAY_ORIENTATION = "flipped"
@@ -558,10 +599,6 @@ MENU_ITEMS = (
     ("stats", "STATS"),
     ("settings", "SETTINGS"),
 )
-MENU_ICON_FILENAMES = {
-    "rx": "receivers.png",
-    "digital": "digi.png",
-}
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 PICKER_BOX = (0, 0, 790, LOGICAL_H)
@@ -1178,7 +1215,7 @@ def is_waterfall_tune_touch(x, y):
     return (
         not contains_with_guard(ZOOM_GROUP_BOX, x, y)
         and not contains_with_guard(VIEW_GROUP_BOX, x, y)
-        and not contains_with_guard(VOSK_TOGGLE_BOX, x, y)
+        and not contains_with_guard(ASR_TOGGLE_BOX, x, y)
     )
 
 
@@ -1444,6 +1481,7 @@ class SharedState:
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
+        self.asr_engine = "off"
         self.transcription_enabled = False
         self.transcription_generation = 0
         self.transcript_lines = deque(maxlen=2)
@@ -1639,16 +1677,21 @@ class SharedState:
         with self.lock:
             return (
                 self.transcription_enabled,
+                self.asr_engine,
                 tuple(self.transcript_lines),
                 self.transcript_partial,
                 self.transcript_status,
                 self.transcription_generation,
             )
 
-    def set_transcription_enabled(self, enabled):
+    def set_asr_engine(self, engine):
+        engine = str(engine).lower()
+        if engine not in ASR_ENGINES:
+            raise ValueError(f"unsupported ASR engine: {engine}")
         with self.lock:
-            enabled = bool(enabled)
-            if enabled != self.transcription_enabled:
+            enabled = engine != "off"
+            if engine != self.asr_engine:
+                self.asr_engine = engine
                 self.transcription_enabled = enabled
                 self.transcription_generation += 1
                 self.transcript_lines.clear()
@@ -1656,7 +1699,11 @@ class SharedState:
                 self.transcript_hold_until = 0.0
                 self.transcript_partial_updated_at = 0.0
             self.transcript_status = "STARTING" if enabled else "OFF"
-            return self.transcription_enabled, self.transcription_generation
+            return self.asr_engine, self.transcription_generation
+
+    def set_transcription_enabled(self, enabled):
+        # Compatibility with saved preferences from the Vosk-only release.
+        return self.set_asr_engine("vosk" if enabled else "off")
 
     def set_transcript(self, text=None, partial=None, status=None):
         with self.lock:
@@ -2360,23 +2407,7 @@ def draw_home_button(text_cache, alpha=1.0):
         icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
         surface.blit(icon, ((w - icon_size) // 2, (h - icon_size) // 2))
     except (pygame.error, OSError):
-        # Keep the control usable if the optional vendor asset is absent.
-        scale = 3
-        hi = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
-
-        def p(value):
-            return int(round(value * scale))
-
-        cx, cy = w / 2, h / 2 + 2
-        color = (231, 235, 237, 238)
-        roof = [(p(cx - 25), p(cy - 3)), (p(cx), p(cy - 25)), (p(cx + 25), p(cy - 3))]
-        pygame.draw.lines(hi, color, False, roof, p(3))
-        pygame.draw.line(hi, color, (p(cx - 18), p(cy - 2)), (p(cx - 18), p(cy + 18)), p(3))
-        pygame.draw.line(hi, color, (p(cx + 18), p(cy - 2)), (p(cx + 18), p(cy + 18)), p(3))
-        pygame.draw.line(hi, color, (p(cx - 18), p(cy + 18)), (p(cx + 18), p(cy + 18)), p(3))
-        pygame.draw.line(hi, color, (p(cx - 5), p(cy + 18)), (p(cx - 5), p(cy + 7)), p(3))
-        pygame.draw.line(hi, color, (p(cx + 5), p(cy + 18)), (p(cx + 5), p(cy + 7)), p(3))
-        surface = pygame.transform.smoothscale(hi, (w, h))
+        draw_menu_icon(surface, "home", w // 2, h // 2, (231, 235, 237, 238), (82, 235, 231, 150))
     tex, tex_w, tex_h = text_cache.surface_texture("home_button_v12", surface)
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
@@ -2905,44 +2936,208 @@ class VoskResampler:
         return ctypes.string_at(destination, output_count.value * ctypes.sizeof(ctypes.c_short))
 
 
-def vosk_caption_worker(stop_event, state, audio_queue):
-    """Bounded live captions. It drops stale audio rather than accumulating lag."""
-    model = recognizer = resampler = None
-    loaded_model_path = None
+def drain_caption_audio(audio_queue):
+    while True:
+        try:
+            audio_queue.get_nowait()
+        except queue.Empty:
+            return
+
+
+def active_moonshine_model_dir():
+    return next((path for path in MOONSHINE_MODEL_DIRS if path.is_dir()), None)
+
+
+def moonshine_recognizer():
+    model_dir = active_moonshine_model_dir()
+    if sherpa_onnx is None or model_dir is None:
+        raise RuntimeError("Moonshine model unavailable")
+    return (
+        sherpa_onnx.OfflineRecognizer.from_moonshine(
+            preprocessor=str(model_dir / "preprocess.onnx"),
+            encoder=str(model_dir / "encode.int8.onnx"),
+            uncached_decoder=str(model_dir / "uncached_decode.int8.onnx"),
+            cached_decoder=str(model_dir / "cached_decode.int8.onnx"),
+            tokens=str(model_dir / "tokens.txt"),
+            num_threads=2,
+        ),
+        model_dir,
+    )
+
+
+def parakeet_recognizer():
+    """Load NVIDIA Parakeet TDT-CTC 110M through Sherpa-ONNX.
+
+    It is a larger offline CTC model than Moonshine Base, but its INT8 build
+    is still fast enough on the Pi for short, deliberately bounded windows.
+    """
+    model_path = PARAKEET_MODEL_DIR / "model.int8.onnx"
+    tokens_path = PARAKEET_MODEL_DIR / "tokens.txt"
+    if sherpa_onnx is None or not model_path.is_file() or not tokens_path.is_file():
+        raise RuntimeError("Parakeet 110M model unavailable")
+    return sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
+        model=str(model_path),
+        tokens=str(tokens_path),
+        num_threads=2,
+        sample_rate=16000,
+        feature_dim=80,
+    )
+
+
+class MoonshineStreamingListener(
+    moonshine_voice.TranscriptEventListener if moonshine_voice is not None else object
+):
+    """Bridge Moonshine Voice events into the SDR's calm subtitle pacing."""
+    def __init__(self, state, generation):
+        self.state = state
+        self.generation = generation
+
+    def _current(self):
+        _enabled, engine, _lines, _partial, _status, generation = self.state.transcription_snapshot()
+        return engine == "moonshine" and generation == self.generation
+
+    def on_line_text_changed(self, event):
+        if self._current():
+            self.state.set_transcript(partial=event.line.text, status="LISTENING")
+
+    def on_line_completed(self, event):
+        if self._current():
+            self.state.set_transcript(text=event.line.text, partial="", status="LISTENING")
+
+    def on_error(self, event):
+        if self._current():
+            self.state.set_transcript(status="MOON ERROR")
+
+
+def moonshine_streaming_transcriber(state, generation):
+    """Optional benchmark backend; Base remains the live Pi default."""
+    if (
+        not MOONSHINE_SMALL_STREAMING_TRIAL
+        or moonshine_voice is None
+        or not MOONSHINE_STREAMING_MODEL_DIR.is_dir()
+    ):
+        return None
+    listener = MoonshineStreamingListener(state, generation)
+    transcriber = moonshine_voice.Transcriber(
+        str(MOONSHINE_STREAMING_MODEL_DIR),
+        moonshine_voice.ModelArch.SMALL_STREAMING,
+        update_interval=0.55,
+    )
+    transcriber.add_listener(listener)
+    transcriber.start()
+    return transcriber
+
+
+def close_moonshine_streaming(transcriber):
+    if transcriber is None:
+        return
+    try:
+        transcriber.stop()
+    except Exception:
+        pass
+    try:
+        transcriber.close()
+    except Exception:
+        pass
+
+
+def whisper_transcribe(pcm16):
+    """Run a bounded Whisper.cpp decode; stale source audio is dropped upstream."""
+    if not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file():
+        raise RuntimeError("Whisper.cpp model unavailable")
+    with tempfile.TemporaryDirectory(prefix="kiwi-whisper-") as tmp:
+        wav_path = Path(tmp) / "radio.wav"
+        result_base = Path(tmp) / "result"
+        with wave.open(str(wav_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(pcm16)
+        result = subprocess.run(
+            [
+                str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
+                "-l", "en", "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=18.0,
+            check=False,
+        )
+        text_path = result_base.with_suffix(".txt")
+        if result.returncode != 0 or not text_path.is_file():
+            raise RuntimeError(f"Whisper exit {result.returncode}")
+        return " ".join(text_path.read_text(errors="replace").split())
+
+
+def asr_caption_worker(stop_event, state, audio_queue):
+    """One bounded ASR lane. Only the selected engine receives PCM or CPU."""
+    vosk_model = vosk_recognizer = moonshine = moonshine_streaming = parakeet = resampler = None
+    loaded_vosk_path = None
+    active_engine = None
     seen_generation = -1
+    offline_pcm = bytearray()
+    offline_since_decode = 0.0
     measured_audio_seconds = 0.0
     measured_processing_seconds = 0.0
     next_performance_report = time.monotonic() + 10.0
     while not stop_event.is_set():
-        enabled, _lines, _partial, _status, generation = state.transcription_snapshot()
+        enabled, engine, _lines, _partial, _status, generation = state.transcription_snapshot()
         if not enabled:
-            recognizer = None
+            active_engine = None
+            vosk_recognizer = None
+            moonshine = None
+            parakeet = None
+            close_moonshine_streaming(moonshine_streaming)
+            moonshine_streaming = None
+            offline_pcm.clear()
+            offline_since_decode = 0.0
             if resampler:
                 resampler.close()
                 resampler = None
-            while not audio_queue.empty():
-                try: audio_queue.get_nowait()
-                except queue.Empty: break
+            drain_caption_audio(audio_queue)
             stop_event.wait(0.15)
             continue
-        model_path = active_vosk_model_path()
-        if vosk is None or model_path is None:
-            state.set_transcript(status="VOSK UNAVAILABLE")
-            stop_event.wait(0.5)
-            continue
         try:
-            if model is None or loaded_model_path != model_path:
-                state.set_transcript(status="LOADING VOSK")
-                vosk.SetLogLevel(-1)
-                model = vosk.Model(str(model_path))
-                loaded_model_path = model_path
-                print(f"gl Vosk model {model_path.name}", flush=True)
-            if recognizer is None or generation != seen_generation:
-                recognizer = vosk.KaldiRecognizer(model, 16000)
-                recognizer.SetWords(False)
-                resampler = VoskResampler()
+            if engine != active_engine or generation != seen_generation:
+                active_engine = engine
                 seen_generation = generation
-                state.set_transcript(status="LISTENING")
+                vosk_recognizer = None
+                moonshine = None
+                parakeet = None
+                close_moonshine_streaming(moonshine_streaming)
+                moonshine_streaming = None
+                offline_pcm.clear()
+                offline_since_decode = 0.0
+                if resampler:
+                    resampler.close()
+                resampler = VoskResampler()
+                drain_caption_audio(audio_queue)
+                state.set_transcript(status=f"LOADING {ASR_ENGINE_LABELS[engine]}")
+            if engine == "vosk":
+                model_path = active_vosk_model_path()
+                if vosk is None or model_path is None:
+                    raise RuntimeError("Vosk model unavailable")
+                if vosk_model is None or loaded_vosk_path != model_path:
+                    vosk.SetLogLevel(-1)
+                    vosk_model = vosk.Model(str(model_path))
+                    loaded_vosk_path = model_path
+                    print(f"gl Vosk model {model_path.name}", flush=True)
+                if vosk_recognizer is None:
+                    vosk_recognizer = vosk.KaldiRecognizer(vosk_model, 16000)
+                    vosk_recognizer.SetWords(False)
+            elif engine == "moonshine" and moonshine_streaming is None and moonshine is None:
+                moonshine_streaming = moonshine_streaming_transcriber(state, generation)
+                if moonshine_streaming is not None:
+                    print("gl Moonshine Small Streaming model ready", flush=True)
+                else:
+                    moonshine, moonshine_dir = moonshine_recognizer()
+                    print(f"gl Moonshine fallback model {moonshine_dir.name} ready", flush=True)
+            elif engine == "parakeet" and parakeet is None:
+                parakeet = parakeet_recognizer()
+                print("gl Parakeet TDT-CTC 110M INT8 model ready", flush=True)
+            elif engine == "whisper" and (not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file()):
+                raise RuntimeError("Whisper.cpp model unavailable")
+            state.set_transcript(status="LISTENING")
             try:
                 audio = audio_queue.get(timeout=0.20)
             except queue.Empty:
@@ -2951,15 +3146,61 @@ def vosk_caption_worker(stop_event, state, audio_queue):
             pcm16 = resampler.process(audio)
             if not pcm16:
                 continue
-            if recognizer.AcceptWaveform(pcm16):
-                state.set_transcript(text=json.loads(recognizer.Result()).get("text", ""), partial="", status="LISTENING")
+            if engine == "vosk":
+                if vosk_recognizer.AcceptWaveform(pcm16):
+                    state.set_transcript(text=json.loads(vosk_recognizer.Result()).get("text", ""), partial="", status="LISTENING")
+                else:
+                    state.set_transcript(partial=json.loads(vosk_recognizer.PartialResult()).get("partial", ""), status="LISTENING")
+            elif engine == "moonshine" and moonshine_streaming is not None:
+                # Moonshine Voice handles incremental encoding, VAD-like
+                # phrase boundaries, and revisions internally. Feeding each
+                # radio packet straight through removes our old batch jitter.
+                samples = [sample / 32768.0 for sample in struct.unpack(f"<{len(pcm16) // 2}h", pcm16)]
+                moonshine_streaming.add_audio(samples, 16000)
             else:
-                state.set_transcript(partial=json.loads(recognizer.PartialResult()).get("partial", ""), status="LISTENING")
+                offline_pcm.extend(pcm16)
+                offline_since_decode += len(pcm16) / 32000.0
+                # The offline engines decode overlapping short windows. That
+                # keeps latency bounded while avoiding a queue of old radio.
+                if engine == "moonshine":
+                    target_seconds = 3.5
+                    max_window_seconds = 5.0
+                elif engine == "parakeet":
+                    # Parakeet is very quick here; three seconds gives it
+                    # useful word context without making captions feel late.
+                    target_seconds = 3.0
+                    max_window_seconds = 4.0
+                else:
+                    target_seconds = 3.6
+                    max_window_seconds = 4.0
+                if offline_since_decode >= target_seconds:
+                    # A five-second Moonshine window carries enough sentence
+                    # context to reduce radio-noise substitutions, while its
+                    # measured Pi RTF leaves ample headroom for live captions.
+                    max_bytes = int(max_window_seconds * 32000)
+                    window = bytes(offline_pcm[-max_bytes:])
+                    offline_pcm.clear()
+                    offline_since_decode = 0.0
+                    if engine == "moonshine":
+                        samples = [sample / 32768.0 for sample in struct.unpack(f"<{len(window) // 2}h", window)]
+                        stream = moonshine.create_stream()
+                        stream.accept_waveform(16000, samples)
+                        moonshine.decode_stream(stream)
+                        result_text = stream.result.text
+                    elif engine == "parakeet":
+                        samples = [sample / 32768.0 for sample in struct.unpack(f"<{len(window) // 2}h", window)]
+                        stream = parakeet.create_stream()
+                        stream.accept_waveform(16000, samples)
+                        parakeet.decode_stream(stream)
+                        result_text = stream.result.text
+                    else:
+                        result_text = whisper_transcribe(window)
+                    state.set_transcript(partial=result_text, status="LISTENING")
             measured_audio_seconds += len(pcm16) / 32000.0
             measured_processing_seconds += time.monotonic() - process_started
             if time.monotonic() >= next_performance_report and measured_audio_seconds > 0.05:
                 print(
-                    f"gl Vosk rtf={measured_processing_seconds / measured_audio_seconds:.2f} "
+                    f"gl ASR {engine} rtf={measured_processing_seconds / measured_audio_seconds:.2f} "
                     f"queue={audio_queue.qsize()}/{audio_queue.maxsize}",
                     flush=True,
                 )
@@ -2967,15 +3208,18 @@ def vosk_caption_worker(stop_event, state, audio_queue):
                 measured_processing_seconds = 0.0
                 next_performance_report = time.monotonic() + 10.0
         except Exception as exc:
-            state.set_transcript(status="VOSK ERROR")
-            print(f"gl Vosk {exc}", flush=True)
-            recognizer = None
-            if resampler:
-                resampler.close()
-                resampler = None
+            label = ASR_ENGINE_LABELS.get(active_engine, "ASR")
+            state.set_transcript(status=f"{label} ERROR")
+            print(f"gl ASR {active_engine}: {exc}", flush=True)
+            vosk_recognizer = None
+            moonshine = None
+            parakeet = None
+            close_moonshine_streaming(moonshine_streaming)
+            moonshine_streaming = None
             stop_event.wait(1.0)
     if resampler:
         resampler.close()
+    close_moonshine_streaming(moonshine_streaming)
 
 
 def rnnoise_voice_mode(radio_mode):
@@ -3831,7 +4075,7 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.arc(surface, speaker, (cx - 10, cy - 22, 38, 44), math.radians(-58), math.radians(58), 6)
         pygame.draw.arc(surface, speaker, (cx - 17, cy - 34, 62, 68), math.radians(-58), math.radians(58), 6)
     elif kind == "tests":
-        # Checklist document fallback matching the supplied diagnostics icon.
+        # Checklist fallback matching the supplied diagnostics artwork.
         pygame.draw.rect(surface, color, (cx - 23, cy - 31, 46, 62), 3, border_radius=3)
         pygame.draw.line(surface, dim, (cx - 13, cy - 12), (cx - 5, cy - 4), 3)
         pygame.draw.line(surface, dim, (cx - 5, cy - 4), (cx + 8, cy - 19), 3)
@@ -4323,7 +4567,7 @@ def format_smeter_readout(smeter_dbm):
     return f"−{abs(value)} dBm" if value < 0 else f"+{value} dBm"
 
 
-def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, transcription_enabled=False, alpha=1.0):
+def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, transcription_enabled=False, asr_engine="off", alpha=1.0):
     if alpha <= 0.01:
         return
     compact = y1 - y0 < 28
@@ -4343,8 +4587,9 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
     draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
     draw_text(text_cache, 730, status_mid_y, "DECODER", (229, 236, 239), size, False, False, "lm", alpha, family="Cantarell")
-    vosk_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
-    draw_text(text_cache, 944, status_mid_y, "VOSK ON" if transcription_enabled else "VOSK OFF", vosk_color, size, False, False, "rm", alpha, family="Cantarell")
+    asr_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
+    asr_label = f"ASR {ASR_ENGINE_LABELS.get(asr_engine, 'OFF')}" if transcription_enabled else "ASR OFF"
+    draw_text(text_cache, 944, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
 
 def draw_vosk_captions(text_cache, lines, partial, status):
@@ -4362,6 +4607,33 @@ def draw_vosk_captions(text_cache, lines, partial, status):
         y = (y0 + y1) / 2 if len(display) == 1 else y0 + 29 + index * 47
         color = (166, 204, 213) if partial else (230, 241, 244)
         draw_text(text_cache, x0 + 20, y, caption, color, 32, True, False, "lm", family="Liberation Sans")
+
+
+def asr_option_at(x, y):
+    x0, y0, x1, y1 = ASR_PANEL_BOX
+    if not contains(ASR_PANEL_BOX, x, y):
+        return None
+    index = min(len(ASR_ENGINES) - 1, max(0, int((x - x0) * len(ASR_ENGINES) / (x1 - x0))))
+    return ASR_ENGINES[index]
+
+
+def draw_asr_panel(text_cache, engine):
+    """A large explicit ASR selector rather than a mystery on/off toggle."""
+    x0, y0, x1, y1 = ASR_PANEL_BOX
+    draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 224))
+    cell_w = (x1 - x0) / len(ASR_ENGINES)
+    for index, candidate in enumerate(ASR_ENGINES):
+        left = x0 + index * cell_w + 4
+        right = x0 + (index + 1) * cell_w - 4
+        active = candidate == engine
+        draw_logical_rect(left, y0 + 5, right, y1 - 5, (24, 82, 61, 230) if active else (20, 32, 39, 210))
+        if active:
+            draw_logical_rect(left, y1 - 8, right, y1 - 5, (100, 255, 163, 245))
+        draw_text(
+            text_cache, (left + right) / 2, (y0 + y1) / 2,
+            ASR_ENGINE_LABELS[candidate], (180, 248, 207) if active else (197, 211, 215),
+            17 if candidate != "whisper" else 15, active, False, "cm", family="Cantarell",
+        )
 
 
 def draw_ruler(
@@ -4579,6 +4851,7 @@ def draw_ui(
     connection_status=None,
     bandwidth_hz=2400,
     transcription_enabled=False,
+    asr_engine="off",
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -4620,6 +4893,7 @@ def draw_ui(
             station_name=station_name,
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
+            asr_engine=asr_engine,
             alpha=instrument_alpha,
         )
     else:
@@ -4632,6 +4906,7 @@ def draw_ui(
             station_name=station_name,
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
+            asr_engine=asr_engine,
             alpha=instrument_alpha,
         )
     draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
@@ -5001,7 +5276,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
                         audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
                     if not audio:
                         continue
-                    transcription_enabled, _lines, _partial, _status, _generation = state.transcription_snapshot()
+                    transcription_enabled, _engine, _lines, _partial, _status, _generation = state.transcription_snapshot()
                     if transcription_enabled and transcript_queue is not None:
                         # Captions must stay current. A congested recognizer is
                         # never allowed to build a delayed replay of the radio.
@@ -5541,7 +5816,12 @@ def main():
             )
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
-        if isinstance(remembered_preferences.get("vosk_enabled"), bool):
+        saved_asr_engine = remembered_preferences.get("asr_engine")
+        if saved_asr_engine in ASR_ENGINES:
+            state.set_asr_engine(saved_asr_engine)
+        elif isinstance(remembered_preferences.get("vosk_enabled"), bool):
+            # Migrate the prior Vosk-only preference without surprising the
+            # existing operator after a software update.
             state.set_transcription_enabled(remembered_preferences["vosk_enabled"])
         audio_preferences = remembered_preferences.get("audio", {})
         if isinstance(audio_preferences, dict):
@@ -5563,7 +5843,7 @@ def main():
     scout_probe = ConstellationScoutProbe(args, state)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
     snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue), daemon=True)
-    caption_thread = threading.Thread(target=vosk_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
+    caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
     wf_thread.start()
     snd_thread.start()
     caption_thread.start()
@@ -5626,6 +5906,7 @@ def main():
     radio_family_open = None
     display_setup_open = False
     audio_panel_open = False
+    asr_panel_open = False
     audio_volume = pipewire_default_volume()
     saved_volume = remembered_preferences.get("audio_volume")
     if isinstance(saved_volume, (int, float)):
@@ -5756,7 +6037,7 @@ def main():
             "filter": {"low_cut": low_cut, "high_cut": high_cut},
             "filter_custom_width": bool(filter_custom_width),
             "spectrum_enabled": bool(spectrum_enabled),
-            "vosk_enabled": state.transcription_snapshot()[0],
+            "asr_engine": state.transcription_snapshot()[1],
             "tune_step_hz": int(tune_step_hz),
             "waterfall": {
                 "floor": round(float(floor), 1),
@@ -5849,7 +6130,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -5962,7 +6243,7 @@ def main():
     def activate_navigation_item(index):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, radio_setup_open, display_setup_open
-        nonlocal audio_panel_open, audio_volume, tests_panel_open, dj_tune_open
+        nonlocal audio_panel_open, asr_panel_open, audio_volume, tests_panel_open, dj_tune_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort
         nonlocal stations, search_open, radio_family_open
         kind, label = MENU_ITEMS[index]
@@ -5970,7 +6251,7 @@ def main():
         menu_open = False
         if kind == "rx":
             picker_open = True
-            radio_setup_open = display_setup_open = audio_panel_open = False
+            radio_setup_open = display_setup_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
             station_scroll = 0
             station_query = ""
@@ -5979,21 +6260,21 @@ def main():
             search_open = False
         elif kind == "display":
             display_setup_open = True
-            picker_open = radio_setup_open = audio_panel_open = False
+            picker_open = radio_setup_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind in ("settings", "digital"):
             radio_setup_open = True
             radio_family_open = None
-            picker_open = display_setup_open = audio_panel_open = False
+            picker_open = display_setup_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "audio":
             audio_volume = pipewire_default_volume()
             audio_panel_open = True
-            picker_open = radio_setup_open = display_setup_open = False
+            picker_open = radio_setup_open = display_setup_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
             tests_panel_open = True
-            picker_open = radio_setup_open = display_setup_open = audio_panel_open = False
+            picker_open = radio_setup_open = display_setup_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         else:
             print(f"gl navigation {label} pending", flush=True)
@@ -6206,7 +6487,14 @@ def main():
         while not stop_event.is_set():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    stop_event.set()
+                    # SDL/Cocoa can emit spurious QUIT events for this
+                    # borderless OpenGL development window. Desktop uses
+                    # Esc/Q as its deliberate close path; the Pi retains its
+                    # normal close behavior.
+                    if not args.desktop:
+                        stop_event.set()
+                    else:
+                        print("gl ignored desktop Cocoa QUIT", flush=True)
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
                 elif (
@@ -6215,13 +6503,8 @@ def main():
                     and event.button == 1
                     and pygame.key.get_mods() & pygame.KMOD_GUI
                 ):
-                    # A borderless window has no native drag surface. Reserve
-                    # Command-left-drag for moving it so ordinary left drags
-                    # continue through the radio's touch pipeline.
                     desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # A normal click always leaves window-move mode, even if
-                    # Cocoa dropped the preceding drag's mouse-up event.
                     desktop_window_drag_button = None
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
@@ -6236,7 +6519,6 @@ def main():
                         window_x, window_y = desktop_window.position
                         desktop_window.position = (window_x + event.rel[0], window_y + event.rel[1])
                     else:
-                        # Do not let a lost Cocoa mouse-up latch movement.
                         desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_pointer_down:
                     emit_desktop_touch(event.pos, "move")
@@ -6325,7 +6607,7 @@ def main():
                             swipe_started = False
                             fast_sweep_zoom_applied = False
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open and not frequency_entry_open else freq_khz
+                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not asr_panel_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open and not frequency_entry_open else freq_khz
                             start_span = display_span
                             candidate_freq = start_freq
                             if waterfall_focus_progress() > 0.01:
@@ -6335,6 +6617,10 @@ def main():
                                 gesture = "frequency_entry"
                             elif frequency_entry_open:
                                 gesture = "frequency_entry_outside"
+                            elif asr_panel_open and asr_option_at(x, y) is not None:
+                                gesture = "asr_select"
+                            elif asr_panel_open:
+                                gesture = "asr_outside"
                             elif DESKTOP_1280_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
                                 gesture = "frequency_entry_open"
                             elif contains(HOME_BOX, x, y):
@@ -6429,8 +6715,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
-                            elif not picker_open and contains(VOSK_TOGGLE_BOX, x, y):
-                                gesture = "vosk_toggle"
+                            elif not picker_open and contains(ASR_TOGGLE_BOX, x, y):
+                                gesture = "asr_toggle"
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
@@ -6966,21 +7252,28 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 change_zoom(1 if gesture == "zoom_plus" else -1)
-                        elif touch_started and gesture == "vosk_toggle":
+                        elif touch_started and gesture == "asr_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                enabled, _lines, _partial, _status, _generation = state.transcription_snapshot()
-                                state.set_transcription_enabled(not enabled)
-                                while not transcript_queue.empty():
-                                    try:
-                                        transcript_queue.get_nowait()
-                                    except queue.Empty:
-                                        break
-                                # This is an explicit, infrequent preference,
-                                # so save it immediately instead of waiting for
-                                # the normal settings idle timer.
-                                preferences_dirty = True
-                                write_remembered_view(force=True)
+                                asr_panel_open = not asr_panel_open
+                            wake_controls()
+                        elif touch_started and gesture == "asr_select":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                selected_engine = asr_option_at(x, y)
+                                if selected_engine is not None:
+                                    state.set_asr_engine(selected_engine)
+                                    drain_caption_audio(transcript_queue)
+                                    # ASR selection is an explicit, infrequent
+                                    # preference and is worth committing now.
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                asr_panel_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "asr_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                asr_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -7421,7 +7714,7 @@ def main():
                 waterfall_y1,
                 0.82,
             )
-            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else controls_alpha(now)
+            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else controls_alpha(now)
             selected_station_name = next(
                 (
                     bottom_station_title(name, location)
@@ -7431,7 +7724,7 @@ def main():
                 "",
             )
             connection_status = state.connection_snapshot()
-            transcription_enabled, transcript_lines, transcript_partial, transcript_status, _transcription_generation = state.transcription_snapshot()
+            transcription_enabled, asr_engine, transcript_lines, transcript_partial, transcript_status, _transcription_generation = state.transcription_snapshot()
             draw_ui(
                 text_cache,
                 display_freq,
@@ -7455,6 +7748,7 @@ def main():
                 connection_status=connection_status,
                 bandwidth_hz=high_cut - low_cut,
                 transcription_enabled=transcription_enabled,
+                asr_engine=asr_engine,
             )
             if spectrum_foreground:
                 draw_spectrum(
@@ -7474,6 +7768,8 @@ def main():
                     transcript_partial,
                     transcript_status,
                 )
+            if asr_panel_open:
+                draw_asr_panel(text_cache, asr_engine)
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if menu_open:
