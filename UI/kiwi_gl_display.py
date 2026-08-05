@@ -137,7 +137,11 @@ BOTTOM_RULER_H = 30
 BOTTOM_STATUS_H = 28
 VOSK_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
 VOSK_CAPTION_BOX = (16, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 108, 944, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
-VOSK_MODEL_PATH = Path(os.environ.get("ITUNER_VOSK_MODEL", "/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"))
+VOSK_MODEL_OVERRIDE = os.environ.get("ITUNER_VOSK_MODEL")
+VOSK_MODEL_PATHS = (
+    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-en-us-0.22-lgraph"),
+    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"),
+)
 WF_TEX_W = 960
 WF_TEX_H = 256
 DISPLAY_ORIENTATION = "flipped"
@@ -1130,6 +1134,14 @@ def rgba(color):
 
 def clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def active_vosk_model_path():
+    """Prefer the higher-accuracy local model, retaining a resilient fallback."""
+    if VOSK_MODEL_OVERRIDE:
+        path = Path(VOSK_MODEL_OVERRIDE)
+        return path if path.is_dir() else None
+    return next((path for path in VOSK_MODEL_PATHS if path.is_dir()), None)
 
 
 def ease_out_cubic(t):
@@ -2882,6 +2894,7 @@ class VoskResampler:
 def vosk_caption_worker(stop_event, state, audio_queue):
     """Bounded live captions. It drops stale audio rather than accumulating lag."""
     model = recognizer = resampler = None
+    loaded_model_path = None
     seen_generation = -1
     while not stop_event.is_set():
         enabled, _lines, _partial, _status, generation = state.transcription_snapshot()
@@ -2895,15 +2908,18 @@ def vosk_caption_worker(stop_event, state, audio_queue):
                 except queue.Empty: break
             stop_event.wait(0.15)
             continue
-        if vosk is None or not VOSK_MODEL_PATH.is_dir():
+        model_path = active_vosk_model_path()
+        if vosk is None or model_path is None:
             state.set_transcript(status="VOSK UNAVAILABLE")
             stop_event.wait(0.5)
             continue
         try:
-            if model is None:
+            if model is None or loaded_model_path != model_path:
                 state.set_transcript(status="LOADING VOSK")
                 vosk.SetLogLevel(-1)
-                model = vosk.Model(str(VOSK_MODEL_PATH))
+                model = vosk.Model(str(model_path))
+                loaded_model_path = model_path
+                print(f"gl Vosk model {model_path.name}", flush=True)
             if recognizer is None or generation != seen_generation:
                 recognizer = vosk.KaldiRecognizer(model, 16000)
                 recognizer.SetWords(False)
@@ -4003,6 +4019,30 @@ def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, 
     return text + ellipsis if text else ellipsis
 
 
+def wrap_caption_lines(text_cache, text, max_width, size, max_rows=2):
+    """Wrap current ASR text into safe, full-width subtitle rows."""
+    words = " ".join(str(text).split()).split()
+    rows, current = [], ""
+    for word in words:
+        # A decoder occasionally emits an implausibly long token. Keep the
+        # GPU measurement bounded without placing an ellipsis in normal text.
+        word = word[:48]
+        candidate = f"{current} {word}".strip()
+        too_wide = len(candidate) > 52 or text_cache.texture(
+            candidate, size, (255, 255, 255), bold=True, family="Liberation Sans"
+        )[1] > max_width
+        if current and too_wide:
+            rows.append(current)
+            if len(rows) == max_rows:
+                break
+            current = word
+        else:
+            current = candidate
+    if current and len(rows) < max_rows:
+        rows.append(current)
+    return rows
+
+
 def station_fields(station):
     """Return a consistent station row for both directory and fallback data."""
     name, location, server = station[:3]
@@ -4283,16 +4323,16 @@ def draw_vosk_captions(text_cache, lines, partial, status):
     """Large two-line caption overlay; it never changes waterfall geometry."""
     x0, y0, x1, y1 = VOSK_CAPTION_BOX
     draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
-    complete = list(lines)[-2:]
-    display = complete + ([partial] if partial else [])
-    display = display[-2:]
+    # A phrase uses both rows when needed. This reads like subtitles rather
+    # than two independently clipping diagnostic strings.
+    source = partial or (list(lines)[-1] if lines else "")
+    display = wrap_caption_lines(text_cache, source, x1 - x0 - 40, 32)
     if not display:
         draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family="Liberation Sans")
         return
     for index, caption in enumerate(display):
-        y = y0 + 29 + index * 47
-        color = (230, 241, 244) if index < len(display) - 1 or not partial else (166, 204, 213)
-        caption = fit_station_text(text_cache, caption, x1 - x0 - 40, 32, bold=True, family="Liberation Sans")
+        y = (y0 + y1) / 2 if len(display) == 1 else y0 + 29 + index * 47
+        color = (166, 204, 213) if partial else (230, 241, 244)
         draw_text(text_cache, x0 + 20, y, caption, color, 32, True, False, "lm", family="Liberation Sans")
 
 
