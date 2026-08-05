@@ -553,11 +553,15 @@ MENU_ITEMS = (
     ("rf", "RF"),
     ("audio", "AUDIO"),
     ("display", "DISPLAY"),
-    ("apps", "APPS"),
+    ("tests", "TESTS"),
     ("digital", "DIGI"),
     ("stats", "STATS"),
     ("settings", "SETTINGS"),
 )
+MENU_ICON_FILENAMES = {
+    "rx": "receivers.png",
+    "digital": "digi.png",
+}
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 PICKER_BOX = (0, 0, 790, LOGICAL_H)
@@ -1909,10 +1913,8 @@ class TextCache:
 def setup_gl(desktop=False):
     pygame.init()
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-    flags = pygame.OPENGL if desktop else pygame.OPENGL | pygame.FULLSCREEN
+    flags = pygame.OPENGL | pygame.NOFRAME if desktop else pygame.OPENGL | pygame.FULLSCREEN
     screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), flags)
-    if desktop:
-        pygame.display.set_caption("Kiwi SDR Desktop")
     GL.glViewport(0, 0, NATIVE_W, NATIVE_H)
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
@@ -2350,22 +2352,32 @@ def draw_home_button(text_cache, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = HOME_BOX
-    w, h, scale = int(x1 - x0), int(y1 - y0), 3
-    hi = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
-    def p(value):
-        return int(round(value * scale))
-    # Material-style Home: large outline, calm boundary, no label or filled tile.
-    cx, cy = w / 2, h / 2 + 2
-    color = (231, 235, 237, 238)
-    roof = [(p(cx - 25), p(cy - 3)), (p(cx), p(cy - 25)), (p(cx + 25), p(cy - 3))]
-    pygame.draw.lines(hi, color, False, roof, p(3))
-    pygame.draw.line(hi, color, (p(cx - 18), p(cy - 2)), (p(cx - 18), p(cy + 18)), p(3))
-    pygame.draw.line(hi, color, (p(cx + 18), p(cy - 2)), (p(cx + 18), p(cy + 18)), p(3))
-    pygame.draw.line(hi, color, (p(cx - 18), p(cy + 18)), (p(cx + 18), p(cy + 18)), p(3))
-    pygame.draw.line(hi, color, (p(cx - 5), p(cy + 18)), (p(cx - 5), p(cy + 7)), p(3))
-    pygame.draw.line(hi, color, (p(cx + 5), p(cy + 18)), (p(cx + 5), p(cy + 7)), p(3))
-    surface = pygame.transform.smoothscale(hi, (w, h))
-    tex, tex_w, tex_h = text_cache.surface_texture("home_button_v11", surface)
+    w, h = int(x1 - x0), int(y1 - y0)
+    surface = pygame.Surface((w, h), pygame.SRCALPHA)
+    try:
+        icon = pygame.image.load(str(MENU_ICON_ASSET_DIR / "home.png")).convert_alpha()
+        icon_size = min(48, w - 14, h - 8)
+        icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+        surface.blit(icon, ((w - icon_size) // 2, (h - icon_size) // 2))
+    except (pygame.error, OSError):
+        # Keep the control usable if the optional vendor asset is absent.
+        scale = 3
+        hi = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
+
+        def p(value):
+            return int(round(value * scale))
+
+        cx, cy = w / 2, h / 2 + 2
+        color = (231, 235, 237, 238)
+        roof = [(p(cx - 25), p(cy - 3)), (p(cx), p(cy - 25)), (p(cx + 25), p(cy - 3))]
+        pygame.draw.lines(hi, color, False, roof, p(3))
+        pygame.draw.line(hi, color, (p(cx - 18), p(cy - 2)), (p(cx - 18), p(cy + 18)), p(3))
+        pygame.draw.line(hi, color, (p(cx + 18), p(cy - 2)), (p(cx + 18), p(cy + 18)), p(3))
+        pygame.draw.line(hi, color, (p(cx - 18), p(cy + 18)), (p(cx + 18), p(cy + 18)), p(3))
+        pygame.draw.line(hi, color, (p(cx - 5), p(cy + 18)), (p(cx - 5), p(cy + 7)), p(3))
+        pygame.draw.line(hi, color, (p(cx + 5), p(cy + 18)), (p(cx + 5), p(cy + 7)), p(3))
+        surface = pygame.transform.smoothscale(hi, (w, h))
+    tex, tex_w, tex_h = text_cache.surface_texture("home_button_v12", surface)
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
@@ -3818,14 +3830,13 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.lines(surface, speaker, True, ((cx - 13, cy - 15), (cx + 11, cy - 31), (cx + 11, cy + 31), (cx - 13, cy + 15)), 5)
         pygame.draw.arc(surface, speaker, (cx - 10, cy - 22, 38, 44), math.radians(-58), math.radians(58), 6)
         pygame.draw.arc(surface, speaker, (cx - 17, cy - 34, 62, 68), math.radians(-58), math.radians(58), 6)
-    elif kind == "apps":
-        # A tic-tac-toe board is a compact, neutral launcher metaphor.
-        for offset in (-15, 15):
-            pygame.draw.line(surface, color, (cx + offset, cy - 27), (cx + offset, cy + 27), 3)
-            pygame.draw.line(surface, color, (cx - 27, cy + offset), (cx + 27, cy + offset), 3)
-        pygame.draw.line(surface, dim, (cx - 22, cy - 22), (cx - 8, cy - 8), 3)
-        pygame.draw.line(surface, dim, (cx - 8, cy - 22), (cx - 22, cy - 8), 3)
-        pygame.draw.circle(surface, dim, (cx + 14, cy + 14), 8, 3)
+    elif kind == "tests":
+        # Checklist document fallback matching the supplied diagnostics icon.
+        pygame.draw.rect(surface, color, (cx - 23, cy - 31, 46, 62), 3, border_radius=3)
+        pygame.draw.line(surface, dim, (cx - 13, cy - 12), (cx - 5, cy - 4), 3)
+        pygame.draw.line(surface, dim, (cx - 5, cy - 4), (cx + 8, cy - 19), 3)
+        pygame.draw.line(surface, color, (cx - 13, cy + 4), (cx + 13, cy + 4), 3)
+        pygame.draw.line(surface, color, (cx - 13, cy + 16), (cx + 13, cy + 16), 3)
     elif kind == "settings":
         pygame.draw.circle(surface, color, (cx, cy), 17, 3)
         pygame.draw.circle(surface, dim, (cx, cy), 6, 3)
@@ -3869,7 +3880,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
     if cached is not None:
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
-    asset_path = MENU_ICON_ASSET_DIR / f"{kind}.png"
+    asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
     try:
         icon = pygame.image.load(str(asset_path)).convert_alpha()
         # Keep the supplied vector-derived art deliberately understated in the
@@ -5558,14 +5569,22 @@ def main():
     caption_thread.start()
 
     desktop_event_writer = None
+    desktop_window = None
     if args.desktop:
+        from pygame._sdl2.video import Window
+
+        desktop_window = Window.from_display_module()
         event_read_fd, desktop_event_writer = os.pipe()
         # The Pygame loop creates the synthetic touch events for this pipe.
         # It must therefore never wait here for an event that it has not yet
         # had a chance to poll from the desktop window.
         os.set_blocking(event_read_fd, False)
         ev = os.fdopen(event_read_fd, "rb", buffering=0)
-        print(f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, wheel zooms", flush=True)
+        print(
+            f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, "
+            "Command-drag moves, wheel zooms",
+            flush=True,
+        )
     else:
         event_path = args.event or kiwi.find_touch_event()
         ev = event_path.open("rb", buffering=0)
@@ -5972,7 +5991,7 @@ def main():
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "apps":
+        elif kind == "tests":
             tests_panel_open = True
             picker_open = radio_setup_open = display_setup_open = audio_panel_open = False
             dj_tune_open = filter_panel_open = False
@@ -6127,6 +6146,7 @@ def main():
         active_swipe_boost = 1.0 + repeat_swipe_count * args.swipe_repeat_boost
 
     desktop_pointer_down = False
+    desktop_window_drag_button = None
 
     def desktop_logical_point(position):
         """Map a desktop mouse position directly into logical UI space."""
@@ -6189,7 +6209,20 @@ def main():
                     stop_event.set()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
+                elif (
+                    args.desktop
+                    and event.type == pygame.MOUSEBUTTONDOWN
+                    and event.button == 1
+                    and pygame.key.get_mods() & pygame.KMOD_GUI
+                ):
+                    # A borderless window has no native drag surface. Reserve
+                    # Command-left-drag for moving it so ordinary left drags
+                    # continue through the radio's touch pipeline.
+                    desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # A normal click always leaves window-move mode, even if
+                    # Cocoa dropped the preceding drag's mouse-up event.
+                    desktop_window_drag_button = None
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
                         activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
@@ -6198,9 +6231,22 @@ def main():
                     else:
                         desktop_pointer_down = True
                         emit_desktop_touch(event.pos, "down")
+                elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_window_drag_button is not None:
+                    if event.buttons[0]:
+                        window_x, window_y = desktop_window.position
+                        desktop_window.position = (window_x + event.rel[0], window_y + event.rel[1])
+                    else:
+                        # Do not let a lost Cocoa mouse-up latch movement.
+                        desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_pointer_down:
                     emit_desktop_touch(event.pos, "move")
-                elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                elif (
+                    args.desktop
+                    and event.type == pygame.MOUSEBUTTONUP
+                    and event.button == desktop_window_drag_button
+                ):
+                    desktop_window_drag_button = None
+                elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1 and desktop_pointer_down:
                     emit_desktop_touch(event.pos, "up")
                     desktop_pointer_down = False
                 elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
