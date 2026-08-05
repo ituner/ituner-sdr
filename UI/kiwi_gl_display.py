@@ -2797,7 +2797,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     voice_clean = bool(controls.get("voice_clean", False))
     panel_button(
         AUDIO_VOICE_CLEAN_BOX,
-        "VOICE",
+        "RNNOISE",
         "ON" if voice_clean else "OFF",
         voice_clean,
         (123, 193, 250, 230),
