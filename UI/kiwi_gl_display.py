@@ -2849,7 +2849,10 @@ class VoskResampler:
         error = self.library.speex_resampler_process_int(self.state, 0, source, ctypes.byref(input_count), destination, ctypes.byref(output_count))
         if error:
             raise RuntimeError(f"Vosk resample failed ({error})")
-        return bytes(destination[:output_count.value])
+        # ``destination`` is signed 16-bit PCM. ``bytes(sequence)`` rejects
+        # negative samples, so copy the raw sample memory exactly as Vosk
+        # expects instead of treating it as an unsigned byte sequence.
+        return ctypes.string_at(destination, output_count.value * ctypes.sizeof(ctypes.c_short))
 
 
 def vosk_caption_worker(stop_event, state, audio_queue):
