@@ -45,7 +45,7 @@ ABS_MT_TRACKING_ID = 0x39
 SND_FLAG_COMPRESSED = 0x10
 SND_FLAG_STEREO = 0x08
 SND_FLAG_LITTLE_ENDIAN = 0x80
-# Four deliberately distinct, radio-friendly WDSP denoiser positions. Kiwi's
+# The denoise slider reserves more useful range for stronger filtering. Kiwi's
 # browser expresses gain/leakage as 1-based slider values; convert them to the
 # DSP coefficients when configuring a receiver stream.
 DENOISE_PRESETS = (
@@ -53,6 +53,8 @@ DENOISE_PRESETS = (
     ("LIGHT", (48, 12, 8, 6)),
     ("NORMAL", (64, 16, 10, 7)),
     ("STRONG", (96, 24, 13, 9)),
+    ("STRONG+", (128, 32, 15, 10)),
+    ("MAX", (160, 40, 17, 11)),
 )
 
 

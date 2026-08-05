@@ -368,11 +368,18 @@ AUDIO_MUTE_BOX = (716, 76, 918, 128)
 AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
 AUDIO_AGC_BOX = (268, 154, 482, 210)
 AUDIO_BLANKER_BOX = (494, 154, 706, 210)
-AUDIO_DENOISE_BOX = (718, 154, 918, 210)
-AUDIO_NOTCH_BOX = (42, 224, 256, 280)
-AUDIO_DEEMP_BOX = (268, 224, 482, 280)
-AUDIO_FILTER_BOX = (494, 224, 706, 280)
-AUDIO_RESET_BOX = (718, 224, 918, 280)
+AUDIO_DENOISE_BOX = (718, 154, 918, 224)
+AUDIO_DENOISE_GAIN_SPLIT_Y = 194
+AUDIO_NOTCH_BOX = (42, 236, 256, 292)
+AUDIO_DEEMP_BOX = (268, 236, 482, 292)
+AUDIO_FILTER_BOX = (494, 236, 706, 292)
+AUDIO_RESET_BOX = (718, 236, 918, 292)
+# Six evenly spaced, discrete Denoise settings. The DSP presets themselves
+# remain intentionally useful at the strong end; only the touch scale is linear.
+DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
+PREFERENCES_WRITE_IDLE_SECONDS = 1.5
+FREQUENCY_WRITE_IDLE_SECONDS = 60.0
+PREFERENCES_POLL_SECONDS = 0.25
 TEST_PANEL_BOX = (12, 72, 948, 288)
 TEST_GLOBE_BOX = (42, 112, 468, 166)
 TEST_DJ_BOX = (492, 112, 918, 166)
@@ -1303,13 +1310,16 @@ def load_remembered_view(path):
             radio_mode = saved.get("radio_mode")
             if isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
                 view["radio_mode"] = radio_mode.upper()
+            preferences = saved.get("preferences")
+            if isinstance(preferences, dict):
+                view["preferences"] = preferences
             return view
     except (OSError, ValueError, TypeError):
         pass
     return None
 
 
-def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False):
+def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False, preferences=None):
     parsed = urlparse(server)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return
@@ -1317,12 +1327,15 @@ def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_r
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
         saved = {
+            "version": 2,
             "freq_khz": round(float(freq_khz), 3),
             "server": server,
             "zoom": clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM),
         }
         if manual_radio_mode and isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
             saved["radio_mode"] = radio_mode.upper()
+        if preferences:
+            saved["preferences"] = preferences
         temporary.write_text(json.dumps(saved, sort_keys=True) + "\n")
         os.replace(temporary, path)
     except OSError as exc:
@@ -1380,6 +1393,7 @@ class SharedState:
         self.nb_algo = 0
         self.nr_algo = 1
         self.denoise_level = 0
+        self.denoise_makeup_db = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
@@ -1553,6 +1567,7 @@ class SharedState:
                 "nb_algo": self.nb_algo,
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
+                "denoise_makeup_db": self.denoise_makeup_db,
                 "denoise": self.denoise_level > 0,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
@@ -1579,7 +1594,7 @@ class SharedState:
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-            "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
+            "nb_algo", "nr_algo", "denoise_level", "denoise_makeup_db", "autonotch_enabled",
         }
         with self.lock:
             changed = False
@@ -1596,6 +1611,7 @@ class SharedState:
             self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
             self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
+            self.denoise_makeup_db = int(clamp(int(self.denoise_makeup_db), 0, 12))
             if changed:
                 self.audio_generation += 1
             return {
@@ -1613,6 +1629,7 @@ class SharedState:
                 "nb_algo": self.nb_algo,
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
+                "denoise_makeup_db": self.denoise_makeup_db,
                 "denoise": self.denoise_level > 0,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
@@ -1622,7 +1639,7 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, autonotch_enabled=False,
+            nr_algo=1, denoise_level=0, denoise_makeup_db=0, autonotch_enabled=False,
         )
 
     def set_filter(self, low_cut=None, high_cut=None):
@@ -2543,11 +2560,41 @@ def audio_squelch_at_x(x):
     return int(round(clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0) * 99))
 
 
+def audio_denoise_level_at_x(x):
+    """Snap a finger position to the evenly spaced Denoise detents."""
+    x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
+    fraction = clamp((x - (x0 + 14)) / max(1, (x1 - 14) - (x0 + 14)), 0.0, 1.0)
+    return min(
+        range(len(DENOISE_SLIDER_POSITIONS)),
+        key=lambda index: abs(DENOISE_SLIDER_POSITIONS[index] - fraction),
+    )
+
+
+def audio_denoise_makeup_at_x(x):
+    x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
+    fraction = clamp((x - (x0 + 14)) / max(1, (x1 - 14) - (x0 + 14)), 0.0, 1.0)
+    return int(round(fraction * 12))
+
+
+def apply_denoise_makeup_gain(audio, gain_db):
+    """Apply SDR-stream-only make-up gain to native S16 PCM, with saturation."""
+    gain_db = clamp(float(gain_db), 0.0, 12.0)
+    if gain_db <= 0.0 or not audio:
+        return audio
+    multiplier = 10.0 ** (gain_db / 20.0)
+    if audioop is not None:
+        return audioop.mul(audio, 2, multiplier)
+    sample_count = len(audio) // 2
+    samples = struct.unpack(f"<{sample_count}h", audio[:sample_count * 2])
+    boosted = (int(clamp(round(sample * multiplier), -32768, 32767)) for sample in samples)
+    return struct.pack(f"<{sample_count}h", *boosted)
+
+
 def audio_option_at(x, y):
     for name, box in (
         ("mute", AUDIO_MUTE_BOX), ("squelch", AUDIO_SQUELCH_BOX),
         ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
-        ("denoise", AUDIO_DENOISE_BOX), ("notch", AUDIO_NOTCH_BOX),
+        ("notch", AUDIO_NOTCH_BOX),
         ("deemphasis", AUDIO_DEEMP_BOX), ("filter", AUDIO_FILTER_BOX),
         ("reset", AUDIO_RESET_BOX),
     ):
@@ -2609,6 +2656,45 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         knob_x = track_x0 + (track_x1 - track_x0) * fraction
         draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, (229, 246, 246, 245))
 
+    def denoise_slider(box, level, makeup_db):
+        bx0, by0, bx1, by1 = box
+        level = int(clamp(level, 0, len(kiwi.DENOISE_PRESETS) - 1))
+        active = level > 0
+        draw_logical_rect(bx0, by0, bx1, by1, (24, 63, 57, 224) if active else (18, 29, 38, 220))
+        line = (93, 235, 174, 184) if active else (115, 140, 151, 82)
+        for line_y in (by0, by1):
+            draw_logical_line(bx0, line_y, bx1, line_y, line, 1)
+        draw_logical_line(bx0, by0, bx0, by1, line, 1)
+        draw_logical_line(bx1, by0, bx1, by1, line, 1)
+        draw_text(text_cache, bx0 + 14, by0 + 14, "DENOISE", (230, 246, 247), 13, True, True, "lm", family="Liberation Sans")
+        label = kiwi.DENOISE_PRESETS[level][0]
+        draw_text(text_cache, bx1 - 14, by0 + 14, label, (112, 235, 175) if active else (153, 185, 191), 13, True, True, "rm", family="Liberation Sans")
+        track_x0, track_x1 = bx0 + 14, bx1 - 14
+        denoise_track_y = by0 + 31
+        draw_logical_rect(track_x0, denoise_track_y - 2, track_x1, denoise_track_y + 2, (27, 45, 52, 255))
+        current_x = track_x0 + (track_x1 - track_x0) * DENOISE_SLIDER_POSITIONS[level]
+        draw_logical_rect(track_x0, denoise_track_y - 2, current_x, denoise_track_y + 2, (80, 226, 164, 235))
+        for index, position in enumerate(DENOISE_SLIDER_POSITIONS):
+            marker_x = track_x0 + (track_x1 - track_x0) * position
+            marker_color = (112, 238, 177, 230) if index <= level else (107, 139, 147, 128)
+            draw_logical_line(marker_x, denoise_track_y - 4, marker_x, denoise_track_y + 4, marker_color, 1)
+        draw_logical_rect(current_x - 5, denoise_track_y - 7, current_x + 5, denoise_track_y + 7, (229, 246, 246, 255))
+
+        makeup_db = int(clamp(makeup_db, 0, 12))
+        gain_color = (112, 235, 175) if active and makeup_db else (153, 185, 191)
+        draw_text(text_cache, bx0 + 14, by0 + 44, "NR GAIN", (197, 220, 224), 11, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx1 - 14, by0 + 44, f"+{makeup_db} dB", gain_color, 12, True, True, "rm", family="Liberation Sans")
+        gain_track_y = by0 + 60
+        gain_fraction = makeup_db / 12.0
+        draw_logical_rect(track_x0, gain_track_y - 2, track_x1, gain_track_y + 2, (27, 45, 52, 255))
+        draw_logical_rect(track_x0, gain_track_y - 2, track_x0 + (track_x1 - track_x0) * gain_fraction, gain_track_y + 2, (80, 226, 164, 235))
+        for db in range(0, 13, 3):
+            marker_x = track_x0 + (track_x1 - track_x0) * (db / 12.0)
+            marker_color = (112, 238, 177, 210) if db <= makeup_db else (107, 139, 147, 120)
+            draw_logical_line(marker_x, gain_track_y - 4, marker_x, gain_track_y + 4, marker_color, 1)
+        gain_x = track_x0 + (track_x1 - track_x0) * gain_fraction
+        draw_logical_rect(gain_x - 5, gain_track_y - 7, gain_x + 5, gain_track_y + 7, (229, 246, 246, 255))
+
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
     sq = int(controls["squelch_level"])
@@ -2618,7 +2704,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
     panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
     denoise_level = int(controls["denoise_level"])
-    panel_button(AUDIO_DENOISE_BOX, "DENOISE", kiwi.DENOISE_PRESETS[denoise_level][0], denoise_level > 0)
+    denoise_slider(AUDIO_DENOISE_BOX, denoise_level, controls["denoise_makeup_db"])
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
@@ -4457,6 +4543,8 @@ def snd_meter_worker(args, stop_event, state):
                 if player and player.stdin and playable_packet and not audio_controls.get("mute", False):
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
+                    if int(audio_controls.get("denoise_level", 0)) > 0:
+                        audio = apply_denoise_makeup_gain(audio, audio_controls.get("denoise_makeup_db", 0))
                     try:
                         player.stdin.write(audio)
                     except (BrokenPipeError, OSError):
@@ -4873,6 +4961,7 @@ def main():
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
     args = parser.parse_args()
     remembered_radio_mode = None
+    remembered_preferences = {}
     if args.remember_receiver:
         remembered_view = load_remembered_view(args.receiver_state_file)
         if remembered_view:
@@ -4880,6 +4969,7 @@ def main():
             args.freq_khz = remembered_view.get("freq_khz", args.freq_khz)
             args.zoom = remembered_view.get("zoom", args.zoom)
             remembered_radio_mode = remembered_view.get("radio_mode")
+            remembered_preferences = remembered_view.get("preferences", {})
             print(
                 f"gl remembered receiver: {args.server} "
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
@@ -4958,10 +5048,36 @@ def main():
         radio_mode.lower(),
         args.spectrum,
     )
+    if remembered_preferences:
+        filter_preferences = remembered_preferences.get("filter", {})
+        if isinstance(filter_preferences, dict):
+            state.set_filter(
+                low_cut=filter_preferences.get("low_cut"),
+                high_cut=filter_preferences.get("high_cut"),
+            )
+        waterfall_preferences = remembered_preferences.get("waterfall", {})
+        if isinstance(waterfall_preferences, dict):
+            state.set_waterfall(
+                floor=waterfall_preferences.get("floor"),
+                ceil=waterfall_preferences.get("ceil"),
+                speed=waterfall_preferences.get("speed"),
+                auto=waterfall_preferences.get("auto"),
+                palette=waterfall_preferences.get("palette"),
+            )
+        if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
+            state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
+        audio_preferences = remembered_preferences.get("audio", {})
+        if isinstance(audio_preferences, dict):
+            state.set_audio_controls(**{
+                name: value for name, value in audio_preferences.items()
+                if name in {
+                    "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
+                    "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
+                    "nb_algo", "nr_algo", "denoise_level", "denoise_makeup_db", "autonotch_enabled",
+                }
+            })
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
-    if args.remember_receiver:
-        save_remembered_view(args.receiver_state_file, args.server, args.freq_khz, args.zoom, radio_mode, manual_radio_mode)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
     snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state), daemon=True)
     wf_thread.start()
@@ -5018,6 +5134,11 @@ def main():
     display_setup_open = False
     audio_panel_open = False
     audio_volume = pipewire_default_volume()
+    saved_volume = remembered_preferences.get("audio_volume")
+    if isinstance(saved_volume, (int, float)):
+        restored_volume = set_pipewire_default_volume(saved_volume)
+        if restored_volume is not None:
+            audio_volume = restored_volume
     audio_volume_last_apply = 0.0
     tests_panel_open = False
     globe_open = False
@@ -5060,14 +5181,16 @@ def main():
     filter_drag_center = 0.0
     filter_drag_audio_center = 0.0
     filter_drag_limit = FILTER_LIMIT_HZ
-    filter_custom_width = False
+    filter_custom_width = bool(remembered_preferences.get("filter_custom_width", False))
     frequency_entry_open = args.frequency_keypad_preview
     frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
     frequency_entry_invalid = False
     frequency_entry_replace_on_digit = False
     station_scroll = 0
-    digital_mode = "DIG"
-    tune_step_hz = args.tune_step_hz
+    saved_digital_mode = remembered_preferences.get("digital_mode")
+    digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
+    saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
+    tune_step_hz = max(1, int(saved_tune_step_hz)) if isinstance(saved_tune_step_hz, (int, float)) else args.tune_step_hz
     active = False
     raw_x = raw_y = None
     current_slot = 0
@@ -5097,11 +5220,121 @@ def main():
     candidate_freq = display_freq
     last_x = None
 
-    def remember_current_view():
+    # Receiver preferences live in one tiny JSON file. UI changes settle for a
+    # moment before writing; frequency gets a much longer dwell so live tuning
+    # never becomes a stream of flash writes.
+    persisted_frequency_khz = args.freq_khz
+    observed_frequency_khz = args.freq_khz
+    frequency_changed_at = time.monotonic()
+    next_preferences_poll = 0.0
+    preferences_due_at = 0.0
+    preferences_dirty = bool(args.remember_receiver and "preferences" not in remembered_preferences)
+    observed_preferences_signature = None
+    saved_preferences_signature = None
+
+    def current_preferences():
+        _server, _freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
+        _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+        floor, ceiling, speed, auto, palette, _wf_generation = state.waterfall_snapshot()
+        spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
+        audio_controls, _audio_generation = state.audio_controls_snapshot()
+        return {
+            "audio": {
+                "squelch_level": audio_controls["squelch_level"],
+                "squelch_tail": audio_controls["squelch_tail"],
+                "audio_mute": audio_controls["mute"],
+                "agc_enabled": audio_controls["agc"],
+                "agc_hang": audio_controls["agc_hang"],
+                "agc_threshold": audio_controls["agc_threshold"],
+                "agc_slope": audio_controls["agc_slope"],
+                "agc_decay": audio_controls["agc_decay"],
+                "agc_manual_gain": audio_controls["agc_manual_gain"],
+                "deemphasis": audio_controls["deemphasis"],
+                "nb_algo": audio_controls["nb_algo"],
+                "nr_algo": audio_controls["nr_algo"],
+                "denoise_level": audio_controls["denoise_level"],
+                "denoise_makeup_db": audio_controls["denoise_makeup_db"],
+                "autonotch_enabled": audio_controls["autonotch"],
+            },
+            "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
+            "digital_mode": digital_mode,
+            "filter": {"low_cut": low_cut, "high_cut": high_cut},
+            "filter_custom_width": bool(filter_custom_width),
+            "spectrum_enabled": bool(spectrum_enabled),
+            "tune_step_hz": int(tune_step_hz),
+            "waterfall": {
+                "floor": round(float(floor), 1),
+                "ceil": round(float(ceiling), 1),
+                "speed": int(speed),
+                "auto": bool(auto),
+                "palette": palette,
+            },
+            "zoom": int(zoom),
+        }
+
+    def preferences_signature(preferences):
+        server, _freq_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        payload = {
+            "server": server,
+            "radio_mode": radio_mode if manual_radio_mode else None,
+            "preferences": preferences,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def write_remembered_view(save_current_frequency=False, force=False):
+        nonlocal persisted_frequency_khz, preferences_dirty, preferences_due_at, saved_preferences_signature
         if not args.remember_receiver:
-            return
+            return False
         server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
-        save_remembered_view(args.receiver_state_file, server, freq_khz, zoom, radio_mode, manual_radio_mode)
+        preferences = current_preferences()
+        signature = preferences_signature(preferences)
+        frequency_changed = abs(persisted_frequency_khz - freq_khz) > 0.0005
+        if not force and not preferences_dirty and signature == saved_preferences_signature and not (save_current_frequency and frequency_changed):
+            return False
+        if save_current_frequency:
+            persisted_frequency_khz = freq_khz
+        save_remembered_view(
+            args.receiver_state_file,
+            server,
+            persisted_frequency_khz,
+            zoom,
+            radio_mode,
+            manual_radio_mode,
+            preferences,
+        )
+        saved_preferences_signature = signature
+        preferences_dirty = False
+        preferences_due_at = 0.0
+        return True
+
+    def observe_preferences(now):
+        nonlocal observed_frequency_khz, frequency_changed_at, next_preferences_poll
+        nonlocal observed_preferences_signature, preferences_dirty, preferences_due_at
+        if not args.remember_receiver or now < next_preferences_poll:
+            return
+        next_preferences_poll = now + PREFERENCES_POLL_SECONDS
+        _server, freq_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        if abs(freq_khz - observed_frequency_khz) > 0.0005:
+            observed_frequency_khz = freq_khz
+            frequency_changed_at = now
+        preferences = current_preferences()
+        signature = preferences_signature(preferences)
+        if signature != observed_preferences_signature:
+            observed_preferences_signature = signature
+            if signature != saved_preferences_signature:
+                preferences_dirty = True
+                preferences_due_at = now + PREFERENCES_WRITE_IDLE_SECONDS
+        if preferences_dirty and now >= preferences_due_at:
+            write_remembered_view()
+        elif abs(freq_khz - persisted_frequency_khz) > 0.0005 and now - frequency_changed_at >= FREQUENCY_WRITE_IDLE_SECONDS:
+            write_remembered_view(save_current_frequency=True)
+
+    initial_preferences = current_preferences()
+    observed_preferences_signature = preferences_signature(initial_preferences)
+    saved_preferences_signature = observed_preferences_signature
+
+    def remember_current_view():
+        observe_preferences(time.monotonic())
 
     def apply_band_default(freq_khz):
         """Follow the conventional 10 MHz split until the operator takes over."""
@@ -5589,6 +5822,8 @@ def main():
                                 gesture = "audio_volume"
                             elif audio_panel_open and contains(AUDIO_SQUELCH_BOX, x, y):
                                 gesture = "audio_squelch_level"
+                            elif audio_panel_open and contains(AUDIO_DENOISE_BOX, x, y):
+                                gesture = "audio_denoise_gain" if y >= AUDIO_DENOISE_GAIN_SPLIT_Y else "audio_denoise_level"
                             elif audio_panel_open and audio_option_at(x, y) is not None:
                                 gesture = "audio_control"
                             elif audio_panel_open:
@@ -5712,6 +5947,13 @@ def main():
                                     audio_volume_last_apply = time.monotonic()
                         elif gesture == "audio_squelch_level":
                             state.set_audio_controls(squelch_level=audio_squelch_at_x(x))
+                        elif gesture == "audio_denoise_level":
+                            state.set_audio_controls(
+                                nr_algo=1,
+                                denoise_level=audio_denoise_level_at_x(x),
+                            )
+                        elif gesture == "audio_denoise_gain":
+                            state.set_audio_controls(denoise_makeup_db=audio_denoise_makeup_at_x(x))
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
@@ -5866,6 +6108,15 @@ def main():
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 state.set_audio_controls(squelch_level=0 if controls["squelch_level"] else 20)
                             wake_controls()
+                        elif touch_started and gesture == "audio_denoise_level":
+                            state.set_audio_controls(
+                                nr_algo=1,
+                                denoise_level=audio_denoise_level_at_x(x),
+                            )
+                            wake_controls()
+                        elif touch_started and gesture == "audio_denoise_gain":
+                            state.set_audio_controls(denoise_makeup_db=audio_denoise_makeup_at_x(x))
+                            wake_controls()
                         elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -5882,11 +6133,6 @@ def main():
                                         state.set_audio_controls(agc_enabled=False, agc_hang=False)
                                 elif choice == "blanker":
                                     state.set_audio_controls(nb_algo=(int(controls["nb_algo"]) + 1) % 3)
-                                elif choice == "denoise":
-                                    state.set_audio_controls(
-                                        nr_algo=1,
-                                        denoise_level=(int(controls["denoise_level"]) + 1) % len(kiwi.DENOISE_PRESETS),
-                                    )
                                 elif choice == "notch":
                                     state.set_audio_controls(nr_algo=1, autonotch_enabled=not controls["autonotch"])
                                 elif choice == "deemphasis":
@@ -6310,6 +6556,7 @@ def main():
                         start_x = start_freq = last_x = None
 
             now = time.monotonic()
+            observe_preferences(now)
             if zoom_osd_requested.is_set():
                 zoom_osd_until = now + args.zoom_osd_seconds
                 zoom_osd_requested.clear()
@@ -6761,6 +7008,9 @@ def main():
                 break
             clock.tick(args.fps)
     finally:
+        # An orderly exit commits a genuine last-minute adjustment, including
+        # the current frequency, once. Unchanged state produces no write.
+        write_remembered_view(save_current_frequency=True)
         globe_mixer.stop()
         scout_probe.stop()
         stop_event.set()
