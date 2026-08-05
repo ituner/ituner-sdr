@@ -136,7 +136,7 @@ WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 BOTTOM_RULER_H = 30
 BOTTOM_STATUS_H = 28
 VOSK_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
-VOSK_CAPTION_BOX = (18, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 76, 942, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
+VOSK_CAPTION_BOX = (16, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 108, 944, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
 VOSK_MODEL_PATH = Path(os.environ.get("ITUNER_VOSK_MODEL", "/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"))
 WF_TEX_W = 960
 WF_TEX_H = 256
@@ -4263,13 +4263,13 @@ def draw_vosk_captions(text_cache, lines, partial, status):
     display = complete + ([partial] if partial else [])
     display = display[-2:]
     if not display:
-        draw_text(text_cache, x0 + 18, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 18, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family="Liberation Sans")
         return
     for index, caption in enumerate(display):
-        y = y0 + 22 + index * 31
+        y = y0 + 29 + index * 47
         color = (230, 241, 244) if index < len(display) - 1 or not partial else (166, 204, 213)
-        caption = fit_station_text(text_cache, caption, x1 - x0 - 36, 24, bold=True, family="Liberation Sans")
-        draw_text(text_cache, x0 + 18, y, caption, color, 24, True, False, "lm", family="Liberation Sans")
+        caption = fit_station_text(text_cache, caption, x1 - x0 - 40, 32, bold=True, family="Liberation Sans")
+        draw_text(text_cache, x0 + 20, y, caption, color, 32, True, False, "lm", family="Liberation Sans")
 
 
 def draw_ruler(
