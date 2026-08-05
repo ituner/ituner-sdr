@@ -28,6 +28,11 @@ try:
 except ImportError:
     audioop = None
 
+try:
+    import vosk
+except ImportError:
+    vosk = None
+
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
 # on its native Cocoa backend so --desktop can open a normal dev window.
 if sys.platform.startswith("linux"):
@@ -130,6 +135,9 @@ SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 BOTTOM_RULER_H = 30
 BOTTOM_STATUS_H = 28
+VOSK_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
+VOSK_CAPTION_BOX = (20, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 48, 940, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
+VOSK_MODEL_PATH = Path(os.environ.get("ITUNER_VOSK_MODEL", "/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"))
 WF_TEX_W = 960
 WF_TEX_H = 256
 DISPLAY_ORIENTATION = "flipped"
@@ -1149,7 +1157,11 @@ def is_waterfall_tune_touch(x, y):
         return 0 <= x < DESKTOP_1280_MAIN_W and 0 <= y < LOGICAL_H
     if not (WATERFALL_TUNE_X0 <= x <= WATERFALL_TUNE_X1 and WATERFALL_Y0 <= y <= WATERFALL_Y1):
         return False
-    return not contains_with_guard(ZOOM_GROUP_BOX, x, y) and not contains_with_guard(VIEW_GROUP_BOX, x, y)
+    return (
+        not contains_with_guard(ZOOM_GROUP_BOX, x, y)
+        and not contains_with_guard(VIEW_GROUP_BOX, x, y)
+        and not contains_with_guard(VOSK_TOGGLE_BOX, x, y)
+    )
 
 
 def is_waterfall_band_touch(x, y):
@@ -1414,6 +1426,11 @@ class SharedState:
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
+        self.transcription_enabled = False
+        self.transcription_generation = 0
+        self.transcript_lines = deque(maxlen=2)
+        self.transcript_partial = ""
+        self.transcript_status = "OFF"
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
@@ -1597,6 +1614,38 @@ class SharedState:
     def external_audio_snapshot(self):
         with self.lock:
             return self.external_audio
+
+    def transcription_snapshot(self):
+        with self.lock:
+            return (
+                self.transcription_enabled,
+                tuple(self.transcript_lines),
+                self.transcript_partial,
+                self.transcript_status,
+                self.transcription_generation,
+            )
+
+    def set_transcription_enabled(self, enabled):
+        with self.lock:
+            enabled = bool(enabled)
+            if enabled != self.transcription_enabled:
+                self.transcription_enabled = enabled
+                self.transcription_generation += 1
+                self.transcript_lines.clear()
+                self.transcript_partial = ""
+            self.transcript_status = "STARTING" if enabled else "OFF"
+            return self.transcription_enabled, self.transcription_generation
+
+    def set_transcript(self, text=None, partial=None, status=None):
+        with self.lock:
+            if text:
+                normalized = " ".join(str(text).split())
+                if normalized and (not self.transcript_lines or self.transcript_lines[-1] != normalized):
+                    self.transcript_lines.append(normalized)
+            if partial is not None:
+                self.transcript_partial = " ".join(str(partial).split())
+            if status is not None:
+                self.transcript_status = status
 
     def set_squelch(self, enabled):
         with self.lock:
@@ -2767,6 +2816,94 @@ class RNNoiseVoiceCleaner:
         blended = [int(clamp(round(w * mix + d * (1.0 - mix)), -32768, 32767)) for w, d in zip(wet, dry)]
         voiced = self._apply_voice_tone(blended)
         return struct.pack(f"<{output_count}h", *voiced)
+
+
+class VoskResampler:
+    """Streaming SpeexDSP converter for Vosk's required 16 kHz mono PCM."""
+
+    def __init__(self):
+        self.library = ctypes.CDLL(SPEEXDSP_LIBRARY)
+        self.library.speex_resampler_init.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        self.library.speex_resampler_init.restype = ctypes.c_void_p
+        self.library.speex_resampler_destroy.argtypes = [ctypes.c_void_p]
+        self.library.speex_resampler_process_int.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_short), ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_short), ctypes.POINTER(ctypes.c_uint)]
+        self.library.speex_resampler_process_int.restype = ctypes.c_int
+        error = ctypes.c_int()
+        self.state = self.library.speex_resampler_init(1, 12000, 16000, 6, ctypes.byref(error))
+        if not self.state or error.value:
+            raise RuntimeError(f"Vosk resampler init failed ({error.value})")
+
+    def close(self):
+        if self.state:
+            self.library.speex_resampler_destroy(self.state)
+            self.state = None
+
+    def process(self, audio):
+        sample_count = len(audio) // 2
+        if not sample_count:
+            return b""
+        source = (ctypes.c_short * sample_count).from_buffer_copy(audio[:sample_count * 2])
+        capacity = int(math.ceil(sample_count * 4.0 / 3.0)) + 128
+        destination = (ctypes.c_short * capacity)()
+        input_count, output_count = ctypes.c_uint(sample_count), ctypes.c_uint(capacity)
+        error = self.library.speex_resampler_process_int(self.state, 0, source, ctypes.byref(input_count), destination, ctypes.byref(output_count))
+        if error:
+            raise RuntimeError(f"Vosk resample failed ({error})")
+        return bytes(destination[:output_count.value])
+
+
+def vosk_caption_worker(stop_event, state, audio_queue):
+    """Bounded live captions. It drops stale audio rather than accumulating lag."""
+    model = recognizer = resampler = None
+    seen_generation = -1
+    while not stop_event.is_set():
+        enabled, _lines, _partial, _status, generation = state.transcription_snapshot()
+        if not enabled:
+            recognizer = None
+            if resampler:
+                resampler.close()
+                resampler = None
+            while not audio_queue.empty():
+                try: audio_queue.get_nowait()
+                except queue.Empty: break
+            stop_event.wait(0.15)
+            continue
+        if vosk is None or not VOSK_MODEL_PATH.is_dir():
+            state.set_transcript(status="VOSK UNAVAILABLE")
+            stop_event.wait(0.5)
+            continue
+        try:
+            if model is None:
+                state.set_transcript(status="LOADING VOSK")
+                vosk.SetLogLevel(-1)
+                model = vosk.Model(str(VOSK_MODEL_PATH))
+            if recognizer is None or generation != seen_generation:
+                recognizer = vosk.KaldiRecognizer(model, 16000)
+                recognizer.SetWords(False)
+                resampler = VoskResampler()
+                seen_generation = generation
+                state.set_transcript(status="LISTENING")
+            try:
+                audio = audio_queue.get(timeout=0.20)
+            except queue.Empty:
+                continue
+            pcm16 = resampler.process(audio)
+            if not pcm16:
+                continue
+            if recognizer.AcceptWaveform(pcm16):
+                state.set_transcript(text=json.loads(recognizer.Result()).get("text", ""), partial="", status="LISTENING")
+            else:
+                state.set_transcript(partial=json.loads(recognizer.PartialResult()).get("partial", ""), status="LISTENING")
+        except Exception as exc:
+            state.set_transcript(status="VOSK ERROR")
+            print(f"gl Vosk {exc}", flush=True)
+            recognizer = None
+            if resampler:
+                resampler.close()
+                resampler = None
+            stop_event.wait(1.0)
+    if resampler:
+        resampler.close()
 
 
 def rnnoise_voice_mode(radio_mode):
@@ -4091,7 +4228,7 @@ def format_smeter_readout(smeter_dbm):
     return f"−{abs(value)} dBm" if value < 0 else f"+{value} dBm"
 
 
-def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, alpha=1.0):
+def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, transcription_enabled=False, alpha=1.0):
     if alpha <= 0.01:
         return
     compact = y1 - y0 < 28
@@ -4111,7 +4248,24 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
     draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
     draw_text(text_cache, 730, status_mid_y, "DECODER", (229, 236, 239), size, False, False, "lm", alpha, family="Cantarell")
-    draw_text(text_cache, 838, status_mid_y, "NO SYNC", (255, 178, 105), size, False, False, "lm", alpha, family="Cantarell")
+    vosk_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
+    draw_text(text_cache, 944, status_mid_y, "VOSK ON" if transcription_enabled else "VOSK OFF", vosk_color, size, False, False, "rm", alpha, family="Cantarell")
+
+
+def draw_vosk_captions(text_cache, lines, partial, status):
+    """Two-line, low-chrome caption overlay; it never changes waterfall geometry."""
+    x0, y0, x1, y1 = VOSK_CAPTION_BOX
+    draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 164))
+    complete = list(lines)[-2:]
+    display = complete + ([partial] if partial else [])
+    display = display[-2:]
+    if not display:
+        draw_text(text_cache, x0 + 14, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 13, False, True, "lm", family="Liberation Sans")
+        return
+    for index, caption in enumerate(display):
+        y = y0 + 15 + index * 21
+        color = (230, 241, 244) if index < len(display) - 1 or not partial else (166, 204, 213)
+        draw_text(text_cache, x0 + 14, y, caption, color, 16, False, True, "lm", family="Liberation Sans")
 
 
 def draw_ruler(
@@ -4328,6 +4482,7 @@ def draw_ui(
     station_name="",
     connection_status=None,
     bandwidth_hz=2400,
+    transcription_enabled=False,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -4368,6 +4523,7 @@ def draw_ui(
             LOGICAL_H,
             station_name=station_name,
             smeter_readout_dbm=None,
+            transcription_enabled=transcription_enabled,
             alpha=instrument_alpha,
         )
     else:
@@ -4379,6 +4535,7 @@ def draw_ui(
             LOGICAL_H,
             station_name=station_name,
             smeter_readout_dbm=None,
+            transcription_enabled=transcription_enabled,
             alpha=instrument_alpha,
         )
     draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
@@ -4595,7 +4752,7 @@ def set_pipewire_default_volume(volume):
         return None
 
 
-def snd_meter_worker(args, stop_event, state):
+def snd_meter_worker(args, stop_event, state, transcript_queue=None):
     seen_view_generation = -1
     seen_radio_generation = -1
     seen_server_generation = -1
@@ -4737,7 +4894,7 @@ def snd_meter_worker(args, stop_event, state):
                 # Keep mute local as well as informing Kiwi. Some public
                 # receivers continue sending raw PCM after SET mute, and this
                 # is the final path into PipeWire/the USB audio device.
-                if player and player.stdin and playable_packet and not audio_controls.get("mute", False):
+                if playable_packet:
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
                     denoise_level = int(audio_controls.get("denoise_level", 0))
@@ -4748,12 +4905,28 @@ def snd_meter_worker(args, stop_event, state):
                         audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
                     if not audio:
                         continue
-                    try:
-                        player.stdin.write(audio)
-                    except (BrokenPipeError, OSError):
-                        stop_audio_player(player)
-                        player = None
-                        player_channels = None
+                    transcription_enabled, _lines, _partial, _status, _generation = state.transcription_snapshot()
+                    if transcription_enabled and transcript_queue is not None:
+                        # Captions must stay current. A congested recognizer is
+                        # never allowed to build a delayed replay of the radio.
+                        try:
+                            transcript_queue.put_nowait(audio)
+                        except queue.Full:
+                            try:
+                                transcript_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            try:
+                                transcript_queue.put_nowait(audio)
+                            except queue.Full:
+                                pass
+                    if player and player.stdin and not audio_controls.get("mute", False):
+                        try:
+                            player.stdin.write(audio)
+                        except (BrokenPipeError, OSError):
+                            stop_audio_player(player)
+                            player = None
+                            player_channels = None
         except Exception as exc:
             print(f"gl SND {exc}", flush=True)
             if state.connection_failed(server_generation, "audio"):
@@ -5227,6 +5400,7 @@ def main():
     text_cache = TextCache()
     wf_texture = WaterfallTexture()
     line_queue = queue.Queue(maxsize=96)
+    transcript_queue = queue.Queue(maxsize=24)
     stop_event = threading.Event()
     screenshot_requested = threading.Event()
     zoom_osd_requested = threading.Event()
@@ -5290,9 +5464,11 @@ def main():
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
-    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state), daemon=True)
+    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue), daemon=True)
+    caption_thread = threading.Thread(target=vosk_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
     wf_thread.start()
     snd_thread.start()
+    caption_thread.start()
 
     desktop_event_writer = None
     if args.desktop:
@@ -6119,6 +6295,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and contains(VOSK_TOGGLE_BOX, x, y):
+                                gesture = "vosk_toggle"
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
@@ -6654,6 +6832,17 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 change_zoom(1 if gesture == "zoom_plus" else -1)
+                        elif touch_started and gesture == "vosk_toggle":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                enabled, _lines, _partial, _status, _generation = state.transcription_snapshot()
+                                state.set_transcription_enabled(not enabled)
+                                while not transcript_queue.empty():
+                                    try:
+                                        transcript_queue.get_nowait()
+                                    except queue.Empty:
+                                        break
+                            wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -7103,6 +7292,7 @@ def main():
                 "",
             )
             connection_status = state.connection_snapshot()
+            transcription_enabled, transcript_lines, transcript_partial, transcript_status, _transcription_generation = state.transcription_snapshot()
             draw_ui(
                 text_cache,
                 display_freq,
@@ -7125,6 +7315,7 @@ def main():
                 station_name=selected_station_name,
                 connection_status=connection_status,
                 bandwidth_hz=high_cut - low_cut,
+                transcription_enabled=transcription_enabled,
             )
             if spectrum_foreground:
                 draw_spectrum(
@@ -7136,6 +7327,13 @@ def main():
                     foreground=True,
                     source_span_khz=kiwi.zoom_source_span_khz(zoom),
                     visible_span_khz=display_span,
+                )
+            if transcription_enabled:
+                draw_vosk_captions(
+                    text_cache,
+                    transcript_lines,
+                    transcript_partial,
+                    transcript_status,
                 )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
@@ -7234,6 +7432,7 @@ def main():
             os.close(desktop_event_writer)
         wf_thread.join(timeout=1.5)
         snd_thread.join(timeout=1.5)
+        caption_thread.join(timeout=1.5)
         elapsed = max(0.001, time.monotonic() - start)
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()
