@@ -368,15 +368,17 @@ AUDIO_MUTE_BOX = (716, 76, 918, 128)
 AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
 AUDIO_AGC_BOX = (268, 154, 482, 210)
 AUDIO_BLANKER_BOX = (494, 154, 706, 210)
-AUDIO_DENOISE_BOX = (718, 154, 918, 224)
-AUDIO_DENOISE_GAIN_SPLIT_Y = 194
-AUDIO_NOTCH_BOX = (42, 236, 256, 292)
-AUDIO_DEEMP_BOX = (268, 236, 482, 292)
-AUDIO_FILTER_BOX = (494, 236, 706, 292)
-AUDIO_RESET_BOX = (718, 236, 918, 292)
+AUDIO_DENOISE_BOX = (718, 154, 918, 210)
+AUDIO_NOTCH_BOX = (42, 224, 256, 280)
+AUDIO_DEEMP_BOX = (268, 224, 482, 280)
+AUDIO_FILTER_BOX = (494, 224, 706, 280)
+AUDIO_RESET_BOX = (718, 224, 918, 280)
 # Six evenly spaced, discrete Denoise settings. The DSP presets themselves
 # remain intentionally useful at the strong end; only the touch scale is linear.
 DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
+# A clear, no-extra-controls loudness recovery curve. It reaches the requested
+# 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
+DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
 PREFERENCES_WRITE_IDLE_SECONDS = 1.5
 FREQUENCY_WRITE_IDLE_SECONDS = 60.0
 PREFERENCES_POLL_SECONDS = 0.25
@@ -1393,7 +1395,6 @@ class SharedState:
         self.nb_algo = 0
         self.nr_algo = 1
         self.denoise_level = 0
-        self.denoise_makeup_db = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
@@ -1567,7 +1568,6 @@ class SharedState:
                 "nb_algo": self.nb_algo,
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
-                "denoise_makeup_db": self.denoise_makeup_db,
                 "denoise": self.denoise_level > 0,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
@@ -1594,7 +1594,7 @@ class SharedState:
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-            "nb_algo", "nr_algo", "denoise_level", "denoise_makeup_db", "autonotch_enabled",
+            "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
         }
         with self.lock:
             changed = False
@@ -1611,7 +1611,6 @@ class SharedState:
             self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
             self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
-            self.denoise_makeup_db = int(clamp(int(self.denoise_makeup_db), 0, 12))
             if changed:
                 self.audio_generation += 1
             return {
@@ -1629,7 +1628,6 @@ class SharedState:
                 "nb_algo": self.nb_algo,
                 "nr_algo": self.nr_algo,
                 "denoise_level": self.denoise_level,
-                "denoise_makeup_db": self.denoise_makeup_db,
                 "denoise": self.denoise_level > 0,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
@@ -1639,7 +1637,7 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, denoise_makeup_db=0, autonotch_enabled=False,
+            nr_algo=1, denoise_level=0, autonotch_enabled=False,
         )
 
     def set_filter(self, low_cut=None, high_cut=None):
@@ -2570,10 +2568,8 @@ def audio_denoise_level_at_x(x):
     )
 
 
-def audio_denoise_makeup_at_x(x):
-    x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
-    fraction = clamp((x - (x0 + 14)) / max(1, (x1 - 14) - (x0 + 14)), 0.0, 1.0)
-    return int(round(fraction * 12))
+def denoise_makeup_gain_db(level):
+    return DENOISE_MAKEUP_GAIN_DB[int(clamp(level, 0, len(DENOISE_MAKEUP_GAIN_DB) - 1))]
 
 
 def apply_denoise_makeup_gain(audio, gain_db):
@@ -2656,7 +2652,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         knob_x = track_x0 + (track_x1 - track_x0) * fraction
         draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, (229, 246, 246, 245))
 
-    def denoise_slider(box, level, makeup_db):
+    def denoise_slider(box, level):
         bx0, by0, bx1, by1 = box
         level = int(clamp(level, 0, len(kiwi.DENOISE_PRESETS) - 1))
         active = level > 0
@@ -2666,34 +2662,19 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
             draw_logical_line(bx0, line_y, bx1, line_y, line, 1)
         draw_logical_line(bx0, by0, bx0, by1, line, 1)
         draw_logical_line(bx1, by0, bx1, by1, line, 1)
-        draw_text(text_cache, bx0 + 14, by0 + 14, "DENOISE", (230, 246, 247), 13, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, by0 + 16, "DENOISE", (230, 246, 247), 14, True, True, "lm", family="Liberation Sans")
         label = kiwi.DENOISE_PRESETS[level][0]
-        draw_text(text_cache, bx1 - 14, by0 + 14, label, (112, 235, 175) if active else (153, 185, 191), 13, True, True, "rm", family="Liberation Sans")
+        draw_text(text_cache, bx1 - 14, by0 + 16, label, (112, 235, 175) if active else (153, 185, 191), 14, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
-        denoise_track_y = by0 + 31
-        draw_logical_rect(track_x0, denoise_track_y - 2, track_x1, denoise_track_y + 2, (27, 45, 52, 255))
+        denoise_track_y = by1 - 15
+        draw_logical_rect(track_x0, denoise_track_y - 3, track_x1, denoise_track_y + 3, (27, 45, 52, 255))
         current_x = track_x0 + (track_x1 - track_x0) * DENOISE_SLIDER_POSITIONS[level]
-        draw_logical_rect(track_x0, denoise_track_y - 2, current_x, denoise_track_y + 2, (80, 226, 164, 235))
+        draw_logical_rect(track_x0, denoise_track_y - 3, current_x, denoise_track_y + 3, (80, 226, 164, 235))
         for index, position in enumerate(DENOISE_SLIDER_POSITIONS):
             marker_x = track_x0 + (track_x1 - track_x0) * position
             marker_color = (112, 238, 177, 230) if index <= level else (107, 139, 147, 128)
-            draw_logical_line(marker_x, denoise_track_y - 4, marker_x, denoise_track_y + 4, marker_color, 1)
-        draw_logical_rect(current_x - 5, denoise_track_y - 7, current_x + 5, denoise_track_y + 7, (229, 246, 246, 255))
-
-        makeup_db = int(clamp(makeup_db, 0, 12))
-        gain_color = (112, 235, 175) if active and makeup_db else (153, 185, 191)
-        draw_text(text_cache, bx0 + 14, by0 + 44, "NR GAIN", (197, 220, 224), 11, True, True, "lm", family="Liberation Sans")
-        draw_text(text_cache, bx1 - 14, by0 + 44, f"+{makeup_db} dB", gain_color, 12, True, True, "rm", family="Liberation Sans")
-        gain_track_y = by0 + 60
-        gain_fraction = makeup_db / 12.0
-        draw_logical_rect(track_x0, gain_track_y - 2, track_x1, gain_track_y + 2, (27, 45, 52, 255))
-        draw_logical_rect(track_x0, gain_track_y - 2, track_x0 + (track_x1 - track_x0) * gain_fraction, gain_track_y + 2, (80, 226, 164, 235))
-        for db in range(0, 13, 3):
-            marker_x = track_x0 + (track_x1 - track_x0) * (db / 12.0)
-            marker_color = (112, 238, 177, 210) if db <= makeup_db else (107, 139, 147, 120)
-            draw_logical_line(marker_x, gain_track_y - 4, marker_x, gain_track_y + 4, marker_color, 1)
-        gain_x = track_x0 + (track_x1 - track_x0) * gain_fraction
-        draw_logical_rect(gain_x - 5, gain_track_y - 7, gain_x + 5, gain_track_y + 7, (229, 246, 246, 255))
+            draw_logical_line(marker_x, denoise_track_y - 5, marker_x, denoise_track_y + 5, marker_color, 1)
+        draw_logical_rect(current_x - 6, denoise_track_y - 10, current_x + 6, denoise_track_y + 10, (229, 246, 246, 255))
 
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
@@ -2704,7 +2685,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
     panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
     denoise_level = int(controls["denoise_level"])
-    denoise_slider(AUDIO_DENOISE_BOX, denoise_level, controls["denoise_makeup_db"])
+    denoise_slider(AUDIO_DENOISE_BOX, denoise_level)
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
@@ -4543,8 +4524,9 @@ def snd_meter_worker(args, stop_event, state):
                 if player and player.stdin and playable_packet and not audio_controls.get("mute", False):
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
-                    if int(audio_controls.get("denoise_level", 0)) > 0:
-                        audio = apply_denoise_makeup_gain(audio, audio_controls.get("denoise_makeup_db", 0))
+                    denoise_level = int(audio_controls.get("denoise_level", 0))
+                    if denoise_level > 0:
+                        audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
                     try:
                         player.stdin.write(audio)
                     except (BrokenPipeError, OSError):
@@ -5073,7 +5055,7 @@ def main():
                 if name in {
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-                    "nb_algo", "nr_algo", "denoise_level", "denoise_makeup_db", "autonotch_enabled",
+                    "nb_algo", "nr_algo", "denoise_level", "autonotch_enabled",
                 }
             })
     globe_mixer = GlobeAudioMixer(args, state)
@@ -5253,7 +5235,6 @@ def main():
                 "nb_algo": audio_controls["nb_algo"],
                 "nr_algo": audio_controls["nr_algo"],
                 "denoise_level": audio_controls["denoise_level"],
-                "denoise_makeup_db": audio_controls["denoise_makeup_db"],
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -5823,7 +5804,7 @@ def main():
                             elif audio_panel_open and contains(AUDIO_SQUELCH_BOX, x, y):
                                 gesture = "audio_squelch_level"
                             elif audio_panel_open and contains(AUDIO_DENOISE_BOX, x, y):
-                                gesture = "audio_denoise_gain" if y >= AUDIO_DENOISE_GAIN_SPLIT_Y else "audio_denoise_level"
+                                gesture = "audio_denoise_level"
                             elif audio_panel_open and audio_option_at(x, y) is not None:
                                 gesture = "audio_control"
                             elif audio_panel_open:
@@ -5952,8 +5933,6 @@ def main():
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
                             )
-                        elif gesture == "audio_denoise_gain":
-                            state.set_audio_controls(denoise_makeup_db=audio_denoise_makeup_at_x(x))
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
@@ -6113,9 +6092,6 @@ def main():
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
                             )
-                            wake_controls()
-                        elif touch_started and gesture == "audio_denoise_gain":
-                            state.set_audio_controls(denoise_makeup_db=audio_denoise_makeup_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
