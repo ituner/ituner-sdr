@@ -51,31 +51,44 @@ sudo ituner-sdr-configure --frequency-khz 7075.794 --orientation flipped
 
 ## Run Locally on macOS
 
-The active OpenGL radio can run directly on a Mac for UI development and receiver testing. It opens the SDR canvas as a normal `960x320` landscape window; it does not need the Pi, DSI display, or touch controller.
+The active OpenGL radio can run directly on a Mac for UI development and receiver testing. Desktop modes use a fixed-size, borderless window with no macOS title bar or native close/minimize/fullscreen buttons. They do not need the Pi, DSI display, or touch controller.
 
 Use Python 3.9 through 3.12:
 
 ```bash
 git clone https://github.com/ituner/ituner-sdr.git
-cd ituner-sdr/UI
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install pygame PyOpenGL sounddevice
-python kiwi_gl_display.py --desktop --fps 30
+cd ituner-sdr
+python3 -m venv UI/.venv
+source UI/.venv/bin/activate
+python -m pip install pygame PyOpenGL sounddevice Pillow
 ```
 
 On macOS where Anaconda shadows the desired interpreter, use the system Python explicitly:
 
 ```bash
-/usr/bin/python3 -m venv .venv
+/usr/bin/python3 -m venv UI/.venv
 ```
+
+Available output modes, run from the repository root:
+
+| Output | Command | Layout |
+| --- | --- | --- |
+| Standard macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 30` | `960x320` SDR canvas |
+| Wide macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop-1280 --fps 30` | `1024x480` SDR canvas plus a `256x480` navigation rail (`1280x480` total) |
+| Raspberry Pi display | `UI/.venv/bin/python UI/kiwi_gl_display.py` | Fullscreen rotated `400x960` KMS/DRM framebuffer |
+
+The Raspberry Pi command requires its KMS/DRM display and touch environment and is normally started by `ituner-sdr.service` rather than launched from macOS.
 
 Desktop controls:
 
 - Left-click and drag: touch-style tuning, menus, filter, and passband controls.
+- Right-click and drag: does not move the window.
+- Command-left-drag anywhere: move the borderless window.
 - Mouse wheel: zoom.
 - `Esc` or `q`: close the application.
 - `--no-audio`: run without CoreAudio output.
+
+Because desktop windows are borderless, use `Esc` or `q` instead of a macOS close button.
 
 The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
 
@@ -129,5 +142,7 @@ sudo reboot
 
 - `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
 - `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
-- `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture asset.
+- `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture assets.
+- `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
+- `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.
 - `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.
