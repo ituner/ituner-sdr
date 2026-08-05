@@ -2650,6 +2650,13 @@ class RNNoiseVoiceCleaner:
         self.dry_pending = []
         self.wet_12k = []
         self.dry_12k = []
+        # A modest 3 dB shelf restores consonant detail after voice cleanup
+        # without inventing treble that is absent from Kiwi's 12 kHz stream.
+        self._presence_biquad = self._make_high_shelf(12000.0, 2600.0, 3.0)
+        self._presence_z1 = 0.0
+        self._presence_z2 = 0.0
+        self._level_rms = 0.0
+        self._level_gain = 1.0
 
     def _make_resampler(self, source_rate, target_rate):
         error = ctypes.c_int()
@@ -2671,6 +2678,48 @@ class RNNoiseVoiceCleaner:
         if error:
             raise RuntimeError(f"SpeexDSP resample failed ({error})")
         return list(destination[:output_count.value])
+
+    @staticmethod
+    def _make_high_shelf(sample_rate, frequency, gain_db):
+        """RBJ high-shelf coefficients, normalized for transposed DF-II."""
+        amplitude = 10.0 ** (gain_db / 40.0)
+        omega = math.tau * frequency / sample_rate
+        cosine = math.cos(omega)
+        sine = math.sin(omega)
+        alpha = sine / 2.0 * math.sqrt((amplitude + 1.0 / amplitude) * 2.0)
+        beta = 2.0 * math.sqrt(amplitude) * alpha
+        b0 = amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine + beta)
+        b1 = -2.0 * amplitude * ((amplitude - 1.0) + (amplitude + 1.0) * cosine)
+        b2 = amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine - beta)
+        a0 = (amplitude + 1.0) - (amplitude - 1.0) * cosine + beta
+        a1 = 2.0 * ((amplitude - 1.0) - (amplitude + 1.0) * cosine)
+        a2 = (amplitude + 1.0) - (amplitude - 1.0) * cosine - beta
+        return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
+
+    def _apply_voice_tone(self, samples):
+        """Add light speech presence and a slow, conservative comfort leveler."""
+        if not samples:
+            return samples
+        rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+        self._level_rms = self._level_rms * 0.94 + rms * 0.06
+        if self._level_rms >= 500.0:
+            desired_gain = clamp(5000.0 / self._level_rms, 0.78, 1.38)
+        else:
+            desired_gain = 1.0
+        # Pull loud speech down promptly, but return level gradually between words.
+        follow = 0.18 if desired_gain < self._level_gain else 0.035
+        self._level_gain += (desired_gain - self._level_gain) * follow
+        b0, b1, b2, a1, a2 = self._presence_biquad
+        output = []
+        for sample in samples:
+            shaped = b0 * sample + self._presence_z1
+            self._presence_z1 = b1 * sample - a1 * shaped + self._presence_z2
+            self._presence_z2 = b2 * sample - a2 * shaped
+            # Gentle soft limiting prevents the presence shelf from clipping.
+            leveled = shaped * self._level_gain
+            limited = leveled / (1.0 + abs(leveled) / 36000.0)
+            output.append(int(clamp(round(limited), -32768, 32767)))
+        return output
 
     def close(self):
         for name in ("up_state", "wet_down_state", "dry_down_state"):
@@ -2715,8 +2764,9 @@ class RNNoiseVoiceCleaner:
         dry = self.dry_12k[:output_count]
         del self.wet_12k[:output_count]
         del self.dry_12k[:output_count]
-        blended = (int(clamp(round(w * mix + d * (1.0 - mix)), -32768, 32767)) for w, d in zip(wet, dry))
-        return struct.pack(f"<{output_count}h", *blended)
+        blended = [int(clamp(round(w * mix + d * (1.0 - mix)), -32768, 32767)) for w, d in zip(wet, dry)]
+        voiced = self._apply_voice_tone(blended)
+        return struct.pack(f"<{output_count}h", *voiced)
 
 
 def rnnoise_voice_mode(radio_mode):
