@@ -381,6 +381,10 @@ DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
 # A clear, no-extra-controls loudness recovery curve. It reaches the requested
 # 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
 DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
+# Speech cleanup has deliberately few operator-facing choices. Each level is
+# a fixed RNNoise wet/dry blend: lower settings retain more radio brightness.
+VOICE_CLEAN_PRESETS = ("OFF", "LIGHT", "MEDIUM", "STRONG")
+VOICE_CLEAN_MIX = (0.0, 0.55, 0.75, 1.0)
 # RNNoise is intentionally kept local to the Pi. The public Kiwi receiver
 # remains responsible for demodulation while this optional stage cleans the
 # received mono PCM before it reaches PipeWire/USB audio.
@@ -388,6 +392,7 @@ RNNOISE_LIBRARY = Path(os.environ.get(
     "ITUNER_RNNOISE_LIBRARY",
     "/home/ituner/codex-sdr-display/vendor/rnnoise-install/lib/librnnoise.so",
 ))
+SPEEXDSP_LIBRARY = os.environ.get("ITUNER_SPEEXDSP_LIBRARY", "libspeexdsp.so.1")
 PREFERENCES_WRITE_IDLE_SECONDS = 1.5
 FREQUENCY_WRITE_IDLE_SECONDS = 60.0
 PREFERENCES_POLL_SECONDS = 0.25
@@ -1405,6 +1410,7 @@ class SharedState:
         self.nr_algo = 1
         self.denoise_level = 0
         self.voice_clean_enabled = False
+        self.voice_clean_level = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
@@ -1580,6 +1586,7 @@ class SharedState:
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
+                "voice_clean_level": self.voice_clean_level,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1605,7 +1612,8 @@ class SharedState:
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-            "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
+            "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
+            "autonotch_enabled",
         }
         with self.lock:
             changed = False
@@ -1622,7 +1630,11 @@ class SharedState:
             self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
             self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
-            self.voice_clean_enabled = bool(self.voice_clean_enabled)
+            if "voice_clean_level" in changes:
+                self.voice_clean_level = int(clamp(int(self.voice_clean_level), 0, len(VOICE_CLEAN_PRESETS) - 1))
+            elif "voice_clean_enabled" in changes:
+                self.voice_clean_level = 2 if bool(self.voice_clean_enabled) else 0
+            self.voice_clean_enabled = self.voice_clean_level > 0
             if changed:
                 self.audio_generation += 1
             return {
@@ -1642,6 +1654,7 @@ class SharedState:
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
+                "voice_clean_level": self.voice_clean_level,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1650,7 +1663,8 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, voice_clean_enabled=False, autonotch_enabled=False,
+            nr_algo=1, denoise_level=0, voice_clean_enabled=False, voice_clean_level=0,
+            autonotch_enabled=False,
         )
 
     def set_filter(self, low_cut=None, high_cut=None):
@@ -2600,75 +2614,109 @@ def apply_denoise_makeup_gain(audio, gain_db):
 
 
 class RNNoiseVoiceCleaner:
-    """A small 12 kHz Kiwi PCM adapter for RNNoise's 48 kHz frame API."""
+    """RNNoise with high-quality SpeexDSP conversion only on the Voice path."""
 
     INPUT_FRAME_SAMPLES = 120
     RNNOISE_FRAME_SAMPLES = 480
+    SPEEX_QUALITY = 8
 
-    def __init__(self, library_path=RNNOISE_LIBRARY):
+    def __init__(self, library_path=RNNOISE_LIBRARY, speex_library=SPEEXDSP_LIBRARY):
         self.library = ctypes.CDLL(str(library_path))
         self.library.rnnoise_create.argtypes = [ctypes.c_void_p]
         self.library.rnnoise_create.restype = ctypes.c_void_p
         self.library.rnnoise_destroy.argtypes = [ctypes.c_void_p]
         self.library.rnnoise_destroy.restype = None
-        self.library.rnnoise_process_frame.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.c_float),
-            ctypes.POINTER(ctypes.c_float),
-        ]
+        self.library.rnnoise_process_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
         self.library.rnnoise_process_frame.restype = ctypes.c_float
         self.state = self.library.rnnoise_create(None)
         if not self.state:
             raise RuntimeError("rnnoise_create failed")
+
+        self.speex = ctypes.CDLL(str(speex_library))
+        self.speex.speex_resampler_init.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        self.speex.speex_resampler_init.restype = ctypes.c_void_p
+        self.speex.speex_resampler_destroy.argtypes = [ctypes.c_void_p]
+        self.speex.speex_resampler_destroy.restype = None
+        self.speex.speex_resampler_process_int.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_short), ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_short), ctypes.POINTER(ctypes.c_uint),
+        ]
+        self.speex.speex_resampler_process_int.restype = ctypes.c_int
+        self.up_state = self._make_resampler(12000, 48000)
+        self.wet_down_state = self._make_resampler(48000, 12000)
+        self.dry_down_state = self._make_resampler(48000, 12000)
         self.pending = bytearray()
-        self.highpass_input = 0.0
-        self.highpass_output = 0.0
+        self.rn_pending = []
+        self.dry_pending = []
+        self.wet_12k = []
+        self.dry_12k = []
+
+    def _make_resampler(self, source_rate, target_rate):
+        error = ctypes.c_int()
+        state = self.speex.speex_resampler_init(1, source_rate, target_rate, self.SPEEX_QUALITY, ctypes.byref(error))
+        if not state or error.value:
+            raise RuntimeError(f"SpeexDSP resampler init failed ({error.value})")
+        return state
+
+    def _resample(self, state, samples, output_capacity):
+        if not samples:
+            return []
+        source = (ctypes.c_short * len(samples))(*samples)
+        destination = (ctypes.c_short * output_capacity)()
+        input_count = ctypes.c_uint(len(samples))
+        output_count = ctypes.c_uint(output_capacity)
+        error = self.speex.speex_resampler_process_int(
+            state, 0, source, ctypes.byref(input_count), destination, ctypes.byref(output_count)
+        )
+        if error:
+            raise RuntimeError(f"SpeexDSP resample failed ({error})")
+        return list(destination[:output_count.value])
 
     def close(self):
+        for name in ("up_state", "wet_down_state", "dry_down_state"):
+            state = getattr(self, name, None)
+            if state:
+                self.speex.speex_resampler_destroy(state)
+                setattr(self, name, None)
         if self.state:
             self.library.rnnoise_destroy(self.state)
             self.state = None
 
-    def process_pcm(self, audio, mix=1.0, output_db=0.0, low_cut_hz=0.0):
-        """Clean native little-endian mono S16 PCM with about 10 ms latency."""
+    def process_pcm(self, audio, mix=1.0):
+        """Clean mono S16 PCM, returning a matched high-quality-resampled stream."""
         if not audio:
             return audio
         mix = clamp(float(mix), 0.0, 1.0)
-        output_gain = 10.0 ** (clamp(float(output_db), 0.0, 12.0) / 20.0)
-        low_cut_hz = clamp(float(low_cut_hz), 0.0, 300.0)
-        highpass_alpha = 0.0
-        if low_cut_hz > 0.0:
-            rc = 1.0 / (math.tau * low_cut_hz)
-            highpass_alpha = rc / (rc + 1.0 / 12000.0)
         self.pending.extend(audio)
         frame_bytes = self.INPUT_FRAME_SAMPLES * 2
-        output = bytearray()
         while len(self.pending) >= frame_bytes:
             frame = bytes(self.pending[:frame_bytes])
             del self.pending[:frame_bytes]
             samples = struct.unpack(f"<{self.INPUT_FRAME_SAMPLES}h", frame)
-            rn_input = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)()
-            for index, current in enumerate(samples):
-                following = samples[index + 1] if index + 1 < len(samples) else current
-                base = index * 4
-                delta = following - current
-                rn_input[base] = float(current)
-                rn_input[base + 1] = float(current + delta * 0.25)
-                rn_input[base + 2] = float(current + delta * 0.50)
-                rn_input[base + 3] = float(current + delta * 0.75)
-            rn_output = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)()
-            self.library.rnnoise_process_frame(self.state, rn_output, rn_input)
-            cleaned = []
-            for index, dry in enumerate(samples):
-                sample = (rn_output[index * 4] * mix + dry * (1.0 - mix)) * output_gain
-                if highpass_alpha:
-                    filtered = highpass_alpha * (self.highpass_output + sample - self.highpass_input)
-                    self.highpass_input = sample
-                    self.highpass_output = filtered
-                    sample = filtered
-                cleaned.append(int(clamp(round(sample), -32768, 32767)))
-            output.extend(struct.pack(f"<{self.INPUT_FRAME_SAMPLES}h", *cleaned))
-        return bytes(output)
+            upsampled = self._resample(self.up_state, samples, self.RNNOISE_FRAME_SAMPLES + 128)
+            self.rn_pending.extend(upsampled)
+            self.dry_pending.extend(upsampled)
+            while len(self.rn_pending) >= self.RNNOISE_FRAME_SAMPLES:
+                rn_frame = self.rn_pending[:self.RNNOISE_FRAME_SAMPLES]
+                dry_frame = self.dry_pending[:self.RNNOISE_FRAME_SAMPLES]
+                del self.rn_pending[:self.RNNOISE_FRAME_SAMPLES]
+                del self.dry_pending[:self.RNNOISE_FRAME_SAMPLES]
+                rn_input = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)(*map(float, rn_frame))
+                rn_output = (ctypes.c_float * self.RNNOISE_FRAME_SAMPLES)()
+                self.library.rnnoise_process_frame(self.state, rn_output, rn_input)
+                wet_frame = [int(clamp(round(value), -32768, 32767)) for value in rn_output]
+                self.wet_12k.extend(self._resample(self.wet_down_state, wet_frame, self.INPUT_FRAME_SAMPLES + 128))
+                self.dry_12k.extend(self._resample(self.dry_down_state, dry_frame, self.INPUT_FRAME_SAMPLES + 128))
+
+        output_count = min(len(self.wet_12k), len(self.dry_12k))
+        if not output_count:
+            return b""
+        wet = self.wet_12k[:output_count]
+        dry = self.dry_12k[:output_count]
+        del self.wet_12k[:output_count]
+        del self.dry_12k[:output_count]
+        blended = (int(clamp(round(w * mix + d * (1.0 - mix)), -32768, 32767)) for w, d in zip(wet, dry))
+        return struct.pack(f"<{output_count}h", *blended)
 
 
 def rnnoise_voice_mode(radio_mode):
@@ -2769,11 +2817,12 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
-    voice_clean = bool(controls.get("voice_clean", False))
+    voice_clean_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
+    voice_clean = voice_clean_level > 0
     panel_button(
         AUDIO_VOICE_CLEAN_BOX,
         "VOICE",
-        "ON" if voice_clean else "OFF",
+        VOICE_CLEAN_PRESETS[voice_clean_level],
         voice_clean,
         (123, 193, 250, 230),
     )
@@ -4643,7 +4692,8 @@ def snd_meter_worker(args, stop_event, state):
                         audio = kiwi.swap_s16_bytes(audio)
                     denoise_level = int(audio_controls.get("denoise_level", 0))
                     if voice_cleaner is not None:
-                        audio = voice_cleaner.process_pcm(audio)
+                        voice_level = int(clamp(audio_controls.get("voice_clean_level", 2), 0, len(VOICE_CLEAN_MIX) - 1))
+                        audio = voice_cleaner.process_pcm(audio, mix=VOICE_CLEAN_MIX[voice_level])
                     elif denoise_level > 0:
                         audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
                     if not audio:
@@ -5178,7 +5228,8 @@ def main():
                 if name in {
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-                    "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
+                    "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
+                    "autonotch_enabled",
                 }
             })
     globe_mixer = GlobeAudioMixer(args, state)
@@ -5359,6 +5410,7 @@ def main():
                 "nr_algo": audio_controls["nr_algo"],
                 "denoise_level": audio_controls["denoise_level"],
                 "voice_clean_enabled": audio_controls["voice_clean"],
+                "voice_clean_level": audio_controls["voice_clean_level"],
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -6057,6 +6109,7 @@ def main():
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
                                 voice_clean_enabled=False,
+                                voice_clean_level=0,
                             )
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
@@ -6217,6 +6270,7 @@ def main():
                                 nr_algo=1,
                                 denoise_level=audio_denoise_level_at_x(x),
                                 voice_clean_enabled=False,
+                                voice_clean_level=0,
                             )
                             wake_controls()
                         elif touch_started and gesture == "audio_control":
@@ -6227,7 +6281,8 @@ def main():
                                 if choice == "mute":
                                     state.set_audio_controls(audio_mute=not controls["mute"])
                                 elif choice == "voice_clean":
-                                    state.set_audio_controls(voice_clean_enabled=not controls["voice_clean"])
+                                    next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
+                                    state.set_audio_controls(voice_clean_level=next_level)
                                 elif choice == "agc":
                                     if not controls["agc"]:
                                         state.set_audio_controls(agc_enabled=True, agc_hang=False)
