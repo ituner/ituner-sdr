@@ -1431,6 +1431,8 @@ class SharedState:
         self.transcript_lines = deque(maxlen=2)
         self.transcript_partial = ""
         self.transcript_status = "OFF"
+        self.transcript_hold_until = 0.0
+        self.transcript_partial_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
@@ -1633,17 +1635,39 @@ class SharedState:
                 self.transcription_generation += 1
                 self.transcript_lines.clear()
                 self.transcript_partial = ""
+                self.transcript_hold_until = 0.0
+                self.transcript_partial_updated_at = 0.0
             self.transcript_status = "STARTING" if enabled else "OFF"
             return self.transcription_enabled, self.transcription_generation
 
     def set_transcript(self, text=None, partial=None, status=None):
         with self.lock:
+            now = time.monotonic()
             if text:
                 normalized = " ".join(str(text).split())
                 if normalized and (not self.transcript_lines or self.transcript_lines[-1] != normalized):
                     self.transcript_lines.append(normalized)
+                    # A completed phrase is useful only if the operator can
+                    # read it. Hold it briefly before live hypotheses resume.
+                    self.transcript_hold_until = now + 2.0
+                self.transcript_partial = ""
+                self.transcript_partial_updated_at = now
             if partial is not None:
-                self.transcript_partial = " ".join(str(partial).split())
+                normalized_partial = " ".join(str(partial).split())
+                if not normalized_partial:
+                    self.transcript_partial = ""
+                    self.transcript_partial_updated_at = now
+                elif (
+                    now >= self.transcript_hold_until
+                    and (
+                        normalized_partial == self.transcript_partial
+                        or now - self.transcript_partial_updated_at >= 0.50
+                    )
+                ):
+                    # Vosk revises its partial hypothesis at packet rate.
+                    # Half-second pacing feels like captions, not a debugger.
+                    self.transcript_partial = normalized_partial
+                    self.transcript_partial_updated_at = now
             if status is not None:
                 self.transcript_status = status
 
@@ -5449,6 +5473,8 @@ def main():
             )
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
+        if isinstance(remembered_preferences.get("vosk_enabled"), bool):
+            state.set_transcription_enabled(remembered_preferences["vosk_enabled"])
         audio_preferences = remembered_preferences.get("audio", {})
         if isinstance(audio_preferences, dict):
             restored_audio = {
@@ -5654,6 +5680,7 @@ def main():
             "filter": {"low_cut": low_cut, "high_cut": high_cut},
             "filter_custom_width": bool(filter_custom_width),
             "spectrum_enabled": bool(spectrum_enabled),
+            "vosk_enabled": state.transcription_snapshot()[0],
             "tune_step_hz": int(tune_step_hz),
             "waterfall": {
                 "floor": round(float(floor), 1),
@@ -6846,6 +6873,11 @@ def main():
                                         transcript_queue.get_nowait()
                                     except queue.Empty:
                                         break
+                                # This is an explicit, infrequent preference,
+                                # so save it immediately instead of waiting for
+                                # the normal settings idle timer.
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
