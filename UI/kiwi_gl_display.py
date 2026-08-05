@@ -383,8 +383,8 @@ DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
 DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
 # Speech cleanup has deliberately few operator-facing choices. Each level is
 # a fixed RNNoise wet/dry blend: lower settings retain more radio brightness.
-VOICE_CLEAN_PRESETS = ("OFF", "LIGHT", "MEDIUM", "STRONG")
-VOICE_CLEAN_MIX = (0.0, 0.55, 0.75, 1.0)
+VOICE_CLEAN_PRESETS = ("OFF", "MEDIUM", "STRONG")
+VOICE_CLEAN_MIX = (0.0, 0.75, 1.0)
 # RNNoise is intentionally kept local to the Pi. The public Kiwi receiver
 # remains responsible for demodulation while this optional stage cleans the
 # received mono PCM before it reaches PipeWire/USB audio.
@@ -5223,7 +5223,7 @@ def main():
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
         audio_preferences = remembered_preferences.get("audio", {})
         if isinstance(audio_preferences, dict):
-            state.set_audio_controls(**{
+            restored_audio = {
                 name: value for name, value in audio_preferences.items()
                 if name in {
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
@@ -5231,7 +5231,12 @@ def main():
                     "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
                     "autonotch_enabled",
                 }
-            })
+            }
+            # The former four-step control had Light/Medium/Strong. Retain an
+            # active saved preference as the new balanced Medium setting.
+            if audio_preferences.get("voice_clean_profile") != 2 and restored_audio.get("voice_clean_level", 0):
+                restored_audio["voice_clean_level"] = 1
+            state.set_audio_controls(**restored_audio)
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
@@ -5411,6 +5416,7 @@ def main():
                 "denoise_level": audio_controls["denoise_level"],
                 "voice_clean_enabled": audio_controls["voice_clean"],
                 "voice_clean_level": audio_controls["voice_clean_level"],
+                "voice_clean_profile": 2,
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
