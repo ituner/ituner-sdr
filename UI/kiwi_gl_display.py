@@ -139,8 +139,10 @@ VOSK_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
 VOSK_CAPTION_BOX = (16, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 108, 944, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
 VOSK_MODEL_OVERRIDE = os.environ.get("ITUNER_VOSK_MODEL")
 VOSK_MODEL_PATHS = (
-    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-en-us-0.22-lgraph"),
     Path("/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"),
+    # The larger lgraph model is installed for controlled tests, but it runs
+    # over 3x behind real time on this 2 GB Pi and must not be the live default.
+    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-en-us-0.22-lgraph"),
 )
 WF_TEX_W = 960
 WF_TEX_H = 256
@@ -1137,7 +1139,7 @@ def clamp(value, low, high):
 
 
 def active_vosk_model_path():
-    """Prefer the higher-accuracy local model, retaining a resilient fallback."""
+    """Prefer the model that can remain live on this receiver, with fallback."""
     if VOSK_MODEL_OVERRIDE:
         path = Path(VOSK_MODEL_OVERRIDE)
         return path if path.is_dir() else None
@@ -2896,6 +2898,9 @@ def vosk_caption_worker(stop_event, state, audio_queue):
     model = recognizer = resampler = None
     loaded_model_path = None
     seen_generation = -1
+    measured_audio_seconds = 0.0
+    measured_processing_seconds = 0.0
+    next_performance_report = time.monotonic() + 10.0
     while not stop_event.is_set():
         enabled, _lines, _partial, _status, generation = state.transcription_snapshot()
         if not enabled:
@@ -2930,6 +2935,7 @@ def vosk_caption_worker(stop_event, state, audio_queue):
                 audio = audio_queue.get(timeout=0.20)
             except queue.Empty:
                 continue
+            process_started = time.monotonic()
             pcm16 = resampler.process(audio)
             if not pcm16:
                 continue
@@ -2937,6 +2943,17 @@ def vosk_caption_worker(stop_event, state, audio_queue):
                 state.set_transcript(text=json.loads(recognizer.Result()).get("text", ""), partial="", status="LISTENING")
             else:
                 state.set_transcript(partial=json.loads(recognizer.PartialResult()).get("partial", ""), status="LISTENING")
+            measured_audio_seconds += len(pcm16) / 32000.0
+            measured_processing_seconds += time.monotonic() - process_started
+            if time.monotonic() >= next_performance_report and measured_audio_seconds > 0.05:
+                print(
+                    f"gl Vosk rtf={measured_processing_seconds / measured_audio_seconds:.2f} "
+                    f"queue={audio_queue.qsize()}/{audio_queue.maxsize}",
+                    flush=True,
+                )
+                measured_audio_seconds = 0.0
+                measured_processing_seconds = 0.0
+                next_performance_report = time.monotonic() + 10.0
         except Exception as exc:
             state.set_transcript(status="VOSK ERROR")
             print(f"gl Vosk {exc}", flush=True)
