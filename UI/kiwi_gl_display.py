@@ -375,10 +375,6 @@ AUDIO_NOTCH_BOX = (42, 224, 256, 280)
 AUDIO_DEEMP_BOX = (268, 224, 482, 280)
 AUDIO_FILTER_BOX = (494, 224, 706, 280)
 AUDIO_RESET_BOX = (718, 224, 918, 280)
-VOICE_CLEAN_PANEL_BOX = (190, 48, 936, 292)
-VOICE_CLEAN_MIX_BOX = (224, 104, 902, 148)
-VOICE_CLEAN_OUTPUT_BOX = (224, 164, 902, 208)
-VOICE_CLEAN_LOWCUT_BOX = (224, 224, 902, 268)
 # Six evenly spaced, discrete Denoise settings. The DSP presets themselves
 # remain intentionally useful at the strong end; only the touch scale is linear.
 DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
@@ -1409,9 +1405,6 @@ class SharedState:
         self.nr_algo = 1
         self.denoise_level = 0
         self.voice_clean_enabled = False
-        self.voice_clean_mix = 75
-        self.voice_clean_output_db = 0
-        self.voice_clean_low_cut_hz = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
@@ -1587,9 +1580,6 @@ class SharedState:
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
-                "voice_clean_mix": self.voice_clean_mix,
-                "voice_clean_output_db": self.voice_clean_output_db,
-                "voice_clean_low_cut_hz": self.voice_clean_low_cut_hz,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1615,8 +1605,7 @@ class SharedState:
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-            "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_mix",
-            "voice_clean_output_db", "voice_clean_low_cut_hz", "autonotch_enabled",
+            "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
         }
         with self.lock:
             changed = False
@@ -1634,10 +1623,6 @@ class SharedState:
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
             self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
             self.voice_clean_enabled = bool(self.voice_clean_enabled)
-            self.voice_clean_mix = int(clamp(int(self.voice_clean_mix), 0, 100))
-            self.voice_clean_enabled = self.voice_clean_enabled and self.voice_clean_mix > 0
-            self.voice_clean_output_db = int(clamp(int(self.voice_clean_output_db), 0, 12))
-            self.voice_clean_low_cut_hz = int(clamp(int(self.voice_clean_low_cut_hz), 0, 300))
             if changed:
                 self.audio_generation += 1
             return {
@@ -1657,9 +1642,6 @@ class SharedState:
                 "denoise_level": self.denoise_level,
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
-                "voice_clean_mix": self.voice_clean_mix,
-                "voice_clean_output_db": self.voice_clean_output_db,
-                "voice_clean_low_cut_hz": self.voice_clean_low_cut_hz,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1668,8 +1650,7 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, voice_clean_enabled=False, voice_clean_mix=75,
-            voice_clean_output_db=0, voice_clean_low_cut_hz=0, autonotch_enabled=False,
+            nr_algo=1, denoise_level=0, voice_clean_enabled=False, autonotch_enabled=False,
         )
 
     def set_filter(self, low_cut=None, high_cut=None):
@@ -2600,12 +2581,6 @@ def audio_denoise_level_at_x(x):
     )
 
 
-def audio_slider_value_at_x(box, x, maximum, minimum=0):
-    x0, _y0, x1, _y1 = box
-    ratio = clamp((x - (x0 + 18)) / max(1, (x1 - 18) - (x0 + 18)), 0.0, 1.0)
-    return int(round(minimum + (maximum - minimum) * ratio))
-
-
 def denoise_makeup_gain_db(level):
     return DENOISE_MAKEUP_GAIN_DB[int(clamp(level, 0, len(DENOISE_MAKEUP_GAIN_DB) - 1))]
 
@@ -2797,7 +2772,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     voice_clean = bool(controls.get("voice_clean", False))
     panel_button(
         AUDIO_VOICE_CLEAN_BOX,
-        "RNNOISE",
+        "VOICE",
         "ON" if voice_clean else "OFF",
         voice_clean,
         (123, 193, 250, 230),
@@ -2815,39 +2790,6 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
     panel_button(AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False)
     panel_button(AUDIO_RESET_BOX, "RESTORE", "KIWI DEFAULTS", False)
-
-
-def draw_voice_clean_panel(text_cache, controls):
-    """A compact local-RNNoise workspace over the existing Audio sheet."""
-    x0, y0, x1, y1 = VOICE_CLEAN_PANEL_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 128))
-    draw_logical_rect(x0, y0, x1, y1, (9, 20, 30, 244))
-    for edge in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(*edge, (110, 187, 220, 138), 1)
-    draw_text(text_cache, x0 + 28, y0 + 25, "VOICE CLEAN", (229, 244, 248), 21, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 28, y0 + 25, "RNNOISE / LOCAL", (116, 197, 238), 13, True, True, "rm", family="Liberation Sans")
-
-    def slider(box, title, value, maximum, detail):
-        bx0, by0, bx1, by1 = box
-        fraction = clamp(float(value) / max(1, maximum), 0.0, 1.0)
-        draw_logical_rect(bx0, by0, bx1, by1, (15, 35, 45, 232))
-        for edge in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
-            draw_logical_line(*edge, (100, 150, 171, 92), 1)
-        draw_text(text_cache, bx0 + 16, by0 + 14, title, (222, 241, 246), 14, True, True, "lm", family="Liberation Sans")
-        draw_text(text_cache, bx1 - 16, by0 + 14, detail, (103, 222, 178) if value else (156, 184, 191), 16, True, True, "rm", family="Liberation Sans")
-        track_x0, track_x1 = bx0 + 16, bx1 - 16
-        track_y = by1 - 12
-        draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (25, 51, 62, 255))
-        draw_logical_rect(track_x0, track_y - 4, track_x0 + (track_x1 - track_x0) * fraction, track_y + 4, (68, 190, 231, 236))
-        knob_x = track_x0 + (track_x1 - track_x0) * fraction
-        draw_logical_rect(knob_x - 7, track_y - 11, knob_x + 7, track_y + 11, (230, 247, 249, 255))
-
-    mix = int(controls.get("voice_clean_mix", 75)) if controls.get("voice_clean", False) else 0
-    slider(VOICE_CLEAN_MIX_BOX, "CLEAN", mix, 100, "OFF" if mix <= 0 else f"{mix}%")
-    output_db = int(controls.get("voice_clean_output_db", 0))
-    slider(VOICE_CLEAN_OUTPUT_BOX, "OUTPUT", output_db, 12, f"+{output_db} dB")
-    low_cut = int(controls.get("voice_clean_low_cut_hz", 0))
-    slider(VOICE_CLEAN_LOWCUT_BOX, "LOW CUT", low_cut, 300, "OFF" if low_cut <= 0 else f"{low_cut} Hz")
 
 
 def tests_option_at(x, y):
@@ -4701,12 +4643,7 @@ def snd_meter_worker(args, stop_event, state):
                         audio = kiwi.swap_s16_bytes(audio)
                     denoise_level = int(audio_controls.get("denoise_level", 0))
                     if voice_cleaner is not None:
-                        audio = voice_cleaner.process_pcm(
-                            audio,
-                            mix=float(audio_controls.get("voice_clean_mix", 75)) / 100.0,
-                            output_db=audio_controls.get("voice_clean_output_db", 0),
-                            low_cut_hz=audio_controls.get("voice_clean_low_cut_hz", 0),
-                        )
+                        audio = voice_cleaner.process_pcm(audio)
                     elif denoise_level > 0:
                         audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
                     if not audio:
@@ -5241,8 +5178,7 @@ def main():
                 if name in {
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
-                    "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_mix",
-                    "voice_clean_output_db", "voice_clean_low_cut_hz", "autonotch_enabled",
+                    "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "autonotch_enabled",
                 }
             })
     globe_mixer = GlobeAudioMixer(args, state)
@@ -5302,7 +5238,6 @@ def main():
     radio_family_open = None
     display_setup_open = False
     audio_panel_open = False
-    voice_clean_panel_open = False
     audio_volume = pipewire_default_volume()
     saved_volume = remembered_preferences.get("audio_volume")
     if isinstance(saved_volume, (int, float)):
@@ -5424,9 +5359,6 @@ def main():
                 "nr_algo": audio_controls["nr_algo"],
                 "denoise_level": audio_controls["denoise_level"],
                 "voice_clean_enabled": audio_controls["voice_clean"],
-                "voice_clean_mix": audio_controls["voice_clean_mix"],
-                "voice_clean_output_db": audio_controls["voice_clean_output_db"],
-                "voice_clean_low_cut_hz": audio_controls["voice_clean_low_cut_hz"],
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -5991,14 +5923,6 @@ def main():
                                 gesture = "home"
                             elif contains(top_instrument_layout(text_cache, display_freq)[1], x, y):
                                 gesture = "radio_toggle"
-                            elif voice_clean_panel_open and contains(VOICE_CLEAN_MIX_BOX, x, y):
-                                gesture = "voice_clean_mix"
-                            elif voice_clean_panel_open and contains(VOICE_CLEAN_OUTPUT_BOX, x, y):
-                                gesture = "voice_clean_output"
-                            elif voice_clean_panel_open and contains(VOICE_CLEAN_LOWCUT_BOX, x, y):
-                                gesture = "voice_clean_lowcut"
-                            elif voice_clean_panel_open:
-                                gesture = "voice_clean_outside"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
                             elif audio_panel_open and contains(AUDIO_SQUELCH_BOX, x, y):
@@ -6134,13 +6058,6 @@ def main():
                                 denoise_level=audio_denoise_level_at_x(x),
                                 voice_clean_enabled=False,
                             )
-                        elif gesture == "voice_clean_mix":
-                            mix = audio_slider_value_at_x(VOICE_CLEAN_MIX_BOX, x, 100)
-                            state.set_audio_controls(voice_clean_mix=mix, voice_clean_enabled=mix > 0)
-                        elif gesture == "voice_clean_output":
-                            state.set_audio_controls(voice_clean_output_db=audio_slider_value_at_x(VOICE_CLEAN_OUTPUT_BOX, x, 12))
-                        elif gesture == "voice_clean_lowcut":
-                            state.set_audio_controls(voice_clean_low_cut_hz=audio_slider_value_at_x(VOICE_CLEAN_LOWCUT_BOX, x, 300))
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
@@ -6302,21 +6219,6 @@ def main():
                                 voice_clean_enabled=False,
                             )
                             wake_controls()
-                        elif touch_started and gesture == "voice_clean_mix":
-                            mix = audio_slider_value_at_x(VOICE_CLEAN_MIX_BOX, x, 100)
-                            state.set_audio_controls(voice_clean_mix=mix, voice_clean_enabled=mix > 0)
-                            wake_controls()
-                        elif touch_started and gesture == "voice_clean_output":
-                            state.set_audio_controls(voice_clean_output_db=audio_slider_value_at_x(VOICE_CLEAN_OUTPUT_BOX, x, 12))
-                            wake_controls()
-                        elif touch_started and gesture == "voice_clean_lowcut":
-                            state.set_audio_controls(voice_clean_low_cut_hz=audio_slider_value_at_x(VOICE_CLEAN_LOWCUT_BOX, x, 300))
-                            wake_controls()
-                        elif touch_started and gesture == "voice_clean_outside":
-                            moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
-                                voice_clean_panel_open = False
-                            wake_controls()
                         elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -6325,7 +6227,7 @@ def main():
                                 if choice == "mute":
                                     state.set_audio_controls(audio_mute=not controls["mute"])
                                 elif choice == "voice_clean":
-                                    voice_clean_panel_open = True
+                                    state.set_audio_controls(voice_clean_enabled=not controls["voice_clean"])
                                 elif choice == "agc":
                                     if not controls["agc"]:
                                         state.set_audio_controls(agc_enabled=True, agc_hang=False)
@@ -7159,8 +7061,6 @@ def main():
                     audio_high_cut,
                     audio_volume is not None,
                 )
-                if voice_clean_panel_open:
-                    draw_voice_clean_panel(text_cache, audio_controls)
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
             if globe_open:
