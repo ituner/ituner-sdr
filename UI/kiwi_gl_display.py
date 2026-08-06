@@ -183,7 +183,11 @@ class HamCallsignBook:
 MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
+    "tests": "apps.png",
 }
+MENU_ICON_SCALE = 0.70  # 15% visual padding on every side of each icon slot.
+MENU_ICON_LABEL_H = 26
+MENU_ICON_MAX_SIZE = 38  # Match the compact 1280 px rail in the Home overlay.
 SPECTRUM_H = 70
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
 # the recovered vertical space directly to the live waterfall.
@@ -1059,7 +1063,7 @@ MENU_ITEMS = (
     ("rf", "RF"),
     ("audio", "AUDIO"),
     ("display", "DISPLAY"),
-    ("tests", "TESTS"),
+    ("tests", "APPS"),
     ("digital", "DIGI"),
     ("stats", "STATS"),
     ("settings", "SETTINGS"),
@@ -2548,7 +2552,9 @@ class TextCache:
 def setup_gl(desktop=False):
     pygame.init()
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-    flags = pygame.OPENGL | pygame.NOFRAME if desktop else pygame.OPENGL | pygame.FULLSCREEN
+    if desktop:
+        pygame.display.set_caption("iTuner SDR")
+    flags = pygame.OPENGL if desktop else pygame.OPENGL | pygame.FULLSCREEN
     screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), flags)
     GL.glViewport(0, 0, NATIVE_W, NATIVE_H)
     GL.glMatrixMode(GL.GL_PROJECTION)
@@ -2993,7 +2999,7 @@ def draw_home_button(text_cache, alpha=1.0):
     surface = pygame.Surface((w, h), pygame.SRCALPHA)
     try:
         icon = pygame.image.load(str(MENU_ICON_ASSET_DIR / "home.png")).convert_alpha()
-        icon_size = min(48, w - 14, h - 8)
+        icon_size = round(min(48, w - 14, h - 8) * MENU_ICON_SCALE)
         icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
         surface.blit(icon, ((w - icon_size) // 2, (h - icon_size) // 2))
     except (pygame.error, OSError):
@@ -4021,7 +4027,10 @@ def whisper_transcribe(pcm16):
         result = subprocess.run(
             [
                 str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
-                "-l", WHISPER_LANGUAGE, "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
+                # The current whisper.cpp Metal backend crashes on Apple M4
+                # during this short-lived subprocess. CPU inference is stable
+                # and remains comfortably inside the bounded ASR window.
+                "-l", WHISPER_LANGUAGE, "-t", "4", "-ng", "-nt", "-np", "-otxt", "-of", str(result_base),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -4763,7 +4772,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, 36, y0 + 22, "APPS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
@@ -5316,7 +5325,7 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     draw_logical_line(x0, y0, x1, y0, (116, 170, 183, 100), 1)
     draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
     draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
-    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
+    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "APPS")
     map_box = GLOBE_MAP_BOX
     draw_logical_rect(*map_box, (10, 35, 55, 245))
     draw_logical_line(map_box[0], map_box[1], map_box[2], map_box[1], (86, 173, 195, 150), 1)
@@ -5845,21 +5854,24 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.circle(surface, color, (cx, cy - 20), 3)
 
 
-def menu_icon_texture(text_cache, kind, label, width=132, height=112):
+def menu_icon_texture(text_cache, kind, label, width=132, height=112, audio_muted=False):
     """Build a menu tile at its eventual raster size to avoid texture blur."""
-    key = f"menu_asset_{kind}_{label}_{width}x{height}"
+    icon_filename = "audio-muted.png" if kind == "audio" and audio_muted else MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
+    key = f"menu_asset_{kind}_{label}_{icon_filename}_{width}x{height}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
-    asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
+    asset_path = MENU_ICON_ASSET_DIR / icon_filename
     try:
         icon = pygame.image.load(str(asset_path)).convert_alpha()
-        # Keep the supplied vector-derived art deliberately understated in the
-        # compact menu. Its transparent alpha allows one clean 30% reduction.
-        icon_size = round(icon.get_width() * 0.70)
+        # Scale against the artwork region, not just the source bitmap. The
+        # 1280 px navigation rail is shorter than the overlay menu, so a fixed
+        # 45 px icon would lose the intended 15% vertical inset there.
+        artwork_size = min(icon.get_width(), icon.get_height(), width, max(1, height - MENU_ICON_LABEL_H))
+        icon_size = min(MENU_ICON_MAX_SIZE, max(1, round(artwork_size * MENU_ICON_SCALE)))
         icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
-        icon_y = max(0, (height - 26 - icon_size) // 2)
+        icon_y = max(0, (height - MENU_ICON_LABEL_H - icon_size) // 2)
         surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
     except (pygame.error, OSError):
         # Keep development builds usable if the optional icon package is absent.
@@ -5867,11 +5879,11 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
         dim = (82, 235, 231, 150)
         draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12), color, dim)
     label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(label, True, (207, 221, 224))
-    surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - 26))
+    surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - MENU_ICON_LABEL_H))
     return text_cache.surface_texture(key, surface)
 
 
-def draw_main_menu(text_cache, scroll):
+def draw_main_menu(text_cache, scroll, audio_muted=False):
     x0, y0, x1, y1 = MENU_BOX
     # Let the waterfall remain legible behind a single calm, temporary veil.
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
@@ -5887,7 +5899,9 @@ def draw_main_menu(text_cache, scroll):
         target_h = min(92, by1 - by0 - 4)
         target_x = bx0 + ((bx1 - bx0) - target_w) / 2
         target_y = by0 + ((by1 - by0) - target_h) / 2
-        tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label, int(target_w), int(target_h))
+        tex, tex_w, tex_h = menu_icon_texture(
+            text_cache, kind, label, int(target_w), int(target_h), audio_muted=audio_muted
+        )
         draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
@@ -5900,7 +5914,7 @@ def desktop_1280_nav_box(index):
     return x0, y0, x0 + 117, y0 + 88
 
 
-def draw_desktop_1280_navigation(text_cache):
+def draw_desktop_1280_navigation(text_cache, audio_muted=False):
     if not DESKTOP_1280_MODE:
         return
     x0 = DESKTOP_1280_MAIN_W
@@ -5914,7 +5928,9 @@ def draw_desktop_1280_navigation(text_cache):
         draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
         tile_w = bx1 - bx0 - 8
         tile_h = by1 - by0 - 8
-        tex, _tex_w, _tex_h = menu_icon_texture(text_cache, kind, label, tile_w, tile_h)
+        tex, _tex_w, _tex_h = menu_icon_texture(
+            text_cache, kind, label, tile_w, tile_h, audio_muted=audio_muted
+        )
         draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
 
 
@@ -7857,11 +7873,7 @@ def main():
     callsign_thread.start()
 
     desktop_event_writer = None
-    desktop_window = None
     if args.desktop:
-        from pygame._sdl2.video import Window
-
-        desktop_window = Window.from_display_module()
         event_read_fd, desktop_event_writer = os.pipe()
         # The Pygame loop creates the synthetic touch events for this pipe.
         # It must therefore never wait here for an event that it has not yet
@@ -7870,7 +7882,7 @@ def main():
         ev = os.fdopen(event_read_fd, "rb", buffering=0)
         print(
             f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, "
-            "Command-drag moves, wheel zooms",
+            "wheel zooms",
             flush=True,
         )
     else:
@@ -8474,7 +8486,6 @@ def main():
         active_swipe_boost = 1.0 + repeat_swipe_count * args.swipe_repeat_boost
 
     desktop_pointer_down = False
-    desktop_window_drag_button = None
     desktop_map_press = None
     desktop_map_last = None
     desktop_map_dragged = False
@@ -8598,14 +8609,7 @@ def main():
         while not stop_event.is_set():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    # SDL/Cocoa can emit spurious QUIT events for this
-                    # borderless OpenGL development window. Desktop uses
-                    # Esc/Q as its deliberate close path; the Pi retains its
-                    # normal close behavior.
-                    if not args.desktop:
-                        stop_event.set()
-                    else:
-                        print("gl ignored desktop Cocoa QUIT", flush=True)
+                    stop_event.set()
                 elif (
                     args.desktop
                     and deepgram_setup_open
@@ -8619,15 +8623,7 @@ def main():
                     wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
-                elif (
-                    args.desktop
-                    and event.type == pygame.MOUSEBUTTONDOWN
-                    and event.button == 1
-                    and pygame.key.get_mods() & pygame.KMOD_GUI
-                ):
-                    desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    desktop_window_drag_button = None
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
                         activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
@@ -8651,12 +8647,6 @@ def main():
                         else:
                             desktop_pointer_down = True
                             emit_desktop_touch(event.pos, "down")
-                elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_window_drag_button is not None:
-                    if event.buttons[0]:
-                        window_x, window_y = desktop_window.position
-                        desktop_window.position = (window_x + event.rel[0], window_y + event.rel[1])
-                    else:
-                        desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_map_press is not None:
                     map_x, map_y = desktop_logical_point(event.pos)
                     previous_x, previous_y = desktop_map_last
@@ -8677,12 +8667,6 @@ def main():
                     emit_desktop_touch(event.pos, "move")
                 elif args.desktop and event.type == pygame.MOUSEMOTION:
                     update_receiver_map_hover(event.pos)
-                elif (
-                    args.desktop
-                    and event.type == pygame.MOUSEBUTTONUP
-                    and event.button == desktop_window_drag_button
-                ):
-                    desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if desktop_map_press is not None:
                         map_x, map_y = desktop_logical_point(event.pos)
@@ -10227,8 +10211,9 @@ def main():
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
+            menu_audio_muted = state.audio_controls_snapshot()[0]["mute"]
             if menu_open:
-                draw_main_menu(text_cache, menu_scroll)
+                draw_main_menu(text_cache, menu_scroll, audio_muted=menu_audio_muted)
             if picker_open:
                 if picker_map_open:
                     draw_receiver_map(
@@ -10300,7 +10285,7 @@ def main():
                     alpha = int(220 * osd_remaining / fade)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
             if not picker_open:
-                draw_desktop_1280_navigation(text_cache)
+                draw_desktop_1280_navigation(text_cache, audio_muted=menu_audio_muted)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

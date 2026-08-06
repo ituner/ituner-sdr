@@ -51,7 +51,7 @@ sudo ituner-sdr-configure --frequency-khz 7075.794 --orientation flipped
 
 ## Run Locally on macOS
 
-The active OpenGL radio can run directly on a Mac for UI development and receiver testing. Desktop modes use a fixed-size, borderless window with no macOS title bar or native close/minimize/fullscreen buttons. They do not need the Pi, DSI display, or touch controller.
+The active OpenGL radio can run directly on a Mac for UI development and receiver testing. Desktop modes use a fixed-size native macOS window. They do not need the Pi, DSI display, or touch controller.
 
 Use Python 3.9 through 3.12:
 
@@ -82,13 +82,10 @@ The Raspberry Pi command requires its KMS/DRM display and touch environment and 
 Desktop controls:
 
 - Left-click and drag: touch-style tuning, menus, filter, and passband controls.
-- Right-click and drag: does not move the window.
-- Command-left-drag anywhere: move the borderless window.
 - Mouse wheel: zoom.
-- `Esc` or `q`: close the application.
+- Use the native title bar to move, close, minimize, or enter fullscreen.
+- `Esc` or `q`: close the application from the keyboard.
 - `--no-audio`: run without CoreAudio output.
-
-Because desktop windows are borderless, use `Esc` or `q` instead of a macOS close button.
 
 The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
 
