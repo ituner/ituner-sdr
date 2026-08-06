@@ -56,7 +56,67 @@ The Linux boot console rotation is a separate driver/framebuffer concern. The ap
 
 ### 1. Static mockup and framebuffer writer
 
-`tools/render_sdr_frontend_mockup.py` was the visual design tool and first on-panel implementation.
+`tools/render_sdr_frontend_mockup.py` was the visual design tool and first on-panel implementation. It is now historical only: the current user interface is rendered by `tools/kiwi_gl_display.py`.
+
+To view the exact current Pi display from the Mac, use:
+
+```sh
+/Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/tools/capture_p5_live_display.sh
+open /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/renders/p5-live-reference-960x400.png
+```
+
+This asks the live OpenGL service for a framebuffer screenshot, so it includes the actual receiver, waterfall, controls, and any active overlay rather than a separate mockup.
+
+For a continuously refreshing Mac window of that same framebuffer, use:
+
+```sh
+python3 /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI/tools/p5_live_preview.py
+```
+
+It refreshes at 2 fps by default, which is gentle on the Pi while remaining useful for live UI work. Use `--fps 3` through `--fps 5` when a faster preview is needed.
+
+### Local Desktop Development
+
+The OpenGL receiver can also run entirely on the Mac, without the Pi or its framebuffer:
+
+```sh
+cd /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI
+/opt/miniconda3/bin/python3 -m pip install --upgrade pygame PyOpenGL sounddevice vosk sherpa-onnx moonshine-voice
+/opt/miniconda3/bin/python3 tools/kiwi_gl_display.py --desktop --fps 30
+```
+
+Use Python 3.10 or newer when you want the full local ASR feature set. `--desktop` opens the same interface in a native `960x320` landscape window, matching the SDR canvas rather than the Pi's rotated framebuffer. It connects directly to the selected KiwiSDR receiver and uses CoreAudio for normal receiver audio. Left-click and drag is the touch gesture; the mouse wheel changes zoom; `Esc` or `q` closes the window. Use `--no-audio` for silent visual-only testing. If the remembered public receiver is unavailable, choose another one with `Home -> RX`.
+
+#### Matching Desktop ASR
+
+The Mac simulator uses the same public receiver directory as the Pi; it reads
+the live KiwiSDR directory first and caches the complete result locally. Its ASR
+models are intentionally portable rather than Pi-only. To give the desktop the
+same `VOSK`, `MOON`, and `PARA` choices as the Pi, run this once in macOS
+Terminal while `p5` is reachable:
+
+```bash
+cd /Users/andreibulucea/Documents/Pi4/P5/p5-RX/r2d2/KIWI-SDR-UI
+chmod +x tools/bootstrap_macos_asr_from_p5.sh
+tools/bootstrap_macos_asr_from_p5.sh p5
+```
+
+It installs the Mac Python ASR runtime and mirrors the portable Vosk, Moonshine,
+and Parakeet model data into `vendor/` beside the project. The launcher prefers
+the installed Miniconda Python 3.13 when available, because Moonshine Voice's
+language profiles require a modern Python runtime. The renderer finds that local
+directory automatically; `ITUNER_VENDOR_DIR` may point it at an external model
+disk instead.
+
+The `MOON` selector opens an eight-language profile menu: English, Spanish,
+Arabic, Japanese, Korean, Chinese, Ukrainian, and Vietnamese. English uses the
+local Sherpa-ONNX Base model; selecting another language downloads Moonshine's
+official Base profile once into `vendor/moonshine-voice/` and retains it for
+later use. `WHISPER` is automatic-language mode. It uses the multilingual
+`ggml-tiny.bin` model when installed, and intentionally falls back to the
+English-only model only until that model is available. The bootstrap script
+builds the native macOS Whisper executable and copies that multilingual model,
+so the completed simulator matches the Pi rather than exposing a dead button.
 
 It uses Pillow to compose a full `960x320` SDR image, then converts it to the native rotated framebuffer layout and writes `/dev/fb0` through `mmap`. It established the principal visual language:
 
@@ -237,6 +297,39 @@ Health probes should be conservative because these are volunteer-operated public
 
 The future picker can show a small state indicator only when useful: available, waterfall-only, or unavailable. It should avoid verbose diagnostics on the 4.8-inch display; detailed error text belongs in logs or a diagnostics view.
 
+### Receiver GPS map
+
+In the `480x1280` desktop layout, `RECEIVERS -> MAP` opens a full-height
+`1024x480` equirectangular GPS map backed by the public Kiwi map feed. Drag to
+pan and pinch (or use the desktop mouse wheel) to zoom. It is now an
+orthographic `RADIOGARDEN` globe, not an unfolded coordinate chart: the center
+reticle stays fixed while the globe moves underneath it. Clicking a visible
+dot locks that station into the center and starts the ordinary live Kiwi
+audio/waterfall connection. Clicking the reticle tunes the receiver nearest to
+the current geographic focus. Desktop handling bypasses the synthetic touch
+bridge for direct, reliable mouse/touchpad dragging, hover preview, and click;
+the Pi uses the same gesture semantics through touch. Released globe drags
+coast briefly to a stop, while a selected receiver smoothly locks into center.
+
+The map starts near edge-to-edge and supports `192x` regional zoom. It switches
+from Natural Earth's 50 m outlines to an anti-aliased 10 m coastline layer at
+close view, preserving coast and small-island detail without magnifying a
+coarse source. At regional zoom it changes from fragmented boundary segments
+to complete Natural Earth country polygons with restrained country labels. This
+makes national borders, including Romania at a Balkan close-up, read as closed
+political shapes instead of thin river-like line fragments.
+The compact `VIEW` control on the map rail cycles the built-in styles:
+`CLEAN` (receiver-first coastlines), `BORDERS` (international boundaries),
+`ATLAS` (boundaries plus a restrained latitude/longitude grid), and `SAT`
+(NASA Blue Marble physical/satellite-style imagery with the political-boundary
+overlay). `SAT` uses a 2048x1024 texture on Pi and a 4096x2048 texture in the
+desktop simulator. It also applies a UTC-driven day/night terminator with a
+subtle twilight transition. The styles are native OpenGL layers and need no
+network tile service.
+The map is only a visual receiver selector for now: signal comparison,
+heatmaps, and multiple neighboring receiver streams are deliberately separate
+later work.
+
 ### S-meter and SND behavior
 
 The OpenGL service now starts a `SND` worker alongside the waterfall connection. It sends the active frequency, radio mode, and filter cuts to KiwiSDR and uses `SND` meter messages when available. The waterfall percentile remains a visual fallback while a receiver is unavailable or reconnecting.
@@ -246,6 +339,61 @@ Some public Kiwi receivers can limit concurrent `W/F` and `SND` connections. The
 ### Home > Audio and Tests
 
 `AUDIO` is the listening-control sheet. Its `SPEAKER VOLUME` slider reads and writes the real PipeWire default-sink volume, while squelch and Audio Filter control the live SND path.
+
+The lower-right `ASR` readout is also a touch control. It opens a seven-choice
+caption-engine selector: `OFF`, `VOSK`, `MOON`, `PARA`, `WHISPER`, `DEEP`, and
+`D-HAM`.
+`DEEP` is Deepgram Nova-3 live transcription. It uses the same live Kiwi `SND`
+PCM lane as every local engine, so audio playback and waterfall rendering are
+unchanged. The selection is
+remembered with the receiver preferences. `VOSK` uses the lightweight live
+Kaldi model, `MOON` uses Moonshine Base INT8 through sherpa-onnx (falling back
+to Moonshine Tiny if Base is unavailable) and is the preferred local option on
+the 2 GB Pi 5. `PARA` uses NVIDIA Parakeet TDT-CTC 110M INT8 through
+sherpa-onnx in short bounded windows, and `WHISPER` uses Whisper.cpp Tiny
+English in the same bounded-batch style. All engines use the normal Kiwi `SND`
+PCM path and USB-audio playback continues independently. Offline engines drop
+stale audio rather than accumulating delayed captions.
+
+`D-HAM` is a separate Deepgram Nova-3 profile for amateur-radio listening. It
+adds a focused static vocabulary for Q-codes, signal reports, common QSO
+phrases, and short callsign-adjacent language, then passes Deepgram's three
+final alternatives to the existing local callsign scorer. The visible caption
+remains the normal Deepgram transcript. The callsign pane highlights a call
+only when it is locally verified, repeated across alternatives, or explicitly
+appears in a high-confidence QSO-shaped result; it can also summarize observed
+behavior such as `CQ`, `calling`, `QSL`, `QTH`, a report, or `73`. It is a
+context profile, not a trained ham model, so uncertain noisy speech stays in
+the normal caption stream instead of being promoted to a callsign.
+
+### Deepgram setup
+
+Deepgram is deliberately optional. Install its Python SDK for the service user:
+
+```sh
+sudo -H -u ituner /usr/bin/python3 -m pip install --user 'deepgram-sdk>=3,<4'
+```
+
+On the display, tap the `ASR` annunciator, choose `DEEP` or `D-HAM`, then enter the key
+in the large on-screen keypad and tap `OK`. The renderer saves it locally as
+`~/.config/ituner-sdr/deepgram.env`, with an owner-only `0700` directory and
+`0600` file. It never writes the key to the repository, receiver-state JSON,
+screenshots, or normal logs. Tapping the active `DEEP` choice again reopens
+the sheet for a deliberate key replacement.
+
+The credentials file is read directly by the renderer, so no systemd
+`EnvironmentFile` line is required. Optional model and language overrides may
+still be added through the service environment:
+
+```ini
+Environment=ITUNER_DEEPGRAM_MODEL=nova-3
+Environment=ITUNER_DEEPGRAM_LANGUAGE=en-US
+```
+
+The defaults are `nova-3` and `en-US`. They can be overridden without changing
+source using `ITUNER_DEEPGRAM_MODEL` and `ITUNER_DEEPGRAM_LANGUAGE`. Selecting
+`DEEP` without a key opens the local setup sheet; receiver audio remains
+unaffected throughout setup and transcription.
 
 `TESTS` is a separate, extensible diagnostics sheet. `DJ TUNE` is the live finger-driven tuning bench: it uses the **same** selected receiver, `W/F` waterfall connection, and `SND` audio path as normal listening.
 

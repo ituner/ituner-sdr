@@ -3,13 +3,16 @@ import argparse
 from collections import deque
 import ctypes
 import errno
+import gzip
 import json
+import lzma
 import math
 import os
 import queue
 import select
 import signal
 import socket
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -22,6 +25,12 @@ import wave
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+# Optional inference wheels stay beside the project, avoiding changes to the
+# Pi's externally managed system Python installation.
+_PACKAGE_VENDOR_DIR = Path(__file__).resolve().parent.parent / "vendor" / "python"
+if _PACKAGE_VENDOR_DIR.is_dir():
+    sys.path.insert(0, str(_PACKAGE_VENDOR_DIR))
 
 try:
     # `audioop` was removed in Python 3.13. It is only needed for the local
@@ -42,8 +51,24 @@ except ImportError:
 
 try:
     import moonshine_voice
-except ImportError:
+except (ImportError, TypeError):
+    # moonshine-voice currently requires Python 3.10 syntax. The bundled
+    # macOS developer Python is 3.9, but Moonshine Base through sherpa-onnx
+    # remains fully supported there, so its optional streaming helper must not
+    # prevent the desktop receiver from starting.
     moonshine_voice = None
+
+try:
+    from deepgram import DeepgramClient, LiveOptions, LiveTranscriptionEvents
+except ImportError:
+    DeepgramClient = LiveOptions = LiveTranscriptionEvents = None
+
+try:
+    import numpy as np
+    import onnxruntime as ort
+except ImportError:
+    np = None
+    ort = None
 
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
 # on its native Cocoa backend so --desktop can open a normal dev window.
@@ -84,6 +109,77 @@ DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NBFM"
 _RENDERER_DIR = Path(__file__).resolve().parent
 _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
+SATELLITE_MAP_PATH = _RENDERER_DIR / "assets" / "nasa-blue-marble-2048.jpg"
+SATELLITE_MAP_HD_PATH = _RENDERER_DIR / "assets" / "nasa-blue-marble-4096.jpg"
+_satellite_map_surfaces = {}
+
+
+def _vendor_roots():
+    """Return local model roots in the order an operator can override them.
+
+    The same renderer runs on the Pi and on macOS.  Keeping the model files
+    beside the project makes the desktop an honest simulator instead of a
+    Pi-only ASR mockup, while the environment variable supports an external
+    model disk without source changes.
+    """
+    candidates = []
+    override = os.environ.get("ITUNER_VENDOR_DIR")
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.extend((
+        _RENDERER_DIR.parent / "vendor",
+        Path.home() / "Library" / "Application Support" / "iTuner SDR" / "vendor",
+        Path("/home/ituner/codex-sdr-display/vendor"),
+    ))
+    roots = []
+    for candidate in candidates:
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+VENDOR_ROOTS = _vendor_roots()
+
+
+def vendor_path(*parts):
+    """Locate a vendored file or directory without hard-coding a host path."""
+    for root in VENDOR_ROOTS:
+        candidate = root.joinpath(*parts)
+        if candidate.exists():
+            return candidate
+    return VENDOR_ROOTS[0].joinpath(*parts)
+
+
+class HamCallsignBook:
+    """Read-only callsign membership lookup with no resident PII cache."""
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else vendor_path("ham-callsigns", "fcc-active-callsigns.sqlite")
+        self._connection = None
+        self._unavailable = False
+
+    def contains(self, callsign):
+        if self._unavailable or not callsign or not self.path.is_file():
+            return False
+        try:
+            if self._connection is None:
+                uri = f"file:{self.path.resolve()}?mode=ro"
+                self._connection = sqlite3.connect(uri, uri=True)
+            row = self._connection.execute(
+                "SELECT 1 FROM callsigns WHERE callsign = ?", (str(callsign).upper(),)
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error as exc:
+            self._unavailable = True
+            print(f"gl callsign book unavailable: {exc}", flush=True)
+            return False
+
+    def close(self):
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+
 MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
@@ -99,7 +195,10 @@ SPECTRUM_RAISE_Y = 12
 WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
 SPECTRUM_PEAK_HOLD_SECONDS = 10.0
-SCOUT_HEAT_REMANENCE_SECONDS = 1800.0
+# A slow, respectful long-form survey: four probes are sampled together every
+# 172.8 seconds, yielding roughly 1,000 individual receiver samples in twelve
+# hours. Keep that complete pass visible as the map's heat remanence.
+SCOUT_HEAT_REMANENCE_SECONDS = 12.0 * 60.0 * 60.0
 SCOUT_RF_SAMPLE_SECONDS = 1.5
 SCOUT_RF_CONNECT_TIMEOUT_SECONDS = 7.0
 SCOUT_SNR_NOISE_SECONDS = 0.5
@@ -119,8 +218,8 @@ SCOUT_GLOBAL_CELL_BONUS_KM = 3500.0
 # favors a legible, receiver-backed field over a sparse cloud of tiny points.
 SCOUT_HEAT_GRID_PIXELS = 40.0
 SCOUT_HEAT_AREA_MULTIPLIER = 4.0
-SCOUT_ROTATION_SECONDS = 15.0
-SCOUT_MAX_TOTAL = 100
+SCOUT_ROTATION_SECONDS = 172.8
+SCOUT_MAX_TOTAL = 1000
 # A responsive radio meter should rise nearly immediately, settle back more
 # gently, and retain a brief, decaying indication of recent peaks.
 SMETER_ATTACK_SECONDS = 0.085
@@ -151,40 +250,190 @@ SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 BOTTOM_RULER_H = 30
 BOTTOM_STATUS_H = 28
+ASR_CAPTION_HEIGHT = 140
+CALLSIGN_CAPTION_HEIGHT = 68
+CALLSIGN_CONTEXT_MAX_AGE = 4.5
+ASR_CAPTION_ANCHORS = ("bottom", "center", "top")
+CALLSIGN_TOGGLE_BOX = (676, LOGICAL_H - BOTTOM_STATUS_H, 826, LOGICAL_H)
 ASR_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
 # This replaces the old one-bit Vosk switch with deliberate, readable
 # choices. It is transient and leaves the radio view visible beneath it.
 ASR_PANEL_BOX = (244, 186, 716, 244)
-ASR_ENGINES = ("off", "vosk", "moonshine", "parakeet", "whisper")
+ASR_PANEL_WIDTH = 480
+ASR_PANEL_HEIGHT = 58
+ASR_MOON_LANGUAGE_PANEL_BOX = (244, 126, 716, 244)
+ASR_MOON_LANGUAGE_PANEL_HEIGHT = 118
+ASR_ENGINES = ("off", "vosk", "moonshine", "parakeet", "whisper", "deepgram", "deepgram_ham")
 ASR_ENGINE_LABELS = {
     "off": "OFF", "vosk": "VOSK", "moonshine": "MOON",
-    "parakeet": "PARA", "whisper": "WHISPER",
+    "parakeet": "PARA", "whisper": "WHISPER", "deepgram": "DEEP",
+    "deepgram_ham": "D-HAM",
 }
-VOSK_CAPTION_BOX = (16, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 108, 944, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
+DEEPGRAM_MODEL = os.environ.get("ITUNER_DEEPGRAM_MODEL", "nova-3")
+DEEPGRAM_LANGUAGE = os.environ.get("ITUNER_DEEPGRAM_LANGUAGE", "en-US")
+DEEPGRAM_KEYTERMS = ("CQ", "QSO", "QSL", "QRZ", "QTH", "DX", "HF", "SSB", "FT8", "WSPR")
+# This is intentionally a compact operational vocabulary, not a fake custom
+# language model. Nova-3 gets radio context while the local callsign lane
+# still verifies or corroborates every highlighted call before showing it.
+DEEPGRAM_HAM_KEYTERMS = DEEPGRAM_KEYTERMS + (
+    "CQ CQ", "CQ DX", "DE", "RST", "QRM", "QRN", "QSB", "QSY", "QRP",
+    "five nine", "five by nine", "five and nine", "73", "88", "SK",
+    "over", "clear", "stand by", "calling", "this is", "portable", "mobile",
+    "POTA", "SOTA", "net control", "signal report", "kilohertz", "megahertz",
+)
+DEEPGRAM_ENGINES = frozenset(("deepgram", "deepgram_ham"))
+DEEPGRAM_CAPTION_PUBLISH_SECONDS = 1.6
+MOONSHINE_LANGUAGE_OPTIONS = (
+    ("en", "EN"), ("es", "ES"), ("ar", "AR"), ("ja", "JA"),
+    ("ko", "KO"), ("zh", "ZH"), ("uk", "UK"), ("vi", "VI"),
+)
+MOONSHINE_LANGUAGE_CODES = frozenset(code for code, _label in MOONSHINE_LANGUAGE_OPTIONS)
+
+# This is deliberately a small, constrained vocabulary rather than an attempt
+# to teach a general captioner radio jargon. It makes the second Vosk lane
+# useful for calls such as "KILO PAPA FOX WHISKEY" -> KPFW.
+CALLSIGN_WORD_TO_SYMBOL = {
+    "alfa": "A", "alpha": "A", "bravo": "B", "charlie": "C", "delta": "D",
+    "echo": "E", "foxtrot": "F", "fox": "F", "golf": "G", "hotel": "H",
+    "india": "I", "juliett": "J", "juliet": "J", "kilo": "K", "lima": "L",
+    "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q",
+    "romeo": "R", "sierra": "S", "tango": "T", "uniform": "U", "victor": "V",
+    "whiskey": "W", "whisky": "W", "xray": "X", "yankee": "Y", "zulu": "Z",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "niner": "9",
+    # Alternate and legacy phonetics regularly heard on HF. This large map is
+    # used to normalize text from the broad recognizer; it is intentionally
+    # *not* copied wholesale into Vosk's tight grammar below.
+    "able": "A", "adam": "A", "america": "A",
+    "baker": "B", "boston": "B", "boy": "B",
+    "canada": "C", "cesar": "C",
+    "david": "D", "denmark": "D", "dog": "D",
+    "easy": "E", "edward": "E",
+    "france": "F", "frank": "F",
+    "george": "G", "germany": "G",
+    "henry": "H", "honolulu": "H", "how": "H",
+    "italy": "I", "item": "I",
+    "john": "J", "japan": "J", "jig": "J",
+    "king": "K",
+    "lincoln": "L", "london": "L", "love": "L",
+    "mary": "M", "mexico": "M",
+    "nancy": "N", "norway": "N", "nan": "N",
+    "ocean": "O", "ontario": "O", "oboe": "O",
+    "peter": "P",
+    "queen": "Q",
+    "robert": "R",
+    "sam": "S", "sugar": "S",
+    "tom": "T", "tare": "T",
+    "uncle": "U",
+    "william": "W", "washington": "W",
+    "yellow": "Y", "yokohama": "Y", "yoke": "Y",
+    "zebra": "Z",
+}
+HAM_RADIO_WORDS = frozenset((
+    "cq", "de", "dx", "qso", "qsl", "qrm", "qrn", "qro", "qrp", "qrs", "qrz", "qsb", "qsy", "qth",
+    "qrl", "qrt", "qrv", "qrx", "qsk", "qtc", "qtr",
+    "rst", "roger", "copy", "over", "break", "calling", "call", "station", "operator", "name", "handle",
+    "report", "signal", "readability", "strength", "power", "watts", "antenna", "rig", "band", "frequency",
+    "this", "is", "from", "to",
+    "portable", "mobile", "maritime", "aeronautical", "contest", "exchange", "grid", "locator", "weather",
+    "thanks", "thank", "you", "please", "again", "standby", "monitoring", "listening", "clear", "out", "sk",
+    "seventy", "three", "five", "nine", "four", "two", "zero", "one", "six", "seven", "eight", "ten",
+))
+CALLSIGN_PROWORDS = frozenset(("cq", "de", "calling", "call", "over", "portable", "mobile", "slash"))
+# The compact Vosk vocabulary lacks literal Q-codes, so decode their spoken
+# forms and normalize them below. This is still a strict ham-only grammar.
+HAM_SPELLED_CODE_MAP = (
+    ("cue ess oh", "QSO"), ("cue ess ell", "QSL"), ("cue are em", "QRM"),
+    ("cue are en", "QRN"), ("cue are oh", "QRO"), ("cue are pea", "QRP"),
+    ("cue are zee", "QRZ"), ("cue ess why", "QSY"), ("cue tee h", "QTH"),
+    ("cue ess bee", "QSB"), ("cue are ess", "QRS"), ("cue are ell", "QRL"),
+    ("cue are tee", "QRT"), ("cue are vee", "QRV"), ("cue are ex", "QRX"),
+    ("cue ess kay", "QSK"), ("cue tee see", "QTC"), ("cue tee are", "QTR"),
+)
+HAM_VOSK_WORDS = HAM_RADIO_WORDS - frozenset((
+    "qso", "qsl", "qrm", "qrn", "qro", "qrp", "qrs", "qrz", "qsb", "qsy", "qth",
+    "qrl", "qrt", "qrv", "qrx", "qsk", "qtc", "qtr",
+))
+CALLSIGN_STRICT_VOSK_WORDS = (
+    "alfa", "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "fox", "golf", "hotel",
+    "india", "juliett", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec",
+    "romeo", "sierra", "tango", "uniform", "victor", "whiskey", "whisky", "xray", "yankee", "zulu",
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "niner",
+)
+CALLSIGN_VOSK_GRAMMAR = tuple(dict.fromkeys((
+    *(word for word in CALLSIGN_STRICT_VOSK_WORDS if word not in ("juliett", "xray")),
+    *HAM_VOSK_WORDS, *(spoken for spoken, _code in HAM_SPELLED_CODE_MAP), "x ray", "[unk]",
+)))
+
+
+def moonshine_language(engine):
+    """Return the persisted Moonshine profile language, defaulting old saves."""
+    engine = str(engine).lower()
+    if engine == "moonshine":
+        return "en"
+    prefix, separator, language = engine.partition(":")
+    return language if prefix == "moonshine" and separator and language in MOONSHINE_LANGUAGE_CODES else None
+
+
+def asr_engine_family(engine):
+    return "moonshine" if moonshine_language(engine) is not None else str(engine).lower()
+
+
+def is_deepgram_engine(engine):
+    return asr_engine_family(engine) in DEEPGRAM_ENGINES
+
+
+def valid_asr_engine(engine):
+    return asr_engine_family(engine) in ASR_ENGINES
+
+
+def asr_engine_label(engine):
+    family = asr_engine_family(engine)
+    if family == "moonshine":
+        return f"MOON {moonshine_language(engine).upper()}"
+    if family == "whisper":
+        return "WHISPER AUTO" if WHISPER_LANGUAGE == "auto" else f"WHISPER {WHISPER_LANGUAGE.upper()}"
+    return ASR_ENGINE_LABELS.get(family, "ASR")
+
+VOSK_CAPTION_BOX = (
+    16,
+    LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - ASR_CAPTION_HEIGHT,
+    LOGICAL_W - 16,
+    LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4,
+)
 VOSK_MODEL_OVERRIDE = os.environ.get("ITUNER_VOSK_MODEL")
 VOSK_MODEL_PATHS = (
-    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-small-en-us-0.15"),
+    vendor_path("vosk-model-small-en-us-0.15"),
     # The larger lgraph model is installed for controlled tests, but it runs
     # over 3x behind real time on this 2 GB Pi and must not be the live default.
-    Path("/home/ituner/codex-sdr-display/vendor/vosk-model-en-us-0.22-lgraph"),
+    vendor_path("vosk-model-en-us-0.22-lgraph"),
 )
 # Moonshine Base has materially better English recognition than Tiny. The
 # smaller model remains a no-touch fallback for installs with tighter storage.
 MOONSHINE_MODEL_DIRS = (
-    Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-moonshine-base-en-int8"),
-    Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-moonshine-tiny-en-int8"),
+    vendor_path("sherpa-onnx-moonshine-base-en-int8"),
+    vendor_path("sherpa-onnx-moonshine-tiny-en-int8"),
 )
-MOONSHINE_STREAMING_MODEL_DIR = Path(
-    "/home/ituner/codex-sdr-display/vendor/moonshine-voice/"
-    "download.moonshine.ai/model/small-streaming-en/quantized"
+MOONSHINE_STREAMING_MODEL_DIR = vendor_path(
+    "moonshine-voice", "download.moonshine.ai", "model", "small-streaming-en", "quantized"
 )
 # The official Small Streaming model is installed for controlled benchmarks,
 # but on this Pi it measured 1.53x real time and starved live captions. Keep
 # it opt-in only; the Base engine is the production Moonshine setting.
 MOONSHINE_SMALL_STREAMING_TRIAL = os.environ.get("ITUNER_MOONSHINE_SMALL_STREAMING") == "1"
-WHISPER_CLI = Path("/home/ituner/codex-sdr-display/vendor/whisper.cpp/build/bin/whisper-cli")
-WHISPER_MODEL = Path("/home/ituner/codex-sdr-display/vendor/whisper.cpp/models/ggml-tiny.en.bin")
-PARAKEET_MODEL_DIR = Path("/home/ituner/codex-sdr-display/vendor/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
+WHISPER_CLI = vendor_path("whisper.cpp", "build", "bin", "whisper-cli")
+WHISPER_LANGUAGE = os.environ.get("ITUNER_WHISPER_LANGUAGE", "auto").strip() or "auto"
+_WHISPER_MODEL_NAMES = (
+    os.environ.get("ITUNER_WHISPER_MODEL", "ggml-tiny.bin"),
+    "ggml-tiny.en.bin",
+)
+WHISPER_MODEL = next(
+    (vendor_path("whisper.cpp", "models", name) for name in _WHISPER_MODEL_NAMES
+     if vendor_path("whisper.cpp", "models", name).is_file()),
+    vendor_path("whisper.cpp", "models", _WHISPER_MODEL_NAMES[0]),
+)
+PARAKEET_MODEL_DIR = vendor_path("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
+HF_ENHANCE_MODEL = vendor_path("hf-enhance-tiny", "hf-enhance-tiny.onnx")
 WF_TEX_W = 960
 WF_TEX_H = 256
 DISPLAY_ORIENTATION = "flipped"
@@ -218,8 +467,9 @@ RADIO_SETUP_WIDTH = 74
 RADIO_SETUP_GAP = 10
 RADIO_SETUP_BOX = (260, 10, 334, 54)
 RADIO_PANEL_BOX = (12, 66, 948, 316)
-# All Kiwi demodulators are reached through eight large touch families. A
-# family opens a second, full-width choice tray when it has variants.
+# All Kiwi demodulators are reached through eight large touch families. A tap
+# cycles the variants within that family, keeping the temporary control panel
+# to one predictable layer.
 KIWI_MODE_FAMILIES = (
     ("AM", ("AM", "AMN", "AMW")),
     ("SYNC AM", ("SAM", "SAU", "SAL", "SAS", "QAM")),
@@ -419,9 +669,10 @@ FILTER_WIDTH_PRESETS = (
     ("KIWI MAX", 12000),
 )
 AUDIO_PANEL_BOX = (12, 34, 948, 316)
-AUDIO_VOLUME_BOX = (42, 76, 692, 128)
-AUDIO_MUTE_BOX = (716, 76, 814, 128)
-AUDIO_VOICE_CLEAN_BOX = (826, 76, 918, 128)
+AUDIO_VOLUME_BOX = (42, 76, 612, 128)
+AUDIO_MUTE_BOX = (624, 76, 710, 128)
+AUDIO_VOICE_CLEAN_BOX = (722, 76, 818, 128)
+AUDIO_HF_ENHANCE_BOX = (830, 76, 918, 128)
 AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
 AUDIO_AGC_BOX = (268, 154, 482, 210)
 AUDIO_BLANKER_BOX = (494, 154, 706, 210)
@@ -436,18 +687,34 @@ DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
 # A clear, no-extra-controls loudness recovery curve. It reaches the requested
 # 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
 DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
-# Speech cleanup has deliberately few operator-facing choices. Each level is
-# a fixed RNNoise wet/dry blend: lower settings retain more radio brightness.
-VOICE_CLEAN_PRESETS = ("OFF", "MEDIUM", "STRONG")
+# The two listener-only processors are intentionally distinct controls. They
+# never stack, while caption/callsign queues remain raw in every selection.
+VOICE_CLEAN_PRESETS = ("OFF", "MED", "STR")
 VOICE_CLEAN_MIX = (0.0, 0.75, 1.0)
-# RNNoise is intentionally kept local to the Pi. The public Kiwi receiver
-# remains responsible for demodulation while this optional stage cleans the
-# received mono PCM before it reaches PipeWire/USB audio.
-RNNOISE_LIBRARY = Path(os.environ.get(
-    "ITUNER_RNNOISE_LIBRARY",
-    "/home/ituner/codex-sdr-display/vendor/rnnoise-install/lib/librnnoise.so",
-))
-SPEEXDSP_LIBRARY = os.environ.get("ITUNER_SPEEXDSP_LIBRARY", "libspeexdsp.so.1")
+RNNOISE_VOICE_LEVELS = frozenset((1, 2))
+HF_ENHANCE_MODELS = (
+    None,
+    vendor_path("hf-enhance-tiny", "hf-enhance-tiny-v1.onnx"),
+    HF_ENHANCE_MODEL,
+)
+HF_ENHANCE_PRESETS = ("OFF", "EPOCH 1", "EPOCH 8")
+# RNNoise remains local: KiwiSDR demodulates remotely and this stage cleans
+# received mono PCM before it reaches the Pi USB path or the Mac CoreAudio
+# player. The desktop bundle carries matching Apple Silicon dylibs so its
+# Voice control exercises the same DSP path as the radio.
+_MACOS_DSP_LIB_DIR = _RENDERER_DIR.parent / "vendor" / "macos-dsp" / "prefix" / "lib"
+_DEFAULT_RNNOISE_LIBRARY = (
+    _MACOS_DSP_LIB_DIR / "librnnoise.dylib"
+    if sys.platform == "darwin"
+    else Path("/home/ituner/codex-sdr-display/vendor/rnnoise-install/lib/librnnoise.so")
+)
+_DEFAULT_SPEEXDSP_LIBRARY = (
+    _MACOS_DSP_LIB_DIR / "libspeexdsp.dylib"
+    if sys.platform == "darwin"
+    else "libspeexdsp.so.1"
+)
+RNNOISE_LIBRARY = Path(os.environ.get("ITUNER_RNNOISE_LIBRARY", str(_DEFAULT_RNNOISE_LIBRARY)))
+SPEEXDSP_LIBRARY = os.environ.get("ITUNER_SPEEXDSP_LIBRARY", str(_DEFAULT_SPEEXDSP_LIBRARY))
 PREFERENCES_WRITE_IDLE_SECONDS = 1.5
 FREQUENCY_WRITE_IDLE_SECONDS = 60.0
 PREFERENCES_POLL_SECONDS = 0.25
@@ -468,10 +735,10 @@ GLOBE_STATION_BOXES = (
     (604, 134, 938, 214),
     (604, 222, 938, 302),
 )
-def load_globe_coastlines():
-    """Load genuine Natural Earth land outlines, decimated for the small panel."""
+def load_globe_coastlines(filename="ne_110m_land.geojson", minimum_points=0, target_points=72):
+    """Load Natural Earth land outlines with bounded draw cost per ring."""
     try:
-        payload = json.loads((Path(__file__).parent / "assets" / "ne_110m_land.geojson").read_text())
+        payload = json.loads(read_map_asset(filename))
     except (OSError, ValueError, TypeError):
         return ()
     outlines = []
@@ -481,9 +748,9 @@ def load_globe_coastlines():
         polygons = coordinates if geometry.get("type") == "MultiPolygon" else [coordinates]
         for polygon in polygons:
             for ring in polygon:
-                if len(ring) < 3:
+                if len(ring) < max(3, minimum_points):
                     continue
-                stride = max(1, len(ring) // 72)
+                stride = max(1, len(ring) // target_points)
                 simplified = ring[::stride]
                 if simplified[-1] != ring[-1]:
                     simplified.append(ring[-1])
@@ -491,7 +758,151 @@ def load_globe_coastlines():
     return tuple(outlines)
 
 
+def load_globe_lines(filename, minimum_points=0, target_points=120):
+    """Load Natural Earth line features, e.g. international boundaries."""
+    try:
+        payload = json.loads(read_map_asset(filename))
+    except (OSError, ValueError, TypeError):
+        return ()
+    lines = []
+    for feature in payload.get("features", []):
+        geometry = feature.get("geometry") or {}
+        coordinates = geometry.get("coordinates") or []
+        line_sets = coordinates if geometry.get("type") == "MultiLineString" else [coordinates]
+        for line in line_sets:
+            if len(line) < max(2, minimum_points):
+                continue
+            stride = max(1, len(line) // target_points)
+            simplified = line[::stride]
+            if simplified[-1] != line[-1]:
+                simplified.append(line[-1])
+            lines.append(tuple((float(lat), float(lon)) for lon, lat, *_rest in simplified))
+    return tuple(lines)
+
+
+def read_map_asset(filename):
+    """Read bundled GeoJSON, accepting compressed releases to keep installs lean."""
+    asset_path = Path(__file__).parent / "assets" / filename
+    if asset_path.exists():
+        return asset_path.read_text()
+    compressed_path = asset_path.with_name(asset_path.name + ".gz")
+    if compressed_path.exists():
+        with gzip.open(compressed_path, "rt", encoding="utf-8") as source:
+            return source.read()
+    compressed_path = asset_path.with_name(asset_path.name + ".xz")
+    with lzma.open(compressed_path, "rt", encoding="utf-8") as source:
+        return source.read()
+
+
+def longitude_delta_degrees(longitude, center_longitude):
+    """Shortest signed longitude delta, robust at the international date line."""
+    return (longitude - center_longitude + 540.0) % 360.0 - 180.0
+
+
+def geographic_line_index(lines):
+    """Precompute light geographic bounds so detailed borders can be culled."""
+    indexed = []
+    for line in lines:
+        latitudes = [lat for lat, _lon in line]
+        longitudes = [lon for _lat, lon in line]
+        sine = sum(math.sin(math.radians(lon)) for lon in longitudes)
+        cosine = sum(math.cos(math.radians(lon)) for lon in longitudes)
+        center_lon = math.degrees(math.atan2(sine, cosine))
+        longitude_radius = max(abs(longitude_delta_degrees(lon, center_lon)) for lon in longitudes)
+        indexed.append((line, min(latitudes), max(latitudes), center_lon, longitude_radius))
+    return tuple(indexed)
+
+
+def load_country_shapes(filename="ne_50m_admin_0_countries.geojson", target_points=260):
+    """Load complete country exterior rings for a readable regional overlay.
+
+    Administrative boundary-line data is intentionally segmented by Natural
+    Earth. Drawing those fragments directly over satellite imagery makes them
+    resemble rivers. Country polygons let the eye read each political area as
+    one coherent, closed shape instead.
+    """
+    try:
+        payload = json.loads(read_map_asset(filename))
+    except (OSError, ValueError, TypeError):
+        return ()
+    countries = []
+    for feature in payload.get("features", []):
+        geometry = feature.get("geometry") or {}
+        coordinates = geometry.get("coordinates") or []
+        kind = geometry.get("type")
+        polygons = coordinates if kind == "MultiPolygon" else [coordinates] if kind == "Polygon" else []
+        rings = []
+        all_points = []
+        for polygon in polygons:
+            if not polygon or len(polygon[0]) < 3:
+                continue
+            ring = polygon[0]
+            stride = max(1, len(ring) // target_points)
+            simplified = ring[::stride]
+            if simplified[-1] != ring[-1]:
+                simplified.append(ring[-1])
+            converted = tuple((float(lat), float(lon)) for lon, lat, *_rest in simplified)
+            rings.append(converted)
+            all_points.extend(converted)
+        if not all_points:
+            continue
+        properties = feature.get("properties") or {}
+        label_lat = float(properties.get("LABEL_Y") or sum(lat for lat, _lon in all_points) / len(all_points))
+        label_lon = float(properties.get("LABEL_X") or 0.0)
+        if not properties.get("LABEL_X"):
+            sine = sum(math.sin(math.radians(lon)) for _lat, lon in all_points)
+            cosine = sum(math.cos(math.radians(lon)) for _lat, lon in all_points)
+            label_lon = math.degrees(math.atan2(sine, cosine))
+        longitudes = [lon for _lat, lon in all_points]
+        latitudes = [lat for lat, _lon in all_points]
+        sine = sum(math.sin(math.radians(lon)) for lon in longitudes)
+        cosine = sum(math.cos(math.radians(lon)) for lon in longitudes)
+        center_lon = math.degrees(math.atan2(sine, cosine))
+        countries.append({
+            "name": str(properties.get("NAME_EN") or properties.get("NAME") or properties.get("ADMIN") or ""),
+            "rings": tuple(rings),
+            "label": {"lat": label_lat, "lon": label_lon},
+            "lat_min": min(latitudes),
+            "lat_max": max(latitudes),
+            "lon_center": center_lon,
+            "lon_radius": max(abs(longitude_delta_degrees(lon, center_lon)) for lon in longitudes),
+        })
+    return tuple(countries)
+
+
+def visible_country_shapes(countries, center_lon, center_lat, box, scale):
+    """Cull country polygons before the expensive spherical projection."""
+    center_lon_deg = math.degrees(center_lon)
+    center_lat_deg = math.degrees(center_lat)
+    radius = radiogarden_radius(box, scale)
+    half_diagonal = math.hypot((box[2] - box[0]) / 2, (box[3] - box[1]) / 2)
+    angular_reach = math.degrees(math.asin(min(0.995, half_diagonal / max(radius, 1.0)))) + 10.0
+    for country in countries:
+        if country["lat_max"] < center_lat_deg - angular_reach or country["lat_min"] > center_lat_deg + angular_reach:
+            continue
+        if abs(longitude_delta_degrees(country["lon_center"], center_lon_deg)) > angular_reach + country["lon_radius"]:
+            continue
+        yield country
+
+
+# The 110 m coastline keeps the whole world calm. The 50 m layer swaps in at
+# regional zoom, avoiding the blocky coastline seen when the global asset was
+# magnified while remaining light enough for the Pi display path.
 GLOBE_COASTLINES = load_globe_coastlines()
+GLOBE_COASTLINES_DETAIL = load_globe_coastlines("ne_50m_land.geojson", minimum_points=24, target_points=420)
+# Keep close view genuinely 10 m, but bound it to the major continental rings.
+# Rendering every tiny island every frame made the map stutter more than it
+# improved the view, especially on the Pi.
+GLOBE_COASTLINES_FINE = load_globe_coastlines("ne_10m_land.geojson", minimum_points=800, target_points=350) or GLOBE_COASTLINES_DETAIL
+# Political borders are a separate, subdued layer rather than a replacement
+# for shoreline geometry. Keeping only substantial lines preserves movement.
+# The raw political-boundary dataset has thousands of tiny fragments. Keep
+# substantial boundaries at a useful regional-map resolution so this extra
+# layer stays responsive on the Pi as well as the desktop simulator.
+GLOBE_COUNTRY_BORDERS = load_globe_lines("ne_10m_admin_0_boundary_lines_land.geojson", minimum_points=70, target_points=100)
+# At regional zoom switch to country exteriors rather than fragmented boundary
+# segments. It makes individual countries unambiguous over physical imagery.
+GLOBE_COUNTRY_SHAPES = load_country_shapes()
 DJ_PANEL_BOX = (12, 72, 948, 288)
 DJ_TRACK_BOX = (42, 130, 918, 205)
 DJ_STEP_BOX = (42, 224, 240, 276)
@@ -509,7 +920,7 @@ POPUP_LAYOUT_BASE = {
                 DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES),
     "filter": (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
                FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX),
-    "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX,
+    "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
               AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
               AUDIO_FILTER_BOX, AUDIO_RESET_BOX),
@@ -533,12 +944,16 @@ def configure_popup_layout():
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
-    global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX
+    global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX
     global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX, TEST_RUN_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
+    global CALLSIGN_TOGGLE_BOX, ASR_TOGGLE_BOX, ASR_PANEL_BOX, ASR_MOON_LANGUAGE_PANEL_BOX, VOSK_CAPTION_BOX
+    global PICKER_BOX, PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H, PICKER_MAP_BOX, PICKER_MAP_MODE_BOX
+    global PICKER_SEARCH_BOX, PICKER_SORT_LOCATION_BOX, PICKER_SORT_NAME_BOX, PICKER_EXIT_BOX
+    global RADIOGARDEN_LIST_BOX, RADIOGARDEN_EXIT_BOX, RADIOGARDEN_VIEW_BOX
 
     def offset(kind):
         panel = POPUP_LAYOUT_BASE[kind][0]
@@ -566,7 +981,7 @@ def configure_popup_layout():
     )
 
     dy = offset("audio")
-    (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX,
+    (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
      AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
      AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
      AUDIO_FILTER_BOX, AUDIO_RESET_BOX) = (
@@ -580,6 +995,56 @@ def configure_popup_layout():
     dy = offset("dj")
     (DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX,
      DJ_RATE_BOX, DJ_RETURN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["dj"])
+
+    # The status readout remains in the 1024 px radio canvas when the Mac's
+    # 1280 px layout adds its navigation rail. Its hit target must follow that
+    # actual lower band rather than retain the Pi's 320 px coordinates.
+    radio_canvas_w = DESKTOP_1280_MAIN_W if DESKTOP_1280_MODE else LOGICAL_W
+    CALLSIGN_TOGGLE_BOX = (676, LOGICAL_H - BOTTOM_STATUS_H, 826, LOGICAL_H)
+    ASR_TOGGLE_BOX = (826, LOGICAL_H - BOTTOM_STATUS_H, radio_canvas_w, LOGICAL_H)
+    asr_x0 = (radio_canvas_w - ASR_PANEL_WIDTH) // 2
+    asr_y1 = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 8
+    ASR_PANEL_BOX = (asr_x0, asr_y1 - ASR_PANEL_HEIGHT, asr_x0 + ASR_PANEL_WIDTH, asr_y1)
+    ASR_MOON_LANGUAGE_PANEL_BOX = (
+        asr_x0,
+        asr_y1 - ASR_MOON_LANGUAGE_PANEL_HEIGHT,
+        asr_x0 + ASR_PANEL_WIDTH,
+        asr_y1,
+    )
+    # Captions belong at the lower edge of the live waterfall, above the
+    # frequency ruler. Recompute this after the desktop/Pi geometry is known.
+    VOSK_CAPTION_BOX = (
+        16,
+        LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - ASR_CAPTION_HEIGHT,
+        radio_canvas_w - 16,
+        LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4,
+    )
+    if DESKTOP_1280_MODE:
+        # The wider desktop simulator gets a real receiver browser rather
+        # than the Pi's narrow five-row list plus side controls.
+        PICKER_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 2, 4, 70
+        PICKER_MAP_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+        PICKER_MAP_MODE_BOX = (16, 12, 172, 58)
+        PICKER_SEARCH_BOX = (184, 12, 376, 58)
+        PICKER_SORT_LOCATION_BOX = (388, 12, 580, 58)
+        PICKER_SORT_NAME_BOX = (592, 12, 760, 58)
+        PICKER_EXIT_BOX = (816, 12, LOGICAL_W - 16, 58)
+        RADIOGARDEN_LIST_BOX = (932, 16, 1008, 72)
+        RADIOGARDEN_EXIT_BOX = (932, 82, 1008, 138)
+        RADIOGARDEN_VIEW_BOX = (932, 148, 1008, 212)
+    else:
+        PICKER_BOX = (0, 0, 790, LOGICAL_H)
+        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
+        PICKER_MAP_BOX = (0, 0, 0, 0)
+        PICKER_MAP_MODE_BOX = (0, 0, 0, 0)
+        PICKER_SEARCH_BOX = (806, 20, 948, 86)
+        PICKER_SORT_LOCATION_BOX = (806, 98, 948, 164)
+        PICKER_SORT_NAME_BOX = (806, 176, 948, 242)
+        PICKER_EXIT_BOX = (806, 254, 948, 320)
+        RADIOGARDEN_LIST_BOX = (0, 0, 0, 0)
+        RADIOGARDEN_EXIT_BOX = (0, 0, 0, 0)
+        RADIOGARDEN_VIEW_BOX = (0, 0, 0, 0)
 GEAR_BOX = (892, 228, 958, 294)
 # Home is a temporary waterfall-scale workspace, leaving the top instrument
 # strip and its Home affordance visible.
@@ -604,10 +1069,16 @@ WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 PICKER_BOX = (0, 0, 790, LOGICAL_H)
 PICKER_COLS = 1
 PICKER_ROWS = 5
+PICKER_HEADER_H = 0
+PICKER_MAP_BOX = (0, 0, 0, 0)
+PICKER_MAP_MODE_BOX = (0, 0, 0, 0)
 PICKER_SEARCH_BOX = (806, 20, 948, 86)
 PICKER_SORT_LOCATION_BOX = (806, 98, 948, 164)
 PICKER_SORT_NAME_BOX = (806, 176, 948, 242)
 PICKER_EXIT_BOX = (806, 254, 948, 320)
+RADIOGARDEN_LIST_BOX = (0, 0, 0, 0)
+RADIOGARDEN_EXIT_BOX = (0, 0, 0, 0)
+RADIOGARDEN_VIEW_BOX = (0, 0, 0, 0)
 SEARCH_CASE_BOX = (608, 8, 662, 64)
 SEARCH_MODE_BOX = (674, 8, 736, 64)
 SEARCH_EXIT_BOX = (748, 8, 946, 64)
@@ -621,6 +1092,22 @@ SEARCH_NUMERIC_KEY_ROWS = (
     ("1234567890", 18, 78, 93),
     ("@#$_&-+<?.", 18, 154, 93),
     ("!%*=/()~~>", 18, 230, 93),
+)
+DEEPGRAM_CREDENTIAL_FILE = Path.home() / ".config" / "ituner-sdr" / "deepgram.env"
+DEEPGRAM_SETUP_BOX = (82, 8, 878, 312)
+DEEPGRAM_KEY_FIELD_BOX = (112, 48, 574, 96)
+DEEPGRAM_KEY_MODE_BOX = (588, 48, 648, 96)
+DEEPGRAM_KEY_CLEAR_BOX = (658, 48, 716, 96)
+DEEPGRAM_KEY_CANCEL_BOX = (726, 48, 788, 96)
+DEEPGRAM_KEY_SAVE_BOX = (798, 48, 848, 96)
+DEEPGRAM_KEY_ROWS = (
+    ("QWERTYUIOP", 114, 108, 74),
+    ("ASDFGHJKL<", 114, 166, 74),
+    ("ZXCVBNM_-.", 114, 224, 74),
+)
+DEEPGRAM_KEY_DIGIT_ROWS = (
+    ("1234567890", 114, 108, 74),
+    ("_-.:/@+=<#", 114, 166, 74),
 )
 PUBLIC_DIRECTORY_URL = "http://kiwisdr.com/public/"
 PUBLIC_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.json"
@@ -645,8 +1132,6 @@ def persist_live_station_health(server, stream, available):
                 health = {"cursor": 0, "stations": {}}
             stations = health.setdefault("stations", {})
             entry = stations.setdefault(server, {})
-            if entry.get(stream) is available:
-                return
             entry[stream] = available
             entry["status"] = "ok" if entry.get("audio") or entry.get("waterfall") else "failed"
             entry["checked"] = int(time.time())
@@ -1027,15 +1512,16 @@ def health_prioritized_stations(stations, station_health, sort_mode):
         fresh = now - entry.get("checked", 0) <= 86400
         if not fresh:
             return 2
-        # Audio availability defines an active receiver. Within a matching
-        # audio state, prefer an available waterfall for the browsing view.
+        # A green-ready receiver means the actual paired experience works:
+        # waterfall plus audio. Audio-only and waterfall-only stations remain
+        # useful and selectable, but are not promoted as fully healthy.
         audio_active = entry.get("audio") is True
         waterfall_active = entry.get("waterfall") is True
         if audio_active and waterfall_active:
             return 0
-        if audio_active:
-            return 1
         if waterfall_active:
+            return 1
+        if audio_active:
             return 2
         return 3
 
@@ -1478,17 +1964,31 @@ class SharedState:
         self.denoise_level = 0
         self.voice_clean_enabled = False
         self.voice_clean_level = 0
+        self.hf_enhance_level = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         self.external_audio = False
         self.asr_engine = "off"
         self.transcription_enabled = False
         self.transcription_generation = 0
-        self.transcript_lines = deque(maxlen=2)
+        # Four finished phrases provide readable subtitle history without
+        # turning the waterfall into a scrolling transcript pane.
+        self.transcript_lines = deque(maxlen=4)
         self.transcript_partial = ""
         self.transcript_status = "OFF"
         self.transcript_hold_until = 0.0
         self.transcript_partial_updated_at = 0.0
+        self.transcript_context_updated_at = 0.0
+        # D-HAM writes only short-lived N-best text here. It is a private
+        # evidence lane for the callsign worker, never a second caption pane.
+        self.ham_asr_alternatives = ()
+        self.ham_asr_updated_at = 0.0
+        self.callsign_enabled = True
+        self.callsign_value = ""
+        self.callsign_history = deque(maxlen=3)
+        self.ham_message = ""
+        self.callsign_status = "STARTING"
+        self.callsign_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
@@ -1662,6 +2162,7 @@ class SharedState:
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
                 "voice_clean_level": self.voice_clean_level,
+                "hf_enhance_level": self.hf_enhance_level,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1684,9 +2185,77 @@ class SharedState:
                 self.transcription_generation,
             )
 
+    def transcript_context_snapshot(self):
+        """Return only a fresh, short caption context for ham-ASR fusion."""
+        with self.lock:
+            text = self.transcript_partial or (self.transcript_lines[-1] if self.transcript_lines else "")
+            timestamp = max(self.transcript_context_updated_at, self.transcript_partial_updated_at)
+            return text, timestamp
+
+    def set_ham_asr_alternatives(self, alternatives, generation):
+        """Share fresh D-HAM alternatives with the strict callsign decoder."""
+        normalized = []
+        for alternative in alternatives or ():
+            text = " ".join(str(alternative.get("text", "")).split())
+            if not text:
+                continue
+            try:
+                confidence = float(alternative.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            normalized.append({"text": text, "confidence": confidence})
+        with self.lock:
+            if self.transcription_generation != generation or self.asr_engine != "deepgram_ham":
+                return
+            self.ham_asr_alternatives = tuple(normalized[:3])
+            self.ham_asr_updated_at = time.monotonic()
+
+    def ham_asr_alternatives_snapshot(self):
+        with self.lock:
+            return self.ham_asr_alternatives, self.ham_asr_updated_at
+
+    def callsign_snapshot(self):
+        with self.lock:
+            return (
+                self.callsign_enabled,
+                self.callsign_value,
+                self.ham_message,
+                self.callsign_status,
+                self.callsign_updated_at,
+            )
+
+    def callsign_history_snapshot(self):
+        with self.lock:
+            return tuple(self.callsign_history)
+
+    def set_callsign_enabled(self, enabled):
+        with self.lock:
+            self.callsign_enabled = bool(enabled)
+            self.callsign_status = "STARTING" if self.callsign_enabled else "OFF"
+            if not self.callsign_enabled:
+                self.callsign_value = ""
+                self.callsign_history.clear()
+                self.ham_message = ""
+            return self.callsign_enabled
+
+    def set_callsign(self, value=None, message=None, status=None):
+        with self.lock:
+            if value:
+                self.callsign_value = str(value).upper()
+                if self.callsign_value in self.callsign_history:
+                    self.callsign_history.remove(self.callsign_value)
+                if not self.callsign_history or self.callsign_history[0] != self.callsign_value:
+                    self.callsign_history.appendleft(self.callsign_value)
+                self.callsign_updated_at = time.monotonic()
+            if message:
+                self.ham_message = str(message)
+                self.callsign_updated_at = time.monotonic()
+            if status is not None:
+                self.callsign_status = str(status)
+
     def set_asr_engine(self, engine):
         engine = str(engine).lower()
-        if engine not in ASR_ENGINES:
+        if not valid_asr_engine(engine):
             raise ValueError(f"unsupported ASR engine: {engine}")
         with self.lock:
             enabled = engine != "off"
@@ -1698,6 +2267,8 @@ class SharedState:
                 self.transcript_partial = ""
                 self.transcript_hold_until = 0.0
                 self.transcript_partial_updated_at = 0.0
+                self.ham_asr_alternatives = ()
+                self.ham_asr_updated_at = 0.0
             self.transcript_status = "STARTING" if enabled else "OFF"
             return self.asr_engine, self.transcription_generation
 
@@ -1717,6 +2288,7 @@ class SharedState:
                     self.transcript_hold_until = now + 2.0
                 self.transcript_partial = ""
                 self.transcript_partial_updated_at = now
+                self.transcript_context_updated_at = now
             if partial is not None:
                 normalized_partial = " ".join(str(partial).split())
                 if not normalized_partial:
@@ -1733,6 +2305,7 @@ class SharedState:
                     # Half-second pacing feels like captions, not a debugger.
                     self.transcript_partial = normalized_partial
                     self.transcript_partial_updated_at = now
+                    self.transcript_context_updated_at = now
             if status is not None:
                 self.transcript_status = status
 
@@ -1751,6 +2324,7 @@ class SharedState:
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
             "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
+            "hf_enhance_level",
             "autonotch_enabled",
         }
         with self.lock:
@@ -1772,6 +2346,16 @@ class SharedState:
                 self.voice_clean_level = int(clamp(int(self.voice_clean_level), 0, len(VOICE_CLEAN_PRESETS) - 1))
             elif "voice_clean_enabled" in changes:
                 self.voice_clean_level = 2 if bool(self.voice_clean_enabled) else 0
+            if "hf_enhance_level" in changes:
+                self.hf_enhance_level = int(clamp(int(self.hf_enhance_level), 0, len(HF_ENHANCE_MODELS) - 1))
+            # The control touched most recently wins. This avoids a stale
+            # Voice setting silently blocking a newly selected HF epoch.
+            if "hf_enhance_level" in changes and self.hf_enhance_level > 0:
+                self.voice_clean_level = 0
+            elif "voice_clean_level" in changes and self.voice_clean_level > 0:
+                self.hf_enhance_level = 0
+            elif self.voice_clean_level > 0:
+                self.hf_enhance_level = 0
             self.voice_clean_enabled = self.voice_clean_level > 0
             if changed:
                 self.audio_generation += 1
@@ -1793,6 +2377,7 @@ class SharedState:
                 "denoise": self.denoise_level > 0,
                 "voice_clean": self.voice_clean_enabled,
                 "voice_clean_level": self.voice_clean_level,
+                "hf_enhance_level": self.hf_enhance_level,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -1801,7 +2386,7 @@ class SharedState:
             squelch_level=0, squelch_tail=0.25, audio_mute=False,
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
-            nr_algo=1, denoise_level=0, voice_clean_enabled=False, voice_clean_level=0,
+            nr_algo=1, denoise_level=0, voice_clean_enabled=False, voice_clean_level=0, hf_enhance_level=0,
             autonotch_enabled=False,
         )
 
@@ -1910,7 +2495,10 @@ class TextCache:
         key = ("font", size, bold, mono, family)
         font = self.cache.get(key)
         if font is None:
-            names = [family] if family else (["DejaVu Sans Mono", "monospace"] if mono else ["DejaVu Sans", "sans"])
+            if family:
+                names = [family] if isinstance(family, str) else list(family)
+            else:
+                names = ["DejaVu Sans Mono", "monospace"] if mono else ["DejaVu Sans", "sans"]
             font = pygame.font.SysFont(names, size, bold=bold)
             self.cache[key] = font
         return font
@@ -1971,6 +2559,8 @@ def setup_gl(desktop=False):
     GL.glDisable(GL.GL_DEPTH_TEST)
     GL.glEnable(GL.GL_BLEND)
     GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+    GL.glEnable(GL.GL_LINE_SMOOTH)
+    GL.glHint(GL.GL_LINE_SMOOTH_HINT, GL.GL_NICEST)
     GL.glEnable(GL.GL_TEXTURE_2D)
     return screen
 
@@ -2540,22 +3130,21 @@ def radio_variant_layout(modes):
 
 
 def radio_option_at(x, y, family_open=None):
-    if family_open is not None:
-        modes = next((modes for family, modes in KIWI_MODE_FAMILIES if family == family_open), ())
-        if contains(radio_variant_back_box(modes), x, y):
-            return "back", None
-        for mode, box in radio_variant_layout(modes):
-            if contains(box, x, y):
-                return "mode", mode
-        if contains(radio_variant_popup_box(modes), x, y):
-            return None
     for _family, modes, box in radio_mode_layout():
         if contains(box, x, y):
-            return "mode_family", (_family, modes)
+            return "mode_cycle", modes
     for step_hz, box in radio_step_options():
         if contains(box, x, y):
             return "step", step_hz
     return None
+
+
+def next_radio_mode_variant(current_mode, modes):
+    """Return the next variant in one radio-mode family."""
+    try:
+        return modes[(modes.index(current_mode) + 1) % len(modes)]
+    except ValueError:
+        return modes[0]
 
 
 def draw_radio_option(text_cache, box, label, active):
@@ -2604,14 +3193,6 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     )
     if active:
         draw_text(text_cache, (x0 + x1) / 2, y1 - 16, active_mode, (174, 244, 228), 14, True, False, "cm", family="Liberation Sans")
-    elif len(modes) > 1:
-        # A generously sized, two-stroke chevron reads as a touch disclosure,
-        # rather than as a tiny text character.
-        chevron_x = x1 - 24
-        chevron_y = y1 - 21
-        chevron_color = (116, 202, 201, 210)
-        draw_logical_line(chevron_x - 10, chevron_y - 6, chevron_x, chevron_y + 4, chevron_color, 2)
-        draw_logical_line(chevron_x, chevron_y + 4, chevron_x + 10, chevron_y - 6, chevron_color, 2)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
@@ -2646,7 +3227,7 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None)
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 112), 1)
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Choose a mode family", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
     draw_text(text_cache, radio_popup_x(532), radio_popup_y(87), "STEP", (145, 183, 190), 13, True, False, "lm", family="Liberation Sans")
     active_mode = mode.upper()
     for family, modes, box in radio_mode_layout():
@@ -2655,18 +3236,6 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None)
     for option, box in radio_step_options():
         label = f"{option // 1000}k" if option >= 1000 else str(option)
         draw_radio_option(text_cache, box, label, option == step_hz)
-    if family_open is not None:
-        modes = next((options for family, options in KIWI_MODE_FAMILIES if family == family_open), ())
-        vx0, vy0, vx1, vy1 = radio_variant_popup_box(modes)
-        draw_logical_rect(vx0, vy0, vx1, vy1, (6, 18, 25, 248))
-        draw_logical_line(vx0, vy0, vx1, vy0, (122, 196, 200, 204), 1)
-        draw_logical_line(vx0, vy1, vx1, vy1, (122, 196, 200, 204), 1)
-        draw_logical_line(vx0, vy0, vx0, vy1, (122, 196, 200, 204), 1)
-        draw_logical_line(vx1, vy0, vx1, vy1, (122, 196, 200, 204), 1)
-        draw_radio_option(text_cache, radio_variant_back_box(modes), "BACK", False)
-        draw_text(text_cache, (vx0 + vx1) / 2, vy0 + 20, family_open, (231, 246, 247), 18, True, False, "cm", family="Liberation Sans")
-        for option, box in radio_variant_layout(modes):
-            draw_radio_variant_option(text_cache, box, option, option == active_mode)
 
 
 def display_option_at(x, y):
@@ -2899,11 +3468,175 @@ class RNNoiseVoiceCleaner:
         return struct.pack(f"<{output_count}h", *voiced)
 
 
+def hf_enhance_available(level=None):
+    """Return whether one of the locally trained HF models can be used."""
+    if np is None or ort is None:
+        return False
+    if level is None:
+        return any(path is not None and path.is_file() for path in HF_ENHANCE_MODELS[1:])
+    index = int(clamp(int(level), 0, len(HF_ENHANCE_MODELS) - 1))
+    path = HF_ENHANCE_MODELS[index]
+    return bool(path is not None and path.is_file())
+
+
+def hf_enhance_model_for_level(level):
+    index = int(clamp(int(level), 0, len(HF_ENHANCE_MODELS) - 1))
+    return HF_ENHANCE_MODELS[index] if hf_enhance_available(index) else None
+
+
+class LinearPCMResampler:
+    """Small stateful fallback for desktop Python builds without ``audioop``."""
+
+    def __init__(self, input_rate, output_rate):
+        self.step = float(input_rate) / float(output_rate)
+        self.position = 0.0
+        self.buffer = np.empty(0, dtype=np.float32) if np is not None else None
+
+    def process(self, samples):
+        if np is None or not len(samples):
+            return np.empty(0, dtype=np.float32) if np is not None else []
+        self.buffer = np.concatenate((self.buffer, samples.astype(np.float32, copy=False)))
+        positions = np.arange(self.position, max(self.position, len(self.buffer) - 1), self.step)
+        if not len(positions):
+            return np.empty(0, dtype=np.float32)
+        indices = positions.astype(np.int64)
+        fractions = positions - indices
+        output = self.buffer[indices] * (1.0 - fractions) + self.buffer[indices + 1] * fractions
+        self.position = float(positions[-1] + self.step)
+        consumed = int(self.position)
+        if consumed:
+            self.buffer = self.buffer[consumed:]
+            self.position -= consumed
+        return output.astype(np.float32, copy=False)
+
+
+class HFEnhanceRuntime:
+    """Causal Pi-side ONNX spectral masker for the separate listening path.
+
+    It runs at the corpus' native 8 kHz, retaining the received phase and
+    reconstructing with normalized overlap-add. This deliberately does not
+    sit in front of the caption queues: ASR keeps the native Kiwi signal.
+    """
+
+    INPUT_RATE = 12000
+    MODEL_RATE = 8000
+    FFT_SIZE = 256
+    HOP_SIZE = 160
+    HIDDEN_SIZE = 384
+    # The compact model is trained at 8 kHz. Replace its useful speech band,
+    # but leave Kiwi's 4--6 kHz detail from the original 12 kHz stream intact.
+    WET_MIX = 0.62
+    LOW_BAND_CUTOFF_HZ = 3600.0
+
+    def __init__(self, model_path=HF_ENHANCE_MODEL):
+        if np is None or ort is None or not Path(model_path).is_file():
+            raise RuntimeError("HF Enhance model or ONNX runtime unavailable")
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(str(model_path), sess_options=options, providers=["CPUExecutionProvider"])
+        self.to_model_state = None
+        self.from_model_state = None
+        self.to_model_linear = LinearPCMResampler(self.INPUT_RATE, self.MODEL_RATE)
+        self.from_model_linear = LinearPCMResampler(self.MODEL_RATE, self.INPUT_RATE)
+        self.pending = np.empty(0, dtype=np.float32)
+        self.window = np.hanning(self.FFT_SIZE).astype(np.float32)
+        self.ola = np.zeros(self.FFT_SIZE, dtype=np.float32)
+        self.ola_weight = np.zeros(self.FFT_SIZE, dtype=np.float32)
+        self.state = np.zeros((1, 1, self.HIDDEN_SIZE), dtype=np.float32)
+        self.raw_output = bytearray()
+        self.low_band_state = 0.0
+        self.low_band_alpha = float(1.0 - np.exp(-2.0 * np.pi * self.LOW_BAND_CUTOFF_HZ / self.INPUT_RATE))
+
+    def _resample_input(self, audio):
+        if audioop is not None:
+            converted, self.to_model_state = audioop.ratecv(audio, 2, 1, self.INPUT_RATE, self.MODEL_RATE, self.to_model_state)
+            return np.frombuffer(converted, dtype="<i2").astype(np.float32) / 32768.0
+        source = np.frombuffer(audio, dtype="<i2").astype(np.float32) / 32768.0
+        return self.to_model_linear.process(source)
+
+    def _resample_output(self, samples):
+        clipped = np.clip(samples, -1.0, 0.9999695)
+        raw = (clipped * 32768.0).astype("<i2").tobytes()
+        if audioop is not None:
+            converted, self.from_model_state = audioop.ratecv(raw, 2, 1, self.MODEL_RATE, self.INPUT_RATE, self.from_model_state)
+            return converted
+        return (np.clip(self.from_model_linear.process(clipped), -1.0, 0.9999695) * 32768.0).astype("<i2").tobytes()
+
+    def close(self):
+        self.session = None
+
+    def _blend_with_fullband_raw(self, enhanced_pcm):
+        """Replace only the noisy lower speech band without dulling Kiwi audio."""
+        needed = len(enhanced_pcm)
+        if needed <= 0:
+            return enhanced_pcm
+        if len(self.raw_output) < needed:
+            # The first analysis frame can be shorter than the input packet.
+            raw_pcm = bytes(self.raw_output) + b"\0" * (needed - len(self.raw_output))
+            self.raw_output.clear()
+        else:
+            raw_pcm = bytes(self.raw_output[:needed])
+            del self.raw_output[:needed]
+
+        raw = np.frombuffer(raw_pcm, dtype="<i2").astype(np.float32) / 32768.0
+        enhanced = np.frombuffer(enhanced_pcm, dtype="<i2").astype(np.float32) / 32768.0
+        low = np.empty_like(raw)
+        state = float(self.low_band_state)
+        alpha = self.low_band_alpha
+        for index, sample in enumerate(raw):
+            state += alpha * (float(sample) - state)
+            low[index] = state
+        self.low_band_state = state
+        mixed = raw + self.WET_MIX * (enhanced - low)
+        return (np.clip(mixed, -1.0, 0.9999695) * 32768.0).astype("<i2").tobytes()
+
+    def process_pcm(self, audio):
+        if not audio:
+            return audio
+        self.raw_output.extend(audio)
+        self.pending = np.concatenate((self.pending, self._resample_input(audio)))
+        output_frames = []
+        while len(self.pending) >= self.FFT_SIZE:
+            frame = self.pending[:self.FFT_SIZE]
+            self.pending = self.pending[self.HOP_SIZE:]
+            spectrum = np.fft.rfft(frame * self.window)
+            features = np.log1p(np.abs(spectrum)).astype(np.float32)[None, None, :]
+            mask, self.state = self.session.run(None, {"log_magnitude": features, "state": self.state})
+            enhanced = np.fft.irfft(spectrum * mask[0, 0], n=self.FFT_SIZE).real.astype(np.float32)
+            self.ola += enhanced * self.window
+            self.ola_weight += self.window * self.window
+            output = np.divide(self.ola[:self.HOP_SIZE], self.ola_weight[:self.HOP_SIZE], out=np.zeros(self.HOP_SIZE, dtype=np.float32), where=self.ola_weight[:self.HOP_SIZE] > 1e-5)
+            output_frames.append(output)
+            self.ola[:-self.HOP_SIZE] = self.ola[self.HOP_SIZE:]
+            self.ola[-self.HOP_SIZE:] = 0.0
+            self.ola_weight[:-self.HOP_SIZE] = self.ola_weight[self.HOP_SIZE:]
+            self.ola_weight[-self.HOP_SIZE:] = 0.0
+        if not output_frames:
+            return b""
+        return self._blend_with_fullband_raw(self._resample_output(np.concatenate(output_frames)))
+
+
 class VoskResampler:
-    """Streaming SpeexDSP converter for Vosk's required 16 kHz mono PCM."""
+    """Streaming 12 kHz-to-16 kHz PCM conversion for every caption engine.
+
+    SpeexDSP is the preferred low-overhead Pi implementation. macOS does not
+    ship that Linux shared library, so the desktop simulator uses `audioop`'s
+    stateful converter instead. The fallback keeps consecutive Kiwi packets
+    phase-continuous and lets the same Vosk, Moonshine, and Parakeet lanes run
+    locally without making the Mac a special mock path.
+    """
 
     def __init__(self):
-        self.library = ctypes.CDLL(SPEEXDSP_LIBRARY)
+        self.library = None
+        self.state = None
+        self.fallback_state = None
+        self.linear_buffer = []
+        self.linear_position = 0.0
+        try:
+            self.library = ctypes.CDLL(SPEEXDSP_LIBRARY)
+        except OSError:
+            return
         self.library.speex_resampler_init.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
         self.library.speex_resampler_init.restype = ctypes.c_void_p
         self.library.speex_resampler_destroy.argtypes = [ctypes.c_void_p]
@@ -2915,7 +3648,7 @@ class VoskResampler:
             raise RuntimeError(f"Vosk resampler init failed ({error.value})")
 
     def close(self):
-        if self.state:
+        if self.library is not None and self.state:
             self.library.speex_resampler_destroy(self.state)
             self.state = None
 
@@ -2923,6 +3656,14 @@ class VoskResampler:
         sample_count = len(audio) // 2
         if not sample_count:
             return b""
+        if self.library is None:
+            source = audio[:sample_count * 2]
+            if audioop is not None:
+                converted, self.fallback_state = audioop.ratecv(
+                    source, 2, 1, 12000, 16000, self.fallback_state
+                )
+                return converted
+            return self._linear_fallback(source)
         source = (ctypes.c_short * sample_count).from_buffer_copy(audio[:sample_count * 2])
         capacity = int(math.ceil(sample_count * 4.0 / 3.0)) + 128
         destination = (ctypes.c_short * capacity)()
@@ -2934,6 +3675,29 @@ class VoskResampler:
         # negative samples, so copy the raw sample memory exactly as Vosk
         # expects instead of treating it as an unsigned byte sequence.
         return ctypes.string_at(destination, output_count.value * ctypes.sizeof(ctypes.c_short))
+
+    def _linear_fallback(self, audio):
+        """Portable 12-to-16 kHz fallback for macOS Python 3.13+.
+
+        The ratio is exactly 4/3. Keeping one short source buffer and its
+        fractional position continuous avoids a click at each Kiwi packet.
+        SpeexDSP remains the production Pi path; this only keeps the desktop
+        simulator's ASR lanes functional when ``audioop`` is unavailable.
+        """
+        self.linear_buffer.extend(struct.unpack(f"<{len(audio) // 2}h", audio))
+        output = []
+        while self.linear_position + 1 < len(self.linear_buffer):
+            index = int(self.linear_position)
+            fraction = self.linear_position - index
+            left = self.linear_buffer[index]
+            right = self.linear_buffer[index + 1]
+            output.append(int(round(left + (right - left) * fraction)))
+            self.linear_position += 0.75
+        consumed = int(self.linear_position)
+        if consumed:
+            del self.linear_buffer[:consumed]
+            self.linear_position -= consumed
+        return struct.pack(f"<{len(output)}h", *output) if output else b""
 
 
 def drain_caption_audio(audio_queue):
@@ -2988,13 +3752,14 @@ class MoonshineStreamingListener(
     moonshine_voice.TranscriptEventListener if moonshine_voice is not None else object
 ):
     """Bridge Moonshine Voice events into the SDR's calm subtitle pacing."""
-    def __init__(self, state, generation):
+    def __init__(self, state, generation, language="en"):
         self.state = state
         self.generation = generation
+        self.language = language
 
     def _current(self):
         _enabled, engine, _lines, _partial, _status, generation = self.state.transcription_snapshot()
-        return engine == "moonshine" and generation == self.generation
+        return moonshine_language(engine) == self.language and generation == self.generation
 
     def on_line_text_changed(self, event):
         if self._current():
@@ -3009,18 +3774,34 @@ class MoonshineStreamingListener(
             self.state.set_transcript(status="MOON ERROR")
 
 
-def moonshine_streaming_transcriber(state, generation):
-    """Optional benchmark backend; Base remains the live Pi default."""
-    if (
-        not MOONSHINE_SMALL_STREAMING_TRIAL
-        or moonshine_voice is None
-        or not MOONSHINE_STREAMING_MODEL_DIR.is_dir()
-    ):
+def moonshine_streaming_transcriber(state, generation, language):
+    """Return Moonshine Voice for a selected language profile when available.
+
+    English keeps the existing Sherpa Base path by default. Other Moonshine
+    languages are Base profiles fetched on their first deliberate selection
+    and then kept in the local vendor cache for future starts.
+    """
+    if moonshine_voice is None:
         return None
-    listener = MoonshineStreamingListener(state, generation)
+    if language == "en":
+        if not MOONSHINE_SMALL_STREAMING_TRIAL or not MOONSHINE_STREAMING_MODEL_DIR.is_dir():
+            return None
+        model_path = MOONSHINE_STREAMING_MODEL_DIR
+        architecture = moonshine_voice.ModelArch.SMALL_STREAMING
+    else:
+        try:
+            from moonshine_voice import download as moonshine_download
+            model_info = moonshine_download.find_model_info(language, moonshine_voice.ModelArch.BASE)
+            model_path, architecture = moonshine_download.download_model_from_info(
+                model_info,
+                cache_root=vendor_path("moonshine-voice"),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Moonshine {language.upper()} profile unavailable: {exc}") from exc
+    listener = MoonshineStreamingListener(state, generation, language)
     transcriber = moonshine_voice.Transcriber(
-        str(MOONSHINE_STREAMING_MODEL_DIR),
-        moonshine_voice.ModelArch.SMALL_STREAMING,
+        str(model_path),
+        architecture,
         update_interval=0.55,
     )
     transcriber.add_listener(listener)
@@ -3041,6 +3822,190 @@ def close_moonshine_streaming(transcriber):
         pass
 
 
+def deepgram_api_key():
+    """Read the cloud credential from env or the owner-only touch setup file."""
+    api_key = os.environ.get("ITUNER_DEEPGRAM_API_KEY") or os.environ.get("DEEPGRAM_API_KEY")
+    if api_key:
+        return api_key.strip()
+    try:
+        for line in DEEPGRAM_CREDENTIAL_FILE.read_text().splitlines():
+            name, separator, value = line.partition("=")
+            if separator and name.strip() == "DEEPGRAM_API_KEY":
+                return value.strip()
+    except OSError:
+        pass
+    return None
+
+
+def save_deepgram_api_key(api_key):
+    """Atomically persist a touch-entered key without ever touching project data."""
+    api_key = str(api_key).strip()
+    if len(api_key) < 12 or len(api_key) > 512 or any(char.isspace() for char in api_key):
+        raise ValueError("enter the complete API key")
+    DEEPGRAM_CREDENTIAL_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(DEEPGRAM_CREDENTIAL_FILE.parent, 0o700)
+    except OSError:
+        pass
+    temporary = DEEPGRAM_CREDENTIAL_FILE.with_name(f".{DEEPGRAM_CREDENTIAL_FILE.name}.{os.getpid()}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(f"DEEPGRAM_API_KEY={api_key}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, DEEPGRAM_CREDENTIAL_FILE)
+        os.chmod(DEEPGRAM_CREDENTIAL_FILE, 0o600)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    os.environ["DEEPGRAM_API_KEY"] = api_key
+
+
+def desktop_clipboard_text():
+    """Read plain text only for the local desktop key-entry sheet."""
+    if sys.platform == "darwin":
+        try:
+            return subprocess.check_output(
+                ("pbpaste",), text=True, stderr=subprocess.DEVNULL, timeout=1.0
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    try:
+        pygame.scrap.init()
+        payload = pygame.scrap.get(pygame.SCRAP_TEXT)
+        if isinstance(payload, bytes):
+            return payload.decode("utf-8", "ignore").replace("\0", "").strip()
+        return str(payload or "").strip()
+    except pygame.error:
+        return ""
+
+
+def append_desktop_deepgram_clipboard(value):
+    """Append a Mac/Linux desktop clipboard value to the secret field."""
+    pasted = desktop_clipboard_text()
+    if not pasted:
+        return value, "clipboard has no text"
+    return value + pasted[:max(0, 512 - len(value))], ""
+
+
+class DeepgramStreamingTranscriber:
+    """A bounded live Deepgram bridge for the existing 16 kHz caption lane."""
+
+    def __init__(self, state, generation, ham_profile=False):
+        api_key = deepgram_api_key()
+        if not api_key:
+            raise RuntimeError("set DEEPGRAM_API_KEY")
+        if DeepgramClient is None:
+            raise RuntimeError("Deepgram SDK unavailable")
+        self.state = state
+        self.generation = generation
+        self.ham_profile = bool(ham_profile)
+        self.closed = False
+        self.error = None
+        self.final_parts = []
+        self.last_caption_publish_at = 0.0
+        self.last_send_at = time.monotonic()
+        self.client = DeepgramClient(api_key)
+        self.connection = self.client.listen.websocket.v("1")
+        self.connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
+        self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
+        option_values = dict(
+            model=DEEPGRAM_MODEL,
+            language=DEEPGRAM_LANGUAGE,
+            encoding="linear16",
+            sample_rate=16000,
+            channels=1,
+            # Nova-3's live endpoint uses interim output with our endpointing
+            # options. The callback deliberately ignores those revisions and
+            # publishes only final text at a calm cadence below.
+            interim_results=True,
+            smart_format=True,
+            punctuate=True,
+            endpointing=750,
+            utterance_end_ms="1500",
+            keyterm=list(DEEPGRAM_HAM_KEYTERMS if self.ham_profile else DEEPGRAM_KEYTERMS),
+        )
+        if self.ham_profile:
+            # A short N-best set is input to the local callsign scorer. The
+            # primary Deepgram transcript remains the visible ASR text.
+            option_values["alternatives"] = 3
+        options = LiveOptions(**option_values)
+        if not self.connection.start(options):
+            raise RuntimeError("Deepgram connection failed")
+
+    def _current(self):
+        enabled, engine, _lines, _partial, _status, generation = self.state.transcription_snapshot()
+        return enabled and is_deepgram_engine(engine) and generation == self.generation
+
+    def _on_transcript(self, _client, result, **_kwargs):
+        if self.closed or not self._current():
+            return
+        try:
+            alternatives = result.channel.alternatives
+            transcript = alternatives[0].transcript.strip()
+        except (AttributeError, IndexError):
+            return
+        if not transcript:
+            return
+        if getattr(result, "is_final", False):
+            if self.ham_profile:
+                self.state.set_ham_asr_alternatives(
+                    (
+                        {
+                            "text": getattr(alternative, "transcript", ""),
+                            "confidence": getattr(alternative, "confidence", 0.0),
+                        }
+                        for alternative in alternatives
+                    ),
+                    self.generation,
+                )
+            self.final_parts.append(transcript)
+            now = time.monotonic()
+            # HF noise can prevent a conventional speech_final boundary. A
+            # short cadence gives stable, readable updates without a rapid
+            # flicker of tiny corrected fragments.
+            if (
+                getattr(result, "speech_final", False)
+                or now - self.last_caption_publish_at >= DEEPGRAM_CAPTION_PUBLISH_SECONDS
+            ):
+                self.state.set_transcript(
+                    text=" ".join(self.final_parts), partial="", status="LISTENING"
+                )
+                self.final_parts.clear()
+                self.last_caption_publish_at = now
+            return
+
+    def _on_error(self, _client, error, **_kwargs):
+        self.error = str(error)
+        if self._current():
+            self.state.set_transcript(status="DEEP ERROR")
+
+    def add_audio(self, pcm16):
+        if self.error:
+            raise RuntimeError(self.error)
+        if not self.connection.send(pcm16):
+            raise RuntimeError("Deepgram audio send failed")
+        self.last_send_at = time.monotonic()
+
+    def keepalive_if_due(self, interval=4.0):
+        """Keep an already-audible stream open during Kiwi receiver gaps."""
+        if self.error or self.closed or time.monotonic() - self.last_send_at < interval:
+            return
+        if not self.connection.send('{"type":"KeepAlive"}'):
+            raise RuntimeError("Deepgram keepalive send failed")
+        self.last_send_at = time.monotonic()
+
+    def close(self):
+        self.closed = True
+        try:
+            self.connection.finish()
+        except Exception:
+            pass
+
+
 def whisper_transcribe(pcm16):
     """Run a bounded Whisper.cpp decode; stale source audio is dropped upstream."""
     if not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file():
@@ -3056,7 +4021,7 @@ def whisper_transcribe(pcm16):
         result = subprocess.run(
             [
                 str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
-                "-l", "en", "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
+                "-l", WHISPER_LANGUAGE, "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -3069,9 +4034,372 @@ def whisper_transcribe(pcm16):
         return " ".join(text_path.read_text(errors="replace").split())
 
 
+def ham_radio_from_vosk_text(result, callsign_book=None):
+    """Normalize a constrained Vosk result into a call and compact ham phrase."""
+    raw_text = str(result.get("text", "")).lower().replace("-", " ")
+    for spoken, code in HAM_SPELLED_CODE_MAP:
+        raw_text = raw_text.replace(spoken, code.lower())
+    words = raw_text.replace("x ray", "xray").split()
+    candidates = []
+    current = []
+    phrase = []
+
+    def flush_current():
+        nonlocal current
+        if 3 <= len(current) <= 7:
+            callsign = "".join(current)
+            candidates.append(callsign)
+            phrase.append(callsign)
+        current = []
+
+    for word in words:
+        symbol = CALLSIGN_WORD_TO_SYMBOL.get(word)
+        if symbol:
+            # A numeric word following an already credible all-letter call is
+            # almost always an RST report (e.g. KPFW five nine), whereas K1ABC
+            # must retain the digit after its first letter.
+            if symbol.isdigit() and len(current) >= 3 and not any(char.isdigit() for char in current):
+                flush_current()
+            if symbol.isdigit() and not current:
+                phrase.append(word.upper())
+                continue
+            current.append(symbol)
+            continue
+        flush_current()
+        if word in HAM_RADIO_WORDS:
+            phrase.append(word.upper())
+    flush_current()
+    message = format_ham_message(phrase)
+    if not candidates:
+        return None, message or None
+    # Numbers are a useful positive cue, but four-letter broadcast/club calls
+    # such as KPFW must also be accepted.
+    return max(
+        candidates,
+        key=lambda value: (
+            bool(callsign_book and callsign_book.contains(value)),
+            any(char.isdigit() for char in value),
+            len(value),
+        ),
+    ), message or None
+
+
+def format_ham_message(tokens):
+    """Present constrained decoder tokens as readable ham-radio traffic."""
+    if not tokens:
+        return ""
+    words = [str(token).upper() for token in tokens]
+    text = " ".join(words).replace("SEVENTY THREE", "73").replace("FIVE NINE", "59")
+    words = text.split()
+    radio_tokens = {
+        "CQ", "DE", "DX", "QSO", "QSL", "QRM", "QRN", "QRO", "QRP", "QRS", "QRZ", "QSB", "QSY", "QTH",
+        "QRL", "QRT", "QRV", "QRX", "QSK", "QTC", "QTR", "RST", "SK",
+    }
+    narrative_tokens = {
+        "THIS", "IS", "FROM", "TO", "CALLING", "CALL", "STATION", "OPERATOR", "NAME", "HANDLE",
+        "REPORT", "SIGNAL", "READABILITY", "STRENGTH", "POWER", "WATTS", "ANTENNA", "RIG", "BAND",
+        "FREQUENCY", "PORTABLE", "MOBILE", "MARITIME", "AERONAUTICAL", "CONTEST", "EXCHANGE", "GRID",
+        "LOCATOR", "WEATHER", "THANKS", "THANK", "YOU", "PLEASE", "AGAIN", "STANDBY", "MONITORING",
+        "LISTENING", "CLEAR", "OUT", "OVER", "BREAK", "ROGER", "COPY",
+    }
+
+    def display_word(word):
+        if word in radio_tokens or word.isdigit():
+            return word
+        if word in narrative_tokens:
+            return word.lower()
+        if re.fullmatch(r"[A-Z0-9]{3,7}", word):
+            return word
+        return word.lower()
+
+    if len(words) >= 2 and words[:2] == ["THIS", "IS"]:
+        return "This is " + " ".join(display_word(word) for word in words[2:])
+    if "CALLING" in words:
+        calling_index = words.index("CALLING")
+        callers = words[:calling_index]
+        targets = words[calling_index + 1:]
+        if callers and targets:
+            return "This is " + " ".join(display_word(word) for word in callers) + " calling " + " ".join(display_word(word) for word in targets)
+    return " ".join(display_word(word) for word in words)
+
+
+def ham_radio_from_vosk_result(result, callsign_book=None):
+    """Pick the best ham interpretation from Vosk's N-best hypotheses."""
+    alternatives = result.get("alternatives") if isinstance(result, dict) else None
+    hypotheses = alternatives if isinstance(alternatives, list) and alternatives else [result]
+    decoded = [ham_radio_from_vosk_text(hypothesis, callsign_book) for hypothesis in hypotheses if isinstance(hypothesis, dict)]
+    if not decoded:
+        return None, None
+
+    def score(item):
+        callsign, message = item
+        message = message or ""
+        return (
+            bool(callsign and callsign_book and callsign_book.contains(callsign)),
+            int("CQ" in message) + int(" DE " in f" {message} ") + int(" calling " in message),
+            bool(callsign and any(char.isdigit() for char in callsign)),
+            len(message),
+        )
+
+    return max(decoded, key=score)
+
+
+def callsigns_from_general_caption(text):
+    """Extract explicit callsigns from a broad ASR caption without guessing."""
+    source = str(text or "").upper().replace("-", " ")
+    compact = re.sub(r"\s+", "", source)
+    candidates = re.findall(r"(?<![A-Z0-9])[A-Z]{1,3}\d[A-Z]{1,4}(?![A-Z0-9])", source)
+    # An explicit, space-delimited call is already better evidence than the
+    # compact recovery below. In particular, do not let `CQ K1ABC calling`
+    # absorb the first C of `calling` as an extra callsign suffix.
+    if candidates:
+        return tuple(dict.fromkeys(candidate.upper() for candidate in candidates))
+    # Broad recognizers sometimes put spaces between call characters. The
+    # compact pass is intentionally limited to familiar QSO lead-in phrases.
+    for phrase in ("CQ", "DE", "THISIS", "CALLING"):
+        start = compact.find(phrase)
+        if start < 0:
+            continue
+        tail = compact[start + len(phrase):]
+        match = re.match(r"([A-Z]{1,3}\d[A-Z]{1,4})", tail)
+        if match:
+            candidates.append(match.group(1))
+    return tuple(dict.fromkeys(candidate.upper() for candidate in candidates))
+
+
+def qso_behavior_from_caption(text, callsigns=()):
+    """Summarize explicit QSO behavior without inventing missing speech."""
+    source = " ".join(str(text or "").upper().replace("-", " ").split())
+    calls = tuple(dict.fromkeys(value.upper() for value in callsigns if value))
+    primary = calls[0] if calls else ""
+    if not source:
+        return ""
+    if re.search(r"\bCQ\b", source):
+        return f"CQ {primary}".strip()
+    if re.search(r"\bTHIS\s+IS\b", source) and re.search(r"\bCALLING\b", source) and len(calls) >= 2:
+        return f"This is {calls[0]} calling {calls[1]}"
+    if re.search(r"\bCALLING\b", source) and primary:
+        return f"{primary} calling"
+    if re.search(r"\bQSL\b", source):
+        return f"{primary} QSL".strip()
+    if re.search(r"\bQTH\b", source):
+        return f"{primary} QTH".strip()
+    if re.search(r"\b(?:RST|REPORT|FIVE\s+(?:BY\s+)?NINE)\b", source):
+        return f"{primary} report".strip()
+    if re.search(r"\b(?:73|SEVENTY\s+THREE|SK|CLEAR|OVER)\b", source):
+        return f"{primary} 73".strip()
+    return ""
+
+
+def deepgram_ham_evidence(alternatives, callsign_book=None):
+    """Return only corroborated D-HAM calls plus a compact QSO event.
+
+    Deepgram's N-best text helps with normal language and spoken phonetics, but
+    a single noisy alternative must never be enough to highlight an arbitrary
+    callsign. A call is accepted only when it is in the local book, appears in
+    two alternatives, or is explicit in a QSO-shaped high-confidence result.
+    """
+    entries = []
+    counts = {}
+    for alternative in alternatives or ():
+        if not isinstance(alternative, dict):
+            continue
+        text = " ".join(str(alternative.get("text", "")).split())
+        if not text:
+            continue
+        try:
+            confidence = float(alternative.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        decoded_call, decoded_message = ham_radio_from_vosk_text({"text": text}, callsign_book)
+        explicit = callsigns_from_general_caption(text)
+        calls = tuple(dict.fromkeys(value for value in (*explicit, decoded_call) if value))
+        caption_message = qso_behavior_from_caption(text, calls)
+        qso_message = caption_message if explicit else (
+            decoded_message
+            if decoded_message and re.search(r"\b(?:CQ|CALLING|QSL|QTH|RST|REPORT|73|SK)\b", decoded_message.upper())
+            else caption_message
+        )
+        entries.append((text, confidence, calls, qso_message))
+        for callsign in calls:
+            counts[callsign] = counts.get(callsign, 0) + 1
+    if not entries:
+        return None, "", ""
+
+    def call_score(callsign):
+        book_match = bool(callsign_book and callsign_book.contains(callsign))
+        best_confidence = max(
+            (confidence for _text, confidence, calls, _message in entries if callsign in calls),
+            default=0.0,
+        )
+        explicit_qso = any(
+            callsign in calls and message
+            for _text, _confidence, calls, message in entries
+        )
+        return (book_match, counts.get(callsign, 0), explicit_qso, best_confidence, len(callsign))
+
+    candidate = max(counts, key=call_score) if counts else None
+    accepted = False
+    if candidate:
+        book_match, count, explicit_qso, confidence, _length = call_score(candidate)
+        accepted = book_match or count >= 2 or (explicit_qso and confidence >= 0.72)
+    primary_text, _confidence, _calls, message = entries[0]
+    if candidate:
+        for text, _confidence, calls, candidate_message in entries:
+            if candidate in calls and candidate_message:
+                primary_text, message = text, candidate_message
+                break
+    return candidate if accepted else None, message, primary_text
+
+
+def fuse_ham_caption(callsign, ham_message, caption_text, caption_age, callsign_book=None):
+    """Use the selected main ASR for context, while Vosk keeps phonetics exact."""
+    if not caption_text or caption_age > CALLSIGN_CONTEXT_MAX_AGE:
+        return callsign, ham_message
+    general = " ".join(str(caption_text).split())
+    general_upper = general.upper()
+    explicit = callsigns_from_general_caption(general)
+    verified = [value for value in explicit if callsign_book and callsign_book.contains(value)]
+    # A call printed directly by the broad recognizer is stronger evidence than
+    # a phonetic reconstruction only when the local callbook verifies it.
+    if verified:
+        callsign = verified[0]
+    elif not callsign and explicit:
+        callsign = explicit[0]
+
+    if not callsign:
+        return callsign, ham_message
+    # Borrow only unequivocal QSO intent from the broad recognizer. Keep the
+    # Vosk phrase when it has richer callsign structure, especially two calls.
+    has_two_calls = len(re.findall(r"\b[A-Z]{1,3}\d[A-Z]{1,4}\b", (ham_message or "").upper())) >= 2
+    if "CQ" in general_upper and "CQ" not in (ham_message or "").upper():
+        return callsign, f"CQ {callsign}"
+    if re.search(r"\bTHIS\s+IS\b", general_upper) and not has_two_calls:
+        return callsign, f"This is {callsign}"
+    return callsign, ham_message
+
+
+def fuse_ham_hypotheses(strict, broad, caption_text, caption_age, callsign_book=None):
+    """Ensemble the strict phonetic and hidden broad-Vosk hypotheses."""
+    strict_call, strict_message = strict
+    broad_call, broad_message = broad
+    candidates = [value for value in (strict_call, broad_call) if value]
+    verified = [value for value in candidates if callsign_book and callsign_book.contains(value)]
+    callsign = verified[0] if verified else (strict_call or broad_call)
+    # The strict grammar is best for individual letters. The broad model has
+    # better ordinary-language context, so borrow it only when strict Vosk did
+    # not form a useful ham phrase.
+    message = strict_message or broad_message
+    if broad_message and (not message or ("CQ" in broad_message and "CQ" not in message)):
+        message = broad_message
+    # A strict `A calling B` parse carries more callsign structure than a
+    # broad caption can usually preserve. Never collapse it to one call.
+    if strict_message and " calling " in strict_message.lower():
+        return strict_call or callsign, strict_message
+    return fuse_ham_caption(callsign, message, caption_text, caption_age, callsign_book)
+
+
+def callsign_worker(stop_event, state, audio_queue):
+    """Run strict phonetic and hidden broad Vosk decoders beside captions."""
+    model = strict_recognizer = broad_recognizer = resampler = None
+    model_path = None
+    callsign_book = HamCallsignBook()
+    broad_result = None
+    broad_result_at = 0.0
+    while not stop_event.is_set():
+        enabled, _value, _message, _status, _updated_at = state.callsign_snapshot()
+        if not enabled:
+            strict_recognizer = broad_recognizer = None
+            broad_result = None
+            if resampler:
+                resampler.close()
+                resampler = None
+            drain_caption_audio(audio_queue)
+            stop_event.wait(0.20)
+            continue
+        try:
+            active_path = active_vosk_model_path()
+            if vosk is None or active_path is None:
+                raise RuntimeError("Vosk model unavailable")
+            if model is None or model_path != active_path:
+                vosk.SetLogLevel(-1)
+                model = vosk.Model(str(active_path))
+                model_path = active_path
+                strict_recognizer = broad_recognizer = None
+            if strict_recognizer is None:
+                strict_recognizer = vosk.KaldiRecognizer(model, 16000, json.dumps(CALLSIGN_VOSK_GRAMMAR))
+                strict_recognizer.SetWords(False)
+                strict_recognizer.SetMaxAlternatives(5)
+                broad_recognizer = vosk.KaldiRecognizer(model, 16000)
+                broad_recognizer.SetWords(False)
+                broad_recognizer.SetMaxAlternatives(8)
+                state.set_callsign(status="LISTENING")
+                print("gl callsign ensemble ready (strict + hidden broad Vosk)", flush=True)
+            if resampler is None:
+                resampler = VoskResampler()
+            try:
+                audio = audio_queue.get(timeout=0.20)
+            except queue.Empty:
+                continue
+            pcm16 = resampler.process(audio)
+            if not pcm16:
+                continue
+            if broad_recognizer.AcceptWaveform(pcm16):
+                broad_result = json.loads(broad_recognizer.Result())
+                broad_result_at = time.monotonic()
+            if not strict_recognizer.AcceptWaveform(pcm16):
+                continue
+            strict_result = json.loads(strict_recognizer.Result())
+            strict = ham_radio_from_vosk_result(strict_result, callsign_book)
+            broad = (
+                ham_radio_from_vosk_result(broad_result, callsign_book)
+                if broad_result is not None and time.monotonic() - broad_result_at <= CALLSIGN_CONTEXT_MAX_AGE
+                else (None, None)
+            )
+            caption_text, caption_timestamp = state.transcript_context_snapshot()
+            callsign, message = fuse_ham_hypotheses(
+                strict,
+                broad,
+                caption_text,
+                time.monotonic() - caption_timestamp,
+                callsign_book,
+            )
+            deepgram_alternatives, deepgram_timestamp = state.ham_asr_alternatives_snapshot()
+            if time.monotonic() - deepgram_timestamp <= CALLSIGN_CONTEXT_MAX_AGE:
+                deepgram_call, deepgram_message, _deepgram_text = deepgram_ham_evidence(
+                    deepgram_alternatives, callsign_book
+                )
+                if deepgram_call:
+                    # A verified/corroborated D-HAM call beats a phonetic-only
+                    # guess. The strict lane still runs continuously as the
+                    # conservative fallback for difficult SSB audio.
+                    callsign = deepgram_call
+                if deepgram_message:
+                    # Prefer explicit QSO behavior over a vague one-word
+                    # phonetic fragment, but never manufacture a narrative.
+                    message = deepgram_message
+            if callsign or message:
+                state.set_callsign(value=callsign, message=message, status="HEARD")
+                print(f"gl ham {message or callsign}", flush=True)
+            elif strict_result.get("text") or strict_result.get("alternatives"):
+                print(f"gl ham rejected strict={strict_result}", flush=True)
+        except Exception as exc:
+            state.set_callsign(status="ERROR")
+            print(f"gl callsign unavailable: {exc}", flush=True)
+            strict_recognizer = broad_recognizer = None
+            model = None
+            if resampler:
+                resampler.close()
+                resampler = None
+            stop_event.wait(1.0)
+    if resampler:
+        resampler.close()
+    callsign_book.close()
+
+
 def asr_caption_worker(stop_event, state, audio_queue):
     """One bounded ASR lane. Only the selected engine receives PCM or CPU."""
-    vosk_model = vosk_recognizer = moonshine = moonshine_streaming = parakeet = resampler = None
+    vosk_model = vosk_recognizer = moonshine = moonshine_streaming = parakeet = deepgram_stream = resampler = None
     loaded_vosk_path = None
     active_engine = None
     seen_generation = -1
@@ -3089,6 +4417,9 @@ def asr_caption_worker(stop_event, state, audio_queue):
             parakeet = None
             close_moonshine_streaming(moonshine_streaming)
             moonshine_streaming = None
+            if deepgram_stream is not None:
+                deepgram_stream.close()
+                deepgram_stream = None
             offline_pcm.clear()
             offline_since_decode = 0.0
             if resampler:
@@ -3098,6 +4429,8 @@ def asr_caption_worker(stop_event, state, audio_queue):
             stop_event.wait(0.15)
             continue
         try:
+            engine_family = asr_engine_family(engine)
+            moon_language = moonshine_language(engine)
             if engine != active_engine or generation != seen_generation:
                 active_engine = engine
                 seen_generation = generation
@@ -3106,14 +4439,17 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 parakeet = None
                 close_moonshine_streaming(moonshine_streaming)
                 moonshine_streaming = None
+                if deepgram_stream is not None:
+                    deepgram_stream.close()
+                    deepgram_stream = None
                 offline_pcm.clear()
                 offline_since_decode = 0.0
                 if resampler:
                     resampler.close()
                 resampler = VoskResampler()
                 drain_caption_audio(audio_queue)
-                state.set_transcript(status=f"LOADING {ASR_ENGINE_LABELS[engine]}")
-            if engine == "vosk":
+                state.set_transcript(status=f"LOADING {asr_engine_label(engine)}")
+            if engine_family == "vosk":
                 model_path = active_vosk_model_path()
                 if vosk is None or model_path is None:
                     raise RuntimeError("Vosk model unavailable")
@@ -3125,33 +4461,56 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 if vosk_recognizer is None:
                     vosk_recognizer = vosk.KaldiRecognizer(vosk_model, 16000)
                     vosk_recognizer.SetWords(False)
-            elif engine == "moonshine" and moonshine_streaming is None and moonshine is None:
-                moonshine_streaming = moonshine_streaming_transcriber(state, generation)
+            elif engine_family == "moonshine" and moonshine_streaming is None and moonshine is None:
+                moonshine_streaming = moonshine_streaming_transcriber(state, generation, moon_language)
                 if moonshine_streaming is not None:
-                    print("gl Moonshine Small Streaming model ready", flush=True)
+                    print(f"gl Moonshine {moon_language.upper()} profile ready", flush=True)
                 else:
+                    if moon_language != "en":
+                        raise RuntimeError(f"Moonshine {moon_language.upper()} runtime unavailable")
                     moonshine, moonshine_dir = moonshine_recognizer()
                     print(f"gl Moonshine fallback model {moonshine_dir.name} ready", flush=True)
-            elif engine == "parakeet" and parakeet is None:
+            elif engine_family == "parakeet" and parakeet is None:
                 parakeet = parakeet_recognizer()
                 print("gl Parakeet TDT-CTC 110M INT8 model ready", flush=True)
-            elif engine == "whisper" and (not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file()):
+            elif engine_family in DEEPGRAM_ENGINES:
+                # Open only after the receiver supplies PCM below. Deepgram
+                # closes a pre-opened stream that sees no first audio packet.
+                pass
+            elif engine_family == "whisper" and (not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file()):
                 raise RuntimeError("Whisper.cpp model unavailable")
-            state.set_transcript(status="LISTENING")
+            state.set_transcript(
+                status=(
+                    "WAITING AUDIO"
+                    if engine_family in DEEPGRAM_ENGINES and deepgram_stream is None
+                    else "LISTENING"
+                )
+            )
             try:
                 audio = audio_queue.get(timeout=0.20)
             except queue.Empty:
+                if engine_family in DEEPGRAM_ENGINES and deepgram_stream is not None:
+                    deepgram_stream.keepalive_if_due()
                 continue
             process_started = time.monotonic()
             pcm16 = resampler.process(audio)
             if not pcm16:
                 continue
-            if engine == "vosk":
+            if engine_family == "vosk":
                 if vosk_recognizer.AcceptWaveform(pcm16):
                     state.set_transcript(text=json.loads(vosk_recognizer.Result()).get("text", ""), partial="", status="LISTENING")
                 else:
                     state.set_transcript(partial=json.loads(vosk_recognizer.PartialResult()).get("partial", ""), status="LISTENING")
-            elif engine == "moonshine" and moonshine_streaming is not None:
+            elif engine_family in DEEPGRAM_ENGINES:
+                if deepgram_stream is None:
+                    deepgram_stream = DeepgramStreamingTranscriber(
+                        state, generation, ham_profile=engine_family == "deepgram_ham"
+                    )
+                    profile = " D-HAM" if engine_family == "deepgram_ham" else ""
+                    print(f"gl Deepgram {DEEPGRAM_MODEL}{profile} live stream ready", flush=True)
+                    state.set_transcript(status="LISTENING")
+                deepgram_stream.add_audio(pcm16)
+            elif engine_family == "moonshine" and moonshine_streaming is not None:
                 # Moonshine Voice handles incremental encoding, VAD-like
                 # phrase boundaries, and revisions internally. Feeding each
                 # radio packet straight through removes our old batch jitter.
@@ -3162,10 +4521,10 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 offline_since_decode += len(pcm16) / 32000.0
                 # The offline engines decode overlapping short windows. That
                 # keeps latency bounded while avoiding a queue of old radio.
-                if engine == "moonshine":
+                if engine_family == "moonshine":
                     target_seconds = 3.5
                     max_window_seconds = 5.0
-                elif engine == "parakeet":
+                elif engine_family == "parakeet":
                     # Parakeet is very quick here; three seconds gives it
                     # useful word context without making captions feel late.
                     target_seconds = 3.0
@@ -3181,13 +4540,13 @@ def asr_caption_worker(stop_event, state, audio_queue):
                     window = bytes(offline_pcm[-max_bytes:])
                     offline_pcm.clear()
                     offline_since_decode = 0.0
-                    if engine == "moonshine":
+                    if engine_family == "moonshine":
                         samples = [sample / 32768.0 for sample in struct.unpack(f"<{len(window) // 2}h", window)]
                         stream = moonshine.create_stream()
                         stream.accept_waveform(16000, samples)
                         moonshine.decode_stream(stream)
                         result_text = stream.result.text
-                    elif engine == "parakeet":
+                    elif engine_family == "parakeet":
                         samples = [sample / 32768.0 for sample in struct.unpack(f"<{len(window) // 2}h", window)]
                         stream = parakeet.create_stream()
                         stream.accept_waveform(16000, samples)
@@ -3195,7 +4554,10 @@ def asr_caption_worker(stop_event, state, audio_queue):
                         result_text = stream.result.text
                     else:
                         result_text = whisper_transcribe(window)
-                    state.set_transcript(partial=result_text, status="LISTENING")
+                    # These are completed offline decode windows, not live
+                    # hypotheses. Commit them to the shared four-line caption
+                    # history just like Deepgram and streaming Moonshine.
+                    state.set_transcript(text=result_text, partial="", status="LISTENING")
             measured_audio_seconds += len(pcm16) / 32000.0
             measured_processing_seconds += time.monotonic() - process_started
             if time.monotonic() >= next_performance_report and measured_audio_seconds > 0.05:
@@ -3208,7 +4570,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 measured_processing_seconds = 0.0
                 next_performance_report = time.monotonic() + 10.0
         except Exception as exc:
-            label = ASR_ENGINE_LABELS.get(active_engine, "ASR")
+            label = asr_engine_label(active_engine)
             state.set_transcript(status=f"{label} ERROR")
             print(f"gl ASR {active_engine}: {exc}", flush=True)
             vosk_recognizer = None
@@ -3216,20 +4578,31 @@ def asr_caption_worker(stop_event, state, audio_queue):
             parakeet = None
             close_moonshine_streaming(moonshine_streaming)
             moonshine_streaming = None
+            if deepgram_stream is not None:
+                deepgram_stream.close()
+                deepgram_stream = None
             stop_event.wait(1.0)
     if resampler:
         resampler.close()
     close_moonshine_streaming(moonshine_streaming)
+    if deepgram_stream is not None:
+        deepgram_stream.close()
 
 
 def rnnoise_voice_mode(radio_mode):
     """RNNoise is a speech enhancer, not a useful DSP stage for digital/IQ."""
-    return str(radio_mode).lower() in ("am", "sam", "lsb", "usb")
+    return str(radio_mode).lower() in (
+        "am", "amn", "amw",
+        "sam", "sau", "sal", "sas", "qam",
+        "lsb", "lsn", "usb", "usn",
+        "nbfm", "nnfm",
+    )
 
 
 def audio_option_at(x, y):
     for name, box in (
         ("mute", AUDIO_MUTE_BOX), ("voice_clean", AUDIO_VOICE_CLEAN_BOX),
+        ("hf_enhance", AUDIO_HF_ENHANCE_BOX),
         ("squelch", AUDIO_SQUELCH_BOX),
         ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
         ("notch", AUDIO_NOTCH_BOX),
@@ -3252,7 +4625,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     output_label = "USB SPEAKER" if output_available else "OUTPUT UNAVAILABLE"
     output_color = (104, 230, 151) if output_available else (242, 163, 104)
     draw_text(text_cache, 148, y0 + 19, output_label, output_color, 13, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 906, y0 + 19, "RAW PCM", (151, 180, 187), 12, False, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, 906, y0 + 19, "RAW ASR", (151, 180, 187), 12, False, True, "rm", family="Liberation Sans")
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
@@ -3329,6 +4702,18 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         voice_clean,
         (123, 193, 250, 230),
     )
+    hf_enhance_level = int(clamp(controls.get("hf_enhance_level", 0), 0, len(HF_ENHANCE_PRESETS) - 1))
+    hf_active = hf_enhance_level > 0
+    hf_detail = HF_ENHANCE_PRESETS[hf_enhance_level]
+    if hf_active and not hf_enhance_available(hf_enhance_level):
+        hf_detail = "MODEL MISSING"
+    panel_button(
+        AUDIO_HF_ENHANCE_BOX,
+        "HF ENH",
+        hf_detail,
+        hf_active,
+        (93, 226, 170, 230),
+    )
     sq = int(controls["squelch_level"])
     panel_slider(AUDIO_SQUELCH_BOX, "SQUELCH", sq, 99)
     agc_detail = "AUTO" if controls["agc"] and not controls["agc_hang"] else ("AUTO HANG" if controls["agc"] else f"MAN {controls['agc_manual_gain']} dB")
@@ -3336,7 +4721,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
     panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
     denoise_level = int(controls["denoise_level"])
-    denoise_slider(AUDIO_DENOISE_BOX, denoise_level, voice_clean)
+    denoise_slider(AUDIO_DENOISE_BOX, denoise_level, voice_clean or hf_active)
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
@@ -3419,10 +4804,11 @@ def flat_map_project(receiver, center_lon, center_lat, box, scale, longitude_off
 def draw_flat_coastlines(center_lon, center_lat, box, scale):
     """Real coastlines, split at projection seams and map edges."""
     width = box[2] - box[0]
+    coastlines = GLOBE_COASTLINES_DETAIL if scale >= 1.25 and GLOBE_COASTLINES_DETAIL else GLOBE_COASTLINES
     # At the lower zooms the edges repeat the world, just like an unfolded
     # cylindrical map: America can sit between Europe and Asia without voids.
     for longitude_offset in (-360.0, 0.0, 360.0):
-        for coastline in GLOBE_COASTLINES:
+        for coastline in coastlines:
             segment = []
             for lat, lon in coastline:
                 point = flat_map_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale, longitude_offset)
@@ -3432,6 +4818,349 @@ def draw_flat_coastlines(center_lon, center_lat, box, scale):
                 if point is not None:
                     segment.append(point)
             draw_logical_polyline(segment, (96, 187, 181, 166), 1)
+
+
+def radiogarden_radius(box, scale):
+    """The globe starts near edge-to-edge, then makes a real regional zoom."""
+    base = min(box[2] - box[0], box[3] - box[1]) * 0.92
+    # A logarithmic radius made a 36x -> 96x change look almost identical.
+    # This gentle power curve preserves a controllable world view while giving
+    # regional closeups enough magnification to read country geography.
+    return base * clamp((max(0.55, scale) / 0.62) ** 0.36, 0.72, 12.0)
+
+
+def radiogarden_project(receiver, center_lon, center_lat, box, scale):
+    """Orthographic globe projection; points behind the limb are hidden."""
+    lat = math.radians(receiver["lat"])
+    lon_delta = math.radians(receiver["lon"]) - center_lon
+    sin_lat, cos_lat = math.sin(lat), math.cos(lat)
+    sin_center, cos_center = math.sin(center_lat), math.cos(center_lat)
+    depth = sin_center * sin_lat + cos_center * cos_lat * math.cos(lon_delta)
+    if depth < 0.0:
+        return None
+    globe_x = cos_lat * math.sin(lon_delta)
+    globe_y = cos_center * sin_lat - sin_center * cos_lat * math.cos(lon_delta)
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    radius = radiogarden_radius(box, scale)
+    return cx + globe_x * radius, cy - globe_y * radius, depth
+
+
+def receiver_map_station_at(x, y, receivers, center_lon, center_lat, box, scale, garden_mode=True):
+    """Resolve a forgiving RadioGarden dot target to the nearest front-side RX."""
+    candidates = []
+    for receiver in receivers:
+        point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
+        if point:
+            candidates.append((math.hypot(point[0] - x, point[1] - y), receiver))
+    if not candidates:
+        return None
+    distance, receiver = min(candidates, key=lambda item: item[0])
+    # The target is intentionally much larger than its luminous core. At a
+    # regional closeup the spatial separation resolves the closest receiver.
+    return receiver if distance <= 42.0 else None
+
+
+def receiver_map_center_candidate(receivers, center_lon, center_lat):
+    """Return the geographically nearest receiver to the map focus point."""
+    if not receivers:
+        return None
+    focus = {"lat": center_lat, "lon": center_lon}
+    return min(receivers, key=lambda receiver: globe_haversine_km(focus, receiver))
+
+
+MAP_VIEWS = ("clean", "borders", "atlas", "satellite")
+MAP_VIEW_LABELS = {
+    "clean": "CLEAN",
+    "borders": "BORDERS",
+    "atlas": "ATLAS",
+    "satellite": "SAT",
+}
+
+
+def draw_receiver_map_graticule(center_lon, center_lat, box, scale):
+    """Subtle latitude/longitude grid for the high-context atlas view."""
+    # Keep a stable, readable grid rather than adding more geometry as the
+    # user approaches a region. Country boundaries remain the detail layer.
+    for latitude in range(-60, 61, 30):
+        segment = []
+        for longitude in range(-180, 181, 5):
+            point = radiogarden_project(
+                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
+            )
+            if point is None:
+                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
+                segment = []
+            else:
+                segment.append((point[0], point[1]))
+        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
+    for longitude in range(-180, 181, 30):
+        segment = []
+        for latitude in range(-85, 86, 5):
+            point = radiogarden_project(
+                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
+            )
+            if point is None:
+                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
+                segment = []
+            else:
+                segment.append((point[0], point[1]))
+        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
+
+
+def satellite_map_texture(text_cache):
+    """Upload the right satellite texture once per OpenGL context.
+
+    Desktop can afford the 4096 px Blue Marble source during close inspection;
+    the Pi intentionally stays on the lighter 2048 px source.
+    """
+    map_path = SATELLITE_MAP_HD_PATH if DESKTOP_1280_MODE and SATELLITE_MAP_HD_PATH.exists() else SATELLITE_MAP_PATH
+    if not map_path.exists():
+        return None
+    surface = _satellite_map_surfaces.get(map_path)
+    if surface is None:
+        try:
+            surface = pygame.image.load(str(map_path)).convert_alpha()
+        except pygame.error:
+            return None
+        _satellite_map_surfaces[map_path] = surface
+    return text_cache.surface_texture(("nasa-blue-marble", str(map_path), map_path.stat().st_mtime_ns), surface)[0]
+
+
+def solar_subpoint(timestamp=None):
+    """Return a close visual approximation of the current sub-solar point."""
+    utc = time.gmtime(time.time() if timestamp is None else timestamp)
+    utc_hour = utc.tm_hour + utc.tm_min / 60.0 + utc.tm_sec / 3600.0
+    # Good enough for a visual terminator: annual axial tilt plus Earth’s
+    # 15-degree-per-hour rotation. This avoids a heavy astronomy dependency.
+    seasonal_angle = math.tau * (utc.tm_yday - 80 + utc_hour / 24.0) / 365.2422
+    declination = math.radians(23.44) * math.sin(seasonal_angle)
+    longitude = math.radians((12.0 - utc_hour) * 15.0)
+    return longitude, declination
+
+
+def satellite_light_color(latitude, longitude, sun_lon, sun_lat):
+    """Per-vertex daylight, night shade and a thin amber/cyan terminator."""
+    lat = math.radians(latitude)
+    lon_delta = math.radians(longitude) - sun_lon
+    illumination = (
+        math.sin(lat) * math.sin(sun_lat)
+        + math.cos(lat) * math.cos(sun_lat) * math.cos(lon_delta)
+    )
+    daylight = clamp((illumination + 0.16) / 0.34, 0.0, 1.0)
+    daylight = daylight * daylight * (3.0 - 2.0 * daylight)
+    # The glow peaks just inside the daylight side of the terminator, keeping
+    # it atmospheric rather than turning the political map into a neon band.
+    twilight = math.exp(-((illumination - 0.025) / 0.115) ** 2)
+    return (
+        0.16 + 0.84 * daylight + 0.15 * twilight,
+        0.22 + 0.78 * daylight + 0.06 * twilight,
+        0.41 + 0.59 * daylight,
+    )
+
+
+def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale):
+    """Map Blue Marble imagery onto the globe with a live solar terminator."""
+    texture = satellite_map_texture(text_cache)
+    if texture is None:
+        return False
+    # This mesh is independent from image resolution. Desktop gets a little
+    # extra curvature for the 4k source; the Pi remains in its proven light
+    # budget, rather than spending CPU just to over-tessellate a tiny panel.
+    lon_steps, lat_steps = (120, 60) if DESKTOP_1280_MODE else (96, 48)
+    sun_lon, sun_lat = solar_subpoint()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+    GL.glBegin(GL.GL_QUADS)
+    for lat_index in range(lat_steps):
+        lat0 = -90.0 + 180.0 * lat_index / lat_steps
+        lat1 = -90.0 + 180.0 * (lat_index + 1) / lat_steps
+        v0 = (90.0 - lat0) / 180.0
+        v1 = (90.0 - lat1) / 180.0
+        for lon_index in range(lon_steps):
+            lon0 = -180.0 + 360.0 * lon_index / lon_steps
+            lon1 = -180.0 + 360.0 * (lon_index + 1) / lon_steps
+            p00 = radiogarden_project({"lat": lat0, "lon": lon0}, center_lon, center_lat, box, scale)
+            p10 = radiogarden_project({"lat": lat0, "lon": lon1}, center_lon, center_lat, box, scale)
+            p11 = radiogarden_project({"lat": lat1, "lon": lon1}, center_lon, center_lat, box, scale)
+            p01 = radiogarden_project({"lat": lat1, "lon": lon0}, center_lon, center_lat, box, scale)
+            if not all((p00, p10, p11, p01)):
+                continue
+            u0 = lon0 / 360.0 + 0.5
+            u1 = lon1 / 360.0 + 0.5
+            for point, lon, lat, u, v in (
+                (p00, lon0, lat0, u0, v0), (p10, lon1, lat0, u1, v0),
+                (p11, lon1, lat1, u1, v1), (p01, lon0, lat1, u0, v1),
+            ):
+                GL.glColor4f(*satellite_light_color(lat, lon, sun_lon, sun_lat), 1.0)
+                GL.glTexCoord2f(u, v)
+                GL.glVertex2f(*logical_to_native(point[0], point[1]))
+    GL.glEnd()
+    return True
+
+
+def draw_receiver_map(
+    text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
+    connection_status, station_health, notice="", garden_mode=False, hover_server=None,
+    map_view="borders",
+):
+    """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
+    box = PICKER_MAP_BOX
+    if DESKTOP_1280_MODE:
+        draw_native_rect(DESKTOP_1280_MAIN_W, 0, NATIVE_W, NATIVE_H, (5, 6, 8, 255))
+    draw_logical_rect(*box, (7, 19, 29, 255))
+    center_lon, center_lat = yaw, pitch
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    radius = radiogarden_radius(box, scale)
+    satellite_drawn = map_view == "satellite" and draw_receiver_map_satellite(
+        text_cache, center_lon, center_lat, box, scale,
+    )
+    if not satellite_drawn:
+        draw_logical_circle(cx, cy, radius, (14, 40, 48, 255), 96)
+    draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
+    if map_view == "atlas":
+        draw_receiver_map_graticule(center_lon, center_lat, box, scale)
+    # Full-detail coastlines are projected on the sphere, split cleanly at
+    # the limb. This stays smooth when a region fills the display.
+    if not satellite_drawn:
+        coastlines = GLOBE_COASTLINES_FINE if scale >= 2.0 else GLOBE_COASTLINES_DETAIL
+        for coastline in coastlines:
+            segment = []
+            for lat, lon in coastline:
+                point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
+                if point is None:
+                    draw_logical_polyline(
+                        segment,
+                        (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
+                        1,
+                    )
+                    segment = []
+                else:
+                    segment.append((point[0], point[1]))
+            draw_logical_polyline(
+                segment,
+                (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
+                1,
+            )
+    # At broad view, a few substantial political boundaries are enough. Once
+    # the user zooms toward a region, change to complete country exteriors.
+    # The source boundary-line dataset is segmented, and those loose segments
+    # look exactly like rivers over the Blue Marble texture.
+    if map_view != "clean" and scale >= (0.75 if satellite_drawn else 1.15):
+        if scale < 1.5:
+            for border in GLOBE_COUNTRY_BORDERS:
+                segment = []
+                for lat, lon in border:
+                    point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
+                    if point is None:
+                        draw_logical_polyline(segment, (207, 222, 211, 150) if satellite_drawn else (177, 203, 201, 196), 1)
+                        segment = []
+                    else:
+                        segment.append((point[0], point[1]))
+                draw_logical_polyline(segment, (207, 222, 211, 150) if satellite_drawn else (177, 203, 201, 196), 1)
+        else:
+            country_color = (241, 218, 132, 228) if satellite_drawn else (179, 224, 212, 220)
+            country_shadow = (6, 12, 14, 150) if satellite_drawn else (4, 15, 18, 126)
+            visible_countries = tuple(visible_country_shapes(GLOBE_COUNTRY_SHAPES, center_lon, center_lat, box, scale))
+            for country in visible_countries:
+                for ring in country["rings"]:
+                    segment = []
+                    for lat, lon in ring:
+                        point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
+                        if point is None:
+                            draw_logical_polyline(segment, country_shadow, 3)
+                            draw_logical_polyline(segment, country_color, 1)
+                            segment = []
+                        else:
+                            segment.append((point[0], point[1]))
+                    draw_logical_polyline(segment, country_shadow, 3)
+                    draw_logical_polyline(segment, country_color, 1)
+            # Country names make the political outlines immediately legible at
+            # a close regional view, without cluttering the globe at overview.
+            if scale >= 3.0:
+                for country in visible_countries:
+                    point = radiogarden_project(country["label"], center_lon, center_lat, box, scale)
+                    if not point or point[2] < 0.16 or not country["name"]:
+                        continue
+                    draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
+                    draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
+    center_candidate = receiver_map_center_candidate(receivers, math.degrees(center_lon), math.degrees(center_lat))
+    now = time.time()
+    for receiver in receivers:
+        entry = station_health.get(receiver["server"], {})
+        ready = (
+            now - entry.get("checked", 0) <= 86400
+            and entry.get("audio") is True
+            and entry.get("waterfall") is True
+        )
+        point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
+        if not point:
+            continue
+        is_selected = receiver["server"] == selected_server
+        is_pending = receiver["server"] == pending_server
+        is_failed = is_pending and connection_status == "failed"
+        is_hovered = receiver["server"] == hover_server
+        color = (
+            (255, 81, 96, 255) if is_failed else
+            ((94, 236, 183, 255) if is_pending else ((83, 229, 176, 232) if ready else (132, 189, 198, 165)))
+        )
+        dot_radius = 5.4 if is_pending else (4.6 if is_hovered or is_selected else (2.35 if ready else 1.65))
+        if is_pending or is_hovered or is_selected:
+            pulse = 3.0 + (math.sin(time.monotonic() * 9.0) + 1.0) * 3.5 if is_pending else 4.0
+            draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 225), 24, True)
+            if is_pending:
+                draw_logical_circle(point[0], point[1], dot_radius + pulse + 7.0, (*color[:3], 108), 24, True)
+        draw_logical_circle(point[0], point[1], dot_radius, color, 20)
+        if is_hovered or is_selected:
+            draw_logical_circle(point[0], point[1], dot_radius + 9, (175, 255, 219, 235), 24, True)
+    selected = next((receiver for receiver in receivers if receiver["server"] == selected_server), None)
+    state_label = {
+        "connecting": "CONNECTING",
+        "retrying": "RETRYING",
+        "no_waterfall": "NO WATERFALL",
+        "waterfall_audio_retry": "AUDIO RETRY",
+        "failed": "UNAVAILABLE",
+    }.get(connection_status, "SELECTED") if selected else "TAP A SQUARE TO SELECT"
+    detail = bottom_station_title(selected["name"], selected["location"]) if selected else f"{len(receivers)} GPS RECEIVERS"
+    draw_logical_rect(box[0] + 14, box[1] + 14, min(box[2] - 14, box[0] + 604), box[1] + 66, (3, 13, 19, 202))
+    draw_text(text_cache, box[0] + 28, box[1] + 32, state_label, (108, 250, 191) if selected else (180, 213, 219), 17, True, False, "lm", family="Cantarell")
+    draw_text(text_cache, box[0] + 28, box[1] + 52, fit_station_text(text_cache, detail, 554, 18, True, False, family="Cantarell"), (229, 242, 244), 18, True, False, "lm", family="Cantarell")
+    draw_logical_circle(cx, cy, 23, (238, 250, 248, 232), 28, True)
+    draw_logical_line(cx - 34, cy, cx - 16, cy, (238, 250, 248, 210), 1)
+    draw_logical_line(cx + 16, cy, cx + 34, cy, (238, 250, 248, 210), 1)
+    draw_logical_line(cx, cy - 34, cx, cy - 16, (238, 250, 248, 210), 1)
+    draw_logical_line(cx, cy + 16, cx, cy + 34, (238, 250, 248, 210), 1)
+    hovered = next((receiver for receiver in receivers if receiver["server"] == hover_server), None)
+    if hovered:
+        hover_detail = bottom_station_title(hovered["name"], hovered["location"])
+        hover_point = radiogarden_project(hovered, center_lon, center_lat, box, scale)
+        if hover_point:
+            label_y = max(box[1] + 66, hover_point[1] - 26)
+            label_x0 = clamp(hover_point[0] - 144, box[0] + 12, box[2] - 300)
+            draw_logical_rect(label_x0, label_y - 14, label_x0 + 288, label_y + 14, (3, 22, 24, 228))
+            draw_text(text_cache, label_x0 + 12, label_y - 4, "TAP TO LISTEN", (117, 255, 197), 14, True, False, "lm", family="Cantarell")
+            draw_text(text_cache, label_x0 + 12, label_y + 10, fit_station_text(text_cache, hover_detail, 264, 16, True, False, family="Cantarell"), (232, 248, 248), 16, True, False, "lm", family="Cantarell")
+    if notice:
+        notice_x0 = max(box[0] + 18, (box[0] + box[2]) / 2 - 286)
+        notice_x1 = min(box[2] - 18, (box[0] + box[2]) / 2 + 286)
+        notice_y1 = box[3] - 36
+        notice_y0 = notice_y1 - 52
+        draw_logical_rect(notice_x0, notice_y0, notice_x1, notice_y1, (5, 30, 28, 228))
+        draw_logical_line(notice_x0, notice_y0, notice_x1, notice_y0, (101, 255, 191, 220), 2)
+        draw_text(text_cache, (notice_x0 + notice_x1) / 2, (notice_y0 + notice_y1) / 2, fit_station_text(text_cache, notice, notice_x1 - notice_x0 - 24, 20, True, False, family="Cantarell"), (226, 255, 244), 20, True, False, "cm", family="Cantarell")
+    # The compact right rail keeps view switching accessible without turning
+    # the map into a desktop-style control surface.
+    draw_logical_rect(RADIOGARDEN_LIST_BOX[0], RADIOGARDEN_LIST_BOX[1], RADIOGARDEN_LIST_BOX[2], RADIOGARDEN_LIST_BOX[3], (4, 18, 24, 196))
+    draw_logical_rect(RADIOGARDEN_EXIT_BOX[0], RADIOGARDEN_EXIT_BOX[1], RADIOGARDEN_EXIT_BOX[2], RADIOGARDEN_EXIT_BOX[3], (4, 18, 24, 196))
+    draw_logical_rect(RADIOGARDEN_VIEW_BOX[0], RADIOGARDEN_VIEW_BOX[1], RADIOGARDEN_VIEW_BOX[2], RADIOGARDEN_VIEW_BOX[3], (4, 18, 24, 208))
+    draw_logical_line(RADIOGARDEN_LIST_BOX[0], RADIOGARDEN_LIST_BOX[1], RADIOGARDEN_LIST_BOX[2], RADIOGARDEN_LIST_BOX[1], (107, 215, 198, 150), 1)
+    draw_logical_line(RADIOGARDEN_EXIT_BOX[0], RADIOGARDEN_EXIT_BOX[1], RADIOGARDEN_EXIT_BOX[2], RADIOGARDEN_EXIT_BOX[1], (135, 169, 176, 130), 1)
+    draw_logical_line(RADIOGARDEN_VIEW_BOX[0], RADIOGARDEN_VIEW_BOX[1], RADIOGARDEN_VIEW_BOX[2], RADIOGARDEN_VIEW_BOX[1], (107, 215, 198, 150), 1)
+    draw_text(text_cache, (RADIOGARDEN_LIST_BOX[0] + RADIOGARDEN_LIST_BOX[2]) / 2, (RADIOGARDEN_LIST_BOX[1] + RADIOGARDEN_LIST_BOX[3]) / 2, "LIST", (221, 244, 243), 14, True, False, "cm", family="Cantarell")
+    draw_text(text_cache, (RADIOGARDEN_EXIT_BOX[0] + RADIOGARDEN_EXIT_BOX[2]) / 2, (RADIOGARDEN_EXIT_BOX[1] + RADIOGARDEN_EXIT_BOX[3]) / 2, "EXIT", (221, 244, 243), 14, True, False, "cm", family="Cantarell")
+    draw_text(text_cache, (RADIOGARDEN_VIEW_BOX[0] + RADIOGARDEN_VIEW_BOX[2]) / 2, RADIOGARDEN_VIEW_BOX[1] + 23, "VIEW", (163, 208, 209), 12, True, False, "cm", family="Cantarell")
+    draw_text(text_cache, (RADIOGARDEN_VIEW_BOX[0] + RADIOGARDEN_VIEW_BOX[2]) / 2, RADIOGARDEN_VIEW_BOX[1] + 45, MAP_VIEW_LABELS.get(map_view, "BORDERS"), (221, 250, 243), 12, True, False, "cm", family="Cantarell")
+    draw_text(text_cache, 22, 22, "RADIOGARDEN", (116, 255, 194), 16, True, False, "lm", family="Cantarell")
+    draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
 def scout_rf_strength(smeter_dbm):
@@ -3968,10 +5697,9 @@ def station_tile(index, scroll):
         return None
     x0, y0, x1, y1 = PICKER_BOX
     pad = 4
-    header_h = 0
     gap = 3
     grid_x0 = x0 + pad
-    grid_y0 = y0 + header_h + pad
+    grid_y0 = y0 + PICKER_HEADER_H + pad
     cell_w = (x1 - x0 - 2 * pad - (PICKER_COLS - 1) * gap) // PICKER_COLS
     cell_h = (y1 - grid_y0 - pad - (PICKER_ROWS - 1) * gap) // PICKER_ROWS
     col = visible_index % PICKER_COLS
@@ -4202,6 +5930,72 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
 
 
+def deepgram_keyboard_rows(mode):
+    if mode == "digits":
+        return DEEPGRAM_KEY_DIGIT_ROWS
+    if mode == "lower":
+        return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in DEEPGRAM_KEY_ROWS)
+    return DEEPGRAM_KEY_ROWS
+
+
+def deepgram_key_at(x, y, mode):
+    for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
+        if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
+            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
+            return "BACK" if key == "<" else key
+    return None
+
+
+def deepgram_setup_action_at(x, y, mode):
+    if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
+        return "PASTE"
+    if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
+        return "MODE"
+    if contains(DEEPGRAM_KEY_CLEAR_BOX, x, y):
+        return "CLEAR"
+    if contains(DEEPGRAM_KEY_CANCEL_BOX, x, y):
+        return "CANCEL"
+    if contains(DEEPGRAM_KEY_SAVE_BOX, x, y):
+        return "SAVE"
+    return deepgram_key_at(x, y, mode)
+
+
+def draw_deepgram_setup(text_cache, value, mode, error=""):
+    """A full-size, touch-safe secret-entry sheet above the live waterfall."""
+    x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
+    draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
+    draw_logical_line(x0, y0, x1, y0, (103, 215, 210, 188), 1)
+    draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", (224, 241, 243), 20, True, False, "lm", family="Cantarell")
+    draw_text(text_cache, x1 - 28, y0 + 23, "LOCAL ONLY", (116, 184, 183), 13, False, False, "rm", family="Cantarell")
+    field_color = (48, 75, 80, 246) if not error else (90, 47, 42, 246)
+    draw_logical_rect(*DEEPGRAM_KEY_FIELD_BOX, field_color)
+    draw_logical_line(DEEPGRAM_KEY_FIELD_BOX[0], DEEPGRAM_KEY_FIELD_BOX[1], DEEPGRAM_KEY_FIELD_BOX[2], DEEPGRAM_KEY_FIELD_BOX[1], (132, 190, 190, 184), 1)
+    masked = "*" * len(value)
+    field_text = masked or (
+        "Click here or Cmd+V to paste your key"
+        if DESKTOP_MODE
+        else "Touch keys to enter your key"
+    )
+    field_color = (229, 241, 243) if value else (145, 171, 174)
+    draw_text(text_cache, DEEPGRAM_KEY_FIELD_BOX[0] + 14, (DEEPGRAM_KEY_FIELD_BOX[1] + DEEPGRAM_KEY_FIELD_BOX[3]) / 2, field_text, field_color, 19, False, False, "lm", family="Cantarell")
+    mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
+    draw_picker_button(text_cache, DEEPGRAM_KEY_MODE_BOX, mode_label, 15, mode != "lower")
+    draw_picker_button(text_cache, DEEPGRAM_KEY_CLEAR_BOX, "CLR", 15)
+    draw_picker_button(text_cache, DEEPGRAM_KEY_CANCEL_BOX, "X", 22)
+    draw_picker_button(text_cache, DEEPGRAM_KEY_SAVE_BOX, "OK", 15, bool(value))
+    for keys, row_x0, row_y0, key_w in deepgram_keyboard_rows(mode):
+        for index, key in enumerate(keys):
+            box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 52)
+            draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 16 if key == "<" else 22)
+    message = error or (
+        "Cmd+V pastes from the Mac clipboard. The key is never shown again."
+        if DESKTOP_MODE
+        else "Saved only on this device. The key is never shown again."
+    )
+    draw_text(text_cache, x0 + 30, y1 - 18, message, (246, 163, 116) if error else (124, 184, 187), 14, False, False, "lm", family="Cantarell")
+
+
 def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mode):
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
     draw_logical_rect(18, 8, 596, 64, (36, 40, 44, 255))
@@ -4291,28 +6085,70 @@ def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, 
     return text + ellipsis if text else ellipsis
 
 
-def wrap_caption_lines(text_cache, text, max_width, size, max_rows=2):
+def caption_font_family():
+    """Prefer installed CJK coverage for multilingual ASR subtitles."""
+    if sys.platform == "darwin":
+        return ("Hiragino Sans GB", "PingFang SC", "sans")
+    return ("Noto Sans CJK JP", "Droid Sans Fallback", "sans")
+
+
+def caption_box_for_waterfall(waterfall_y0, waterfall_y1, anchor):
+    """Pin captions to one stable upper waterfall window."""
+    bottom = min(waterfall_y1, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
+    y0 = min(max(waterfall_y0 + 4, 0), bottom - ASR_CAPTION_HEIGHT)
+    width = DESKTOP_1280_MAIN_W if DESKTOP_1280_MODE else LOGICAL_W
+    return (16, round(y0), width - 16, round(y0 + ASR_CAPTION_HEIGHT))
+
+
+def callsign_box_for_waterfall(waterfall_y0, waterfall_y1, caption_anchor, caption_box=None):
+    """Reserve a non-overlapping lane for the parallel ham decoder."""
+    bottom = min(waterfall_y1, LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - 4)
+    top = min(max(waterfall_y0 + 4, 0), bottom - CALLSIGN_CAPTION_HEIGHT)
+    width = DESKTOP_1280_MAIN_W if DESKTOP_1280_MODE else LOGICAL_W
+    if caption_box is not None:
+        gap = 6
+        below = (caption_box[3] + gap, bottom)
+        if below[1] - below[0] < CALLSIGN_CAPTION_HEIGHT:
+            # ASR captions own the constrained waterfall space. The ham
+            # decoder continues in the background rather than masking words.
+            return None
+        y0 = below[1] - CALLSIGN_CAPTION_HEIGHT
+        return (16, round(y0), width - 16, round(y0 + CALLSIGN_CAPTION_HEIGHT))
+    y0 = bottom - CALLSIGN_CAPTION_HEIGHT
+    return (16, round(y0), width - 16, round(y0 + CALLSIGN_CAPTION_HEIGHT))
+
+
+def has_cjk_text(text):
+    return any(
+        "\u3040" <= char <= "\u30ff" or "\u3400" <= char <= "\u9fff"
+        for char in str(text)
+    )
+
+
+def wrap_caption_lines(text_cache, text, max_width, size, max_rows=2, max_characters=52, family=None):
     """Wrap current ASR text into safe, full-width subtitle rows."""
-    words = " ".join(str(text).split()).split()
+    normalized = " ".join(str(text).split())
+    cjk = has_cjk_text(normalized)
+    words = list(normalized) if cjk else normalized.split()
     rows, current = [], ""
     for word in words:
         # A decoder occasionally emits an implausibly long token. Keep the
         # GPU measurement bounded without placing an ellipsis in normal text.
         word = word[:48]
-        candidate = f"{current} {word}".strip()
-        too_wide = len(candidate) > 52 or text_cache.texture(
-            candidate, size, (255, 255, 255), bold=True, family="Liberation Sans"
+        candidate = f"{current}{word}" if cjk else f"{current} {word}".strip()
+        too_wide = (not cjk and len(candidate) > max_characters) or text_cache.texture(
+            candidate, size, (255, 255, 255), bold=True, family=family
         )[1] > max_width
         if current and too_wide:
             rows.append(current)
-            if len(rows) == max_rows:
-                break
             current = word
         else:
             current = candidate
     if current and len(rows) < max_rows:
         rows.append(current)
-    return rows
+    # Captions are live information: preserve the newest complete rows when
+    # the source is longer than the available subtitle history.
+    return rows[-max_rows:]
 
 
 def station_fields(station):
@@ -4323,17 +6159,28 @@ def station_fields(station):
     return name, location, server, listener_used, listener_total
 
 
-def draw_station_picker(text_cache, stations, scroll, selected_server, query, sort_mode, station_health):
+def draw_station_picker(
+    text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
+    pending_server=None, connection_status=None,
+):
     x0, y0, x1, y1 = PICKER_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
-    draw_logical_rect(794, 0, LOGICAL_W, LOGICAL_H, (18, 21, 24, 255))
-    draw_logical_line(794, 0, 794, LOGICAL_H, (138, 143, 147, 185), 1)
-    draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 23)
+    if DESKTOP_1280_MODE:
+        # `LOGICAL_W` is the native 1024-sample radio canvas. Cover the
+        # desktop-only navigation rail too while the modal browser is open.
+        draw_native_rect(DESKTOP_1280_MAIN_W, 0, NATIVE_W, NATIVE_H, (5, 6, 8, 255))
+        draw_logical_line(0, PICKER_HEADER_H, LOGICAL_W, PICKER_HEADER_H, (83, 112, 119, 180), 1)
+    else:
+        draw_logical_rect(794, 0, LOGICAL_W, LOGICAL_H, (18, 21, 24, 255))
+        draw_logical_line(794, 0, 794, LOGICAL_H, (138, 143, 147, 185), 1)
+    if DESKTOP_1280_MODE:
+        draw_picker_button(text_cache, PICKER_MAP_MODE_BOX, "MAP", 19, selected=False)
+    draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 19 if DESKTOP_1280_MODE else 23)
     draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
-              f"{scroll + 1}–{min(len(stations), scroll + PICKER_ROWS)} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
-    draw_picker_button(text_cache, PICKER_SORT_LOCATION_BOX, "LOCATION", 20, sort_mode == "location")
-    draw_picker_button(text_cache, PICKER_SORT_NAME_BOX, "NAME", 20, sort_mode == "name")
-    draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 20)
+              f"{scroll + 1}–{min(len(stations), scroll + PICKER_COLS * PICKER_ROWS)} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
+    draw_picker_button(text_cache, PICKER_SORT_LOCATION_BOX, "LOCATION", 17 if DESKTOP_1280_MODE else 20, sort_mode == "location")
+    draw_picker_button(text_cache, PICKER_SORT_NAME_BOX, "NAME", 17 if DESKTOP_1280_MODE else 20, sort_mode == "name")
+    draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if DESKTOP_1280_MODE else 20)
 
     for idx, station in enumerate(stations):
         name, location, server, listener_used, listener_total = station_fields(station)
@@ -4341,11 +6188,17 @@ def draw_station_picker(text_cache, stations, scroll, selected_server, query, so
         if not box:
             continue
         selected = server == selected_server
+        pending = server == pending_server
         entry_health = station_health.get(server, {})
         checked = entry_health.get("checked", 0)
         health_fresh = time.time() - checked <= 86400
-        active = health_fresh and entry_health.get("audio") is True
-        if selected:
+        active = health_fresh and entry_health.get("audio") is True and entry_health.get("waterfall") is True
+        if pending:
+            # Retain the selected tile while the two Kiwi streams establish.
+            # The inset/bright outline reads as a real pressed touch state.
+            fill = (22, 82, 65, 242)
+            outline = (112, 255, 188, 248)
+        elif selected:
             fill = (72, 77, 81, 235)
             outline = (212, 216, 219, 230)
         elif active:
@@ -4359,6 +6212,8 @@ def draw_station_picker(text_cache, stations, scroll, selected_server, query, so
         draw_logical_line(box[0], box[3], box[2], box[3], outline, 1)
         draw_logical_line(box[0], box[1], box[0], box[3], outline, 1)
         draw_logical_line(box[2], box[1], box[2], box[3], outline, 1)
+        if pending:
+            draw_logical_rect(box[0] + 3, box[1] + 3, box[2] - 3, box[1] + 8, (112, 255, 188, 230))
         marker_y = (box[1] + box[3]) / 2
         draw_station_health_icons(text_cache, box[0] + 17, marker_y, entry_health, health_fresh)
         generic_name = "0-30" in name.lower() and "sdr" in name.lower()
@@ -4372,9 +6227,11 @@ def draw_station_picker(text_cache, stations, scroll, selected_server, query, so
             station_label = f"{location}  ·  {identifier}" if identifier else location
         else:
             station_label = f"{name}  ·  {location}"
-        title_color = (238, 240, 242) if active or selected else (137, 142, 146)
-        host_color = (129, 134, 138) if active or selected else (82, 87, 91)
-        capacity_color = (198, 202, 205) if active or selected else (110, 115, 119)
+        # Gray health symbols mean unverified or recently unavailable, not a
+        # disabled row. Keep every directory entry equally readable and tappable.
+        title_color = (232, 255, 243) if pending else ((238, 240, 242) if active or selected else (202, 209, 213))
+        host_color = (156, 226, 197) if pending else ((129, 134, 138) if active or selected else (115, 124, 130))
+        capacity_color = (211, 255, 232) if pending else ((198, 202, 205) if active or selected else (158, 167, 172))
         # Reserve a fixed, generously padded glyph lane. This prevents long
         # station titles from ever colliding with the audio/waterfall symbols.
         title_x = box[0] + 90
@@ -4382,7 +6239,14 @@ def draw_station_picker(text_cache, stations, scroll, selected_server, query, so
         draw_text(text_cache, title_x, marker_y - 10, station_label, title_color, 20, True, False, "lm")
         parsed = urlparse(server if "://" in server else "http://" + server)
         host = (parsed.hostname or server)[:24]
-        draw_text(text_cache, title_x, marker_y + 11, host, host_color, 11, False, False, "lm")
+        status_label = {
+            "connecting": "CONNECTING",
+            "retrying": "RETRYING",
+            "waterfall_audio_retry": "W/F WAIT",
+            "no_waterfall": "NO W/F",
+            "failed": "UNAVAILABLE",
+        }.get(connection_status, "CONNECTING") if pending else host
+        draw_text(text_cache, title_x, marker_y + 11, status_label, host_color, 12 if pending else 11, pending, False, "lm")
         capacity = f"{listener_used}/{listener_total}" if listener_used is not None and listener_total is not None else "–/–"
         draw_text(text_cache, box[2] - 16, marker_y - 10, capacity, capacity_color, 17, True, True, "rm")
 
@@ -4567,7 +6431,9 @@ def format_smeter_readout(smeter_dbm):
     return f"−{abs(value)} dBm" if value < 0 else f"+{value} dBm"
 
 
-def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None, transcription_enabled=False, asr_engine="off", alpha=1.0):
+def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None,
+                      transcription_enabled=False, asr_engine="off", callsign_enabled=False,
+                      callsign_value="", ham_message="", callsign_status="OFF", alpha=1.0):
     if alpha <= 0.01:
         return
     compact = y1 - y0 < 28
@@ -4586,46 +6452,124 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         # 40%-wide station title and the CPU/decoder status on the right.
         draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
     draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
-    draw_text(text_cache, 730, status_mid_y, "DECODER", (229, 236, 239), size, False, False, "lm", alpha, family="Cantarell")
+    call_x0, _call_y0, call_x1, _call_y1 = CALLSIGN_TOGGLE_BOX
+    if callsign_enabled:
+        call_color = (102, 238, 163) if callsign_status != "ERROR" else (246, 164, 94)
+        call_label = f"CALL {callsign_value}" if callsign_value else (f"HAM {ham_message}" if ham_message else "CALL ON")
+        draw_logical_rect(call_x0 + 3, y0 + 3, call_x1 - 3, y1 - 3, (12, 48, 39, int(194 * alpha)))
+    else:
+        call_color = (121, 140, 145)
+        call_label = "CALL OFF"
+        draw_logical_rect(call_x0 + 3, y0 + 3, call_x1 - 3, y1 - 3, (15, 23, 29, int(148 * alpha)))
+    call_label = fit_station_text(text_cache, call_label, call_x1 - call_x0 - 12, size, True, False, family="Cantarell")
+    draw_text(text_cache, (call_x0 + call_x1) / 2, status_mid_y, call_label, call_color, size, True, False, "cm", alpha, family="Cantarell")
     asr_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
-    asr_label = f"ASR {ASR_ENGINE_LABELS.get(asr_engine, 'OFF')}" if transcription_enabled else "ASR OFF"
+    asr_label = f"ASR {asr_engine_label(asr_engine)}" if transcription_enabled else "ASR OFF"
     draw_text(text_cache, 944, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
 
-def draw_vosk_captions(text_cache, lines, partial, status):
-    """Large two-line caption overlay; it never changes waterfall geometry."""
-    x0, y0, x1, y1 = VOSK_CAPTION_BOX
+def draw_vosk_captions(text_cache, lines, partial, status, box=None):
+    """Four-line live caption overlay; it never changes waterfall geometry."""
+    x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
+    family = caption_font_family()
     draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
-    # A phrase uses both rows when needed. This reads like subtitles rather
-    # than two independently clipping diagnostic strings.
-    source = partial or (list(lines)[-1] if lines else "")
-    display = wrap_caption_lines(text_cache, source, x1 - x0 - 40, 32)
+    # Keep finished phrases on screen and append the current live hypothesis.
+    # Selecting only lines[-1] made a four-row panel appear to be one row.
+    source = " ".join((*lines, partial)).strip()
+    # Four larger rows make finished radio speech readable at arm's length.
+    display = wrap_caption_lines(
+        text_cache, source, x1 - x0 - 40, 26, max_rows=4, max_characters=62, family=family
+    )
     if not display:
-        draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
         return
+    color = (166, 204, 213) if partial else (230, 241, 244)
+    line_spacing = 30
+    first_y = (y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
     for index, caption in enumerate(display):
-        y = (y0 + y1) / 2 if len(display) == 1 else y0 + 29 + index * 47
-        color = (166, 204, 213) if partial else (230, 241, 244)
-        draw_text(text_cache, x0 + 20, y, caption, color, 32, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 20, first_y + index * line_spacing, caption, color, 26, True, False, "lm", family=family)
 
 
-def asr_option_at(x, y):
-    x0, y0, x1, y1 = ASR_PANEL_BOX
-    if not contains(ASR_PANEL_BOX, x, y):
+def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, status, box):
+    """Show a call readout, never an untrusted second caption stream."""
+    if not enabled or box is None:
+        return
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, (3, 16, 14, 202))
+    draw_logical_rect(x0, y0, x0 + 5, y1, (77, 220, 151, 235))
+    history = tuple(history) if history else (() if not callsign else (callsign,))
+    if not history:
+        source = "LISTENING..." if status != "ERROR" else "VOSK ERROR"
+        draw_text(text_cache, x0 + 18, (y0 + y1) / 2, "HAM", (105, 238, 169), 15, True, False, "lm", family="Cantarell")
+        draw_text(text_cache, x0 + 76, (y0 + y1) / 2, source, (158, 203, 191), 21, True, False, "lm", family="Cantarell")
+        return
+    # Callsigns are the only high-confidence entity this lane promises. The
+    # broad ASR phrase remains available in the normal caption pane, but is
+    # deliberately not repeated here as noisy pseudo-traffic.
+    draw_text(text_cache, x0 + 18, y0 + 13, "CALLS", (105, 238, 169), 13, True, False, "lm", family="Cantarell")
+    field_x0 = x0 + 74
+    line_h = (y1 - y0 - 10) / max(1, len(history))
+    for index, value in enumerate(history):
+        row_y0 = y0 + 5 + index * line_h
+        row_y1 = row_y0 + line_h - 3
+        call_width = text_cache.font(24 if index == 0 else 19, bold=True, family="Cantarell").size(value)[0]
+        field_x1 = min(x1 - 12, field_x0 + max(116, call_width + 28))
+        if index == 0:
+            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (18, 111, 77, 220))
+            draw_logical_rect(field_x0, row_y0, field_x0 + 4, row_y1, (109, 255, 183, 255))
+            color, size = (230, 255, 243), 24
+        else:
+            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (9, 53, 40, 174))
+            color, size = (151, 205, 184), 19
+        label = fit_station_text(text_cache, value, field_x1 - field_x0 - 20, size, True, False, family="Cantarell")
+        draw_text(text_cache, field_x0 + 13, (row_y0 + row_y1) / 2, label, color, size, True, False, "lm", family="Cantarell")
+
+
+def asr_option_at(x, y, moon_language_menu=False):
+    box = ASR_MOON_LANGUAGE_PANEL_BOX if moon_language_menu else ASR_PANEL_BOX
+    x0, y0, x1, y1 = box
+    if not contains(box, x, y):
         return None
+    if moon_language_menu:
+        cols = 4
+        rows = 2
+        col = min(cols - 1, max(0, int((x - x0) * cols / (x1 - x0))))
+        row = min(rows - 1, max(0, int((y - y0) * rows / (y1 - y0))))
+        index = row * cols + col
+        return f"moonshine:{MOONSHINE_LANGUAGE_OPTIONS[index][0]}"
     index = min(len(ASR_ENGINES) - 1, max(0, int((x - x0) * len(ASR_ENGINES) / (x1 - x0))))
     return ASR_ENGINES[index]
 
 
-def draw_asr_panel(text_cache, engine):
+def draw_asr_panel(text_cache, engine, moon_language_menu=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
+    if moon_language_menu:
+        x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
+        draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 232))
+        active_language = moonshine_language(engine) or "en"
+        cell_w = (x1 - x0) / 4
+        cell_h = (y1 - y0) / 2
+        for index, (language, label) in enumerate(MOONSHINE_LANGUAGE_OPTIONS):
+            col, row = index % 4, index // 4
+            left = x0 + col * cell_w + 4
+            right = x0 + (col + 1) * cell_w - 4
+            top = y0 + row * cell_h + 4
+            bottom = y0 + (row + 1) * cell_h - 4
+            active = language == active_language
+            draw_logical_rect(left, top, right, bottom, (24, 82, 61, 230) if active else (20, 32, 39, 214))
+            if active:
+                draw_logical_rect(left, bottom - 3, right, bottom, (100, 255, 163, 245))
+            draw_text(text_cache, (left + right) / 2, (top + bottom) / 2, label,
+                      (180, 248, 207) if active else (197, 211, 215), 18, active, False, "cm", family="Cantarell")
+        return
+
     x0, y0, x1, y1 = ASR_PANEL_BOX
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 224))
     cell_w = (x1 - x0) / len(ASR_ENGINES)
     for index, candidate in enumerate(ASR_ENGINES):
         left = x0 + index * cell_w + 4
         right = x0 + (index + 1) * cell_w - 4
-        active = candidate == engine
+        active = candidate == asr_engine_family(engine)
         draw_logical_rect(left, y0 + 5, right, y1 - 5, (24, 82, 61, 230) if active else (20, 32, 39, 210))
         if active:
             draw_logical_rect(left, y1 - 8, right, y1 - 5, (100, 255, 163, 245))
@@ -4852,6 +6796,10 @@ def draw_ui(
     bandwidth_hz=2400,
     transcription_enabled=False,
     asr_engine="off",
+    callsign_enabled=False,
+    callsign_value="",
+    ham_message="",
+    callsign_status="OFF",
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -4894,6 +6842,10 @@ def draw_ui(
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
             asr_engine=asr_engine,
+            callsign_enabled=callsign_enabled,
+            callsign_value=callsign_value,
+            ham_message=ham_message,
+            callsign_status=callsign_status,
             alpha=instrument_alpha,
         )
     else:
@@ -4907,6 +6859,10 @@ def draw_ui(
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
             asr_engine=asr_engine,
+            callsign_enabled=callsign_enabled,
+            callsign_value=callsign_value,
+            ham_message=ham_message,
+            callsign_status=callsign_status,
             alpha=instrument_alpha,
         )
     draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v7", (64, 156), controls_alpha)
@@ -5123,7 +7079,7 @@ def set_pipewire_default_volume(volume):
         return None
 
 
-def snd_meter_worker(args, stop_event, state, transcript_queue=None):
+def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_queue=None):
     seen_view_generation = -1
     seen_radio_generation = -1
     seen_server_generation = -1
@@ -5132,6 +7088,8 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
     player_channels = None
     voice_cleaner = None
     voice_clean_requested = None
+    hf_enhancer = None
+    hf_enhance_requested = None
     while not stop_event.is_set():
         ws = None
         try:
@@ -5166,10 +7124,17 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
                     player = start_audio_player(args, desired_channels) if desired_channels else None
                     player_channels = desired_channels
                 audio_controls, audio_generation = state.audio_controls_snapshot()
+                voice_clean_level = int(audio_controls.get("voice_clean_level", 0))
                 want_voice_clean = (
-                    bool(audio_controls.get("voice_clean", False))
+                    voice_clean_level in RNNOISE_VOICE_LEVELS
                     and desired_channels == 1
                     and rnnoise_voice_mode(radio_mode)
+                )
+                hf_enhance_level = int(audio_controls.get("hf_enhance_level", 0))
+                hf_enhance_model = (
+                    hf_enhance_model_for_level(hf_enhance_level)
+                    if desired_channels == 1 and rnnoise_voice_mode(radio_mode)
+                    else None
                 )
                 if want_voice_clean != voice_clean_requested:
                     if voice_cleaner is not None:
@@ -5182,6 +7147,17 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
                             print("gl RNNoise voice clean enabled", flush=True)
                         except (OSError, RuntimeError) as exc:
                             print(f"gl RNNoise unavailable: {exc}", flush=True)
+                if hf_enhance_model != hf_enhance_requested:
+                    if hf_enhancer is not None:
+                        hf_enhancer.close()
+                        hf_enhancer = None
+                    hf_enhance_requested = hf_enhance_model
+                    if hf_enhance_model is not None:
+                        try:
+                            hf_enhancer = HFEnhanceRuntime(hf_enhance_model)
+                            print(f"gl HF Enhance listening path enabled ({HF_ENHANCE_PRESETS[hf_enhance_level]})", flush=True)
+                        except (OSError, RuntimeError) as exc:
+                            print(f"gl HF Enhance unavailable: {exc}", flush=True)
                 live_tune_interval = 1.0 / state.tune_rate_snapshot()
                 if server_generation != seen_server_generation:
                     seen_server_generation = server_generation
@@ -5268,32 +7244,52 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
                 if playable_packet:
                     if not (flags & kiwi.SND_FLAG_LITTLE_ENDIAN):
                         audio = kiwi.swap_s16_bytes(audio)
+                    # Never feed listener DSP into ASR. RNNoise is useful to
+                    # the ear, but it can blur weak consonants and callsign
+                    # phonetics. The recognizers always receive raw Kiwi PCM.
+                    raw_audio = audio
+                    listening_audio = raw_audio
                     denoise_level = int(audio_controls.get("denoise_level", 0))
                     if voice_cleaner is not None:
                         voice_level = int(clamp(audio_controls.get("voice_clean_level", 2), 0, len(VOICE_CLEAN_MIX) - 1))
-                        audio = voice_cleaner.process_pcm(audio, mix=VOICE_CLEAN_MIX[voice_level])
+                        listening_audio = voice_cleaner.process_pcm(raw_audio, mix=VOICE_CLEAN_MIX[voice_level])
+                    elif hf_enhancer is not None:
+                        listening_audio = hf_enhancer.process_pcm(raw_audio)
                     elif denoise_level > 0:
-                        audio = apply_denoise_makeup_gain(audio, denoise_makeup_gain_db(denoise_level))
-                    if not audio:
-                        continue
+                        listening_audio = apply_denoise_makeup_gain(raw_audio, denoise_makeup_gain_db(denoise_level))
                     transcription_enabled, _engine, _lines, _partial, _status, _generation = state.transcription_snapshot()
                     if transcription_enabled and transcript_queue is not None:
                         # Captions must stay current. A congested recognizer is
                         # never allowed to build a delayed replay of the radio.
                         try:
-                            transcript_queue.put_nowait(audio)
+                            transcript_queue.put_nowait(raw_audio)
                         except queue.Full:
                             try:
                                 transcript_queue.get_nowait()
                             except queue.Empty:
                                 pass
                             try:
-                                transcript_queue.put_nowait(audio)
+                                transcript_queue.put_nowait(raw_audio)
                             except queue.Full:
                                 pass
-                    if player and player.stdin and not audio_controls.get("mute", False):
+                    callsign_enabled, _callsign_value, _ham_message, _callsign_status, _callsign_updated_at = state.callsign_snapshot()
+                    if callsign_enabled and callsign_queue is not None:
+                        # The callsign listener has its own bounded lane: it
+                        # may never delay sound, waterfall, or normal captions.
                         try:
-                            player.stdin.write(audio)
+                            callsign_queue.put_nowait(raw_audio)
+                        except queue.Full:
+                            try:
+                                callsign_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            try:
+                                callsign_queue.put_nowait(raw_audio)
+                            except queue.Full:
+                                pass
+                    if player and player.stdin and listening_audio and not audio_controls.get("mute", False):
+                        try:
+                            player.stdin.write(listening_audio)
                         except (BrokenPipeError, OSError):
                             stop_audio_player(player)
                             player = None
@@ -5309,6 +7305,8 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None):
                 ws.send_close()
     if voice_cleaner is not None:
         voice_cleaner.close()
+    if hf_enhancer is not None:
+        hf_enhancer.close()
     stop_audio_player(player)
 
 
@@ -5772,6 +7770,7 @@ def main():
     wf_texture = WaterfallTexture()
     line_queue = queue.Queue(maxsize=96)
     transcript_queue = queue.Queue(maxsize=24)
+    callsign_queue = queue.Queue(maxsize=24)
     stop_event = threading.Event()
     screenshot_requested = threading.Event()
     zoom_osd_requested = threading.Event()
@@ -5817,12 +7816,14 @@ def main():
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
         saved_asr_engine = remembered_preferences.get("asr_engine")
-        if saved_asr_engine in ASR_ENGINES:
+        if valid_asr_engine(saved_asr_engine):
             state.set_asr_engine(saved_asr_engine)
         elif isinstance(remembered_preferences.get("vosk_enabled"), bool):
             # Migrate the prior Vosk-only preference without surprising the
             # existing operator after a software update.
             state.set_transcription_enabled(remembered_preferences["vosk_enabled"])
+        if isinstance(remembered_preferences.get("callsign_enabled"), bool):
+            state.set_callsign_enabled(remembered_preferences["callsign_enabled"])
         audio_preferences = remembered_preferences.get("audio", {})
         if isinstance(audio_preferences, dict):
             restored_audio = {
@@ -5831,22 +7832,29 @@ def main():
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
                     "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
+                    "hf_enhance_level",
                     "autonotch_enabled",
                 }
             }
-            # The former four-step control had Light/Medium/Strong. Retain an
-            # active saved preference as the new balanced Medium setting.
-            if audio_preferences.get("voice_clean_profile") != 2 and restored_audio.get("voice_clean_level", 0):
+            profile = int(audio_preferences.get("voice_clean_profile", 0) or 0)
+            # A prior HF Enhance setting lived as the fourth Voice choice.
+            # Migrate it to Epoch 1 so it remains an intentional choice.
+            if profile < 3 and restored_audio.get("voice_clean_level", 0) == 3:
+                restored_audio["voice_clean_level"] = 0
+                restored_audio["hf_enhance_level"] = 1
+            elif profile != 2 and restored_audio.get("voice_clean_level", 0):
                 restored_audio["voice_clean_level"] = 1
             state.set_audio_controls(**restored_audio)
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
-    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue), daemon=True)
+    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue, callsign_queue), daemon=True)
     caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
+    callsign_thread = threading.Thread(target=callsign_worker, args=(stop_event, state, callsign_queue), daemon=True)
     wf_thread.start()
     snd_thread.start()
     caption_thread.start()
+    callsign_thread.start()
 
     desktop_event_writer = None
     desktop_window = None
@@ -5895,11 +7903,32 @@ def main():
     station_sort = "location"
     stations = filtered_stations(all_stations, station_query, station_sort)
     station_health = {}
+    station_pending_server = None
+    station_pending_started_at = 0.0
+    station_connected_at = 0.0
     next_health_reload = 0.0
     menu_open = False
     menu_opened_at = 0.0
     menu_scroll = 0.0
     picker_open = False
+    picker_map_open = False
+    picker_map_yaw = math.radians(-18)
+    picker_map_pitch = math.radians(18)
+    picker_map_scale = 0.62
+    picker_map_garden_mode = True
+    picker_map_view = "satellite"
+    picker_map_selected_server = None
+    picker_map_hover_server = None
+    picker_map_notice = ""
+    picker_map_notice_until = 0.0
+    picker_map_start_yaw = picker_map_yaw
+    picker_map_start_pitch = picker_map_pitch
+    picker_map_pinch_distance = None
+    picker_map_lock_target = None
+    picker_map_zoom_target = None
+    picker_map_inertia_yaw = 0.0
+    picker_map_inertia_pitch = 0.0
+    picker_map_motion_at = time.monotonic()
     search_open = False
     keyboard_mode = "lower"
     radio_setup_open = False
@@ -5907,6 +7936,16 @@ def main():
     display_setup_open = False
     audio_panel_open = False
     asr_panel_open = False
+    asr_moon_language_open = False
+    deepgram_setup_open = False
+    deepgram_setup_engine = "deepgram"
+    deepgram_key_value = ""
+    deepgram_key_mode = "lower"
+    deepgram_key_error = ""
+    # Captions are a fixed readout, not a touch-position control.
+    caption_anchor = "bottom"
+    caption_box = VOSK_CAPTION_BOX
+    callsign_box = VOSK_CAPTION_BOX
     audio_volume = pipewire_default_volume()
     saved_volume = remembered_preferences.get("audio_volume")
     if isinstance(saved_volume, (int, float)):
@@ -6029,7 +8068,8 @@ def main():
                 "denoise_level": audio_controls["denoise_level"],
                 "voice_clean_enabled": audio_controls["voice_clean"],
                 "voice_clean_level": audio_controls["voice_clean_level"],
-                "voice_clean_profile": 2,
+                "hf_enhance_level": audio_controls["hf_enhance_level"],
+                "voice_clean_profile": 3,
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -6038,6 +8078,8 @@ def main():
             "filter_custom_width": bool(filter_custom_width),
             "spectrum_enabled": bool(spectrum_enabled),
             "asr_engine": state.transcription_snapshot()[1],
+            "callsign_enabled": state.callsign_snapshot()[0],
+            "caption_anchor": caption_anchor,
             "tune_step_hz": int(tune_step_hz),
             "waterfall": {
                 "floor": round(float(floor), 1),
@@ -6130,7 +8172,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -6242,13 +8284,14 @@ def main():
 
     def activate_navigation_item(index):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, radio_setup_open, display_setup_open
-        nonlocal audio_panel_open, asr_panel_open, audio_volume, tests_panel_open, dj_tune_open
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dj_tune_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort
-        nonlocal stations, search_open, radio_family_open
+        nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = MENU_ITEMS[index]
         wake_controls()
         menu_open = False
+        asr_moon_language_open = False
         if kind == "rx":
             picker_open = True
             radio_setup_open = display_setup_open = audio_panel_open = asr_panel_open = False
@@ -6258,6 +8301,10 @@ def main():
             station_sort = "location"
             stations = filtered_stations(all_stations, station_query, station_sort)
             search_open = False
+            picker_map_open = False
+            picker_map_garden_mode = True
+            station_pending_server = None
+            station_connected_at = 0.0
         elif kind == "display":
             display_setup_open = True
             picker_open = radio_setup_open = audio_panel_open = asr_panel_open = False
@@ -6428,6 +8475,11 @@ def main():
 
     desktop_pointer_down = False
     desktop_window_drag_button = None
+    desktop_map_press = None
+    desktop_map_last = None
+    desktop_map_dragged = False
+    desktop_map_velocity = (0.0, 0.0)
+    desktop_map_motion_at = 0.0
 
     def desktop_logical_point(position):
         """Map a desktop mouse position directly into logical UI space."""
@@ -6470,6 +8522,8 @@ def main():
     def desktop_navigation_item(position):
         if not DESKTOP_1280_MODE:
             return None
+        if picker_open:
+            return None
         window_w, window_h = pygame.display.get_window_size()
         nx = round(position[0] * NATIVE_W / max(1, window_w))
         ny = round(position[1] * NATIVE_H / max(1, window_h))
@@ -6481,6 +8535,63 @@ def main():
             if contains(desktop_1280_nav_box(index), nx, ny):
                 return index
         return None
+
+    def update_receiver_map_hover(position):
+        """Preview the nearest RadioGarden dot under a desktop pointer."""
+        nonlocal picker_map_hover_server
+        if not (picker_open and picker_map_open and picker_map_garden_mode and globe_receivers):
+            picker_map_hover_server = None
+            return
+        x, y = desktop_logical_point(position)
+        if not contains(PICKER_MAP_BOX, x, y):
+            picker_map_hover_server = None
+            return
+        receiver = receiver_map_station_at(
+            x, y, globe_receivers, picker_map_yaw,
+            picker_map_pitch, PICKER_MAP_BOX, picker_map_scale, True,
+        )
+        picker_map_hover_server = receiver["server"] if receiver else None
+
+    def select_receiver_from_map(x, y):
+        """Start the normal Kiwi path and smoothly lock the globe to its RX."""
+        nonlocal picker_map_selected_server, picker_map_hover_server, picker_map_lock_target, picker_map_zoom_target
+        nonlocal station_pending_server, station_pending_started_at, station_connected_at
+        nonlocal picker_map_notice, picker_map_notice_until, picker_map_inertia_yaw, picker_map_inertia_pitch
+        center_x = (PICKER_MAP_BOX[0] + PICKER_MAP_BOX[2]) / 2
+        center_y = (PICKER_MAP_BOX[1] + PICKER_MAP_BOX[3]) / 2
+        if math.hypot(x - center_x, y - center_y) <= 50:
+            selected = receiver_map_center_candidate(
+                globe_receivers, math.degrees(picker_map_yaw), math.degrees(picker_map_pitch)
+            )
+        else:
+            selected = receiver_map_station_at(
+                x, y, globe_receivers, picker_map_yaw, picker_map_pitch,
+                PICKER_MAP_BOX, picker_map_scale,
+            )
+        if selected is None:
+            picker_map_notice = "DRAG A REGION UNDER CENTER, THEN TAP THE RETICLE"
+            picker_map_notice_until = time.monotonic() + 3.0
+            return False
+        picker_map_selected_server = selected["server"]
+        picker_map_hover_server = selected["server"]
+        picker_map_lock_target = (math.radians(selected["lon"]), math.radians(selected["lat"]))
+        # Selecting a receiver should feel like giving it attention, not like
+        # an abrupt navigation change. The gentle zoom is cancelled by the
+        # next direct map gesture.
+        picker_map_zoom_target = clamp(picker_map_scale * 1.15, 0.55, 192.0)
+        picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
+        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(selected["server"])
+        remember_current_view()
+        drain_queue(line_queue)
+        wf_texture.clear()
+        animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+        station_pending_server = selected["server"]
+        station_pending_started_at = time.monotonic()
+        station_connected_at = 0.0
+        picker_map_notice = f"LOCKING  {bottom_station_title(selected['name'], selected['location'])}"
+        picker_map_notice_until = time.monotonic() + 4.0
+        print(f"gl map select {selected['name']}: {selected['server']}", flush=True)
+        return True
 
 
     try:
@@ -6495,6 +8606,17 @@ def main():
                         stop_event.set()
                     else:
                         print("gl ignored desktop Cocoa QUIT", flush=True)
+                elif (
+                    args.desktop
+                    and deepgram_setup_open
+                    and event.type == pygame.KEYDOWN
+                    and event.key == pygame.K_v
+                    and event.mod & (pygame.KMOD_CTRL | pygame.KMOD_GUI)
+                ):
+                    deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
+                        deepgram_key_value
+                    )
+                    wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
                 elif (
@@ -6512,27 +8634,82 @@ def main():
                     elif nav_index is not None:
                         activate_navigation_item(nav_index)
                     else:
-                        desktop_pointer_down = True
-                        emit_desktop_touch(event.pos, "down")
+                        map_x, map_y = desktop_logical_point(event.pos)
+                        if (
+                            picker_open and picker_map_open and contains(PICKER_MAP_BOX, map_x, map_y)
+                            and not contains(RADIOGARDEN_LIST_BOX, map_x, map_y)
+                            and not contains(RADIOGARDEN_EXIT_BOX, map_x, map_y)
+                            and not contains(RADIOGARDEN_VIEW_BOX, map_x, map_y)
+                        ):
+                            desktop_map_press = desktop_map_last = (map_x, map_y)
+                            desktop_map_dragged = False
+                            desktop_map_velocity = (0.0, 0.0)
+                            desktop_map_motion_at = time.monotonic()
+                            picker_map_lock_target = None
+                            picker_map_zoom_target = None
+                            update_receiver_map_hover(event.pos)
+                        else:
+                            desktop_pointer_down = True
+                            emit_desktop_touch(event.pos, "down")
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_window_drag_button is not None:
                     if event.buttons[0]:
                         window_x, window_y = desktop_window.position
                         desktop_window.position = (window_x + event.rel[0], window_y + event.rel[1])
                     else:
                         desktop_window_drag_button = None
+                elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_map_press is not None:
+                    map_x, map_y = desktop_logical_point(event.pos)
+                    previous_x, previous_y = desktop_map_last
+                    dx, dy = map_x - previous_x, map_y - previous_y
+                    if abs(map_x - desktop_map_press[0]) > 3 or abs(map_y - desktop_map_press[1]) > 3:
+                        desktop_map_dragged = True
+                    if desktop_map_dragged:
+                        radius = max(1.0, radiogarden_radius(PICKER_MAP_BOX, picker_map_scale))
+                        picker_map_yaw = (picker_map_yaw - dx / radius + math.pi) % math.tau - math.pi
+                        picker_map_pitch = clamp(picker_map_pitch + dy / radius, math.radians(-82), math.radians(82))
+                        current_motion = time.monotonic()
+                        elapsed = max(0.001, current_motion - desktop_map_motion_at)
+                        desktop_map_velocity = (-dx / radius / elapsed, dy / radius / elapsed)
+                        desktop_map_motion_at = current_motion
+                    desktop_map_last = (map_x, map_y)
+                    update_receiver_map_hover(event.pos)
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_pointer_down:
                     emit_desktop_touch(event.pos, "move")
+                elif args.desktop and event.type == pygame.MOUSEMOTION:
+                    update_receiver_map_hover(event.pos)
                 elif (
                     args.desktop
                     and event.type == pygame.MOUSEBUTTONUP
                     and event.button == desktop_window_drag_button
                 ):
                     desktop_window_drag_button = None
-                elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1 and desktop_pointer_down:
-                    emit_desktop_touch(event.pos, "up")
-                    desktop_pointer_down = False
+                elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if desktop_map_press is not None:
+                        map_x, map_y = desktop_logical_point(event.pos)
+                        if desktop_map_dragged:
+                            picker_map_inertia_yaw, picker_map_inertia_pitch = desktop_map_velocity
+                            picker_map_motion_at = time.monotonic()
+                        else:
+                            select_receiver_from_map(map_x, map_y)
+                        desktop_map_press = desktop_map_last = None
+                        desktop_map_dragged = False
+                    elif desktop_pointer_down:
+                        emit_desktop_touch(event.pos, "up")
+                        desktop_pointer_down = False
                 elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
-                    change_zoom(1 if event.y > 0 else -1)
+                    if picker_open and picker_map_open:
+                        picker_map_zoom_target = None
+                        picker_map_scale = clamp(picker_map_scale * (1.22 if event.y > 0 else 1 / 1.22), 0.55, 192.0)
+                    elif picker_open and not search_open:
+                        # Mouse-wheel paging makes the desktop receiver list
+                        # as practical to explore as the Pi's finger drag.
+                        station_scroll = clamp(
+                            station_scroll - event.y * PICKER_COLS,
+                            0,
+                            station_page_max(stations),
+                        )
+                    else:
+                        change_zoom(1 if event.y > 0 else -1)
 
             while True:
                 try:
@@ -6579,6 +8756,13 @@ def main():
                     else:
                         x, y = points[0] if len(points) == 1 else kiwi.midpoint(points[:2])
 
+                    if is_active and picker_open and picker_map_open and picker_map_garden_mode and globe_receivers:
+                        hovered_receiver = receiver_map_station_at(
+                            x, y, globe_receivers, picker_map_yaw,
+                            picker_map_pitch, PICKER_MAP_BOX, picker_map_scale, True,
+                        )
+                        picker_map_hover_server = hovered_receiver["server"] if hovered_receiver else None
+
                     if is_active:
                         if not touch_started:
                             # Any new operator gesture takes ownership from a
@@ -6607,7 +8791,7 @@ def main():
                             swipe_started = False
                             fast_sweep_zoom_applied = False
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not asr_panel_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open and not frequency_entry_open else freq_khz
+                            start_freq = display_freq if not menu_open and not picker_open and not radio_setup_open and not display_setup_open and not audio_panel_open and not asr_panel_open and not deepgram_setup_open and not tests_panel_open and not globe_open and not dj_tune_open and not filter_panel_open and not frequency_entry_open else freq_khz
                             start_span = display_span
                             candidate_freq = start_freq
                             if waterfall_focus_progress() > 0.01:
@@ -6617,10 +8801,20 @@ def main():
                                 gesture = "frequency_entry"
                             elif frequency_entry_open:
                                 gesture = "frequency_entry_outside"
-                            elif asr_panel_open and asr_option_at(x, y) is not None:
+                            elif deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y):
+                                gesture = "deepgram_setup"
+                            elif deepgram_setup_open:
+                                gesture = "deepgram_setup_outside"
+                            elif asr_panel_open and asr_option_at(x, y, asr_moon_language_open) is not None:
                                 gesture = "asr_select"
                             elif asr_panel_open:
                                 gesture = "asr_outside"
+                            elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
+                                gesture = "callsign_caption"
+                            elif state.transcription_snapshot()[0] and contains(caption_box, x, y):
+                                # Protect readable text from accidental tuning,
+                                # but do not move the fixed caption window.
+                                gesture = "caption_readonly"
                             elif DESKTOP_1280_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
                                 gesture = "frequency_entry_open"
                             elif contains(HOME_BOX, x, y):
@@ -6715,6 +8909,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
+                                gesture = "callsign_toggle"
                             elif not picker_open and contains(ASR_TOGGLE_BOX, x, y):
                                 gesture = "asr_toggle"
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
@@ -6725,8 +8921,23 @@ def main():
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
+                            elif picker_open and picker_map_open and contains(RADIOGARDEN_LIST_BOX, x, y):
+                                gesture = "picker_map_list"
+                            elif picker_open and picker_map_open and contains(RADIOGARDEN_EXIT_BOX, x, y):
+                                gesture = "picker_exit"
+                            elif picker_open and picker_map_open and contains(RADIOGARDEN_VIEW_BOX, x, y):
+                                gesture = "picker_map_view"
+                            elif picker_open and picker_map_open and contains(PICKER_MAP_BOX, x, y):
+                                picker_map_start_yaw = picker_map_yaw
+                                picker_map_start_pitch = picker_map_pitch
+                                picker_map_pinch_distance = None
+                                gesture = "picker_map"
+                            elif picker_open and picker_map_open:
+                                gesture = "picker_map_outside"
                             elif picker_open and search_open:
                                 gesture = "search"
+                            elif picker_open and DESKTOP_1280_MODE and contains(PICKER_MAP_MODE_BOX, x, y):
+                                gesture = "picker_map_open"
                             elif picker_open and contains(PICKER_SEARCH_BOX, x, y):
                                 gesture = "picker_search"
                             elif picker_open and contains(PICKER_SORT_LOCATION_BOX, x, y):
@@ -6742,7 +8953,7 @@ def main():
                             else:
                                 gesture = "none"
                         elif gesture == "picker":
-                            row_h = max(1, (PICKER_BOX[3] - PICKER_BOX[1] - 42) // PICKER_ROWS)
+                            row_h = max(1, (PICKER_BOX[3] - PICKER_BOX[1] - PICKER_HEADER_H - 8) // PICKER_ROWS)
                             row_delta = int(round((start_y - y) / row_h))
                             station_scroll = clamp(start_scroll + row_delta * PICKER_COLS, 0, station_page_max(stations))
                         elif gesture == "menu":
@@ -6764,10 +8975,34 @@ def main():
                                 denoise_level=audio_denoise_level_at_x(x),
                                 voice_clean_enabled=False,
                                 voice_clean_level=0,
+                                hf_enhance_level=0,
                             )
                         elif gesture == "dj_tune":
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
+                        elif gesture == "picker_map":
+                            if len(points) >= 2:
+                                picker_map_lock_target = None
+                                picker_map_zoom_target = None
+                                px0, py0 = points[0]
+                                px1, py1 = points[1]
+                                distance = math.hypot(px1 - px0, py1 - py0)
+                                if picker_map_pinch_distance is None:
+                                    picker_map_pinch_distance = max(1.0, distance)
+                                else:
+                                    picker_map_scale = clamp(
+                                        picker_map_scale * (distance / picker_map_pinch_distance), 0.55, 192.0
+                                    )
+                                    picker_map_pinch_distance = max(1.0, distance)
+                            else:
+                                picker_map_lock_target = None
+                                picker_map_zoom_target = None
+                                picker_map_pinch_distance = None
+                                picker_map_yaw = (picker_map_start_yaw - (x - start_x) * 0.009 + math.pi) % math.tau - math.pi
+                                picker_map_pitch = clamp(
+                                    picker_map_start_pitch + (y - start_y) * 0.007,
+                                    math.radians(-80), math.radians(80),
+                                )
                         elif gesture == "globe":
                             if len(points) >= 2:
                                 px0, py0 = points[0]
@@ -6925,6 +9160,7 @@ def main():
                                 denoise_level=audio_denoise_level_at_x(x),
                                 voice_clean_enabled=False,
                                 voice_clean_level=0,
+                                hf_enhance_level=0,
                             )
                             wake_controls()
                         elif touch_started and gesture == "audio_control":
@@ -6936,7 +9172,15 @@ def main():
                                     state.set_audio_controls(audio_mute=not controls["mute"])
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
-                                    state.set_audio_controls(voice_clean_level=next_level)
+                                    state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
+                                elif choice == "hf_enhance":
+                                    available_levels = [0] + [index for index in range(1, len(HF_ENHANCE_MODELS)) if hf_enhance_available(index)]
+                                    current_level = int(controls.get("hf_enhance_level", 0))
+                                    try:
+                                        next_index = (available_levels.index(current_level) + 1) % len(available_levels)
+                                    except ValueError:
+                                        next_index = 0
+                                    state.set_audio_controls(hf_enhance_level=available_levels[next_index], voice_clean_level=0)
                                 elif choice == "agc":
                                     if not controls["agc"]:
                                         state.set_audio_controls(agc_enabled=True, agc_hang=False)
@@ -7134,27 +9378,14 @@ def main():
                                 choice = radio_option_at(x, y, radio_family_open)
                                 if choice is not None:
                                     kind, value = choice
-                                    if kind == "mode_family":
-                                        family, modes = value
-                                        if len(modes) > 1:
-                                            radio_family_open = family
-                                        else:
-                                            radio_mode = modes[0]
-                                            manual_radio_mode = True
-                                            filter_custom_width = False
-                                            digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
-                                            state.set_radio_mode(radio_mode)
-                                            remember_current_view()
-                                    elif kind == "mode":
-                                        radio_mode = value
+                                    if kind == "mode_cycle":
+                                        radio_mode = next_radio_mode_variant(radio_mode, value)
                                         radio_family_open = None
                                         manual_radio_mode = True
                                         filter_custom_width = False
                                         digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
                                         state.set_radio_mode(radio_mode)
                                         remember_current_view()
-                                    elif kind == "back":
-                                        radio_family_open = None
                                     else:
                                         tune_step_hz = value
                                     wake_controls()
@@ -7252,28 +9483,109 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 change_zoom(1 if gesture == "zoom_plus" else -1)
+                        elif touch_started and gesture == "deepgram_setup":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = deepgram_setup_action_at(x, y, deepgram_key_mode)
+                                if action == "MODE":
+                                    deepgram_key_mode = {
+                                        "lower": "upper",
+                                        "upper": "digits",
+                                        "digits": "lower",
+                                    }[deepgram_key_mode]
+                                elif action == "CLEAR":
+                                    deepgram_key_value = ""
+                                    deepgram_key_error = ""
+                                elif action == "BACK":
+                                    deepgram_key_value = deepgram_key_value[:-1]
+                                    deepgram_key_error = ""
+                                elif action == "PASTE":
+                                    deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
+                                        deepgram_key_value
+                                    )
+                                elif action == "CANCEL":
+                                    deepgram_setup_open = False
+                                    deepgram_key_value = ""
+                                    deepgram_key_error = ""
+                                elif action == "SAVE":
+                                    try:
+                                        save_deepgram_api_key(deepgram_key_value)
+                                    except ValueError as exc:
+                                        deepgram_key_error = str(exc)
+                                    else:
+                                        state.set_asr_engine(deepgram_setup_engine)
+                                        drain_caption_audio(transcript_queue)
+                                        preferences_dirty = True
+                                        write_remembered_view(force=True)
+                                        deepgram_setup_open = False
+                                        deepgram_key_value = ""
+                                        deepgram_key_error = ""
+                                elif action and len(deepgram_key_value) < 512:
+                                    deepgram_key_value += action
+                                    deepgram_key_error = ""
+                            wake_controls()
+                        elif touch_started and gesture == "deepgram_setup_outside":
+                            # Keep an entered secret intact until the operator
+                            # explicitly dismisses it with X.
+                            wake_controls()
+                        elif touch_started and gesture == "callsign_toggle":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                enabled, _value, _message, _status, _updated_at = state.callsign_snapshot()
+                                state.set_callsign_enabled(not enabled)
+                                drain_caption_audio(callsign_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
+                            wake_controls()
                         elif touch_started and gesture == "asr_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 asr_panel_open = not asr_panel_open
+                                asr_moon_language_open = False
                             wake_controls()
                         elif touch_started and gesture == "asr_select":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                selected_engine = asr_option_at(x, y)
-                                if selected_engine is not None:
+                                selected_engine = asr_option_at(x, y, asr_moon_language_open)
+                                if selected_engine == "moonshine" and not asr_moon_language_open:
+                                    asr_moon_language_open = True
+                                elif selected_engine in DEEPGRAM_ENGINES and (
+                                    not deepgram_api_key()
+                                    or selected_engine == asr_engine_family(state.transcription_snapshot()[1])
+                                ):
+                                    # Selecting a cloud profile without a key opens setup.
+                                    # Tapping an active cloud profile is also the
+                                    # deliberate way to replace a stored key.
+                                    deepgram_setup_open = True
+                                    deepgram_setup_engine = selected_engine
+                                    deepgram_key_value = ""
+                                    deepgram_key_mode = "lower"
+                                    deepgram_key_error = ""
+                                    asr_panel_open = False
+                                    asr_moon_language_open = False
+                                elif selected_engine is not None:
                                     state.set_asr_engine(selected_engine)
                                     drain_caption_audio(transcript_queue)
                                     # ASR selection is an explicit, infrequent
                                     # preference and is worth committing now.
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
-                                asr_panel_open = False
+                                    asr_panel_open = False
+                                    asr_moon_language_open = False
                             wake_controls()
                         elif touch_started and gesture == "asr_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 asr_panel_open = False
+                                asr_moon_language_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "caption_readonly":
+                            # A caption tap merely wakes the rest of the UI.
+                            wake_controls()
+                        elif touch_started and gesture == "callsign_caption":
+                            # The live ham transcript is informational only;
+                            # reserving its surface prevents an accidental
+                            # retune while an operator tries to read it.
                             wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -7312,12 +9624,57 @@ def main():
                                         station_query += key
                                     stations = filtered_stations(all_stations, station_query, station_sort)
                                     station_scroll = 0
+                        elif touch_started and gesture == "picker_map_open":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                picker_map_open = True
+                                picker_map_garden_mode = True
+                                picker_map_selected_server = state.snapshot()[0]
+                                search_open = False
+                                if not globe_fetch_started:
+                                    globe_fetch_started = True
+                                    threading.Thread(
+                                        target=refresh_globe_receivers,
+                                        args=(globe_result_queue,), daemon=True,
+                                    ).start()
+                            wake_controls()
+                        elif touch_started and gesture == "picker_map_list":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                picker_map_open = False
+                                picker_map_hover_server = None
+                            wake_controls()
+                        elif touch_started and gesture == "picker_map_view":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                current_view_index = MAP_VIEWS.index(picker_map_view)
+                                picker_map_view = MAP_VIEWS[(current_view_index + 1) % len(MAP_VIEWS)]
+                                picker_map_notice = f"MAP VIEW  {MAP_VIEW_LABELS[picker_map_view]}"
+                                picker_map_notice_until = time.monotonic() + 1.75
+                            wake_controls()
+                        elif touch_started and gesture == "picker_map_garden":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                picker_map_garden_mode = True
+                                picker_map_notice = "RADIOGARDEN  DRAG GLOBE OR TAP A GLOWING RECEIVER"
+                                picker_map_notice_until = time.monotonic() + 2.5
+                            wake_controls()
+                        elif touch_started and gesture == "picker_map":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px and globe_receivers:
+                                select_receiver_from_map(x, y)
+                            wake_controls()
+                        elif touch_started and gesture == "picker_map_outside":
+                            wake_controls()
                         elif touch_started and gesture == "picker_exit":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 picker_open = False
+                                picker_map_open = False
                                 search_open = False
                                 station_scroll = 0
+                                station_pending_server = None
+                                station_connected_at = 0.0
                                 wake_controls()
                         elif touch_started and gesture == "picker_search":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -7347,8 +9704,12 @@ def main():
                                     drain_queue(line_queue)
                                     wf_texture.clear()
                                     animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
-                                    picker_open = False
-                                    station_scroll = 0
+                                    # Let the selected tile visibly depress and
+                                    # report the live connection outcome before
+                                    # returning to the waterfall.
+                                    station_pending_server = server
+                                    station_pending_started_at = time.monotonic()
+                                    station_connected_at = 0.0
                                     zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
                                     print(f"gl station {name}: {server}", flush=True)
                         elif touch_started and gesture == "waterfall":
@@ -7393,6 +9754,35 @@ def main():
 
             now = time.monotonic()
             observe_preferences(now)
+            if picker_open and picker_map_open:
+                map_dt = min(0.05, max(0.0, now - picker_map_motion_at))
+                picker_map_motion_at = now
+                if picker_map_lock_target is not None:
+                    target_yaw, target_pitch = picker_map_lock_target
+                    yaw_delta = (target_yaw - picker_map_yaw + math.pi) % math.tau - math.pi
+                    pitch_delta = target_pitch - picker_map_pitch
+                    settle = 1.0 - math.exp(-map_dt * 8.5)
+                    picker_map_yaw = (picker_map_yaw + yaw_delta * settle + math.pi) % math.tau - math.pi
+                    picker_map_pitch += pitch_delta * settle
+                    if abs(yaw_delta) < 0.001 and abs(pitch_delta) < 0.001:
+                        picker_map_yaw, picker_map_pitch = target_yaw, target_pitch
+                        picker_map_lock_target = None
+                if picker_map_zoom_target is not None:
+                    zoom_delta = math.log(max(0.55, picker_map_zoom_target) / max(0.55, picker_map_scale))
+                    zoom_settle = 1.0 - math.exp(-map_dt * 7.0)
+                    picker_map_scale = clamp(picker_map_scale * math.exp(zoom_delta * zoom_settle), 0.55, 192.0)
+                    if abs(zoom_delta) < 0.004:
+                        picker_map_scale = picker_map_zoom_target
+                        picker_map_zoom_target = None
+                elif abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002:
+                    picker_map_yaw = (picker_map_yaw + picker_map_inertia_yaw * map_dt + math.pi) % math.tau - math.pi
+                    picker_map_pitch = clamp(
+                        picker_map_pitch + picker_map_inertia_pitch * map_dt,
+                        math.radians(-82), math.radians(82),
+                    )
+                    decay = math.exp(-map_dt * 4.5)
+                    picker_map_inertia_yaw *= decay
+                    picker_map_inertia_pitch *= decay
             if zoom_osd_requested.is_set():
                 zoom_osd_until = now + args.zoom_osd_seconds
                 zoom_osd_requested.clear()
@@ -7413,6 +9803,45 @@ def main():
                     print(f"gl tuned {display_freq:.3f} kHz", flush=True)
                     inertia_active = False
             server, freq_khz, zoom, _smeter_dbm, _generation, _server_generation = state.snapshot()
+            station_connection_status = None
+            if station_pending_server:
+                station_connection_status = state.connection_snapshot()
+                if station_connection_status == "connected":
+                    if station_connected_at <= 0.0:
+                        station_connected_at = now
+                    elif now - station_connected_at >= 0.45:
+                        if picker_map_open:
+                            # A map selection is intentionally persistent: the
+                            # square stays marked after a successful connect.
+                            selected_map_receiver = next(
+                                (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
+                                None,
+                            )
+                            if selected_map_receiver:
+                                picker_map_notice = (
+                                    f"CONNECTED  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
+                                )
+                                picker_map_notice_until = now + 2.75
+                            station_pending_server = None
+                        else:
+                            picker_open = False
+                            station_scroll = 0
+                            station_pending_server = None
+                        station_connected_at = 0.0
+                elif station_connection_status == "failed":
+                    # Keep the chosen row visible and marked unavailable so
+                    # the operator can immediately choose another receiver.
+                    station_connected_at = 0.0
+                    if picker_map_open:
+                        selected_map_receiver = next(
+                            (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
+                            None,
+                        )
+                        if selected_map_receiver and not picker_map_notice.startswith("UNAVAILABLE"):
+                            picker_map_notice = (
+                                f"UNAVAILABLE  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
+                            )
+                            picker_map_notice_until = now + 4.0
             smeter_dbm, smeter_peak_dbm = state.smeter_snapshot()
             # The bar itself remains frame-smooth. The numerical readout is
             # intentionally sampled at a calmer, radio-like 3.3 Hz cadence.
@@ -7685,6 +10114,14 @@ def main():
             # waterfall then covers rows under the ruler/status strip instead
             # of remapping the visible texture and making it appear to scroll up.
             row_offset = round(waterfall_y0 - focus_waterfall_y0)
+            caption_box = caption_box_for_waterfall(waterfall_y0, waterfall_y1, caption_anchor)
+            caption_active = state.transcription_snapshot()[0]
+            callsign_box = callsign_box_for_waterfall(
+                waterfall_y0,
+                waterfall_y1,
+                caption_anchor,
+                caption_box if caption_active else None,
+            )
             wf_texture.draw(
                 0,
                 waterfall_y0,
@@ -7714,7 +10151,7 @@ def main():
                 waterfall_y1,
                 0.82,
             )
-            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else controls_alpha(now)
+            control_alpha = 0.0 if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else controls_alpha(now)
             selected_station_name = next(
                 (
                     bottom_station_title(name, location)
@@ -7725,6 +10162,8 @@ def main():
             )
             connection_status = state.connection_snapshot()
             transcription_enabled, asr_engine, transcript_lines, transcript_partial, transcript_status, _transcription_generation = state.transcription_snapshot()
+            callsign_enabled, callsign_value, ham_message, callsign_status, _callsign_updated_at = state.callsign_snapshot()
+            callsign_history = state.callsign_history_snapshot()
             draw_ui(
                 text_cache,
                 display_freq,
@@ -7749,6 +10188,10 @@ def main():
                 bandwidth_hz=high_cut - low_cut,
                 transcription_enabled=transcription_enabled,
                 asr_engine=asr_engine,
+                callsign_enabled=callsign_enabled,
+                callsign_value=callsign_value,
+                ham_message=ham_message,
+                callsign_status=callsign_status,
             )
             if spectrum_foreground:
                 draw_spectrum(
@@ -7767,19 +10210,42 @@ def main():
                     transcript_lines,
                     transcript_partial,
                     transcript_status,
+                    caption_box,
                 )
+            draw_callsign_captions(
+                text_cache,
+                callsign_enabled,
+                callsign_value,
+                callsign_history,
+                ham_message,
+                callsign_status,
+                callsign_box,
+            )
             if asr_panel_open:
-                draw_asr_panel(text_cache, asr_engine)
+                draw_asr_panel(text_cache, asr_engine, asr_moon_language_open)
+            if deepgram_setup_open:
+                draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
             if picker_open:
-                if search_open:
+                if picker_map_open:
+                    draw_receiver_map(
+                        text_cache, globe_receivers, picker_map_yaw, picker_map_pitch,
+                        picker_map_scale, picker_map_selected_server or server,
+                        station_pending_server, station_connection_status, station_health,
+                        picker_map_notice if time.monotonic() < picker_map_notice_until else "",
+                        picker_map_garden_mode, picker_map_hover_server, picker_map_view,
+                    )
+                elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
                 else:
                     visible_stations = health_prioritized_stations(stations, station_health, station_sort)
-                    draw_station_picker(text_cache, visible_stations, station_scroll, server, station_query, station_sort, station_health)
+                    draw_station_picker(
+                        text_cache, visible_stations, station_scroll, server, station_query,
+                        station_sort, station_health, station_pending_server, station_connection_status,
+                    )
             if radio_setup_open:
                 draw_radio_setup_panel(text_cache, radio_mode, digital_mode, tune_step_hz, radio_family_open)
             if display_setup_open:
@@ -7833,7 +10299,8 @@ def main():
                 if osd_remaining < fade:
                     alpha = int(220 * osd_remaining / fade)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
-            draw_desktop_1280_navigation(text_cache)
+            if not picker_open:
+                draw_desktop_1280_navigation(text_cache)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -7868,6 +10335,7 @@ def main():
         wf_thread.join(timeout=1.5)
         snd_thread.join(timeout=1.5)
         caption_thread.join(timeout=1.5)
+        callsign_thread.join(timeout=1.5)
         elapsed = max(0.001, time.monotonic() - start)
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()
