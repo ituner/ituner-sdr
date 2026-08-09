@@ -5233,6 +5233,12 @@ class DeepgramStreamingTranscriber:
                 self.final_parts.clear()
                 self.last_caption_publish_at = now
             return
+        # Radio speech and HF noise can keep an endpoint open for a long
+        # time.  Previously the UI discarded every interim result and showed
+        # only the final phrase, which made a healthy Deepgram stream appear
+        # permanently stuck at LISTENING.  Feed the paced live-caption lane
+        # instead; completed phrases above still become the durable history.
+        self.state.set_transcript(partial=transcript, status="LISTENING")
 
     def _on_error(self, _client, error, **_kwargs):
         self.error = str(error)
@@ -10438,7 +10444,7 @@ def main():
         a persisted position or a tap from placing two windows on one another.
         """
         occupied = set()
-        transcription_enabled, _engine, _message, _status, _updated_at = state.transcription_snapshot()
+        transcription_enabled, _engine, _lines, _partial, _status, _generation = state.transcription_snapshot()
         callsign_enabled, _value, _message, _status, _updated_at = state.callsign_snapshot()
         if transcription_enabled and exclude != "asr":
             occupied.add(caption_anchor)
