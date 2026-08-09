@@ -300,7 +300,7 @@ WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 # the bottom edge. Keep the old name at zero so existing geometry helpers
 # reserve only the enlarged status strip below.
 BOTTOM_RULER_H = 0
-SPECTRUM_RULER_H = 30
+SPECTRUM_RULER_H = 60
 BOTTOM_STATUS_H = 88
 ASR_CAPTION_HEIGHT = 140
 CALLSIGN_CAPTION_HEIGHT = 68
@@ -8654,8 +8654,9 @@ def draw_ruler(
     minor_step_hz = max(50, major_step_hz // 5)
     minor_start_hz = int(math.ceil(start_hz / minor_step_hz) * minor_step_hz)
     major_start_hz = int(math.ceil(start_hz / major_step_hz) * major_step_hz)
-    # The bottom ruler sits over live spectrum/waterfall content. Keep it
-    # visibly separate from the brighter cyan/white telemetry status layer.
+    # Larger LCD divider ruler: it overlays the waterfall boundary and must
+    # remain readable at arm's length through the Waveshare panel.
+    tall_ruler = height >= 52
     minor_color = (103, 128, 142, 150) if subdued else (142, 158, 166, 215)
     major_color = (133, 161, 174, 178) if subdued else (196, 210, 216, 255)
     label_color = (145, 178, 191) if subdued else (231, 240, 244)
@@ -8666,7 +8667,7 @@ def draw_ruler(
         if hz % major_step_hz:
             x = int(round((hz - start_hz) / hz_per_px))
             if 0 <= x < LOGICAL_W:
-                draw_logical_line(x, y0 + 2, x, y0 + 5, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1)
+                draw_logical_line(x, y0 + 4, x, y0 + (12 if tall_ruler else 5), (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5 if tall_ruler else 1)
         hz += minor_step_hz
 
     hz = major_start_hz
@@ -8674,15 +8675,15 @@ def draw_ruler(
     while hz <= end_hz:
         x = int(round((hz - start_hz) / hz_per_px))
         if 0 <= x < LOGICAL_W:
-            draw_logical_line(x, y0 + 2, x, y0 + 8, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2)
+            draw_logical_line(x, y0 + 4, x, y0 + (22 if tall_ruler else 8), (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 3 if tall_ruler else 2)
             if x - last_label_x > 140:
                 draw_text(
                     text_cache,
                     x,
-                    y0 + 18,
+                    y0 + (42 if tall_ruler else 18),
                     sdr_ui.format_ruler_label(hz, major_step_hz),
                     label_color,
-                    15,
+                    28 if tall_ruler else 15,
                     True,
                     True,
                     "cm",
