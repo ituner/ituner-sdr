@@ -7568,9 +7568,19 @@ def lcd_home_volume_box():
 
 
 def lcd_home_volume_mute_box():
-    """Compact speaker toggle aligned with the Home volume readout."""
-    _x0, y0, x1, _y1 = lcd_home_volume_box()
-    return x1 - 44, y0 + 5, x1 - 6, y0 + 34
+    """Compact speaker toggle at the left of the Home slider line."""
+    x0, _y0, _x1, y1 = lcd_home_volume_box()
+    return x0 + 6, y1 - 37, x0 + 40, y1 - 7
+
+
+def lcd_home_volume_track_box():
+    """The actual finger range excludes the separate speaker toggle."""
+    x0, _y0, x1, y1 = lcd_home_volume_box()
+    return x0 + 50, y1 - 32, x1 - 12, y1 - 8
+
+
+def home_volume_at_x(x):
+    return volume_at_x(x, lcd_home_volume_track_box())
 
 
 def lcd_home_smeter_box():
@@ -7610,7 +7620,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
     draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, mute_x0 - 8, y0 + 13, status, status_color, 16, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, status, status_color, 18, True, False, "rt", family="Liberation Sans")
     button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
     button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
     icon_color = (*MUTE_ACCENT, 255) if muted else (145, 231, 242, 255)
@@ -7624,8 +7634,8 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
     draw_logical_polyline(((cx - 5, cy - 4), (cx + 3, cy - 10), (cx + 3, cy + 10), (cx - 5, cy + 4)), icon_color, 2)
     if muted:
         draw_logical_line(cx - 13, cy - 12, cx + 13, cy + 12, icon_color, 2.5)
-    track_x0, track_x1 = x0 + 12, x1 - 12
-    track_y = y1 - 20
+    track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box()
+    track_y = (track_y0 + track_y1) / 2
     draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
     draw_logical_rect(track_x0, track_y - 6, track_x0 + (track_x1 - track_x0) * level, track_y + 6, (67, 205, 149, 230))
     knob_x = track_x0 + (track_x1 - track_x0) * level
@@ -11710,7 +11720,7 @@ def main():
                             pass
                         elif gesture in ("audio_volume", "home_volume"):
                             desired_volume = volume_at_x(
-                                x, AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_box()
+                                x, AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box()
                             )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
                                 apply_main_volume(desired_volume)
@@ -11928,7 +11938,7 @@ def main():
                             apply_main_volume(audio_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume":
-                            apply_main_volume(volume_at_x(x, lcd_home_volume_box()))
+                            apply_main_volume(home_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
