@@ -8248,12 +8248,43 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     draw_text(text_cache, 944, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
 
-def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None):
+def caption_translation_toggle_box(box):
+    """Small, right-aligned live-caption mode control within its own banner."""
+    x0, y0, x1, _y1 = box
+    return (max(x0 + 220, x1 - 252), y0 + 7, x1 - 9, y0 + 41)
+
+
+def whisper_caption_toggle_label(caption_mode):
+    """Make the live output choice explicit without implying a fixed source."""
+    mode = str(caption_mode).lower()
+    if mode == "english":
+        return "TRANSLATE · ENGLISH"
+    if mode == "both":
+        return "ORIGINAL + ENGLISH"
+    source = "AUTO" if WHISPER_LANGUAGE == "auto" else WHISPER_LANGUAGE.upper()
+    return f"ORIGINAL · {source}"
+
+
+def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
+                       engine="off"):
     """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
     draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
     caption_mode = str(caption_mode).lower()
+    whisper_mode_control = asr_engine_family(engine) == "whisper"
+    content_x1 = x1 - 274 if whisper_mode_control else x1 - 40
+    if whisper_mode_control:
+        toggle_box = caption_translation_toggle_box((x0, y0, x1, y1))
+        # It is intentionally translucent: the radio remains visible, but
+        # the source/translation state can never be mistaken for a caption.
+        draw_logical_rect(*toggle_box, (10, 34, 43, 166))
+        draw_logical_rect(toggle_box[0], toggle_box[3] - 2, toggle_box[2], toggle_box[3],
+                          (102, 236, 180, 220) if caption_mode == "english" else (108, 185, 207, 210))
+        draw_text(text_cache, (toggle_box[0] + toggle_box[2]) / 2, (toggle_box[1] + toggle_box[3]) / 2,
+                  whisper_caption_toggle_label(caption_mode),
+                  (189, 249, 219) if caption_mode == "english" else (176, 211, 224),
+                  14, True, False, "cm", family=family)
     if caption_mode == "both":
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
@@ -8262,14 +8293,14 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
             return
         draw_text(text_cache, x0 + 20, y0 + 15, "ORIGINAL", (112, 184, 202), 13, True, False, "lm", family=family)
         source_rows = wrap_caption_lines(
-            text_cache, source, x1 - x0 - 40, 20, max_rows=2, max_characters=66, family=family
+            text_cache, source, content_x1 - x0 - 20, 20, max_rows=2, max_characters=66, family=family
         )
         for index, caption in enumerate(source_rows):
             draw_text(text_cache, x0 + 20, y0 + 36 + index * 22, caption, (165, 204, 213), 20, False, False, "lm", family=family)
         english_y = y0 + 79
         draw_text(text_cache, x0 + 20, english_y, "ENGLISH", (120, 241, 183), 13, True, False, "lm", family=family)
         english_rows = wrap_caption_lines(
-            text_cache, english or "TRANSLATING...", x1 - x0 - 40, 24, max_rows=2, max_characters=55, family=family
+            text_cache, english or "TRANSLATING...", content_x1 - x0 - 20, 24, max_rows=2, max_characters=55, family=family
         )
         for index, caption in enumerate(english_rows):
             draw_text(text_cache, x0 + 20, english_y + 23 + index * 25, caption, (230, 248, 240), 24, True, False, "lm", family=family)
@@ -8280,7 +8311,7 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     source = " ".join((*selected_lines, partial)).strip()
     # Four larger rows make finished radio speech readable at arm's length.
     display = wrap_caption_lines(
-        text_cache, source, x1 - x0 - 40, 26, max_rows=4, max_characters=62, family=family
+        text_cache, source, content_x1 - x0 - 20, 26, max_rows=4, max_characters=62, family=family
     )
     if not display:
         draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
@@ -10206,6 +10237,7 @@ def main():
     if callsign_anchor == caption_anchor:
         callsign_anchor = "middle" if caption_anchor != "middle" else "top"
     caption_box = VOSK_CAPTION_BOX
+    caption_translation_toggle_box_live = None
     callsign_box = VOSK_CAPTION_BOX
     buffer_graph_box = None
     cpu_graph_box = None
@@ -11261,6 +11293,8 @@ def main():
                                 # Scope were claimed above, so they remain
                                 # immediately tappable as well.
                                 gesture = "waterfall"
+                            elif caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
+                                gesture = "caption_translation_toggle"
                             elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
                                 gesture = "callsign_caption"
                             elif state.transcription_snapshot()[0] and contains(caption_box, x, y):
@@ -12284,6 +12318,18 @@ def main():
                             )
                             move_overlay_to_lane("asr", target)
                             wake_controls()
+                        elif touch_started and gesture == "caption_translation_toggle":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                # Keep the live banner as a simple two-state
+                                # instrument. "Both" remains an explicit
+                                # ASR-panel option for side-by-side review.
+                                next_mode = "english" if state.caption_mode_snapshot() == "original" else "original"
+                                state.set_caption_mode(next_mode)
+                                drain_caption_audio(transcript_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
+                            wake_controls()
                         elif touch_started and gesture == "callsign_caption":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             target = (
@@ -12926,6 +12972,11 @@ def main():
             row_offset = round(waterfall_y0 - focus_waterfall_y0)
             caption_box = caption_box_for_waterfall(waterfall_y0, waterfall_y1, caption_anchor)
             caption_active = state.transcription_snapshot()[0]
+            caption_translation_toggle_box_live = (
+                caption_translation_toggle_box(caption_box)
+                if caption_active and asr_engine_family(state.transcription_snapshot()[1]) == "whisper"
+                else None
+            )
             callsign_box = callsign_box_for_waterfall(
                 waterfall_y0,
                 waterfall_y1,
@@ -13043,6 +13094,7 @@ def main():
                     transcript_status,
                     caption_mode,
                     caption_box,
+                    asr_engine,
                 )
             draw_callsign_captions(
                 text_cache,
