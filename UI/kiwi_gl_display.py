@@ -10428,20 +10428,52 @@ def main():
     def remember_current_view():
         observe_preferences(time.monotonic())
 
-    def move_overlay_to_lane(which, target_anchor):
-        """Move one overlay and swap lanes if it meets the other overlay."""
-        nonlocal caption_anchor, callsign_anchor, preferences_dirty
+    def occupied_overlay_lanes(exclude=None):
+        """Return the lanes currently used by visible movable overlays.
+
+        The ASR caption, callsign caption and the two diagnostic graphs share
+        a deliberately small three-lane layout.  Only one diagnostic graph is
+        open at a time, so every visible overlay can have a lane of its own.
+        Keeping the ownership here rather than in each touch handler prevents
+        a persisted position or a tap from placing two windows on one another.
+        """
+        occupied = set()
+        transcription_enabled, _engine, _message, _status, _updated_at = state.transcription_snapshot()
+        callsign_enabled, _value, _message, _status, _updated_at = state.callsign_snapshot()
+        if transcription_enabled and exclude != "asr":
+            occupied.add(caption_anchor)
+        if callsign_enabled and exclude != "ham":
+            occupied.add(callsign_anchor)
+        if audio_transport_graph_open and exclude != "buffer":
+            occupied.add(buffer_graph_anchor)
+        if cpu_utilization_graph_open and exclude != "cpu":
+            occupied.add(cpu_graph_anchor)
+        return occupied
+
+    def available_overlay_lane(which, target_anchor):
+        """Choose the requested lane or the next free one, wrapping around."""
         target_anchor = normalize_caption_anchor(target_anchor)
-        current = caption_anchor if which == "asr" else callsign_anchor
-        other = callsign_anchor if which == "asr" else caption_anchor
-        # This tiny swap rule gives both overlays all six distinct two-lane
-        # arrangements while guaranteeing they cannot cover one another.
-        if target_anchor == other:
-            other = current
+        occupied = occupied_overlay_lanes(exclude=which)
+        candidates = [
+            ASR_CAPTION_ANCHORS[(ASR_CAPTION_ANCHORS.index(target_anchor) + offset) % len(ASR_CAPTION_ANCHORS)]
+            for offset in range(len(ASR_CAPTION_ANCHORS))
+        ]
+        for lane in candidates:
+            if lane not in occupied:
+                return lane
+        # This is defensive only: at most three overlays can be visible.
+        # Retaining the requested lane is less surprising than silently
+        # jumping to a fixed position should another overlay type be added.
+        return target_anchor
+
+    def move_overlay_to_lane(which, target_anchor):
+        """Move ASR/HAM text to an unoccupied shared overlay lane."""
+        nonlocal caption_anchor, callsign_anchor, preferences_dirty
+        target_anchor = available_overlay_lane(which, target_anchor)
         if which == "asr":
-            caption_anchor, callsign_anchor = target_anchor, other
+            caption_anchor = target_anchor
         else:
-            callsign_anchor, caption_anchor = target_anchor, other
+            callsign_anchor = target_anchor
         preferences_dirty = True
         write_remembered_view(force=True)
 
@@ -10450,9 +10482,9 @@ def main():
         return ASR_CAPTION_ANCHORS[(ASR_CAPTION_ANCHORS.index(anchor) + 1) % len(ASR_CAPTION_ANCHORS)]
 
     def move_monitoring_graph_to_lane(which, target_anchor):
-        """Move a diagnostic graph with the familiar ASR tap/drag behavior."""
+        """Move a diagnostic graph to a free ASR/diagnostics lane."""
         nonlocal buffer_graph_anchor, cpu_graph_anchor, preferences_dirty
-        target_anchor = normalize_caption_anchor(target_anchor)
+        target_anchor = available_overlay_lane(which, target_anchor)
         if which == "buffer":
             buffer_graph_anchor = target_anchor
         else:
@@ -12106,6 +12138,11 @@ def main():
                                 audio_transport_graph_open = not audio_transport_graph_open
                                 if audio_transport_graph_open:
                                     cpu_utilization_graph_open = False
+                                    # A saved graph lane may now be occupied
+                                    # by ASR/HAM text. Resolve it when the
+                                    # graph becomes visible, not after it has
+                                    # already been drawn over the text.
+                                    move_monitoring_graph_to_lane("buffer", buffer_graph_anchor)
                                     cpu_core_history.clear()
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
@@ -12116,6 +12153,7 @@ def main():
                                 cpu_utilization_graph_open = not cpu_utilization_graph_open
                                 if cpu_utilization_graph_open:
                                     audio_transport_graph_open = False
+                                    move_monitoring_graph_to_lane("cpu", cpu_graph_anchor)
                                     cpu_core_history.clear()
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
