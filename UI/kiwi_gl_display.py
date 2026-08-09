@@ -747,7 +747,7 @@ def radio_panel_box():
     if LCD_800_MODE:
         # The open drawer replaces the entire annunciator block as well as
         # the Home rail beneath it, preventing duplicate mode information.
-        return LCD_ANNUNCIATOR_BOX[0], 0, LCD_ANNUNCIATOR_BOX[2], lcd_rail_bottom()
+        return LCD_ANNUNCIATOR_BOX[0], LCD_DRAWER_HEADER_H, LCD_ANNUNCIATOR_BOX[2], lcd_rail_bottom()
     return radio_popup_box(RADIO_PANEL_BOX)
 
 
@@ -1158,21 +1158,23 @@ def configure_popup_layout():
         # all controls in a bottom-anchored stack so the open upper rail stays
         # calm and leaves the waterfall entirely visible and interactive.
         display_x0, display_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
-        display_y0, display_y1 = 0, lcd_rail_bottom()
+        display_y0, display_y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
         inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
         DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 150)
         column_gap, tile_h, adjust_h = 7, 72, 64
-        palette_y1 = display_y1 - 14
-        palette_y0 = palette_y1 - tile_h
-        rate_y1 = palette_y0 - 16
-        rate_y0 = rate_y1 - tile_h
-        ceiling_y1 = rate_y0 - 16
-        ceiling_y0 = ceiling_y1 - adjust_h
-        floor_y1 = ceiling_y0 - 16
-        floor_y0 = floor_y1 - adjust_h
-        toggle_y1 = floor_y0 - 16
-        toggle_y0 = toggle_y1 - tile_h
+        # Every LCD drawer is top-justified: instruments begin together
+        # beneath the header and leave a quiet lane to the bottom Back button.
+        toggle_y0 = 168
+        toggle_y1 = toggle_y0 + tile_h
+        floor_y0 = toggle_y1 + 16
+        floor_y1 = floor_y0 + adjust_h
+        ceiling_y0 = floor_y1 + 16
+        ceiling_y1 = ceiling_y0 + adjust_h
+        rate_y0 = ceiling_y1 + 16
+        rate_y1 = rate_y0 + tile_h
+        palette_y0 = rate_y1 + 16
+        palette_y1 = palette_y0 + tile_h
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
         DISPLAY_AUTO_BOX = (inner_x0 + half_w + column_gap, toggle_y0, inner_x1, toggle_y1)
@@ -1213,25 +1215,20 @@ def configure_popup_layout():
         # Audio follows the same 256 px right-rail drawer language as the
         # mode controls. The running waterfall remains visible at all times.
         audio_x0, audio_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
-        audio_y0 = 0
+        audio_y0 = LCD_DRAWER_HEADER_H
         audio_y1 = lcd_rail_bottom()
         AUDIO_PANEL_BOX = (audio_x0, audio_y0, audio_x1, audio_y1)
-        # Mute is a first-response safety control. Keep it immediately below
-        # Back, then bottom-justify every remaining control as one coherent
-        # instrument stack.
+        # Keep all audio instruments together under the header; Back has its
+        # own broad, isolated target at the bottom of the rail.
         slider_x0, slider_x1 = LCD_NAV_X0, LOGICAL_W
         left_x0, left_x1 = audio_x0 + 10, audio_x0 + 117
         right_x0, right_x1 = audio_x0 + 124, audio_x1 - 10
         AUDIO_MUTE_BOX = (audio_x0 + 10, 80, audio_x1 - 10, 142)
         tile_h, tile_gap = 72, 16
-        rows_height = 4 * tile_h + 3 * tile_gap
-        rows_y0 = audio_y1 - 14 - rows_height
-        denoise_y1 = rows_y0 - 16
-        denoise_y0 = denoise_y1 - 64
-        squelch_y1 = denoise_y0 - 8
-        squelch_y0 = squelch_y1 - 64
-        volume_y1 = squelch_y0 - 8
-        volume_y0 = volume_y1 - 62
+        volume_y0, volume_y1 = 160, 222
+        squelch_y0, squelch_y1 = 230, 294
+        denoise_y0, denoise_y1 = 302, 366
+        rows_y0 = 382
         AUDIO_VOLUME_BOX = (slider_x0, volume_y0, slider_x1, volume_y1)
         AUDIO_SQUELCH_BOX = (slider_x0, squelch_y0, slider_x1, squelch_y1)
         AUDIO_DENOISE_BOX = (slider_x0, denoise_y0, slider_x1, denoise_y1)
@@ -4549,8 +4546,8 @@ def display_option_at(x, y):
 
 
 def lcd_display_drawer_close_box():
-    _x0, y0, x1, _y1 = DISPLAY_PANEL_BOX
-    return x1 - 117, y0 + 8, x1 - 10, y0 + 70
+    x0, _y0, x1, y1 = DISPLAY_PANEL_BOX
+    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
 
 
 def draw_display_control(text_cache, box, label, active=False):
@@ -5994,11 +5991,12 @@ def audio_option_at(x, y):
 
 
 def lcd_audio_drawer_close_box():
-    _x0, y0, x1, _y1 = AUDIO_PANEL_BOX
-    return x1 - 117, y0 + 8, x1 - 10, y0 + 70
+    x0, _y0, x1, y1 = AUDIO_PANEL_BOX
+    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
 
 
-def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220)):
+def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
+                        title_size=None, detail_size=None):
     """Compact two-line control tile for the LCD audio drawer."""
     x0, y0, x1, y1 = box
     fill = (28, 78, 67, 230) if active else (18, 29, 38, 216)
@@ -6006,20 +6004,22 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, (230, 246, 247), 15 if len(title) <= 8 else 13, True, False, "cm", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), 13 if len(detail) <= 10 else 11, True, False, "cm", family="Liberation Sans")
+    title_size = title_size or (15 if len(title) <= 8 else 13)
+    detail_size = detail_size or (13 if len(detail) <= 10 else 11)
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, (230, 246, 247), title_size, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), detail_size, True, False, "cm", family="Liberation Sans")
 
 
 def receiver_home_drawer_boxes():
     """Profile controls in the normal non-modal 256 px LCD settings rail."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
-    y0, y1 = 0, lcd_rail_bottom()
+    y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x1 - 117, y0 + 8, x1 - 10, y0 + 70),
-        "fan": (x0 + 10, 238, x1 - 10, 306),
-        "locate": (x0 + 10, y1 - 156, x1 - 10, y1 - 88),
-        "fallback": (x0 + 10, y1 - 76, x1 - 10, y1 - 8),
+        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "fan": (x0 + 10, 258, x1 - 10, 326),
+        "locate": (x0 + 10, 346, x1 - 10, 414),
+        "fallback": (x0 + 10, 426, x1 - 10, 494),
     }
 
 
@@ -6030,13 +6030,13 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_text(text_cache, x0 + 12, 32, "RECEIVER HOME", (230, 246, 247), 16, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 68, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 96, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 90, "RECEIVER HOME", (230, 246, 247), 16, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 154, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
-    draw_text(text_cache, x0 + 12, 122, source, (153, 185, 191), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 174, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 200, "ARE MEASURED FROM HERE", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 180, source, (153, 185, 191), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
     fan_curve = fan_curve or load_fan_curve()
     draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", f"{fan_curve['start_c']}→{fan_curve['full_c']} C", True)
     draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
@@ -6045,13 +6045,13 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
 
 def fan_curve_drawer_boxes():
     x0, x1 = LCD_NAV_X0, LOGICAL_W
-    y0, y1 = 0, lcd_rail_bottom()
+    y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x1 - 117, y0 + 8, x1 - 10, y0 + 70),
-        "start": (x0 + 10, 184, x1 - 10, 254),
-        "full": (x0 + 10, 282, x1 - 10, 352),
-        "minimum": (x0 + 10, 380, x1 - 10, 450),
+        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "start": (x0 + 10, 248, x1 - 10, 318),
+        "full": (x0 + 10, 346, x1 - 10, 416),
+        "minimum": (x0 + 10, 444, x1 - 10, 514),
     }
 
 
@@ -6060,11 +6060,11 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
-    draw_text(text_cache, x0 + 12, 32, "FAN CURVE", (230, 246, 247), 18, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 90, "FAN CURVE", (230, 246, 247), 18, True, False, "lm", family="Liberation Sans")
     live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
-    draw_text(text_cache, x0 + 12, 66, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 98, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 120, "SMOOTHED · STOPS 3 C BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 178, "SMOOTHED · STOPS 3 C BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
     start = float(curve["start_c"])
     full = float(curve["full_c"])
     draw_lcd_audio_slider_tile(text_cache, boxes["start"], "FAN START", start - 45.0, 20.0, f"{start:.0f} C", True)
@@ -7094,8 +7094,10 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
-        draw_text(text_cache, x0 + 12, 37, "DISPLAY", (230, 246, 247), 18, True, False, "lm", family="Liberation Sans")
-        draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "DISPLAY RESET", "RESTORE DEFAULTS", False)
+        draw_lcd_audio_tile(
+            text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS", False,
+            title_size=20, detail_size=16,
+        )
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
@@ -7583,6 +7585,7 @@ LCD_NAV_TOP_MIN = 88
 LCD_NAV_TILE_W = 117
 LCD_NAV_TILE_H = 102
 LCD_NAV_GAP = 8
+LCD_DRAWER_HEADER_H = 64
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
