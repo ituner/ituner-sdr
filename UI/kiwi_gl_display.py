@@ -7834,22 +7834,24 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     draw_compact_vfo_text(text_cache, frequency_right, y0 + 30, frequency_text, frequency_color, frequency_size, frequency_x_scale, frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
-    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 68, x1 - 6, y0 + 116
+    # Give the Home meter enough physical weight to read as an instrument,
+    # rather than a thin status decoration beside the VFO.
+    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 64, x1 - 6, y0 + 124
     meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     meter_level = smeter_segment_position(meter_value)
     draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
     draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
-    draw_text(text_cache, meter_x0 + 8, meter_y0 + 10, "S-METER", (149, 183, 191), 10, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, meter_x1 - 8, meter_y0 + 10, compact_smeter_label(meter_value), (220, 242, 245), 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, meter_x0 + 9, meter_y0 + 14, "S-METER", (165, 199, 207), 12, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, compact_smeter_label(meter_value), (230, 247, 249), 18, True, False, "rm", family="Liberation Sans")
     meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-    meter_track_y = meter_y1 - 10
+    meter_track_y = meter_y1 - 15
     segment_w = (meter_track_x1 - meter_track_x0) / 18
     for index in range(18):
         sx0 = meter_track_x0 + index * segment_w + 1
         sx1 = meter_track_x0 + (index + 1) * segment_w - 1
         active = index + 0.5 <= meter_level / 2
         color = (92, 221, 231, 238) if index < 14 else (244, 104, 90, 238)
-        draw_logical_rect(sx0, meter_track_y - 4, sx1, meter_track_y + 4, color if active else (31, 52, 61, 208))
+        draw_logical_rect(sx0, meter_track_y - 7, sx1, meter_track_y + 7, color if active else (31, 52, 61, 208))
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
     cell_h = (y1 - 6 - 130 - 5) / 2
