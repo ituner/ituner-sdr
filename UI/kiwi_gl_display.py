@@ -3525,6 +3525,65 @@ def draw_compact_vfo_text(text_cache, right_x, center_y, text, color, size, x_sc
         cursor_x += width
 
 
+SEVEN_SEGMENT_GLYPHS = {
+    "0": "ab cdef".replace(" ", ""), "1": "bc", "2": "abdeg", "3": "abcdg",
+    "4": "bcfg", "5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg",
+    "9": "abcdfg", "-": "g",
+}
+
+
+def seven_segment_text_width(text, height, x_scale=1.0):
+    """Measure a compact seven-segment VFO string with narrow decimal dots."""
+    scale = clamp(x_scale, 0.35, 1.2)
+    digit_w = height * 0.58 * scale
+    dot_w = max(3.0, height * 0.13 * scale)
+    gap = max(1.0, height * 0.065 * scale)
+    widths = [dot_w if char == "." else digit_w for char in str(text)]
+    return sum(widths) + max(0, len(widths) - 1) * gap
+
+
+def draw_seven_segment_text(right_x, center_y, text, height, color=(91, 255, 168),
+                            x_scale=1.0, anchor="rm"):
+    """Render a crisp green seven-segment VFO without depending on host fonts."""
+    scale = clamp(x_scale, 0.35, 1.2)
+    digit_w = height * 0.58 * scale
+    dot_w = max(3.0, height * 0.13 * scale)
+    gap = max(1.0, height * 0.065 * scale)
+    thickness = max(2.0, height * 0.095 * min(1.0, scale))
+    total_w = seven_segment_text_width(text, height, scale)
+    left = right_x - total_w if "r" in anchor else right_x
+    if "c" in anchor:
+        left -= total_w / 2
+    top = center_y - height / 2 if "m" in anchor else center_y
+    glow = (*color, 52)
+    core = (*color, 248)
+    cursor = left
+    for char in str(text):
+        if char == ".":
+            dot_y0 = top + height - thickness * 1.65
+            draw_logical_rect(cursor, dot_y0, cursor + dot_w, dot_y0 + thickness, glow)
+            draw_logical_rect(cursor + thickness * 0.18, dot_y0 + thickness * 0.18,
+                              cursor + dot_w - thickness * 0.18, dot_y0 + thickness * 0.82, core)
+            cursor += dot_w + gap
+            continue
+        left_x, right_x = cursor + thickness / 2, cursor + digit_w - thickness / 2
+        top_y, mid_y, bottom_y = top + thickness / 2, top + height / 2, top + height - thickness / 2
+        segments = {
+            "a": ((left_x, top_y), (right_x, top_y)),
+            "b": ((right_x, top_y), (right_x, mid_y)),
+            "c": ((right_x, mid_y), (right_x, bottom_y)),
+            "d": ((left_x, bottom_y), (right_x, bottom_y)),
+            "e": ((left_x, mid_y), (left_x, bottom_y)),
+            "f": ((left_x, top_y), (left_x, mid_y)),
+            "g": ((left_x, mid_y), (right_x, mid_y)),
+        }
+        for segment in SEVEN_SEGMENT_GLYPHS.get(char, ""):
+            start, end = segments[segment]
+            draw_logical_line(start[0], start[1], end[0], end[1], glow, thickness * 2.8)
+            draw_logical_line(start[0], start[1], end[0], end[1], core, thickness)
+        cursor += digit_w + gap
+
+
 def draw_textured_quad(tex, x0, y0, x1, y1, u0, v0, u1, v1, alpha=1.0):
     GL.glEnable(GL.GL_TEXTURE_2D)
     GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
@@ -4203,14 +4262,14 @@ def frequency_right_x():
 
 def frequency_display_box(text_cache, freq_khz):
     frequency_text = sdr_ui.format_freq(freq_khz)
-    width = text_cache.font(60, bold=True, family="Liberation Sans").size(frequency_text)[0]
+    width = seven_segment_text_width(frequency_text, 54)
     return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
 
 
 def top_instrument_layout(text_cache, freq_khz):
     """Return a right-aligned mode/frequency cluster next to the S-meter."""
     frequency_text = sdr_ui.format_freq(freq_khz)
-    frequency_width = text_cache.font(60, bold=True, family="Liberation Sans").size(frequency_text)[0]
+    frequency_width = seven_segment_text_width(frequency_text, 54)
     frequency_left = frequency_right_x() - frequency_width
     radio_x1 = frequency_left - RADIO_SETUP_GAP
     radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
@@ -7830,28 +7889,25 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     unit = "MHz"
     unit_size = 11
     unit_width = text_cache.font(unit_size, bold=True, family="Liberation Sans").size(unit)[0]
-    # A compressed monospaced face gives the VFO a blockier instrument style
-    # while preserving room for the full 30 MHz presentation.
-    frequency_family = "DejaVu Sans Mono"
     frequency_left_margin = 10
     unit_right_margin = 10
     frequency_unit_gap = 3
-    frequency_size = 44
+    frequency_height = 42
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
         - (x0 + frequency_left_margin)
     )
-    frequency_color = (240, 242, 244)
+    frequency_color = (91, 255, 168)
     frequency_source_width = max(
-        compact_vfo_text_width(text_cache, frequency_text, frequency_color, frequency_size, 1.0, frequency_family),
-        compact_vfo_text_width(text_cache, fit_target, frequency_color, frequency_size, 1.0, frequency_family),
+        seven_segment_text_width(frequency_text, frequency_height),
+        seven_segment_text_width(fit_target, frequency_height),
     )
-    frequency_x_scale = min(0.84, frequency_width_limit / max(1, frequency_source_width))
+    frequency_x_scale = min(0.90, frequency_width_limit / max(1, frequency_source_width))
     # Keep the currently tuned value visually coupled to its unit. Shorter
     # frequencies therefore do not leave a distracting blank before MHz.
     frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
-    draw_compact_vfo_text(text_cache, frequency_right, y0 + 30, frequency_text, frequency_color, frequency_size, frequency_x_scale, frequency_family)
+    draw_seven_segment_text(frequency_right, y0 + 30, frequency_text, frequency_height, frequency_color, frequency_x_scale, "rm")
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
     # Give the Home meter enough physical weight to read as an instrument,
@@ -9000,11 +9056,9 @@ def draw_ui(
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
-    # Liberation Sans Bold stays clean and compact at the display's physical
-    # pixel density, leaving headroom inside the short instrument strip.
-    # Right alignment keeps this cluster locked to the S-meter while the
-    # number of MHz digits changes between bands.
-    draw_text(text_cache, frequency_right_x(), 39, frequency_text, (169, 189, 193), 60, True, False, "rm", family="Liberation Sans")
+    # The VFO uses a self-rendered seven-segment face so it remains identical
+    # on macOS and the Pi, with no host-font packaging dependency.
+    draw_seven_segment_text(frequency_right_x(), 39, frequency_text, 54, (91, 255, 168), anchor="rm")
     draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
