@@ -7718,16 +7718,22 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
     # Size against the widest normal HF presentation rather than the current
     # frequency. That makes this secondary readout appreciably larger while
     # guaranteeing that 30.000.000 MHz never touches the unit label.
-    frequency_size = 38
+    frequency_left_margin = 12
+    unit_right_margin = 12
+    frequency_unit_gap = 4
+    frequency_size = 42
     fit_target = "30.000.000"
-    frequency_width_limit = x1 - x0 - unit_width - 34
+    frequency_width_limit = (
+        (x1 - unit_right_margin - unit_width - frequency_unit_gap)
+        - (x0 + frequency_left_margin)
+    )
     while frequency_size > 20 and max(
         text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(frequency_text)[0],
         text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(fit_target)[0],
     ) > frequency_width_limit:
         frequency_size -= 1
-    draw_text(text_cache, x0 + 14, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 14, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + frequency_left_margin, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - unit_right_margin, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
     cell_h = (y1 - 6 - 63 - 5) / 2
