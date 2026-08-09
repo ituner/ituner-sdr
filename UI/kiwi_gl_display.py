@@ -301,7 +301,7 @@ WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
 # reserve only the enlarged status strip below.
 BOTTOM_RULER_H = 0
 SPECTRUM_RULER_H = 30
-BOTTOM_STATUS_H = 52
+BOTTOM_STATUS_H = 88
 ASR_CAPTION_HEIGHT = 140
 CALLSIGN_CAPTION_HEIGHT = 68
 CALLSIGN_CONTEXT_MAX_AGE = 4.5
@@ -8402,16 +8402,19 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         return
     height = y1 - y0
     compact = height < 28
+    two_row = height >= 68
     # One typography family, weight and vertical center makes this read as a
     # deliberate single status bar instead of independent overlay labels.
-    size = 14 if compact else (20 if height >= 44 else 16)
+    size = 14 if compact else (20 if two_row else 16)
     status_mid_y = (y0 + y1) / 2
+    primary_y = y0 + height * 0.30 if two_row else status_mid_y
+    secondary_y = y0 + height * 0.73 if two_row else status_mid_y
     draw_logical_rect(0, y0, LOGICAL_W, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
     if station_name:
         # The station is deliberately limited to 40% of the logical display,
         # leaving a permanent clear lane before the right-side status readouts.
-        title = fit_station_text(text_cache, station_name, LOGICAL_W * 0.40, size, False, False, family="Cantarell")
-        draw_text(text_cache, 18, status_mid_y, title, (151, 160, 165), size, False, False, "lm", alpha, family="Cantarell")
+        title = fit_station_text(text_cache, station_name, LOGICAL_W * (0.50 if two_row else 0.40), size, False, False, family="Cantarell")
+        draw_text(text_cache, 18, primary_y, title, (151, 160, 165), size, False, False, "lm", alpha, family="Cantarell")
     if smeter_readout_dbm is not None:
         # Center this calm numeric readout in the permanent lane between the
         # 40%-wide station title and the CPU/decoder status on the right.
@@ -8420,8 +8423,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     # receiver jitter has been characterized across a few stations.
     jitter_label = f"BUFFER {audio_jitter_depth}/{audio_jitter_target}"
     jitter_color = (113, 226, 172) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else (244, 186, 102)
-    draw_text(text_cache, 560, status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if height >= 44 else 14), True, False, "rm", alpha, family="Cantarell")
-    draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
+    draw_text(text_cache, 18 if two_row else 560, secondary_y if two_row else status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if two_row else 14), True, False, "lm" if two_row else "rm", alpha, family="Cantarell")
+    draw_system_annunciator(text_cache, cpu_percent, temp_c, primary_y, size, alpha)
     call_x0, _call_y0, call_x1, _call_y1 = CALLSIGN_TOGGLE_BOX
     if callsign_enabled:
         call_color = (102, 238, 163) if callsign_status != "ERROR" else (246, 164, 94)
@@ -13180,14 +13183,13 @@ def main():
             # bar instead of leaving an arbitrary gap.
             spectrum_y0 = 40 if spectrum_enabled else sdr_ui.TOP_H
             spectrum_y1 = spectrum_y0 + spectrum_h
-            # The ruler is a physical divider between scope and waterfall.
-            # With scope hidden it follows the top instrument strip, so the
-            # same clear frequency reference remains available in full-WF.
+            # The ruler overlays the first waterfall rows at the scope edge:
+            # it remains readable without reserving a black separator band.
             bottom_ruler = False
             ruler_height = SPECTRUM_RULER_H
             ruler_y0 = spectrum_y1 if spectrum_enabled else sdr_ui.TOP_H
-            ruler_background_alpha = 224
-            normal_waterfall_y0 = ruler_y0 + ruler_height
+            ruler_background_alpha = 126
+            normal_waterfall_y0 = ruler_y0
             focus_waterfall_y0 = normal_waterfall_y0
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
             # The status bar is composited over the lower edge; the live
