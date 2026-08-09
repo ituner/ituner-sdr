@@ -330,7 +330,10 @@ CAPTION_MODE_LABELS = {
     "both": "BOTH",
 }
 DEEPGRAM_MODEL = os.environ.get("ITUNER_DEEPGRAM_MODEL", "nova-3")
-DEEPGRAM_LANGUAGE = os.environ.get("ITUNER_DEEPGRAM_LANGUAGE", "en-US")
+# Nova-3's `multi` profile recognizes the supported radio languages without
+# assuming every distant receiver is English. Deployments may still force one
+# language through ITUNER_DEEPGRAM_LANGUAGE when that is genuinely desired.
+DEEPGRAM_LANGUAGE = os.environ.get("ITUNER_DEEPGRAM_LANGUAGE", "multi")
 DEEPGRAM_KEYTERMS = ("CQ", "QSO", "QSL", "QRZ", "QTH", "DX", "HF", "SSB", "FT8", "WSPR")
 # This is intentionally a compact operational vocabulary, not a fake custom
 # language model. Nova-3 gets radio context while the local callsign lane
