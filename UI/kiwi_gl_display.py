@@ -7651,42 +7651,14 @@ FONT_GALLERY_TEST = True
 FONT_GALLERY_PAGE = 0
 FONT_GALLERY_PAGE_SIZE = 8
 FONT_GALLERY_CHOICES = (
-    # Retained finalists from the first gallery.
+    # Operator's retained VFO finalists, shown together on one large page.
     (1, "Courier New", "COURIER NEW"),
     (7, "Cantarell", "CANTARELL"),
     (15, "Nimbus Mono PS", "NIMBUS MONO"),
     (21, "DejaVu Serif Condensed", "DEJAVU SERIF C"),
-    # Fresh, clean SDR/VFO candidates. Imported display faces appear first.
     (30, "Orbitron", "ORBITRON"),
-    (31, "Space Mono", "SPACE MONO"),
-    (32, "Share Tech Mono", "SHARE TECH MONO"),
-    (33, "Audiowide", "AUDIOWIDE"),
     (34, "Oxanium", "OXANIUM"),
-    (35, "Rajdhani", "RAJDHANI"),
-    (36, "DejaVu Sans Mono", "DEJAVU MONO"),
-    (37, "Liberation Mono", "LIBERATION MONO"),
-    (38, "Noto Sans Mono", "NOTO SANS MONO"),
-    (39, "FreeMono", "FREE MONO"),
-    (40, "DejaVu Sans Condensed", "DEJAVU COND"),
-    (41, "Nimbus Sans Narrow", "NIMBUS NARROW"),
-    (42, "URW Gothic", "URW GOTHIC"),
-    (43, "Nimbus Sans", "NIMBUS SANS"),
-    (44, "Nimbus Roman", "NIMBUS ROMAN"),
-    (45, "URW Bookman", "URW BOOKMAN"),
-    (46, "P052", "P052"),
-    (47, "C059", "C059"),
-    (48, "DejaVu Serif", "DEJAVU SERIF"),
-    (49, "Liberation Serif", "LIBERATION SERIF"),
-    (50, "Liberation Sans Narrow", "LIBERATION NARROW"),
-    (51, "FreeSans", "FREE SANS"),
-    (52, "FreeSerif", "FREE SERIF"),
-    (53, "D050000L", "D050000L"),
-    (54, "Noto Mono", "NOTO MONO"),
-    (55, "DejaVu Sans ExtraLight", "DEJAVU LIGHT"),
     (56, "Nimbus Mono PS", "NIMBUS MONO ALT"),
-    (57, "URW Gothic", "URW GOTHIC ALT"),
-    (58, "Liberation Sans", "LIBERATION SANS"),
-    (59, "seven", "SEVEN SEGMENT"),
 )
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
@@ -7812,8 +7784,10 @@ def draw_lcd_font_gallery(text_cache):
     page_count = font_gallery_page_count()
     page = int(clamp(FONT_GALLERY_PAGE, 0, page_count - 1))
     start = page * FONT_GALLERY_PAGE_SIZE
-    row_h = 80
-    sample_y0 = 8
+    single_page = page_count == 1
+    sample_y0 = 18 if single_page else 8
+    visible_rows = min(FONT_GALLERY_PAGE_SIZE, len(FONT_GALLERY_CHOICES) - start)
+    row_h = ((LOGICAL_H - 108 - sample_y0) / max(1, visible_rows)) if single_page else 80
     for row, (font_id, family, label) in enumerate(FONT_GALLERY_CHOICES[start:start + FONT_GALLERY_PAGE_SIZE]):
         y0 = sample_y0 + row * row_h
         y1 = y0 + row_h - 5
@@ -7822,26 +7796,30 @@ def draw_lcd_font_gallery(text_cache):
         draw_text(text_cache, x0 + 16, y0 + 11, f"{font_id:02d}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
         sample = f"5.216.{font_id:03d}"
         sample_right = x1 - 15
-        sample_center_y = y0 + 51
+        sample_center_y = y0 + (row_h * 0.66 if single_page else 51)
         if family == "seven":
-            draw_seven_segment_text(sample_right, sample_center_y, sample, 34, (91, 255, 168), 0.83, "rm")
+            draw_seven_segment_text(sample_right, sample_center_y, sample, 42 if single_page else 34, (91, 255, 168), 0.83, "rm")
             continue
-        sample_size = 34
+        sample_size = 42 if single_page else 34
         text_width = text_cache.font(sample_size, bold=True, family=family).size(sample)[0]
         x_scale = min(1.0, (x1 - x0 - 30) / max(1, text_width))
         draw_text_scaled_x(
             text_cache, sample_right, sample_center_y, sample, (139, 246, 184), sample_size,
             x_scale, bold=True, anchor="rm", family=family,
         )
-    controls = font_gallery_control_boxes()
-    for action, box in controls.items():
-        enabled = page > 0 if action == "previous" else page < page_count - 1
-        draw_lcd_audio_tile(
-            text_cache, box, "‹" if action == "previous" else "›", "PREV" if action == "previous" else "NEXT",
-            enabled, (91, 229, 204, 225), title_size=30, detail_size=11,
-        )
-    draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 40, f"PAGE {page + 1}/{page_count}",
-              (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
+    if single_page:
+        draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 42, "PREFERRED VFO FONTS",
+                  (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
+    else:
+        controls = font_gallery_control_boxes()
+        for action, box in controls.items():
+            enabled = page > 0 if action == "previous" else page < page_count - 1
+            draw_lcd_audio_tile(
+                text_cache, box, "‹" if action == "previous" else "›", "PREV" if action == "previous" else "NEXT",
+                enabled, (91, 229, 204, 225), title_size=30, detail_size=11,
+            )
+        draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 40, f"PAGE {page + 1}/{page_count}",
+                  (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
