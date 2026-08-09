@@ -742,7 +742,7 @@ def radio_panel_box():
     if LCD_800_MODE:
         # The open drawer replaces the entire annunciator block as well as
         # the Home rail beneath it, preventing duplicate mode information.
-        return LCD_ANNUNCIATOR_BOX[0], 0, LCD_ANNUNCIATOR_BOX[2], lcd_content_bottom()
+        return LCD_ANNUNCIATOR_BOX[0], 0, LCD_ANNUNCIATOR_BOX[2], lcd_rail_bottom()
     return radio_popup_box(RADIO_PANEL_BOX)
 
 
@@ -1147,7 +1147,7 @@ def configure_popup_layout():
         # all controls in a bottom-anchored stack so the open upper rail stays
         # calm and leaves the waterfall entirely visible and interactive.
         display_x0, display_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
-        display_y0, display_y1 = 0, lcd_content_bottom()
+        display_y0, display_y1 = 0, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
         inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
         column_gap, tile_h, adjust_h = 7, 72, 64
@@ -1202,7 +1202,7 @@ def configure_popup_layout():
         # mode controls. The running waterfall remains visible at all times.
         audio_x0, audio_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
         audio_y0 = 0
-        audio_y1 = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
+        audio_y1 = lcd_rail_bottom()
         AUDIO_PANEL_BOX = (audio_x0, audio_y0, audio_x1, audio_y1)
         # Mute is a first-response safety control. Keep it immediately below
         # Back, then bottom-justify every remaining control as one coherent
@@ -5999,7 +5999,7 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
 def receiver_home_drawer_boxes():
     """Profile controls in the normal non-modal 256 px LCD settings rail."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
-    y0, y1 = 0, lcd_content_bottom()
+    y0, y1 = 0, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
         "close": (x1 - 117, y0 + 8, x1 - 10, y0 + 70),
@@ -6031,7 +6031,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
 
 def fan_curve_drawer_boxes():
     x0, x1 = LCD_NAV_X0, LOGICAL_W
-    y0, y1 = 0, lcd_content_bottom()
+    y0, y1 = 0, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
         "close": (x1 - 117, y0 + 8, x1 - 10, y0 + 70),
@@ -7565,7 +7565,7 @@ def draw_desktop_1280_navigation(text_cache):
 LCD_NAV_X0 = 1024
 LCD_NAV_TOP_MIN = 88
 LCD_NAV_TILE_W = 117
-LCD_NAV_TILE_H = 88
+LCD_NAV_TILE_H = 102
 LCD_NAV_GAP = 8
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
@@ -7579,6 +7579,16 @@ LCD_RADIO_DRAWER_PROGRESS = 0.0
 def lcd_content_bottom():
     """Bottom edge reserved for live controls, above ruler and status."""
     return LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
+
+
+def lcd_rail_bottom():
+    """The permanent 256 px Home rail owns the full logical height.
+
+    The lower status strip belongs only to the 1024 px RF canvas.  Keeping
+    this independent makes Home a continuous black instrument panel and
+    gives its controls the otherwise unused lower space.
+    """
+    return LOGICAL_H
 
 
 def lcd_radio_drawer_close_box():
@@ -7597,7 +7607,7 @@ def lcd_radio_drawer_reveal_y():
 def lcd_nav_top():
     """Bottom-align the four rows of persistent LCD menu tiles."""
     tiles_h = 4 * LCD_NAV_TILE_H + 3 * LCD_NAV_GAP
-    return max(LCD_NAV_TOP_MIN, lcd_content_bottom() - LCD_CONTROL_GAP - tiles_h)
+    return max(LCD_NAV_TOP_MIN, lcd_rail_bottom() - LCD_CONTROL_GAP - tiles_h)
 
 
 def lcd_home_volume_box():
@@ -7728,12 +7738,11 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
-    content_bottom = lcd_content_bottom()
-    # The 100 px mode matrix is drawn before this rail. Begin below it so the
-    # rail cannot paint over the lower AM/USB/CW/NBFM/IQ row.
-    nav_y0 = max(sdr_ui.TOP_H, LCD_ANNUNCIATOR_BOX[3])
-    draw_logical_rect(LCD_NAV_X0, nav_y0, LOGICAL_W, content_bottom, (6, 13, 19, 246))
-    draw_logical_line(LCD_NAV_X0, nav_y0, LCD_NAV_X0, content_bottom, (125, 147, 158, 118), 1)
+    rail_bottom = lcd_rail_bottom()
+    # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
+    # uninterrupted black panel from the VFO to the physical bottom edge.
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     draw_lcd_home_volume_slider(text_cache, volume, muted)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = lcd_nav_box(index)
@@ -8955,8 +8964,6 @@ def draw_ui(
     # instrument strip.
     draw_logical_rect(68, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 144))
     frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
-    if LCD_800_MODE:
-        draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
     if DESKTOP_1280_MODE:
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
@@ -9024,6 +9031,11 @@ def draw_ui(
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
     draw_lcd_navigation(text_cache, audio_volume, home_smeter_dbm, audio_muted)
+    # The full-height black Home rail is laid down first; render its VFO/mode
+    # instrument over it so the panel remains visible without touching the
+    # independent 1024 px RF scope/waterfall canvas.
+    if LCD_800_MODE:
+        draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
 
 
 def drain_queue(line_queue):
