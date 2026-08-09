@@ -7567,6 +7567,12 @@ def lcd_home_volume_box():
     return x0, y0, x1, max(y0 + 46, y1)
 
 
+def lcd_home_volume_mute_box():
+    """Compact speaker toggle aligned with the Home volume readout."""
+    _x0, y0, x1, _y1 = lcd_home_volume_box()
+    return x1 - 44, y0 + 5, x1 - 6, y0 + 34
+
+
 def lcd_home_smeter_box():
     """Compact RF meter below Home volume and above the tile grid."""
     x0, _volume_y0, x1, volume_y1 = lcd_home_volume_box()
@@ -7593,15 +7599,31 @@ def lcd_nav_item_at(x, y):
     return None
 
 
-def draw_lcd_home_volume_slider(text_cache, volume):
-    """Draw the same real PipeWire control used by the Audio drawer."""
+def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
+    """Draw the master slider and its compact, independent mute switch."""
     x0, y0, x1, y1 = lcd_home_volume_box()
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
+    mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box()
+    status = "MUTE" if muted else main_volume_label(level)
+    status_color = MUTE_ACCENT if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248)
     draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 228))
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
     draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, mute_x0 - 8, y0 + 13, status, status_color, 16, True, False, "rt", family="Liberation Sans")
+    button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
+    button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
+    icon_color = MUTE_ACCENT if muted else (145, 231, 242)
+    draw_logical_rect(mute_x0, mute_y0, mute_x1, mute_y1, button_fill)
+    draw_logical_line(mute_x0, mute_y0, mute_x1, mute_y0, button_edge, 1)
+    draw_logical_line(mute_x0, mute_y1, mute_x1, mute_y1, button_edge, 1)
+    draw_logical_line(mute_x0, mute_y0, mute_x0, mute_y1, button_edge, 1)
+    draw_logical_line(mute_x1, mute_y0, mute_x1, mute_y1, button_edge, 1)
+    cx, cy = (mute_x0 + mute_x1) / 2, (mute_y0 + mute_y1) / 2
+    draw_logical_rect(cx - 10, cy - 4, cx - 5, cy + 4, icon_color)
+    draw_logical_polyline(((cx - 5, cy - 4), (cx + 3, cy - 10), (cx + 3, cy + 10), (cx - 5, cy + 4)), icon_color, 2)
+    if muted:
+        draw_logical_line(cx - 13, cy - 12, cx + 13, cy + 12, icon_color, 2.5)
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y1 - 20
     draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
@@ -7651,7 +7673,7 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
 
 
-def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None):
+def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -7661,7 +7683,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None):
     nav_y0 = max(sdr_ui.TOP_H, LCD_ANNUNCIATOR_BOX[3])
     draw_logical_rect(LCD_NAV_X0, nav_y0, LOGICAL_W, content_bottom, (6, 13, 19, 246))
     draw_logical_line(LCD_NAV_X0, nav_y0, LCD_NAV_X0, content_bottom, (125, 147, 158, 118), 1)
-    draw_lcd_home_volume_slider(text_cache, volume)
+    draw_lcd_home_volume_slider(text_cache, volume, muted)
     draw_lcd_home_smeter(text_cache, smeter_dbm)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = lcd_nav_box(index)
@@ -8820,6 +8842,7 @@ def draw_ui(
     audio_jitter_depth=0,
     audio_volume=None,
     home_smeter_dbm=None,
+    audio_muted=False,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -8900,7 +8923,7 @@ def draw_ui(
         )
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
-    draw_lcd_navigation(text_cache, audio_volume, home_smeter_dbm)
+    draw_lcd_navigation(text_cache, audio_volume, home_smeter_dbm, audio_muted)
 
 
 def drain_queue(line_queue):
@@ -10403,13 +10426,6 @@ def main():
         if restored_volume is not None:
             audio_volume = restored_volume
     audio_volume_last_apply = 0.0
-    saved_audible_volume = remembered_preferences.get("last_audible_volume")
-    if isinstance(saved_audible_volume, (int, float)) and saved_audible_volume > MAIN_VOLUME_MUTE_THRESHOLD:
-        last_audible_volume = clamp(float(saved_audible_volume), 0.0, 1.0)
-    elif audio_volume is not None and audio_volume > MAIN_VOLUME_MUTE_THRESHOLD:
-        last_audible_volume = audio_volume
-    else:
-        last_audible_volume = 0.50
 
     # The master slider owns the explicit MUTE state at zero. Raising it again
     # resumes listening immediately, so a zero level can never look live while
@@ -10419,25 +10435,15 @@ def main():
 
     def apply_main_volume(requested_volume):
         """Apply one master-level gesture and keep mute state in lockstep."""
-        nonlocal audio_volume, audio_volume_last_apply, last_audible_volume
+        nonlocal audio_volume, audio_volume_last_apply
         applied_volume = set_pipewire_default_volume(requested_volume)
         if applied_volume is not None:
             audio_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
-            if applied_volume > MAIN_VOLUME_MUTE_THRESHOLD:
-                last_audible_volume = applied_volume
             state.set_audio_controls(
                 audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
             )
         return applied_volume
-
-    def restore_main_volume_after_mute():
-        """Restore the remembered audible level before reopening SDR audio."""
-        if audio_volume is None or audio_volume <= MAIN_VOLUME_MUTE_THRESHOLD:
-            if apply_main_volume(last_audible_volume) is None:
-                return False
-        state.set_audio_controls(audio_mute=False)
-        return True
 
     tests_panel_open = False
     globe_open = False
@@ -10570,7 +10576,6 @@ def main():
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
-            "last_audible_volume": round(float(last_audible_volume), 3),
             "digital_mode": digital_mode,
             "filter": {"low_cut": low_cut, "high_cut": high_cut},
             "filter_custom_width": bool(filter_custom_width),
@@ -11628,6 +11633,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
+                                gesture = "home_volume_mute"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
                                 gesture = "home_volume"
                             elif not picker_open and lcd_nav_item_at(x, y) is not None:
@@ -11923,6 +11930,12 @@ def main():
                         elif touch_started and gesture == "home_volume":
                             apply_main_volume(volume_at_x(x, lcd_home_volume_box()))
                             wake_controls()
+                        elif touch_started and gesture == "home_volume_mute":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                controls, _audio_generation = state.audio_controls_snapshot()
+                                state.set_audio_controls(audio_mute=not controls["mute"])
+                            wake_controls()
                         elif touch_started and gesture == "audio_squelch_level":
                             current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
                             state.set_audio_controls(
@@ -11960,10 +11973,7 @@ def main():
                                 if choice in (None, "close"):
                                     audio_panel_open = False
                                 elif choice == "mute":
-                                    if controls["mute"]:
-                                        restore_main_volume_after_mute()
-                                    else:
-                                        state.set_audio_controls(audio_mute=True)
+                                    state.set_audio_controls(audio_mute=not controls["mute"])
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
                                     state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
@@ -12343,7 +12353,7 @@ def main():
                         elif touch_started and gesture == "waterfall_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                restore_main_volume_after_mute()
+                                state.set_audio_controls(audio_mute=False)
                             wake_controls()
                         elif touch_started and gesture == "stream_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -13237,6 +13247,7 @@ def main():
             callsign_history = state.callsign_history_snapshot()
             audio_jitter_target, audio_jitter_depth = state.audio_jitter_snapshot()
             audio_jitter_history = state.audio_jitter_history_snapshot()
+            live_audio_controls, _live_audio_generation = state.audio_controls_snapshot()
             draw_ui(
                 text_cache,
                 display_freq,
@@ -13271,6 +13282,7 @@ def main():
                 audio_jitter_depth=audio_jitter_depth,
                 audio_volume=audio_volume,
                 home_smeter_dbm=smeter_dbm,
+                audio_muted=live_audio_controls["mute"],
             )
             if spectrum_foreground:
                 draw_spectrum(
