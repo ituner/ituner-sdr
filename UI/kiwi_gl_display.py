@@ -120,6 +120,15 @@ DESKTOP_1280_TOP_H = 96
 # bounds of the two-column navigation rail beneath it. It is one touch target.
 DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
 DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NBFM", "IQ")
+
+
+def rf_canvas_width():
+    """Width of the live RF surface, excluding the permanent control rail."""
+    # The 800x1280 LCD is presented as a 1280x800 landscape UI, but only its
+    # left 1024 logical pixels are RF space.  The final 256 pixels are a
+    # separate Home/drawer rail and must never alter RF scaling or consume
+    # waterfall/scope samples.
+    return DESKTOP_1280_MAIN_W if LCD_800_MODE else LOGICAL_W
 _RENDERER_DIR = Path(__file__).resolve().parent
 _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
@@ -266,11 +275,11 @@ KIWI_RAW_AUDIO_QUANTUM_FRAMES = 512
 # A gap concealment packet must not step abruptly from arbitrary PCM to zero
 # (or back again): that discontinuity is heard as a click even at low volume.
 SDR_AUDIO_CONCEALMENT_FADE_SECONDS = 0.006
-# During an actual transport starvation, low comfort noise is less jarring
-# than a dead-silent hole. This raw amplitude is subsequently scaled by the
-# user's normal PipeWire volume, so 8% remains a deliberately conservative
-# starting point.
-SDR_AUDIO_COMFORT_NOISE_LEVEL = 0.08
+# A tiny noise bridge can hide a single late packet from an already-playing
+# station, but it must never become a synthetic "radio" while a stream is
+# starting or retrying. After this many audio quanta, rebuffering is silent.
+SDR_AUDIO_COMFORT_NOISE_LEVEL = 0.04
+SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS = 3
 # Right-rail drawers are convenient for brief adjustments, but should never
 # leave the SDR looking like a configuration screen after the operator walks
 # away. Any touch on the radio counts as activity because drawers deliberately
@@ -283,6 +292,10 @@ KIWI_SND_KEEPALIVE_SECONDS = 15.0
 # The stream workers coalesce those events and transmit only the current
 # position at this cadence, keeping a fast drag responsive without a backlog.
 LIVE_TUNE_MIN_INTERVAL_SECONDS = 0.020
+# A centre frequency exactly at 30 MHz makes the requested W/F span exceed
+# the edge of the Kiwi passband on several receivers. Keep live tuning one
+# kHz inside their nominal 0--30 MHz coverage.
+TUNING_MAX_KHZ = 29999.0
 KIWI_IO_POLL_SECONDS = 0.010
 SMETER_FLOOR_DBM = -121
 SMETER_S9_DBM = -73
@@ -297,7 +310,14 @@ SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
 WATERFALL_DEFAULT_FLOOR = 142
 WATERFALL_DEFAULT_CEIL = 245
 WATERFALL_DEFAULT_SPEED = 4
-WATERFALL_DEFAULT_PALETTE = "kiwi"
+# Kiwi's browser-side W/F protocol accepts 1--4. Values above that may appear
+# to work on permissive receivers but cause others to keep the paired socket
+# open without emitting any waterfall frames.
+WATERFALL_MAX_SPEED = 4
+# Match the deep-blue/cyan waterfall texture used by the original iTuner
+# frontend artwork. It is deliberately distinct from both Kiwi's rainbow map
+# and the later ICE experiment.
+WATERFALL_DEFAULT_PALETTE = "classic"
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
@@ -805,12 +825,12 @@ DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
-    (4, (250, 220, 362, 270), "MED"),
-    (8, (374, 220, 486, 270), "FAST"),
+    (2, (250, 220, 362, 270), "MED"),
+    (4, (374, 220, 486, 270), "FAST"),
 )
 DISPLAY_PALETTE_BOXES = (
-    ("kiwi", (650, 220, 772, 270), "KIWI"),
-    ("ice", (784, 220, 906, 270), "ICE"),
+    ("classic", (650, 220, 772, 270), "CLASSIC"),
+    ("kiwi", (784, 220, 906, 270), "KIWI"),
 )
 # Filter editing is intentionally a large, temporary workspace. Its slider
 # and bottom controls have independent touch zones to avoid accidental edits.
@@ -828,14 +848,24 @@ WATERFALL_HORIZONTAL_DRAG_RATIO = 1.5
 FILTER_LIMIT_HZ = 12000
 FILTER_SNAP_HZ = 50
 FILTER_FINE_WIDTH_STEP_HZ = 100
+FILTER_SHIFT_CENTER_DETENT_PX = 6
+# CW and narrow voice filters benefit from much finer positioning near the
+# carrier. The curve remains linear for ordinary and wide broadcast filters.
+FILTER_NARROW_SHIFT_MAX_HZ = 1200
+FILTER_NARROW_SHIFT_RESPONSE_EXPONENT = 1.7
+# Width uses a dedicated two-stage curve: the first 65% of travel gives
+# fine control from CW through 6 kHz, then the remaining travel is a normal
+# linear 6--12 kHz range.
+FILTER_WIDTH_FINE_TARGET_HZ = 6000
+FILTER_WIDTH_FINE_TRACK_FRACTION = 0.65
+FILTER_WIDTH_FINE_RESPONSE_EXPONENT = 1.7
 FILTER_WIDTH_PRESETS = (
     ("CW", 500),
     ("VOICE NARROW", 1200),
     ("VOICE", 2400),
     ("VOICE WIDE", 3000),
     ("WIDE 6k", 6000),
-    ("WIDE 9k", 9000),
-    ("KIWI MAX", 12000),
+    ("WIDE 9/12k", 9000),
 )
 AUDIO_PANEL_BOX = (12, 34, 948, 316)
 AUDIO_VOLUME_BOX = (42, 76, 612, 128)
@@ -1284,17 +1314,17 @@ def configure_popup_layout():
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        PICKER_MAP_MODE_BOX = lcd_nav_box(0)
-        PICKER_SEARCH_BOX = lcd_nav_box(1)
+        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 8)
+        PICKER_SEARCH_BOX = lcd_nav_box(1, 8)
         # Directory uses the full 2×4 rail: one sort tile, then separate
         # route filters. A route must never require cycling through unrelated
         # choices just to reach Direct or Proxy.
-        PICKER_SORT_BOX = lcd_nav_box(2)
-        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3)
-        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4)
-        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5)
-        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6)
-        PICKER_EXIT_BOX = lcd_nav_box(7)
+        PICKER_SORT_BOX = lcd_nav_box(2, 8)
+        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3, 8)
+        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 8)
+        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 8)
+        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6, 8)
+        PICKER_EXIT_BOX = lcd_nav_box(7, 8)
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
         RADIOGARDEN_EXIT_BOX = (1031, 372, 1273, 490)
@@ -1322,15 +1352,23 @@ MENU_BOX = (12, 72, 948, LOGICAL_H)
 MENU_CLOSE_BOX = (0, 0, 0, 0)
 MENU_COLS = 5
 MENU_ROWS = 2
+# The permanent Home rail is deliberately limited to live operating tools.
+# Secondary configuration pages live one tap deeper under Settings so the
+# 800x1280 control rail does not read as an eight-button wall.
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
-    ("rf", "RF"),
     ("audio", "AUDIO"),
-    ("display", "DISPLAY"),
-    ("tests", "TESTS"),
     ("digital", "DIGI"),
-    ("stats", "STATS"),
     ("settings", "SETTINGS"),
+)
+SETTINGS_MENU_ITEMS = (
+    ("display", "DISPLAY"),
+    ("network", "NETWORK"),
+    ("kiwi", "KIWI"),
+    ("stats", "STATS"),
+    ("tests", "TESTS"),
+    ("system", "SYSTEM"),
+    ("settings_back", "HOME"),
 )
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
@@ -2160,7 +2198,7 @@ def parse_frequency_entry_mhz(value):
     except (TypeError, ValueError):
         return None
     frequency_khz = numeric * 1000.0 if numeric <= 30.0 else numeric
-    return frequency_khz if 0.0 <= frequency_khz <= 30000.0 else None
+    return frequency_khz if 0.0 <= frequency_khz <= TUNING_MAX_KHZ else None
 
 
 ZOOM_OSD_SECONDS = 1.4
@@ -2193,7 +2231,13 @@ def configure_output(desktop=False):
     LCD_800_MODE = True
     LCD_NATIVE_TOUCH = not DESKTOP_MODE
     LOGICAL_W, LOGICAL_H = LCD_LOGICAL_W, LCD_LOGICAL_H
-    WF_TEX_W, WF_TEX_H = LOGICAL_W, 800
+    # Build the source texture at the real RF canvas width.  Rendering a
+    # 1280-pixel source into the left 1024 pixels made the receiver appear
+    # horizontally scaled and displaced behind the Home rail.
+    WF_TEX_W, WF_TEX_H = rf_canvas_width(), 800
+    # The shared Kiwi module also owns the Goodix touch transformation. Keep
+    # its logical width at the full 1280-pixel UI width; only W/F rows use the
+    # narrower RF texture width passed explicitly below.
     kiwi.LOGICAL_W = LOGICAL_W
     kiwi.LOGICAL_H = LOGICAL_H
     ACTIVE_H = LOGICAL_H
@@ -2203,8 +2247,9 @@ def configure_output(desktop=False):
     # 480-pixel prototype coordinate.
     content_bottom = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
     zoom_bottom = content_bottom - LCD_CONTROL_GAP
-    # The wide LCD deserves controls sized for a finger, with Zoom anchored
-    # to the canvas's left edge and Filter/Scope mirrored on its right edge.
+    # The wide LCD keeps Zoom anchored to the canvas's left edge and a single
+    # Scope control right-aligned. Passband editing now lives in the Home
+    # drawer, so it no longer competes with live waterfall space.
     # Do not inherit the old 960 px coordinate positions here: the live radio
     # canvas is 1024 px wide, ending immediately before the permanent drawer.
     edge_margin = 16
@@ -2221,11 +2266,11 @@ def configure_output(desktop=False):
 
     view_button_w = 116
     view_gap = 8
-    view_group_w = 2 * view_button_w + view_gap + 2 * inner_margin
+    view_group_w = view_button_w + 2 * inner_margin
     view_x1 = LCD_NAV_X0 - edge_margin
     view_x0 = view_x1 - view_group_w
     VIEW_GROUP_BOX = (view_x0, zoom_y0 - 3, view_x1, zoom_bottom + 3)
-    FILTER_TOGGLE_BOX = (view_x0 + inner_margin, zoom_y0, view_x0 + inner_margin + view_button_w, zoom_bottom)
+    FILTER_TOGGLE_BOX = (-1, -1, -1, -1)
     SPECTRUM_TOGGLE_BOX = (view_x1 - inner_margin - view_button_w, zoom_y0, view_x1 - inner_margin, zoom_bottom)
     # macOS uses the same landscape coordinate space directly. The hardware
     # panel uses its native portrait framebuffer and the existing rotation.
@@ -2373,20 +2418,21 @@ def swipe_effective_sensitivity(speed_px_s, args):
 
 
 def retune_from_drag(start_freq, start_x, x, span_khz, invert_tune=False, sensitivity=1.0):
-    hz_per_px = span_khz * 1000 / LOGICAL_W
+    hz_per_px = span_khz * 1000 / rf_canvas_width()
     direction = 1 if invert_tune else -1
     return start_freq + direction * (x - start_x) * hz_per_px * sensitivity / 1000
 
 
 def retune_delta_from_drag(delta_px, span_khz, invert_tune=False, sensitivity=1.0):
-    hz_per_px = span_khz * 1000 / LOGICAL_W
+    hz_per_px = span_khz * 1000 / rf_canvas_width()
     direction = 1 if invert_tune else -1
     return direction * delta_px * hz_per_px * sensitivity / 1000
 
 
 def retune_from_tap(x, freq_khz, span_khz):
-    hz_per_px = span_khz * 1000 / LOGICAL_W
-    return freq_khz + (x - LOGICAL_W / 2) * hz_per_px / 1000
+    canvas_w = rf_canvas_width()
+    hz_per_px = span_khz * 1000 / canvas_w
+    return freq_khz + (x - canvas_w / 2) * hz_per_px / 1000
 
 
 def snap_frequency_khz(freq_khz, step_hz):
@@ -2494,11 +2540,37 @@ def waterfall_mapper(palette):
         return kiwi.make_waterfall_mapper()
 
     r_lut, g_lut, b_lut = [], [], []
+    if palette == "ice":
+        for value in range(256):
+            t = value / 255.0
+            r_lut.append(int(14 + 76 * t))
+            g_lut.append(int(22 + 186 * t))
+            b_lut.append(int(46 + 209 * t))
+        return r_lut, g_lut, b_lut
+
+    # Original iTuner artwork: a quiet navy noise floor, electric-blue and
+    # cyan activity, then restrained warm colours only at the strongest end.
+    stops = (
+        (0, (1, 4, 14)),
+        (42, (0, 13, 58)),
+        (84, (0, 48, 155)),
+        (126, (0, 132, 222)),
+        (160, (0, 226, 235)),
+        (188, (30, 250, 190)),
+        (210, (236, 246, 55)),
+        (232, (255, 126, 22)),
+        (255, (245, 44, 36)),
+    )
+    stop_index = 0
     for value in range(256):
-        t = value / 255.0
-        r_lut.append(int(14 + 76 * t))
-        g_lut.append(int(22 + 186 * t))
-        b_lut.append(int(46 + 209 * t))
+        while stop_index < len(stops) - 2 and value > stops[stop_index + 1][0]:
+            stop_index += 1
+        left_value, left = stops[stop_index]
+        right_value, right = stops[stop_index + 1]
+        t = (value - left_value) / max(1, right_value - left_value)
+        r_lut.append(round(left[0] + (right[0] - left[0]) * t))
+        g_lut.append(round(left[1] + (right[1] - left[1]) * t))
+        b_lut.append(round(left[2] + (right[2] - left[2]) * t))
     return r_lut, g_lut, b_lut
 
 
@@ -2510,7 +2582,7 @@ def load_remembered_view(path):
         if parsed.scheme in ("http", "https") and parsed.hostname:
             view = {"server": server}
             freq_khz = saved.get("freq_khz")
-            if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= 30000.0:
+            if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= TUNING_MAX_KHZ:
                 view["freq_khz"] = float(freq_khz)
             zoom = saved.get("zoom")
             if isinstance(zoom, int) and 0 <= zoom <= kiwi.DISPLAY_MAX_ZOOM:
@@ -2579,9 +2651,9 @@ class SharedState:
         self.live_tune_rate_hz = round(1.0 / LIVE_TUNE_MIN_INTERVAL_SECONDS)
         self.wf_floor = float(wf_floor)
         self.wf_ceil = float(wf_ceil)
-        self.wf_speed = int(wf_speed)
+        self.wf_speed = clamp(int(wf_speed), 1, WATERFALL_MAX_SPEED)
         self.wf_auto = True
-        self.wf_palette = "kiwi"
+        self.wf_palette = WATERFALL_DEFAULT_PALETTE
         self.wf_generation = 0
         self.radio_mode = radio_mode
         self.low_cut, self.high_cut = kiwi_mode_filter(radio_mode)
@@ -2655,6 +2727,8 @@ class SharedState:
         self.connection_failures = 0
         self.connection_streams = {"audio": False, "waterfall": False}
         self.connection_stream_failures = {"audio": 0, "waterfall": 0}
+        # Kiwi pairs SND and W/F by this browser-style millisecond session id.
+        self.kiwi_session_timestamp = int(time.time() * 1000)
         # This is transport pause, not audio mute: it deliberately closes the
         # receiver's SND and W/F sockets but retains the selected receiver and
         # all tuning/settings so PLAY can resume exactly where it left off.
@@ -2663,6 +2737,12 @@ class SharedState:
     def snapshot(self):
         with self.lock:
             return self.server, self.freq_khz, self.zoom, self.smeter_dbm, self.view_generation, self.server_generation
+
+    def kiwi_session_timestamp_snapshot(self, generation):
+        with self.lock:
+            if generation != self.server_generation:
+                return None
+            return self.kiwi_session_timestamp
 
     def set_view(self, freq_khz=None, zoom=None):
         with self.lock:
@@ -2712,6 +2792,7 @@ class SharedState:
             self.spectrum_peak_history.clear()
             self.view_generation += 1
             self.server_generation += 1
+            self.kiwi_session_timestamp = int(time.time() * 1000)
             self.radio_generation += 1
             self.connection_announce = True
             self.connection_status = "connecting"
@@ -2737,6 +2818,7 @@ class SharedState:
             # Workers use the generation boundary to close a currently open
             # WebSocket promptly and to discard any old PCM/waterfall rows.
             self.server_generation += 1
+            self.kiwi_session_timestamp = int(time.time() * 1000)
             self.connection_announce = True
             self.connection_status = "paused" if paused else "connecting"
             self.connection_status_until = 0.0
@@ -2780,6 +2862,15 @@ class SharedState:
                 self.connection_status_until = time.monotonic() + 2.6
                 return True
             return False
+
+    def audio_stream_ready_snapshot(self, generation):
+        """Whether this Kiwi session has delivered real SND packets yet."""
+        with self.lock:
+            return (
+                not self.stream_paused
+                and generation == self.server_generation
+                and bool(self.connection_streams.get("audio"))
+            )
 
     def connection_failed(self, generation, stream):
         with self.lock:
@@ -2849,11 +2940,11 @@ class SharedState:
             self.wf_floor = min(next_floor, next_ceil - 30.0)
             self.wf_ceil = next_ceil
             if speed is not None:
-                self.wf_speed = clamp(int(speed), 1, 8)
+                self.wf_speed = clamp(int(speed), 1, WATERFALL_MAX_SPEED)
             if auto is not None:
                 self.wf_auto = bool(auto)
             if palette is not None:
-                self.wf_palette = palette if palette in ("kiwi", "ice") else "kiwi"
+                self.wf_palette = palette if palette in ("classic", "kiwi", "ice") else WATERFALL_DEFAULT_PALETTE
             self.wf_generation += 1
             return self.wf_floor, self.wf_ceil, self.wf_speed, self.wf_auto, self.wf_palette, self.wf_generation
 
@@ -4016,9 +4107,12 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
         "cm",
         alpha,
     )
-    view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
-    draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
-    draw_filter_toggle_button(text_cache, alpha)
+    if LCD_800_MODE:
+        draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_scope_only_v1", (), alpha)
+    else:
+        view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
+        draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
+        draw_filter_toggle_button(text_cache, alpha)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, alpha)
 
 
@@ -6069,6 +6163,12 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
     draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), detail_size, True, False, "cm", family="Liberation Sans")
 
 
+def draw_lcd_drawer_heading(text_cache, x, y, title):
+    """Shared quiet heading treatment for LCD right-rail drawers."""
+    draw_text(text_cache, x, y, title, LCD_DRAWER_HEADING_COLOR, LCD_DRAWER_HEADING_SIZE,
+              True, False, "lm", family="Liberation Sans")
+
+
 def receiver_home_drawer_boxes():
     """Profile controls in the normal non-modal 256 px LCD settings rail."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
@@ -6089,7 +6189,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_text(text_cache, x0 + 12, 90, "RECEIVER HOME", (230, 246, 247), 16, True, False, "lm", family="Liberation Sans")
+    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "RECEIVER HOME")
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 154, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
@@ -6119,7 +6219,7 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
-    draw_text(text_cache, x0 + 12, 90, "FAN CURVE", (230, 246, 247), 18, True, False, "lm", family="Liberation Sans")
+    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "FAN CURVE")
     live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
     draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
@@ -7261,14 +7361,15 @@ def filter_edit_limit(low_cut, high_cut):
 def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
     if alpha <= 0.01:
         return
-    hz_per_px = max(1.0, span_khz * 1000.0 / LOGICAL_W)
-    center_x = LOGICAL_W / 2
+    canvas_w = rf_canvas_width()
+    hz_per_px = max(1.0, span_khz * 1000.0 / canvas_w)
+    center_x = canvas_w / 2
     low_x = center_x + low_cut / hz_per_px
     high_x = center_x + high_cut / hz_per_px
     raw_left = min(low_x, high_x)
     raw_right = max(low_x, high_x)
-    left = clamp(raw_left, 0.0, float(LOGICAL_W))
-    right = clamp(raw_right, 0.0, float(LOGICAL_W))
+    left = clamp(raw_left, 0.0, float(canvas_w))
+    right = clamp(raw_right, 0.0, float(canvas_w))
     if right <= left:
         return
     # Cool cyan keeps the passband distinct without warming the waterfall.
@@ -7281,14 +7382,14 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
     if raw_right - raw_left < 10:
         # At wide waterfall spans the real filter can be sub-pixel narrow.
         # Show a compact bracket instead of visually falsifying its width.
-        bracket_x = clamp((low_x + high_x) / 2, 6.0, LOGICAL_W - 6.0)
+        bracket_x = clamp((low_x + high_x) / 2, 6.0, canvas_w - 6.0)
         for edge_x in (bracket_x - 4, bracket_x + 4):
             draw_logical_line(edge_x, y0, edge_x, y1, edge, 1)
             draw_logical_line(edge_x, y0 + 5, bracket_x, y0 + 5, edge, 1)
     else:
         draw_logical_rect(left, y0, right, y1, fill)
         for edge_x, cap_direction in ((low_x, 1), (high_x, -1)):
-            clipped_edge_x = clamp(edge_x, 0.0, float(LOGICAL_W))
+            clipped_edge_x = clamp(edge_x, 0.0, float(canvas_w))
             draw_logical_line(clipped_edge_x, y0, clipped_edge_x, y1, edge, 1)
             draw_logical_line(
                 clipped_edge_x,
@@ -7298,7 +7399,7 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0):
                 edge,
                 1,
             )
-    if 0 <= center_x <= LOGICAL_W:
+    if 0 <= center_x <= canvas_w:
         # A continuous marker masks a weak, perfectly tuned carrier. Use a
         # fine dashed guide instead, with a clear top reference tick.
         draw_logical_line(center_x - 6, y0 + 2, center_x + 6, y0 + 2, center, 1)
@@ -7645,6 +7746,8 @@ LCD_NAV_TILE_W = 117
 LCD_NAV_TILE_H = 102
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
+LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
+LCD_DRAWER_HEADING_SIZE = 13
 VFO_FONT_FAMILY = "Orbitron"
 VFO_NEON_COLOR = (115, 255, 177)
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
@@ -7684,17 +7787,20 @@ def lcd_radio_drawer_reveal_y():
     return y0 + (y1 - y0) * LCD_RADIO_DRAWER_PROGRESS
 
 
-def lcd_nav_top():
-    """Bottom-align the four rows of persistent LCD menu tiles."""
-    tiles_h = 4 * LCD_NAV_TILE_H + 3 * LCD_NAV_GAP
+def lcd_nav_top(item_count=None):
+    """Bottom-align only the rows actually present in this rail view."""
+    item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
+    rows = math.ceil(item_count / 2)
+    tiles_h = rows * LCD_NAV_TILE_H + (rows - 1) * LCD_NAV_GAP
     return max(LCD_NAV_TOP_MIN, lcd_rail_bottom() - LCD_CONTROL_GAP - tiles_h)
 
 
 def lcd_home_volume_box():
     """Persistent Home volume instrument in the calm upper right-rail gap."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    y0 = LCD_ANNUNCIATOR_BOX[3] + 18
-    y1 = min(lcd_nav_top() - 18, y0 + 72)
+    _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box()
+    y0 = pass_y1 + 10
+    y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 18, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 
 
@@ -7722,20 +7828,31 @@ def lcd_home_smeter_box():
     return x0, y0, x1, max(y0 + 48, y1)
 
 
-def lcd_nav_box(index):
+def lcd_home_bandwidth_box():
+    """Dedicated Home-rail passband instrument beneath the live controls."""
+    x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
+    y0 = LCD_ANNUNCIATOR_BOX[3] + 14
+    return x0, y0, x1, y0 + 103
+
+
+def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
     col = index % 2
     row = index // 2
     x0 = LCD_NAV_X0 + 7 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
-    y0 = lcd_nav_top() + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+    y0 = lcd_nav_top(item_count) + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
     return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
 
 
-def lcd_nav_item_at(x, y):
+def lcd_nav_items(settings_open=False):
+    return SETTINGS_MENU_ITEMS if settings_open else MENU_ITEMS
+
+
+def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
-    for index in range(len(MENU_ITEMS)):
-        if contains(lcd_nav_box(index), x, y):
+    for index in range(len(items)):
+        if contains(lcd_nav_box(index, len(items)), x, y):
             return index
     return None
 
@@ -7814,7 +7931,222 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
 
 
-def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
+def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASSBAND"):
+    """Draw a 10 kHz ICOM-inspired, but more informative, passband meter."""
+    x0, y0, x1, y1 = box or lcd_home_bandwidth_box()
+    low_cut = float(low_cut if low_cut is not None else -1200.0)
+    high_cut = float(high_cut if high_cut is not None else 1200.0)
+    if high_cut < low_cut:
+        low_cut, high_cut = high_cut, low_cut
+    plot_x0, plot_x1 = x0 + 18, x1 - 18
+    center_x = (plot_x0 + plot_x1) / 2
+    plot_y = y1 - 28
+    scale_hz = 5000.0
+    def cut_x(cut_hz):
+        return center_x + clamp(cut_hz / scale_hz, -1.0, 1.0) * (plot_x1 - plot_x0) / 2
+
+    low_x, high_x = cut_x(low_cut), cut_x(high_cut)
+    width_hz = max(0.0, high_cut - low_cut)
+    fill = (42, 154, 176, 88)
+    edge = (113, 234, 240, 238)
+    grid = (87, 125, 138, 132)
+    quiet = (153, 186, 195)
+    draw_logical_rect(x0, y0, x1, y1, (7, 15, 21, 236))
+    draw_logical_line(x0, y0, x1, y0, (82, 127, 141, 154), 1)
+    draw_logical_line(x0, y1, x1, y1, (24, 46, 55, 220), 1)
+    draw_text(text_cache, x0 + 11, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 11, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
+    # Delicate 1 kHz graduations make the scale useful without imitating the
+    # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
+    for index in range(-5, 6):
+        x = center_x + index * (plot_x1 - plot_x0) / 10
+        major = index in (-5, 0, 5)
+        tick_h = 10 if major else 5
+        draw_logical_line(x, plot_y, x, plot_y - tick_h, (grid[0], grid[1], grid[2], 206 if major else 126), 1 if not major else 1.5)
+    draw_logical_line(plot_x0, plot_y, plot_x1, plot_y, (107, 151, 162, 188), 1)
+    top_y = y0 + 38
+    shoulder_y = y0 + 44
+    # Keep the sides almost vertical. Wide filters retain a slight analog
+    # taper, while CW/narrow widths must not collapse into a camel-shaped
+    # hump just because the graphical shoulders are wider than the passband.
+    side_inset = min(1.5, max(0.25, (high_x - low_x) * 0.08))
+    passband_points = (
+        (low_x, plot_y),
+        (low_x + side_inset, shoulder_y),
+        (low_x + side_inset, top_y),
+        (high_x - side_inset, top_y),
+        (high_x - side_inset, shoulder_y),
+        (high_x, plot_y),
+    )
+    draw_logical_area(passband_points, plot_y, fill)
+    draw_logical_polyline(passband_points, edge, 1.8)
+    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, (238, 202, 96, 232), 1.5)
+    for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
+        draw_text(text_cache, x, y1 - 8, label, (137, 171, 181), 10, True, False, "cm", family="Liberation Sans")
+    draw_text(
+        text_cache,
+        center_x,
+        y0 + 25,
+        f"{width_hz / 1000.0:.1f} kHz",
+        (214, 240, 242),
+        14,
+        True,
+        False,
+        "cm",
+        family="Liberation Sans",
+    )
+
+
+def lcd_filter_drawer_boxes():
+    """Right-rail geometry for the non-modal LCD passband editor."""
+    x0, x1 = LCD_NAV_X0, LOGICAL_W
+    inner_x0, inner_x1 = x0 + 10, x1 - 10
+    # Keep choice buttons bottom-aligned immediately above Back. That gives
+    # the two continuous instruments generous, finger-friendly travel.
+    preset_top, preset_h, preset_gap = 493, 50, 8
+    preset_w = (inner_x1 - inner_x0 - 8) / 2
+    preset_boxes = []
+    for index, (name, width_hz) in enumerate(FILTER_WIDTH_PRESETS):
+        col, row = index % 2, index // 2
+        left = inner_x0 + col * (preset_w + 8)
+        top = preset_top + row * (preset_h + preset_gap)
+        preset_boxes.append((name, width_hz, (left, top, left + preset_w, top + preset_h)))
+    return {
+        "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
+        "close": (inner_x0, lcd_rail_bottom() - 78, inner_x1, lcd_rail_bottom() - 10),
+        "visual": (inner_x0, 108, inner_x1, 211),
+        "shift": (inner_x0, 217, inner_x1, 329),
+        "width": (inner_x0, 341, inner_x1, 441),
+        "presets": tuple(preset_boxes),
+    }
+
+
+def lcd_filter_slider_track_box(box, lower_slop=0):
+    """Only a rail and its immediate finger margin are interactive."""
+    return box[0], box[3] - 34, box[2], box[3] + lower_slop
+
+
+def next_lcd_filter_preset_width(name, current_width_hz, preset_width_hz):
+    """Return the selected width, including the compact 9/12 kHz cycle."""
+    if name == "WIDE 9/12k":
+        return 12000 if abs(current_width_hz - 9000) <= FILTER_SNAP_HZ / 2 else 9000
+    return preset_width_hz
+
+
+def filter_shift_response_exponent(width_hz):
+    """Return a fine-centre shift response for CW and narrow voice only."""
+    return (
+        FILTER_NARROW_SHIFT_RESPONSE_EXPONENT
+        if width_hz <= FILTER_NARROW_SHIFT_MAX_HZ
+        else 1.0
+    )
+
+
+def filter_shift_slider_fraction(center_hz, width_hz):
+    """Map an actual passband center back to its curved slider position."""
+    response = clamp(center_hz / FILTER_LIMIT_HZ, -1.0, 1.0)
+    exponent = filter_shift_response_exponent(width_hz)
+    if exponent != 1.0 and response:
+        response = math.copysign(abs(response) ** (1.0 / exponent), response)
+    return clamp((response + 1.0) / 2.0, 0.0, 1.0)
+
+
+def filter_width_from_slider_fraction(fraction):
+    """Progressive Width rail: precise at CW, faster through 6 kHz."""
+    fraction = clamp(fraction, 0.0, 1.0)
+    if fraction <= FILTER_WIDTH_FINE_TRACK_FRACTION:
+        fine_fraction = fraction / FILTER_WIDTH_FINE_TRACK_FRACTION
+        return FILTER_SNAP_HZ + (FILTER_WIDTH_FINE_TARGET_HZ - FILTER_SNAP_HZ) * (
+            fine_fraction ** FILTER_WIDTH_FINE_RESPONSE_EXPONENT
+        )
+    upper_fraction = (fraction - FILTER_WIDTH_FINE_TRACK_FRACTION) / (1.0 - FILTER_WIDTH_FINE_TRACK_FRACTION)
+    return FILTER_WIDTH_FINE_TARGET_HZ + (FILTER_LIMIT_HZ - FILTER_WIDTH_FINE_TARGET_HZ) * upper_fraction
+
+
+def filter_width_slider_fraction(width_hz):
+    """Inverse of the progressive Width rail, for faithful thumb placement."""
+    width_hz = clamp(width_hz, FILTER_SNAP_HZ, FILTER_LIMIT_HZ)
+    if width_hz <= FILTER_WIDTH_FINE_TARGET_HZ:
+        fine_fraction = (width_hz - FILTER_SNAP_HZ) / max(1.0, FILTER_WIDTH_FINE_TARGET_HZ - FILTER_SNAP_HZ)
+        return FILTER_WIDTH_FINE_TRACK_FRACTION * (fine_fraction ** (1.0 / FILTER_WIDTH_FINE_RESPONSE_EXPONENT))
+    upper_fraction = (width_hz - FILTER_WIDTH_FINE_TARGET_HZ) / max(1.0, FILTER_LIMIT_HZ - FILTER_WIDTH_FINE_TARGET_HZ)
+    return FILTER_WIDTH_FINE_TRACK_FRACTION + (1.0 - FILTER_WIDTH_FINE_TRACK_FRACTION) * upper_fraction
+
+
+def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
+    x0, y0, x1, y1 = box
+    center_hz = (low_cut + high_cut) / 2.0
+    # Fixed ±12 kHz position scale: changing Width must not make the Shift
+    # thumb appear to slide when its actual center frequency is unchanged.
+    fraction = filter_shift_slider_fraction(center_hz, high_cut - low_cut)
+    track_x0, track_x1 = x0 + 10, x1 - 10
+    track_y = y1 - 14
+    label_y = track_y - 27
+    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
+    draw_text(text_cache, x0 + 10, label_y, "SHIFT", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, shift_label, (113, 236, 190), 17, True, False, "rm", family="Liberation Sans")
+    draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (22, 39, 47, 248))
+    zero_x = (track_x0 + track_x1) / 2
+    draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, (241, 193, 82, 248), 2)
+    draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, (77, 126, 139, 188), 1)
+    draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, (77, 126, 139, 188), 1)
+    draw_logical_rect(min(zero_x, knob_x), track_y - 4, max(zero_x, knob_x), track_y + 4, (76, 214, 170, 184))
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (231, 247, 247, 255))
+
+
+def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
+    x0, y0, x1, y1 = box
+    width_hz = clamp(high_cut - low_cut, FILTER_SNAP_HZ, FILTER_LIMIT_HZ)
+    fraction = filter_width_slider_fraction(width_hz)
+    track_x0, track_x1 = x0 + 10, x1 - 10
+    track_y = y1 - 14
+    label_y = track_y - 27
+    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    draw_text(text_cache, x0 + 10, label_y, "WIDTH", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), (110, 222, 242), 17, True, False, "rm", family="Liberation Sans")
+    draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (22, 39, 47, 248))
+    draw_logical_rect(track_x0, track_y - 4, knob_x, track_y + 4, (84, 188, 226, 184))
+    for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
+        mark_x = track_x0 + (track_x1 - track_x0) * fraction_mark
+        draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, (98, 154, 170, 156), 1)
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (231, 247, 247, 255))
+
+
+def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
+    """Touch-safe passband control drawer that leaves the waterfall live."""
+    boxes = lcd_filter_drawer_boxes()
+    x0, y0, x1, y1 = boxes["panel"]
+    width_hz = high_cut - low_cut
+    # This drawer is an independent operating surface. It must be fully
+    # opaque so the inactive Home/mode controls beneath cannot be mistaken
+    # for live controls or overlap the slider labels.
+    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
+    draw_radio_close_button(text_cache, boxes["close"])
+    draw_lcd_drawer_heading(text_cache, x0 + 12, 88, "PASSBAND")
+    draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
+    draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
+    draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
+    draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", (169, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    current_preset = filter_preset_index(width_hz)
+    for index, (name, preset_width_hz, box) in enumerate(boxes["presets"]):
+        active = current_preset == index or (
+            name == "WIDE 9/12k" and abs(width_hz - 12000) <= FILTER_SNAP_HZ / 2
+        )
+        draw_lcd_audio_tile(
+            text_cache,
+            box,
+            name.replace("VOICE ", ""),
+            ("9 / 12 kHz" if name == "WIDE 9/12k" else format_filter_width(preset_width_hz)),
+            active,
+            accent=(104, 234, 180, 228),
+            title_size=13,
+            detail_size=13,
+        )
+
+
+def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
+                        low_cut=None, high_cut=None):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -7823,9 +8155,12 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     # uninterrupted black panel from the VFO to the physical bottom edge.
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
-    draw_lcd_home_volume_slider(text_cache, volume, muted)
-    for index, (kind, label) in enumerate(MENU_ITEMS):
-        bx0, by0, bx1, by1 = lcd_nav_box(index)
+    items = lcd_nav_items(settings_open)
+    if not settings_open:
+        draw_lcd_home_bandwidth(text_cache, low_cut, high_cut)
+        draw_lcd_home_volume_slider(text_cache, volume, muted)
+    for index, (kind, label) in enumerate(items):
+        bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
         draw_logical_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
         draw_logical_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
@@ -8800,10 +9135,11 @@ def draw_ruler(
 ):
     if alpha <= 0.01:
         return
+    canvas_w = rf_canvas_width()
     draw_logical_rect(
         0,
         y0,
-        LOGICAL_W,
+        canvas_w,
         y0 + height,
         (10, 15, 21, int(background_alpha * alpha)),
     )
@@ -8811,7 +9147,7 @@ def draw_ruler(
     center_hz = int(round(center_khz * 1000))
     start_hz = center_hz - span_hz // 2
     end_hz = center_hz + span_hz // 2
-    hz_per_px = span_hz / LOGICAL_W
+    hz_per_px = span_hz / canvas_w
     major_step_hz = sdr_ui.ruler_major_step_hz(span_khz)
     minor_step_hz = max(50, major_step_hz // 5)
     minor_start_hz = int(math.ceil(start_hz / minor_step_hz) * minor_step_hz)
@@ -8820,28 +9156,28 @@ def draw_ruler(
     # remain readable at arm's length through the Waveshare panel.
     tall_ruler = height >= 52
     minor_color = (103, 128, 142, 150) if subdued else (
-        (192, 212, 220, 236) if tall_ruler else (142, 158, 166, 215)
+        (157, 182, 192, 196) if tall_ruler else (142, 158, 166, 215)
     )
     major_color = (133, 161, 174, 178) if subdued else (
-        (248, 252, 253, 255) if tall_ruler else (196, 210, 216, 255)
+        (202, 218, 224, 220) if tall_ruler else (196, 210, 216, 255)
     )
     label_color = (145, 178, 191) if subdued else (
-        (184, 207, 215) if tall_ruler else (231, 240, 244)
+        (160, 187, 197) if tall_ruler else (231, 240, 244)
     )
     label_alpha = 0.84 if subdued else 1.0
     if tall_ruler:
         # Keep the axis spine away from the scope's bright lower trace. The
         # baseline sits at the waterfall side; ticks rise into the ruler and
         # labels occupy the calm upper portion.
-        draw_logical_line(0, y0 + height - 3, LOGICAL_W, y0 + height - 3, (189, 211, 220, int(145 * alpha)), 1)
+        draw_logical_line(0, y0 + height - 3, canvas_w, y0 + height - 3, (189, 211, 220, int(145 * alpha)), 1)
 
     hz = minor_start_hz
     while hz <= end_hz:
         if hz % major_step_hz:
             x = int(round((hz - start_hz) / hz_per_px))
-            if 0 <= x < LOGICAL_W:
+            if 0 <= x < canvas_w:
                 if tall_ruler:
-                    draw_logical_line(x, y0 + height - 4, x, y0 + height - 15, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5)
+                    draw_logical_line(x, y0 + height - 4, x, y0 + height - 12, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5)
                 else:
                     draw_logical_line(x, y0 + 4, x, y0 + 5, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1)
         hz += minor_step_hz
@@ -8850,9 +9186,9 @@ def draw_ruler(
     last_label_x = -999
     while hz <= end_hz:
         x = int(round((hz - start_hz) / hz_per_px))
-        if 0 <= x < LOGICAL_W:
+        if 0 <= x < canvas_w:
             if tall_ruler:
-                draw_logical_line(x, y0 + height - 4, x, y0 + height - 29, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 3)
+                draw_logical_line(x, y0 + height - 4, x, y0 + height - 23, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2)
             else:
                 draw_logical_line(x, y0 + 4, x, y0 + 8, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2)
             if x - last_label_x > 140:
@@ -8904,12 +9240,13 @@ def draw_spectrum(
     # the information strip. Keep its field translucent there so the reading
     # remains behind the live trace rather than becoming a separate hard box.
     field_alpha = 156 if foreground else 236
-    draw_logical_rect(0, y0, LOGICAL_W, y1, (2, 7, 12, field_alpha))
+    canvas_w = rf_canvas_width()
+    draw_logical_rect(0, y0, canvas_w, y1, (2, 7, 12, field_alpha))
     show_dbm_scale = (y1 - y0) >= 120
     scale_fractions = (0.0, 0.25, 0.50, 0.75, 1.0) if show_dbm_scale else (0.25, 0.50, 0.75)
     for fraction in scale_fractions:
         y = y0 + (y1 - y0) * fraction
-        draw_logical_line(0, y, LOGICAL_W, y, (89, 139, 155, 48 if show_dbm_scale else 34), 1)
+        draw_logical_line(0, y, canvas_w, y, (89, 139, 155, 48 if show_dbm_scale else 34), 1)
     if show_dbm_scale and text_cache is not None:
         # This is a visual reference scale for the normalized Kiwi spectrum,
         # not a calibrated RF-power meter. Keep it as a compact left-edge
@@ -8944,13 +9281,13 @@ def draw_spectrum(
     bottom = y1 - 3
     if len(peak_values) == len(values):
         peak_points = [
-            (index * (LOGICAL_W - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
+            (index * (canvas_w - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
             for index, value in enumerate(peak_values)
         ]
         draw_logical_area(peak_points, bottom, (145, 159, 168, 76))
         draw_logical_polyline(peak_points, (174, 187, 194, 142), 1.0)
     points = [
-        (index * (LOGICAL_W - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
+        (index * (canvas_w - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
         for index, value in enumerate(values)
     ]
     draw_logical_area(points, bottom, (161, 184, 196, 154))
@@ -9029,6 +9366,8 @@ def draw_ui(
     connection_status=None,
     connection_timeout_seconds=None,
     bandwidth_hz=2400,
+    filter_low_hz=None,
+    filter_high_hz=None,
     transcription_enabled=False,
     asr_engine="off",
     caption_mode="original",
@@ -9041,6 +9380,7 @@ def draw_ui(
     audio_volume=None,
     home_smeter_dbm=None,
     audio_muted=False,
+    settings_menu_open=False,
     status_y0=None,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
@@ -9055,7 +9395,7 @@ def draw_ui(
     # Leave the 68 px spectrum-axis gutter completely uncovered. Its dBm
     # graduations remain readable even where the scope passes under the top
     # instrument strip.
-    draw_logical_rect(68, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 144))
+    draw_logical_rect(68, 0, rf_canvas_width(), sdr_ui.TOP_H, (0, 0, 0, 144))
     frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
     if DESKTOP_1280_MODE:
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
@@ -9125,7 +9465,15 @@ def draw_ui(
         )
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
-    draw_lcd_navigation(text_cache, audio_volume, home_smeter_dbm, audio_muted)
+    draw_lcd_navigation(
+        text_cache,
+        audio_volume,
+        home_smeter_dbm,
+        audio_muted,
+        settings_open=settings_menu_open,
+        low_cut=filter_low_hz,
+        high_cut=filter_high_hz,
+    )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
@@ -9318,6 +9666,7 @@ class BufferedAudioPlayer:
         self.last_underflow_log_at = 0.0
         self.last_clock_late_log_at = 0.0
         self.comfort_noise_state = 0x6D2B79F5
+        self.comfort_noise_packets = 0
         self.primed = False
         self.target_packets = SDR_AUDIO_JITTER_TARGET_PACKETS
         self.rebuffering = False
@@ -9405,6 +9754,7 @@ class BufferedAudioPlayer:
             self.last_output_samples = None
             self.output_was_silent = True
             self.output_was_comfort_noise = False
+            self.comfort_noise_packets = 0
             self.primed = False
             self.target_packets = SDR_AUDIO_JITTER_TARGET_PACKETS
             self.rebuffering = False
@@ -9527,17 +9877,22 @@ class BufferedAudioPlayer:
                 if self.rebuffering:
                     if len(self.packets) >= self.target_packets:
                         self.rebuffering = False
+                        self.comfort_noise_packets = 0
                         audio, silence = self.packets.popleft()
                     else:
-                        # Keep PipeWire fed with a very low comfort-noise bed
-                        # while the reserve rebuilds. Deliberate mute/squelch
-                        # remains zero PCM because only this branch reflects
-                        # a missing network packet.
-                        audio = self._comfort_noise_packet(packet_bytes)
-                        silence = False
+                        # A short bridge only: an unresponsive receiver must
+                        # become quiet, not sound like it is still live.
                         output_gap = True
-                        comfort_noise = True
+                        if self.comfort_noise_packets < SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS:
+                            audio = self._comfort_noise_packet(packet_bytes)
+                            self.comfort_noise_packets += 1
+                            silence = False
+                            comfort_noise = True
+                        else:
+                            audio = bytes(packet_bytes)
+                            silence = True
                 elif self.packets:
+                    self.comfort_noise_packets = 0
                     audio, silence = self.packets.popleft()
                 else:
                     previous_target = self.target_packets
@@ -9558,10 +9913,15 @@ class BufferedAudioPlayer:
                             flush=True,
                         )
                         self.last_underflow_log_at = time.monotonic()
-                    audio = self._comfort_noise_packet(packet_bytes)
-                    silence = False
                     output_gap = True
-                    comfort_noise = True
+                    if self.comfort_noise_packets < SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS:
+                        audio = self._comfort_noise_packet(packet_bytes)
+                        self.comfort_noise_packets += 1
+                        silence = False
+                        comfort_noise = True
+                    else:
+                        audio = bytes(packet_bytes)
+                        silence = True
                 self._publish_locked(output_gap=output_gap)
             self._write(audio, silence, comfort_noise)
             deadline += period
@@ -9682,10 +10042,17 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 else:
                     player.reconnect_same_station()
             audio_controls, audio_generation = state.audio_controls_snapshot()
-            ws = kiwi.KiwiWebSocket.connect(server, "SND")
+            session_timestamp = state.kiwi_session_timestamp_snapshot(server_generation)
+            if session_timestamp is None:
+                continue
+            ws = kiwi.KiwiWebSocket.connect(server, "SND", session_timestamp=session_timestamp)
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             configured = False
-            last_keepalive = 0
+            authenticated = False
+            sample_rate_seen = False
+            # Do not send keepalive into Kiwi's authentication exchange. The
+            # periodic command starts only after a configured SND stream.
+            last_keepalive = time.monotonic()
             next_view_send_at = 0.0
             while not stop_event.is_set():
                 if state.external_audio_snapshot():
@@ -9784,7 +10151,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 # paired W/F stream too. This was the source of our periodic
                 # all-receiver audio dropouts.
                 now_monotonic = time.monotonic()
-                if now_monotonic - last_keepalive >= KIWI_SND_KEEPALIVE_SECONDS:
+                if configured and now_monotonic - last_keepalive >= KIWI_SND_KEEPALIVE_SECONDS:
                     ws.send_text("SET keepalive")
                     last_keepalive = now_monotonic
                 try:
@@ -9796,6 +10163,10 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                     continue
                 if message[:3] == b"MSG":
                     params = kiwi.parse_msg_params(message)
+                    if "badp" in params:
+                        if str(params["badp"]) != "0":
+                            raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
+                        authenticated = True
                     if "inactivity_timeout" in params:
                         try:
                             timeout_seconds = int(float(params["inactivity_timeout"])) * 60
@@ -9811,7 +10182,9 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                         # browser-output acknowledgement, while feeding the
                         # locally measured raw rate to PipeWire below.
                         ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
-                    if "sample_rate" in params and not configured:
+                    if "sample_rate" in params:
+                        sample_rate_seen = True
+                    if sample_rate_seen and authenticated and not configured:
                         snd_freq_khz = snd_carrier_khz(freq_khz, low_cut, high_cut)
                         kiwi.send_snd_setup(ws, snd_freq_khz, radio_mode, low_cut, high_cut, audio_controls)
                         configured = True
@@ -9823,14 +10196,16 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                             f"gl snd setup mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
                             flush=True,
                         )
-                        if state.connection_ready(server_generation, "audio"):
-                            persist_live_station_health(server, "audio", True)
                     continue
                 if configured and audio_generation != seen_audio_generation:
                     kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut, audio_controls)
                     seen_audio_generation = audio_generation
                 if message[:3] != b"SND" or len(message) < 10:
                     continue
+                # This is the first point at which the paired W/F worker may
+                # join: Kiwi has accepted the listener and is transmitting.
+                if state.connection_ready(server_generation, "audio"):
+                    persist_live_station_health(server, "audio", True)
                 body = message[3:]
                 flags, _sequence = struct.unpack("<BI", body[:5])
                 smeter, = struct.unpack(">H", body[5:7])
@@ -10020,7 +10395,7 @@ class GlobeAudioMixer:
             kiwi.send_kiwi_setup(ws, "kiwi", self.args.user)
             configured = False
             seen_view = seen_radio = -1
-            last_keepalive = 0
+            last_keepalive = int(time.time())
             while not stop_event.is_set():
                 _server, freq_khz, _zoom, _smeter, view_generation, _server_generation = self.state.snapshot()
                 radio_mode, low_cut, high_cut, radio_generation = self.state.radio_snapshot()
@@ -10028,7 +10403,7 @@ class GlobeAudioMixer:
                     kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
                     seen_view, seen_radio = view_generation, radio_generation
                 now = int(time.time())
-                if now != last_keepalive:
+                if configured and now != last_keepalive:
                     ws.send_text("SET keepalive")
                     last_keepalive = now
                 readable, _writable, _errors = select.select([ws.sock], [], [], KIWI_IO_POLL_SECONDS)
@@ -10108,13 +10483,15 @@ class ConstellationScoutProbe:
             ws = kiwi.KiwiWebSocket.connect(server, "SND")
             kiwi.send_kiwi_setup(ws, "kiwi", self.args.user)
             configured = False
-            last_keepalive = 0
+            # Delay W/F keepalive until setup has been accepted; startup must
+            # contain only the Kiwi authentication and configuration exchange.
+            last_keepalive = int(time.time())
             connect_deadline = time.monotonic() + SCOUT_RF_CONNECT_TIMEOUT_SECONDS
             sample_deadline = None
             phase = "signal"
             while not stop_event.is_set() and time.monotonic() < connect_deadline:
                 now = int(time.time())
-                if now != last_keepalive:
+                if configured and now != last_keepalive:
                     ws.send_text("SET keepalive")
                     last_keepalive = now
                 readable, _writable, _errors = select.select([ws.sock], [], [], 0.20)
@@ -10141,7 +10518,7 @@ class ConstellationScoutProbe:
                         # A short adjacent-channel sample estimates the local
                         # noise floor. It is a practical SNR proxy, not a
                         # calibrated lab measurement.
-                        noise_freq_khz = clamp(freq_khz + SCOUT_SNR_OFFSET_KHZ, 0.0, 30000.0)
+                        noise_freq_khz = clamp(freq_khz + SCOUT_SNR_OFFSET_KHZ, 0.0, TUNING_MAX_KHZ)
                         kiwi.send_snd_setup(ws, snd_carrier_khz(noise_freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut)
                         phase = "noise"
                         sample_deadline = time.monotonic() + SCOUT_SNR_NOISE_SECONDS
@@ -10179,19 +10556,29 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     break
                 continue
             server, freq_khz, zoom, _smeter_dbm, seen_generation, seen_server_generation = state.snapshot()
+            # A paired Kiwi W/F stream must join an *active* SND stream, not
+            # merely a TCP-connected one. This is also the point at which the
+            # web client has received its first real audio packet.
+            if not state.audio_stream_ready_snapshot(seen_server_generation):
+                if stop_event.wait(0.05):
+                    break
+                continue
             state.connection_attempt(seen_server_generation, "waterfall")
             wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, seen_wf_generation = state.waterfall_snapshot()
             mapper = waterfall_mapper(wf_palette)
             leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
-            ws = kiwi.KiwiWebSocket.connect(server, "W/F")
+            session_timestamp = state.kiwi_session_timestamp_snapshot(seen_server_generation)
+            if session_timestamp is None:
+                continue
+            ws = kiwi.KiwiWebSocket.connect(server, "W/F", session_timestamp=session_timestamp)
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
-            kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
             sent_freq_khz = freq_khz
             sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
+            authenticated = False
+            configured = False
             last_keepalive = 0
             last_frame_at = time.monotonic()
             next_view_send_at = 0.0
-            print(f"gl wf setup: {server} {freq_khz:.3f} kHz zoom {zoom}", flush=True)
             while not stop_event.is_set():
                 server, freq_khz, zoom, _smeter_dbm, generation, server_generation = state.snapshot()
                 if state.stream_paused_snapshot():
@@ -10204,7 +10591,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     drain_queue(line_queue)
                     break
                 now_monotonic = time.monotonic()
-                if generation != seen_generation and now_monotonic >= next_view_send_at:
+                if configured and generation != seen_generation and now_monotonic >= next_view_send_at:
                     seen_generation = generation
                     next_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
                     # Display zooms 15/16 are local crops of Kiwi zoom-14
@@ -10217,7 +10604,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
                         sent_kiwi_zoom = next_kiwi_zoom
                         next_view_send_at = now_monotonic + live_tune_interval
                         print(f"gl wf retune: {freq_khz:.3f} kHz zoom {zoom}", flush=True)
-                if wf_generation != seen_wf_generation:
+                if configured and wf_generation != seen_wf_generation:
                     seen_wf_generation = wf_generation
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
                     leveler.floor = wf_floor
@@ -10240,13 +10627,27 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     message = ws.recv()
                 except socket.timeout:
                     continue
+                if message[:3] == b"MSG":
+                    params = kiwi.parse_msg_params(message)
+                    if "badp" in params:
+                        if str(params["badp"]) != "0":
+                            raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
+                        authenticated = True
+                    if authenticated and not configured:
+                        kiwi.send_wf_setup(ws, freq_khz, zoom, wf_speed)
+                        configured = True
+                        sent_freq_khz = freq_khz
+                        sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
+                        next_view_send_at = time.monotonic()
+                        print(f"gl wf setup: {server} {freq_khz:.3f} kHz zoom {zoom}", flush=True)
+                    continue
                 if message[:3] == b"W/F" and len(message) > 16:
                     last_frame_at = time.monotonic()
                     if state.connection_ready(seen_server_generation, "waterfall"):
                         persist_live_station_health(server, "waterfall", True)
                     samples = message[16:]
                     floor, ceiling = leveler.levels_for(samples)
-                    line = kiwi.waterfall_line(samples, mapper, floor, ceiling)
+                    line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                     state.update_spectrum(samples, floor, ceiling)
                     row_span = kiwi.zoom_source_span_khz(zoom)
                     row_item = (line, freq_khz, row_span)
@@ -10601,6 +11002,9 @@ def main():
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
     display_setup_open = False
+    filter_drawer_open = False
+    filter_drawer_width_hz = None
+    settings_menu_open = False
     receiver_home_panel_open = False
     fan_curve_panel_open = False
     audio_panel_open = False
@@ -11014,7 +11418,7 @@ def main():
     def set_test_frequency(freq_khz):
         """Publish a fresh desired tune; workers consume state, not a queue."""
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
-        frequency = clamp(freq_khz, 0.0, 30000.0)
+        frequency = clamp(freq_khz, 0.0, TUNING_MAX_KHZ)
         state.set_view(freq_khz=frequency)
         display_freq = frequency
         candidate_freq = frequency
@@ -11066,19 +11470,20 @@ def main():
         dj_drag_remainder_hz = 0.0
         wake_controls()
 
-    def activate_navigation_item(index):
+    def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, receiver_home_panel_open, fan_curve_panel_open
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dj_tune_open
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, receiver_home_panel_open, fan_curve_panel_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
-        kind, label = MENU_ITEMS[index]
+        kind, label = items[index]
         wake_controls()
         menu_open = False
         asr_moon_language_open = False
         if kind == "rx":
+            settings_menu_open = False
             picker_open = True
-            radio_setup_open = display_setup_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
             station_scroll = 0
             station_query = ""
@@ -11091,29 +11496,126 @@ def main():
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "display":
+            settings_menu_open = False
             display_setup_open = True
-            picker_open = radio_setup_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            picker_open = radio_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "settings":
-            receiver_home_panel_open = True
-            picker_open = radio_setup_open = display_setup_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            settings_menu_open = True
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "settings_back":
+            settings_menu_open = False
+        elif kind == "network":
+            # The existing profile drawer owns the deployed network/location
+            # settings (including IP-based location); it is the safe landing
+            # point until Wi-Fi credential editing is exposed here.
+            receiver_home_panel_open = True
+            settings_menu_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "system":
+            receiver_home_panel_open = True
+            settings_menu_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "kiwi":
+            settings_menu_open = False
+            activate_navigation_item(next(index for index, (candidate, _label) in enumerate(MENU_ITEMS) if candidate == "rx"))
+        elif kind == "stats":
+            settings_menu_open = False
+            cpu_utilization_graph_open = True
         elif kind == "digital":
+            settings_menu_open = False
             radio_setup_open = True
             radio_family_open = None
-            picker_open = display_setup_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            picker_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "audio":
+            settings_menu_open = False
             audio_volume = pipewire_default_volume()
             audio_panel_open = True
-            picker_open = radio_setup_open = display_setup_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
+            settings_menu_open = False
             tests_panel_open = True
-            picker_open = radio_setup_open = display_setup_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         else:
             print(f"gl navigation {label} pending", flush=True)
+
+    def set_lcd_filter_edge(edge, x):
+        """Apply one live passband-edge slider position from the rail drawer."""
+        nonlocal filter_custom_width
+        boxes = lcd_filter_drawer_boxes()
+        slider = boxes[edge]
+        cut_hz = filter_cut_at_x(x, slider[0] + 10, slider[2] - 10, FILTER_LIMIT_HZ, 0.0)
+        _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+        if edge == "low":
+            state.set_filter(low_cut=cut_hz, high_cut=high_cut)
+        else:
+            state.set_filter(low_cut=low_cut, high_cut=cut_hz)
+        filter_custom_width = True
+
+    def set_lcd_filter_shift(x):
+        """Move both filter edges together while preserving bandwidth."""
+        nonlocal filter_custom_width, filter_drawer_width_hz
+        boxes = lcd_filter_drawer_boxes()
+        slider = boxes["shift"]
+        _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+        width_hz = max(
+            FILTER_SNAP_HZ,
+            float(filter_drawer_width_hz)
+            if filter_drawer_width_hz is not None
+            else high_cut - low_cut,
+        )
+        half_width = width_hz / 2.0
+        maximum_shift = max(FILTER_SNAP_HZ, FILTER_LIMIT_HZ - half_width)
+        track_x0, track_x1 = slider[0] + 10, slider[2] - 10
+        zero_x = (track_x0 + track_x1) / 2.0
+        # A touch panel has no tactile center click. Give the center notch a
+        # deliberate magnetic capture zone so a normal finger drag reliably
+        # lands at exactly 0.00 kHz rather than an arbitrary near-zero value.
+        if abs(x - zero_x) <= FILTER_SHIFT_CENTER_DETENT_PX:
+            center_hz = 0.0
+        else:
+            fraction = clamp((x - track_x0) / max(1.0, track_x1 - track_x0), 0.0, 1.0)
+            # Match the fixed visual ±12 kHz scale. Edge clamping is still
+            # necessary when a very wide passband would otherwise escape the
+            # receiver's legal filter range.
+            response = fraction * 2.0 - 1.0
+            exponent = filter_shift_response_exponent(width_hz)
+            if exponent != 1.0 and response:
+                response = math.copysign(abs(response) ** exponent, response)
+            center_hz = clamp(response * FILTER_LIMIT_HZ, -maximum_shift, maximum_shift)
+        # Apply the requested center with the exact locked width. The
+        # receiver's 50 Hz quantizer is then reflected back into the lock,
+        # never into an arbitrary width drift on the next drag.
+        next_low = center_hz - half_width
+        next_high = center_hz + half_width
+        actual_low, actual_high, _generation = state.set_filter(low_cut=next_low, high_cut=next_high)
+        filter_drawer_width_hz = actual_high - actual_low
+        filter_custom_width = True
+
+    def set_lcd_filter_width(x):
+        """Resize symmetrically about the current passband center."""
+        nonlocal filter_custom_width, filter_drawer_width_hz
+        boxes = lcd_filter_drawer_boxes()
+        slider = boxes["width"]
+        fraction = clamp((x - (slider[0] + 10)) / max(1.0, slider[2] - slider[0] - 20), 0.0, 1.0)
+        width_hz = filter_width_from_slider_fraction(fraction)
+        _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+        actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, width_hz))
+        filter_drawer_width_hz = actual_high - actual_low
+        filter_custom_width = True
+
+    def open_lcd_filter_drawer():
+        """Capture the width once so Shift is a true center-only control."""
+        nonlocal filter_drawer_open, filter_drawer_width_hz
+        _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+        filter_drawer_width_hz = high_cut - low_cut
+        filter_drawer_open = True
 
     def restore_dj_origin(reason):
         nonlocal dj_current_khz, dj_drag_remainder_hz
@@ -11229,7 +11731,7 @@ def main():
         candidate_freq = clamp(
             candidate_freq + retune_delta_from_drag(dx, start_span, args.invert_tune, sensitivity),
             0.0,
-            30000.0,
+            TUNING_MAX_KHZ,
         )
         # A normal waterfall drag is a live, positional tuning control. The
         # active zoom supplies the travel range, while the radio step supplies
@@ -11620,7 +12122,7 @@ def main():
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
-                                and (radio_setup_open or audio_panel_open or display_setup_open or receiver_home_panel_open or fan_curve_panel_open)
+                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open)
                                 # Drawers occupy only the right rail. Route
                                 # every remaining point in the left waterfall
                                 # band to live tuning; explicit Zoom/Filter/
@@ -11634,7 +12136,7 @@ def main():
                                 drawer_waterfall_touch
                                 or (
                                     not menu_open and not picker_open and not radio_setup_open
-                                    and not display_setup_open and not audio_panel_open
+                                    and not display_setup_open and not filter_drawer_open and not audio_panel_open
                                     and not asr_panel_open and not deepgram_setup_open
                                     and not tests_panel_open and not globe_open and not dj_tune_open
                                     and not filter_panel_open and not frequency_entry_open
@@ -11789,6 +12291,17 @@ def main():
                                 gesture = "tests_panel"
                             elif tests_panel_open:
                                 gesture = "tests_panel_outside"
+                            elif filter_drawer_open and LCD_800_MODE and contains(lcd_filter_drawer_boxes()["panel"], x, y):
+                                filter_boxes = lcd_filter_drawer_boxes()
+                                # The Shift rail gets the 12 px gap beneath
+                                # it as a forgiving finger landing zone. It
+                                # stops before the Width label begins.
+                                if contains(lcd_filter_slider_track_box(filter_boxes["shift"], lower_slop=12), x, y):
+                                    gesture = "lcd_filter_shift"
+                                elif contains(lcd_filter_slider_track_box(filter_boxes["width"]), x, y):
+                                    gesture = "lcd_filter_width"
+                                else:
+                                    gesture = "lcd_filter_drawer"
                             elif filter_panel_open and contains(FILTER_EDIT_BOX, x, y):
                                 _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                                 filter_drag_audio_center = filter_center_hz(low_cut, high_cut)
@@ -11840,11 +12353,13 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and LCD_800_MODE and not settings_menu_open and contains(lcd_home_bandwidth_box(), x, y):
+                                gesture = "home_passband"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
                                 gesture = "home_volume_mute"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
                                 gesture = "home_volume"
-                            elif not picker_open and lcd_nav_item_at(x, y) is not None:
+                            elif not picker_open and lcd_nav_item_at(x, y, lcd_nav_items(settings_menu_open)) is not None:
                                 gesture = "lcd_nav"
                             elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
                                 gesture = "callsign_toggle"
@@ -11934,6 +12449,10 @@ def main():
                                 voice_clean_level=0,
                                 hf_enhance_level=0,
                             )
+                        elif gesture == "lcd_filter_shift":
+                            set_lcd_filter_shift(x)
+                        elif gesture == "lcd_filter_width":
+                            set_lcd_filter_width(x)
                         elif gesture == "fan_start_slider":
                             adjust_fan_curve_slider(fan_curve, "start", x)
                         elif gesture == "fan_full_slider":
@@ -12418,6 +12937,38 @@ def main():
                                 radio_setup_open = False
                                 radio_family_open = None
                                 wake_controls()
+                        elif touch_started and gesture == "home_passband":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                open_lcd_filter_drawer()
+                                menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "lcd_filter_shift":
+                            # Drag updates continuously above; apply the final
+                            # position again on release so a deliberate tap is
+                            # equally precise.
+                            set_lcd_filter_shift(x)
+                            wake_controls()
+                        elif touch_started and gesture == "lcd_filter_width":
+                            set_lcd_filter_width(x)
+                            wake_controls()
+                        elif touch_started and gesture == "lcd_filter_drawer":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                filter_boxes = lcd_filter_drawer_boxes()
+                                if contains(filter_boxes["close"], x, y):
+                                    filter_drawer_open = False
+                                    filter_drawer_width_hz = None
+                                else:
+                                    for _name, preset_width_hz, preset_box in filter_boxes["presets"]:
+                                        if contains(preset_box, x, y):
+                                            _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+                                            target_width_hz = next_lcd_filter_preset_width(_name, high_cut - low_cut, preset_width_hz)
+                                            actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, target_width_hz))
+                                            filter_drawer_width_hz = actual_high - actual_low
+                                            filter_custom_width = False
+                                            break
+                            wake_controls()
                         elif touch_started and gesture == "filter_controls":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -12468,6 +13019,7 @@ def main():
                                         display_setup_open = False
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
+                                        reset_display = kind == "reset"
                                         if kind == "reset":
                                             floor = WATERFALL_DEFAULT_FLOOR
                                             ceiling = WATERFALL_DEFAULT_CEIL
@@ -12496,6 +13048,15 @@ def main():
                                             auto=auto,
                                             palette=palette,
                                         )
+                                        if reset_display:
+                                            # Palette changes otherwise leave the previous
+                                            # texture visible until it has slowly scrolled
+                                            # away, which makes a successful reset appear
+                                            # inert. Clear it and persist the complete
+                                            # baseline on this same deliberate tap.
+                                            drain_queue(line_queue)
+                                            wf_texture.clear()
+                                            write_remembered_view(save_current_frequency=True, force=True)
                                         print(f"gl display floor={floor:.0f} ceil={ceiling:.0f} auto={int(auto)} rate={speed} palette={palette}", flush=True)
                                     wake_controls()
                         elif touch_started and gesture == "display_setup_outside":
@@ -12551,9 +13112,10 @@ def main():
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                idx = lcd_nav_item_at(x, y)
+                                nav_items = lcd_nav_items(settings_menu_open)
+                                idx = lcd_nav_item_at(x, y, nav_items)
                                 if idx is not None:
-                                    activate_navigation_item(idx)
+                                    activate_navigation_item(idx, nav_items)
                         elif touch_started and gesture in ("menu_close", "menu_outside"):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -12777,7 +13339,10 @@ def main():
                         elif touch_started and gesture == "filter_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                filter_panel_open = True
+                                if LCD_800_MODE:
+                                    open_lcd_filter_drawer()
+                                else:
+                                    filter_panel_open = True
                                 menu_open = False
                                 radio_setup_open = False
                                 display_setup_open = False
@@ -12950,7 +13515,7 @@ def main():
                             candidate_freq = clamp(
                                 snap_frequency_khz(candidate_freq, live_step_hz),
                                 0.0,
-                                30000.0,
+                                TUNING_MAX_KHZ,
                             )
                             if args.swipe_inertia_strength > 0 and swipe_started and abs(swipe_velocity_px_s) >= args.swipe_inertia_min_px_s:
                                 sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args)
@@ -12989,11 +13554,14 @@ def main():
             if (
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
-                and (radio_setup_open or display_setup_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
+                and (settings_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
             ):
+                settings_menu_open = False
                 radio_setup_open = False
                 radio_family_open = None
                 display_setup_open = False
+                filter_drawer_open = False
+                filter_drawer_width_hz = None
                 receiver_home_panel_open = False
                 fan_curve_panel_open = False
                 audio_panel_open = False
@@ -13062,7 +13630,7 @@ def main():
             if not touch_started and abs(inertia_velocity_khz_s) > 0.01:
                 dt = min(0.05, max(0.0, now - inertia_last_t))
                 inertia_last_t = now
-                display_freq = clamp(display_freq + inertia_velocity_khz_s * dt, 0.0, 30000.0)
+                display_freq = clamp(display_freq + inertia_velocity_khz_s * dt, 0.0, TUNING_MAX_KHZ)
                 candidate_freq = display_freq
                 inertia_velocity_khz_s *= math.exp(-dt / args.swipe_inertia_tau)
                 inertia_active = True
@@ -13409,7 +13977,7 @@ def main():
             wf_texture.draw(
                 0,
                 waterfall_y0,
-                LOGICAL_W,
+                rf_canvas_width(),
                 waterfall_y1,
                 center_khz=display_freq,
                 span_khz=display_span,
@@ -13487,6 +14055,8 @@ def main():
                 connection_status=connection_status,
                 connection_timeout_seconds=connection_timeout_seconds,
                 bandwidth_hz=high_cut - low_cut,
+                filter_low_hz=low_cut,
+                filter_high_hz=high_cut,
                 transcription_enabled=transcription_enabled,
                 asr_engine=asr_engine,
                 caption_mode=caption_mode,
@@ -13499,6 +14069,7 @@ def main():
                 audio_volume=audio_volume,
                 home_smeter_dbm=smeter_dbm,
                 audio_muted=live_audio_controls["mute"],
+                settings_menu_open=settings_menu_open,
                 status_y0=LOGICAL_H - BOTTOM_STATUS_H,
             )
             if spectrum_foreground:
@@ -13616,6 +14187,8 @@ def main():
                     wf_palette,
                     spectrum_enabled,
                 )
+            if filter_drawer_open and LCD_800_MODE:
+                draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
             if receiver_home_panel_open and LCD_800_MODE:
                 draw_receiver_home_drawer(text_cache, receiver_home_profile, receiver_home_locating, fan_curve)
             if fan_curve_panel_open and LCD_800_MODE:
