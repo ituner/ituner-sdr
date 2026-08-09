@@ -10403,6 +10403,13 @@ def main():
         if restored_volume is not None:
             audio_volume = restored_volume
     audio_volume_last_apply = 0.0
+    saved_audible_volume = remembered_preferences.get("last_audible_volume")
+    if isinstance(saved_audible_volume, (int, float)) and saved_audible_volume > MAIN_VOLUME_MUTE_THRESHOLD:
+        last_audible_volume = clamp(float(saved_audible_volume), 0.0, 1.0)
+    elif audio_volume is not None and audio_volume > MAIN_VOLUME_MUTE_THRESHOLD:
+        last_audible_volume = audio_volume
+    else:
+        last_audible_volume = 0.50
 
     # The master slider owns the explicit MUTE state at zero. Raising it again
     # resumes listening immediately, so a zero level can never look live while
@@ -10412,15 +10419,25 @@ def main():
 
     def apply_main_volume(requested_volume):
         """Apply one master-level gesture and keep mute state in lockstep."""
-        nonlocal audio_volume, audio_volume_last_apply
+        nonlocal audio_volume, audio_volume_last_apply, last_audible_volume
         applied_volume = set_pipewire_default_volume(requested_volume)
         if applied_volume is not None:
             audio_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
+            if applied_volume > MAIN_VOLUME_MUTE_THRESHOLD:
+                last_audible_volume = applied_volume
             state.set_audio_controls(
                 audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
             )
         return applied_volume
+
+    def restore_main_volume_after_mute():
+        """Restore the remembered audible level before reopening SDR audio."""
+        if audio_volume is None or audio_volume <= MAIN_VOLUME_MUTE_THRESHOLD:
+            if apply_main_volume(last_audible_volume) is None:
+                return False
+        state.set_audio_controls(audio_mute=False)
+        return True
 
     tests_panel_open = False
     globe_open = False
@@ -10553,6 +10570,7 @@ def main():
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
+            "last_audible_volume": round(float(last_audible_volume), 3),
             "digital_mode": digital_mode,
             "filter": {"low_cut": low_cut, "high_cut": high_cut},
             "filter_custom_width": bool(filter_custom_width),
@@ -11942,7 +11960,10 @@ def main():
                                 if choice in (None, "close"):
                                     audio_panel_open = False
                                 elif choice == "mute":
-                                    state.set_audio_controls(audio_mute=not controls["mute"])
+                                    if controls["mute"]:
+                                        restore_main_volume_after_mute()
+                                    else:
+                                        state.set_audio_controls(audio_mute=True)
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
                                     state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
@@ -12322,7 +12343,7 @@ def main():
                         elif touch_started and gesture == "waterfall_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                state.set_audio_controls(audio_mute=False)
+                                restore_main_volume_after_mute()
                             wake_controls()
                         elif touch_started and gesture == "stream_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
