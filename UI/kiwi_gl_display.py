@@ -7584,35 +7584,75 @@ def draw_lcd_navigation(text_cache):
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
-    """Show an auxiliary VFO readout above the complete LCD mode matrix."""
+    """Show a compact radio-style VFO and rounded mode annunciators."""
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
-    draw_logical_rect(x0, y0, x1, y1, (15, 31, 39, 244))
-    draw_logical_line(x0, y0, x1, y0, (125, 147, 158, 168), 1)
-    draw_logical_line(x0, y1, x1, y1, (53, 88, 98, 210), 1)
-    # This is a deliberately secondary, at-a-glance VFO readout. The primary
-    # frequency presentation on the top bar stays exactly as it was.
-    vfo_y0, vfo_y1 = y0 + 5, y0 + 47
-    draw_logical_rect(x0 + 6, vfo_y0, x1 - 6, vfo_y1, (4, 15, 21, 218))
-    draw_logical_line(x0 + 6, vfo_y1, x1 - 6, vfo_y1, (91, 188, 184, 156), 1)
-    draw_text(text_cache, x0 + 14, vfo_y0 + 10, "VFO", (113, 184, 185), 10, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, vfo_y0 + 27, sdr_ui.format_freq(freq_khz), (195, 245, 238), 27, True, False, "cm", family="Liberation Sans")
+    # The main frequency display remains untouched. This smaller right-rail
+    # readout deliberately uses the familiar dark, rounded radio-control
+    # treatment so the mode row reads as one clean instrument.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    cell_w = (x1 - x0 - 12) / 4
+    cache_key = ("surface", f"lcd_annunciator_radio_v2_{active_mode}_{digital.upper()}")
+    cached = text_cache.cache.get(cache_key)
+    if cached is None:
+        width, height, scale = int(x1 - x0), int(y1 - y0), 2
+        surface = pygame.Surface((width * scale, height * scale), pygame.SRCALPHA)
+
+        def pixel(value):
+            return int(round(value * scale))
+
+        def rounded(left, top, right, bottom, fill, edge=None, radius=7):
+            rect = pygame.Rect(pixel(left), pixel(top), pixel(right - left), pixel(bottom - top))
+            pygame.draw.rect(surface, fill, rect, border_radius=pixel(radius))
+            if edge is not None:
+                pygame.draw.rect(surface, edge, rect, width=pixel(1), border_radius=pixel(radius))
+
+        surface.fill((3, 6, 9, 232))
+        rounded(3, 3, width - 3, 56, (10, 13, 16, 246), (54, 60, 65, 232), 8)
+        grid_y0, grid_y1, gap = 63, height - 6, 5
+        cell_w = (width - 12 - 3 * gap) / 4
+        cell_h = (grid_y1 - grid_y0 - gap) / 2
+        for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+            col, row = index % 4, index // 4
+            left = 6 + col * (cell_w + gap)
+            top = grid_y0 + row * (cell_h + gap)
+            active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+            rounded(
+                left,
+                top,
+                left + cell_w,
+                top + cell_h,
+                (41, 117, 221, 255) if active else (7, 10, 13, 238),
+                (80, 154, 247, 255) if active else (62, 67, 73, 228),
+                6,
+            )
+        surface = pygame.transform.smoothscale(surface, (width, height))
+        cached = text_cache.surface_texture(cache_key[1], surface)
+    texture, texture_w, texture_h = cached
+    draw_textured_quad(texture, x0, y0, x0 + texture_w, y0 + texture_h, 0, 0, 1, 1)
+
+    # This is deliberately secondary; the larger top-bar frequency remains
+    # the primary tuning readout.
+    frequency_text = sdr_ui.format_freq(freq_khz)
+    unit = "MHz"
+    unit_width = text_cache.font(16, bold=True, family="Liberation Sans").size(unit)[0]
+    frequency_size = 30
+    while frequency_size > 20 and text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(frequency_text)[0] > (x1 - x0 - unit_width - 34):
+        frequency_size -= 1
+    draw_text(text_cache, x0 + 14, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 14, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
+
+    cell_w = (x1 - x0 - 12 - 3 * 5) / 4
+    cell_h = (y1 - 6 - 63 - 5) / 2
     for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
         col, row = index % 4, index // 4
-        bx0 = x0 + 6 + col * cell_w
+        bx0 = x0 + 6 + col * (cell_w + 5)
         bx1 = bx0 + cell_w
-        by0 = y0 + 56 + row * 42
-        by1 = by0 + 34
+        by0 = y0 + 63 + row * (cell_h + 5)
+        by1 = by0 + cell_h
         active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
-        if active:
-            draw_logical_rect(bx0 + 2, by0 + 1, bx1 - 2, by1 - 1, (43, 121, 81, 205))
-            draw_logical_line(bx0 + 4, by1 - 2, bx1 - 4, by1 - 2, (119, 255, 162, 245), 1)
-        # The LCD's 256 px annunciator rail has enough vertical room for a
-        # more readable mode matrix. Keep the existing cells/touch geometry,
-        # but use a stronger label size for the arm's-length display.
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (235, 255, 239) if active else (130, 151, 157), 18, True, False, "cm")
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
+                  (246, 248, 250) if active else (221, 224, 228), 16, True, False, "cm",
+                  family="Liberation Sans")
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
