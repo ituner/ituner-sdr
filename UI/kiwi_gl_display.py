@@ -4517,6 +4517,15 @@ def volume_at_x(x, box):
     return clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
 
 
+MAIN_VOLUME_MUTE_THRESHOLD = 0.005
+
+
+def main_volume_label(level):
+    """Make a zero master level an explicit listening state, not just 0%."""
+    level = clamp(level if level is not None else 0.0, 0.0, 1.0)
+    return "MUTE" if level <= MAIN_VOLUME_MUTE_THRESHOLD else f"{round(level * 100):.0f}%"
+
+
 def audio_volume_at_x(x):
     return volume_at_x(x, AUDIO_VOLUME_BOX)
 
@@ -6034,7 +6043,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     draw_text(text_cache, vx0 + 10, vy0 + 11, "VOLUME", (164, 193, 198), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1 - 10, vy0 + 11, f"{round(level * 100):.0f}%", (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
     track_y = vy1 - 16
     track_x0, track_x1 = vx0 + 10, vx1 - 10
     draw_logical_rect(track_x0, track_y - 5, track_x1, track_y + 5, (22, 35, 43, 230))
@@ -6094,7 +6103,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     track_y = (vy0 + vy1) / 2 + 9
     draw_text(text_cache, vx0, vy0 + 2, "VOLUME", (164, 193, 198), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1, vy0 + 2, f"{round(level * 100):.0f}%", (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
+    draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
     draw_logical_rect(vx0, track_y - 7, vx1, track_y + 7, (22, 35, 43, 230))
     draw_logical_rect(vx0, track_y - 7, vx0 + (vx1 - vx0) * level, track_y + 7, (68, 209, 151, 226))
     knob_x = vx0 + (vx1 - vx0) * level
@@ -7588,7 +7597,7 @@ def draw_lcd_home_volume_slider(text_cache, volume):
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
     draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, f"{round(level * 100):.0f}%", (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y1 - 20
     draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
@@ -10390,6 +10399,25 @@ def main():
         if restored_volume is not None:
             audio_volume = restored_volume
     audio_volume_last_apply = 0.0
+
+    # The master slider owns the explicit MUTE state at zero. Raising it again
+    # resumes listening immediately, so a zero level can never look live while
+    # deliberately silencing only the hardware output.
+    if audio_volume is not None and audio_volume <= MAIN_VOLUME_MUTE_THRESHOLD:
+        state.set_audio_controls(audio_mute=True)
+
+    def apply_main_volume(requested_volume):
+        """Apply one master-level gesture and keep mute state in lockstep."""
+        nonlocal audio_volume, audio_volume_last_apply
+        applied_volume = set_pipewire_default_volume(requested_volume)
+        if applied_volume is not None:
+            audio_volume = applied_volume
+            audio_volume_last_apply = time.monotonic()
+            state.set_audio_controls(
+                audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
+            )
+        return applied_volume
+
     tests_panel_open = False
     globe_open = False
     globe_receivers = load_globe_receivers()
@@ -11656,10 +11684,7 @@ def main():
                                 x, AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_box()
                             )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
-                                applied_volume = set_pipewire_default_volume(desired_volume)
-                                if applied_volume is not None:
-                                    audio_volume = applied_volume
-                                    audio_volume_last_apply = time.monotonic()
+                                apply_main_volume(desired_volume)
                         elif gesture == "audio_squelch_level":
                             current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
                             state.set_audio_controls(
@@ -11871,16 +11896,10 @@ def main():
                                     dj_tune_open = False
                                 filter_panel_open = False
                         elif touch_started and gesture == "audio_volume":
-                            applied_volume = set_pipewire_default_volume(audio_volume_at_x(x))
-                            if applied_volume is not None:
-                                audio_volume = applied_volume
-                                audio_volume_last_apply = time.monotonic()
+                            apply_main_volume(audio_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume":
-                            applied_volume = set_pipewire_default_volume(volume_at_x(x, lcd_home_volume_box()))
-                            if applied_volume is not None:
-                                audio_volume = applied_volume
-                                audio_volume_last_apply = time.monotonic()
+                            apply_main_volume(volume_at_x(x, lcd_home_volume_box()))
                             wake_controls()
                         elif touch_started and gesture == "audio_squelch_level":
                             current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
