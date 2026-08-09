@@ -13190,7 +13190,9 @@ def main():
             normal_waterfall_y0 = ruler_y0 + ruler_height
             focus_waterfall_y0 = normal_waterfall_y0
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
-            normal_waterfall_y1 = LOGICAL_H if bottom_ruler else WATERFALL_Y1
+            # The status bar is composited over the lower edge; the live
+            # waterfall itself must still occupy the full post-ruler region.
+            normal_waterfall_y1 = LOGICAL_H
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
             # Anchor waterfall rows to the focus layout. Collapsing the
             # waterfall then covers rows under the ruler/status strip instead
