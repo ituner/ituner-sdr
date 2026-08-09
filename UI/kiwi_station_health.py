@@ -6,6 +6,8 @@ import json
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parent))
 import kiwi_live_display_fb as kiwi
@@ -21,6 +23,7 @@ AUDIO_PROBE_SECONDS = 2.5
 # Current live probes: good receivers delivered in 1.06s and 1.22s, while a
 # no-frame receiver elapsed 3.40s; four seconds avoids a false positive.
 WATERFALL_FRAME_TIMEOUT_SECONDS = 4.0
+STATUS_TIMEOUT_SECONDS = 4.0
 
 
 def load_json(path, fallback):
@@ -88,6 +91,25 @@ def probe_waterfall(server):
             ws.send_close()
 
 
+def probe_time_limit(server):
+    """Return whether the receiver advertises any admin-configured limits.
+
+    KiwiSDR's public status intentionally omits the numeric timeout. Its
+    hardware banner adds the hourglass/"Limits" marker when the owner enables
+    an inactivity or per-IP limit. The exact timeout is learned later from the
+    server's ``MSG inactivity_timeout=N`` event in the live client.
+    """
+    try:
+        parsed = urlparse(server if "://" in server else "http://" + server)
+        endpoint = parsed._replace(path="/status", params="", query="", fragment="").geturl()
+        request = Request(endpoint, headers={"User-Agent": "iTuner-SDR-health/1.0"})
+        with urlopen(request, timeout=STATUS_TIMEOUT_SECONDS) as response:
+            status = response.read(32768).decode("utf-8", "replace")
+        return "⏳ Limits" in status or "Limits" in status.split("sdr_hw=", 1)[-1].split("\n", 1)[0]
+    except Exception:
+        return None
+
+
 def save_health(health):
     HEALTH.parent.mkdir(parents=True, exist_ok=True)
     temporary = HEALTH.with_suffix(".tmp")
@@ -107,7 +129,7 @@ def station_is_at_capacity(station):
     return total > 0 and used >= total
 
 
-def refresh_station_health(health, station, audio_probe=probe_audio, waterfall_probe=probe_waterfall):
+def refresh_station_health(health, station, audio_probe=probe_audio, waterfall_probe=probe_waterfall, limit_probe=probe_time_limit):
     """Probe a station unless the directory reports every listener slot full.
 
     A capacity skip intentionally makes no edit to the station record, so its
@@ -118,12 +140,22 @@ def refresh_station_health(health, station, audio_probe=probe_audio, waterfall_p
     server = station[2]
     waterfall = waterfall_probe(server) == "ok"
     audio = audio_probe(server)
-    health.setdefault("stations", {})[server] = {
+    previous = health.setdefault("stations", {}).get(server, {})
+    entry = {
         "status": "ok" if waterfall or audio else "failed",
         "waterfall": waterfall,
         "audio": audio,
         "checked": int(time.time()),
     }
+    advertised = limit_probe(server)
+    if advertised is not None:
+        entry["time_limit_advertised"] = advertised
+    elif previous.get("time_limit_advertised"):
+        entry["time_limit_advertised"] = True
+    if previous.get("timeout_seconds"):
+        entry["timeout_seconds"] = previous["timeout_seconds"]
+        entry["timeout_observed"] = previous.get("timeout_observed", previous.get("checked", 0))
+    health["stations"][server] = entry
     return True
 
 

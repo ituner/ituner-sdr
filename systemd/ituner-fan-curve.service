@@ -1,0 +1,14 @@
+[Unit]
+Description=iTuner smooth PWM fan curve
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+Environment=ITUNER_FAN_CONFIG=/home/__ITUNER_SDR_USER__/.local/state/ituner-fan-curve.json
+ExecStart=/usr/bin/python3 /usr/local/lib/ituner-sdr/ituner_fan_curve.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

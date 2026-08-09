@@ -1,0 +1,3 @@
+# Installed into /opt/ituner-sdr/vendor/python, never into Raspberry Pi OS's
+# externally-managed Python. This powers PipeWire/PortAudio output.
+sounddevice>=0.5,<0.6

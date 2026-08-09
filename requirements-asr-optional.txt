@@ -1,0 +1,12 @@
+# ASR and cloud-caption clients. scripts/install-ai-runtime.sh installs these
+# with the matching local model bundle under vendor/.
+vosk>=0.3.45
+sherpa-onnx>=1.12
+moonshine-voice
+# The live caption bridge uses the Deepgram SDK v3 WebSocket API
+# (DeepgramClient.listen.websocket + LiveOptions). SDK v4+ removed those
+# symbols, so accepting an unconstrained latest wheel makes DEEP fail at
+# import time even when the API key is valid.
+deepgram-sdk>=3,<4
+numpy>=1.26
+onnxruntime>=1.18

@@ -1,0 +1,21 @@
+[Unit]
+Description=iTuner SDR LCD display
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ituner-sdr
+EnvironmentFile=/etc/ituner-sdr.conf
+Environment=XDG_RUNTIME_DIR=/run/user/__ITUNER_SDR_UID__
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=SDL_VIDEODRIVER=wayland
+Environment=PYGAME_HIDE_SUPPORT_PROMPT=1
+# The compositor creates its socket shortly after the graphical session starts.
+ExecStartPre=/usr/bin/test -S /run/user/__ITUNER_SDR_UID__/wayland-0
+ExecStart=/usr/local/lib/ituner-sdr/start-wayland.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
