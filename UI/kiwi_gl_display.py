@@ -7650,9 +7650,9 @@ LCD_DRAWER_HEADER_H = 64
 FONT_GALLERY_TEST = True
 FONT_GALLERY_CHOICES = (
     ("DejaVu Sans Mono", "DEJAVU MONO"),
+    ("Courier New", "COURIER NEW"),
     ("Liberation Mono", "LIBERATION MONO"),
     ("Noto Sans Mono", "NOTO MONO"),
-    ("Courier New", "COURIER NEW"),
     ("PT Mono", "PT MONO"),
     ("DejaVu Serif", "DEJAVU SERIF"),
     ("Liberation Sans", "LIBERATION SANS"),
