@@ -7648,6 +7648,8 @@ LCD_DRAWER_HEADER_H = 64
 # Temporary on-device VFO type comparison. Each sample ends in its selection
 # number so the operator can name a preferred candidate without a legend.
 FONT_GALLERY_TEST = True
+FONT_GALLERY_PAGE = 0
+FONT_GALLERY_PAGE_SIZE = 8
 FONT_GALLERY_CHOICES = (
     ("DejaVu Sans Mono", "DEJAVU MONO"),
     ("Courier New", "COURIER NEW"),
@@ -7658,6 +7660,26 @@ FONT_GALLERY_CHOICES = (
     ("Liberation Sans", "LIBERATION SANS"),
     ("Cantarell", "CANTARELL"),
     ("DejaVu Sans", "DEJAVU SANS"),
+    ("Space Mono", "SPACE MONO"),
+    ("Share Tech Mono", "SHARE TECH MONO"),
+    ("Orbitron", "ORBITRON"),
+    ("Audiowide", "AUDIOWIDE"),
+    ("Oxanium", "OXANIUM"),
+    ("Rajdhani", "RAJDHANI"),
+    ("Nimbus Mono PS", "NIMBUS MONO"),
+    ("FreeMono", "FREE MONO"),
+    ("DejaVu Sans Condensed", "DEJAVU COND"),
+    ("Nimbus Sans", "NIMBUS SANS"),
+    ("Nimbus Sans Narrow", "NIMBUS NARROW"),
+    ("URW Gothic", "URW GOTHIC"),
+    ("Noto Mono", "NOTO MONO"),
+    ("DejaVu Serif Condensed", "DEJAVU SERIF C"),
+    ("Liberation Serif", "LIBERATION SERIF"),
+    ("URW Bookman", "URW BOOKMAN"),
+    ("P052", "P052"),
+    ("C059", "C059"),
+    ("FreeSans", "FREE SANS"),
+    ("FreeSerif", "FREE SERIF"),
     ("seven", "SEVEN SEGMENT"),
 )
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
@@ -7755,19 +7777,45 @@ def lcd_nav_item_at(x, y):
     return None
 
 
+def font_gallery_page_count():
+    return max(1, math.ceil(len(FONT_GALLERY_CHOICES) / FONT_GALLERY_PAGE_SIZE))
+
+
+def font_gallery_control_boxes():
+    x0, x1 = LCD_NAV_X0, LOGICAL_W
+    y0, y1 = LOGICAL_H - 68, LOGICAL_H - 12
+    return {
+        "previous": (x0 + 10, y0, x0 + 76, y1),
+        "next": (x1 - 76, y0, x1 - 10, y1),
+    }
+
+
+def font_gallery_control_at(x, y):
+    if not (LCD_800_MODE and FONT_GALLERY_TEST):
+        return None
+    for action, box in font_gallery_control_boxes().items():
+        if contains(box, x, y):
+            return action
+    return None
+
+
 def draw_lcd_font_gallery(text_cache):
-    """Temporary on-panel comparison of ten possible VFO faces."""
+    """Temporary paginated on-panel comparison of thirty VFO faces."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
     draw_logical_rect(x0, 0, x1, LOGICAL_H, (3, 6, 9, 255))
-    row_h = 78
+    page_count = font_gallery_page_count()
+    page = int(clamp(FONT_GALLERY_PAGE, 0, page_count - 1))
+    start = page * FONT_GALLERY_PAGE_SIZE
+    row_h = 80
     sample_y0 = 8
-    for index, (family, label) in enumerate(FONT_GALLERY_CHOICES):
-        y0 = sample_y0 + index * row_h
+    for row, (family, label) in enumerate(FONT_GALLERY_CHOICES[start:start + FONT_GALLERY_PAGE_SIZE]):
+        index = start + row
+        y0 = sample_y0 + row * row_h
         y1 = y0 + row_h - 5
         draw_logical_rect(x0 + 8, y0, x1 - 8, y1, (10, 18, 24, 236))
         draw_logical_line(x0 + 8, y0, x1 - 8, y0, (70, 111, 119, 120), 1)
-        draw_text(text_cache, x0 + 16, y0 + 11, f"{index}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
-        sample = f"5.216.00{index}"
+        draw_text(text_cache, x0 + 16, y0 + 11, f"{index:02d}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
+        sample = f"5.216.{index:03d}"
         sample_right = x1 - 15
         sample_center_y = y0 + 51
         if family == "seven":
@@ -7780,6 +7828,15 @@ def draw_lcd_font_gallery(text_cache):
             text_cache, sample_right, sample_center_y, sample, (139, 246, 184), sample_size,
             x_scale, bold=True, anchor="rm", family=family,
         )
+    controls = font_gallery_control_boxes()
+    for action, box in controls.items():
+        enabled = page > 0 if action == "previous" else page < page_count - 1
+        draw_lcd_audio_tile(
+            text_cache, box, "‹" if action == "previous" else "›", "PREV" if action == "previous" else "NEXT",
+            enabled, (91, 229, 204, 225), title_size=30, detail_size=11,
+        )
+    draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 40, f"PAGE {page + 1}/{page_count}",
+              (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
@@ -10313,7 +10370,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
 
 
 def main():
-    global LCD_RADIO_DRAWER_PROGRESS
+    global LCD_RADIO_DRAWER_PROGRESS, FONT_GALLERY_PAGE
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
     parser.add_argument("--receiver-state-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-receiver.json")
@@ -11787,7 +11844,7 @@ def main():
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
-                            elif contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif not FONT_GALLERY_TEST and contains(radio_toggle_box(text_cache, display_freq), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -11878,6 +11935,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and font_gallery_control_at(x, y) is not None:
+                                gesture = "font_gallery"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
                                 gesture = "home_volume_mute"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
@@ -12586,6 +12645,15 @@ def main():
                                 idx = menu_at(x, y, menu_scroll)
                                 if idx is not None:
                                     activate_navigation_item(idx)
+                        elif touch_started and gesture == "font_gallery":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = font_gallery_control_at(x, y)
+                                if action == "previous":
+                                    FONT_GALLERY_PAGE = max(0, FONT_GALLERY_PAGE - 1)
+                                elif action == "next":
+                                    FONT_GALLERY_PAGE = min(font_gallery_page_count() - 1, FONT_GALLERY_PAGE + 1)
+                            wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
