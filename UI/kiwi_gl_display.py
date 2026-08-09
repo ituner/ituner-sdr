@@ -8658,22 +8658,26 @@ def draw_ruler(
     # remain readable at arm's length through the Waveshare panel.
     tall_ruler = height >= 52
     minor_color = (103, 128, 142, 150) if subdued else (
-        (168, 196, 207, 232) if tall_ruler else (142, 158, 166, 215)
+        (192, 212, 220, 236) if tall_ruler else (142, 158, 166, 215)
     )
     major_color = (133, 161, 174, 178) if subdued else (
-        (238, 246, 248, 255) if tall_ruler else (196, 210, 216, 255)
+        (248, 252, 253, 255) if tall_ruler else (196, 210, 216, 255)
     )
     label_color = (145, 178, 191) if subdued else (
-        (202, 220, 227) if tall_ruler else (231, 240, 244)
+        (184, 207, 215) if tall_ruler else (231, 240, 244)
     )
     label_alpha = 0.84 if subdued else 1.0
+    if tall_ruler:
+        # A quiet axis spine gives the ticks structure without turning the
+        # divider into another opaque panel.
+        draw_logical_line(0, y0 + 3, LOGICAL_W, y0 + 3, (189, 211, 220, int(145 * alpha)), 1)
 
     hz = minor_start_hz
     while hz <= end_hz:
         if hz % major_step_hz:
             x = int(round((hz - start_hz) / hz_per_px))
             if 0 <= x < LOGICAL_W:
-                draw_logical_line(x, y0 + 4, x, y0 + (15 if tall_ruler else 5), (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5 if tall_ruler else 1)
+                draw_logical_line(x, y0 + 4, x, y0 + (14 if tall_ruler else 5), (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5 if tall_ruler else 1)
         hz += minor_step_hz
 
     hz = major_start_hz
@@ -8681,7 +8685,7 @@ def draw_ruler(
     while hz <= end_hz:
         x = int(round((hz - start_hz) / hz_per_px))
         if 0 <= x < LOGICAL_W:
-            draw_logical_line(x, y0 + 4, x, y0 + (27 if tall_ruler else 8), (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2.5 if tall_ruler else 2)
+            draw_logical_line(x, y0 + 4, x, y0 + (25 if tall_ruler else 8), (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 3 if tall_ruler else 2)
             if x - last_label_x > 140:
                 draw_text(
                     text_cache,
@@ -8689,9 +8693,9 @@ def draw_ruler(
                     y0 + (42 if tall_ruler else 18),
                     sdr_ui.format_ruler_label(hz, major_step_hz),
                     label_color,
-                    24 if tall_ruler else 15,
+                    20 if tall_ruler else 15,
                     True,
-                    True,
+                    False,
                     "cm",
                     alpha * label_alpha,
                 )
