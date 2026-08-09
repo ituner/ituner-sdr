@@ -293,6 +293,11 @@ SMETER_CEILING_DBM = -33
 SMETER_S1_TO_S9_SEGMENTS = 22
 SMETER_S9_TO_PLUS20_SEGMENTS = 6
 SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
+# One Display Reset restores this known-good waterfall rendering baseline.
+WATERFALL_DEFAULT_FLOOR = 142
+WATERFALL_DEFAULT_CEIL = 245
+WATERFALL_DEFAULT_SPEED = 4
+WATERFALL_DEFAULT_PALETTE = "kiwi"
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
@@ -794,6 +799,7 @@ DISPLAY_FLOOR_MINUS_BOX = (150, 130, 222, 180)
 DISPLAY_FLOOR_PLUS_BOX = (330, 130, 402, 180)
 DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
+DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (4, (250, 220, 362, 270), "MED"),
@@ -1109,6 +1115,7 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
+    global DISPLAY_RESET_BOX
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1140,6 +1147,7 @@ def configure_popup_layout():
     DISPLAY_FLOOR_PLUS_BOX = popup_shift_box(DISPLAY_FLOOR_PLUS_BOX, dy)
     DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
+    DISPLAY_RESET_BOX = (0, 0, 0, 0)
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
@@ -1150,6 +1158,7 @@ def configure_popup_layout():
         display_y0, display_y1 = 0, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
         inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
+        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 150)
         column_gap, tile_h, adjust_h = 7, 72, 64
         palette_y1 = display_y1 - 14
         palette_y0 = palette_y1 - tile_h
@@ -4512,6 +4521,8 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None)
 def display_option_at(x, y):
     if LCD_800_MODE and contains(lcd_display_drawer_close_box(), x, y):
         return "close", None
+    if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
+        return "reset", None
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -7080,6 +7091,8 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
+        draw_text(text_cache, x0 + 12, 37, "DISPLAY", (230, 246, 247), 18, True, False, "lm", family="Liberation Sans")
+        draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "DISPLAY RESET", "RESTORE DEFAULTS", False)
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
@@ -10201,10 +10214,10 @@ def main():
     parser.add_argument("--screenshot-path", type=Path, default=Path("/tmp/kiwi-gl-display.png"), help=argparse.SUPPRESS)
     parser.add_argument("--freq-khz", type=float, default=7075.794)
     parser.add_argument("--zoom", type=int, default=13)
-    parser.add_argument("--wf-speed", type=int, default=4)
+    parser.add_argument("--wf-speed", type=int, default=WATERFALL_DEFAULT_SPEED)
     parser.add_argument("--wf-row-pixels", type=int, default=1)
-    parser.add_argument("--wf-floor", type=int, default=142)
-    parser.add_argument("--wf-ceil", type=int, default=245)
+    parser.add_argument("--wf-floor", type=int, default=WATERFALL_DEFAULT_FLOOR)
+    parser.add_argument("--wf-ceil", type=int, default=WATERFALL_DEFAULT_CEIL)
     parser.add_argument("--spectrum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fps", type=float, default=24.0, help="render target; 24 fps is the balanced Raspberry Pi LCD default")
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
@@ -12386,7 +12399,14 @@ def main():
                                         display_setup_open = False
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
-                                        if kind == "spectrum":
+                                        if kind == "reset":
+                                            floor = WATERFALL_DEFAULT_FLOOR
+                                            ceiling = WATERFALL_DEFAULT_CEIL
+                                            speed = WATERFALL_DEFAULT_SPEED
+                                            auto = False
+                                            palette = WATERFALL_DEFAULT_PALETTE
+                                            state.set_spectrum_enabled(True)
+                                        elif kind == "spectrum":
                                             state.set_spectrum_enabled(not state.spectrum_snapshot()[0])
                                         elif kind == "auto":
                                             auto = not auto
