@@ -7715,8 +7715,16 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
     frequency_text = sdr_ui.format_freq(freq_khz)
     unit = "MHz"
     unit_width = text_cache.font(16, bold=True, family="Liberation Sans").size(unit)[0]
-    frequency_size = 30
-    while frequency_size > 20 and text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(frequency_text)[0] > (x1 - x0 - unit_width - 34):
+    # Size against the widest normal HF presentation rather than the current
+    # frequency. That makes this secondary readout appreciably larger while
+    # guaranteeing that 30.000.000 MHz never touches the unit label.
+    frequency_size = 38
+    fit_target = "30.000.000"
+    frequency_width_limit = x1 - x0 - unit_width - 34
+    while frequency_size > 20 and max(
+        text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(frequency_text)[0],
+        text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(fit_target)[0],
+    ) > frequency_width_limit:
         frequency_size -= 1
     draw_text(text_cache, x0 + 14, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 14, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
