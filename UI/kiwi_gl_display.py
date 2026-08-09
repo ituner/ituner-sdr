@@ -7554,6 +7554,14 @@ def lcd_home_volume_box():
     return x0, y0, x1, max(y0 + 46, y1)
 
 
+def lcd_home_smeter_box():
+    """Compact RF meter below Home volume and above the tile grid."""
+    x0, _volume_y0, x1, volume_y1 = lcd_home_volume_box()
+    y0 = volume_y1 + 10
+    y1 = min(lcd_nav_top() - 16, y0 + 76)
+    return x0, y0, x1, max(y0 + 48, y1)
+
+
 def lcd_nav_box(index):
     """Return the logical box for the permanent LCD navigation rail."""
     col = index % 2
@@ -7589,7 +7597,48 @@ def draw_lcd_home_volume_slider(text_cache, volume):
     draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, (233, 247, 248, 255))
 
 
-def draw_lcd_navigation(text_cache, volume=None):
+def compact_smeter_label(dbm):
+    """Translate the calibrated reading into the familiar short S label."""
+    if dbm is None:
+        return "S?"
+    if dbm < SMETER_S9_DBM:
+        fraction = clamp((dbm - SMETER_FLOOR_DBM) / (SMETER_S9_DBM - SMETER_FLOOR_DBM), 0.0, 1.0)
+        return f"S{max(1, min(9, round(1 + fraction * 8)))}"
+    if dbm < SMETER_PLUS20_DBM:
+        return f"S9+{round(dbm - SMETER_S9_DBM):.0f}"
+    return f"S9+{round(dbm - SMETER_S9_DBM):.0f}"
+
+
+def draw_lcd_home_smeter(text_cache, smeter_dbm):
+    """A small live, calibrated RF reading for the persistent Home rail."""
+    x0, y0, x1, y1 = lcd_home_smeter_box()
+    dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+    live_segments = smeter_segment_position(dbm)
+    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
+    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
+    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
+    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 12, True, False, "rt", family="Liberation Sans")
+    track_x0, track_x1 = x0 + 12, x1 - 12
+    track_y = y0 + 47
+    segment_w = (track_x1 - track_x0) / 36.0
+    for index in range(36):
+        sx0 = track_x0 + index * segment_w + 1
+        sx1 = track_x0 + (index + 1) * segment_w - 1
+        active = index + 0.5 <= live_segments
+        red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
+        if active:
+            color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
+        else:
+            color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
+        draw_logical_rect(sx0, track_y - 6, sx1, track_y + 6, color)
+    for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
+        lx = track_x0 + (track_x1 - track_x0) * position / 36.0
+        draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+
+
+def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -7600,6 +7649,7 @@ def draw_lcd_navigation(text_cache, volume=None):
     draw_logical_rect(LCD_NAV_X0, nav_y0, LOGICAL_W, content_bottom, (6, 13, 19, 246))
     draw_logical_line(LCD_NAV_X0, nav_y0, LCD_NAV_X0, content_bottom, (125, 147, 158, 118), 1)
     draw_lcd_home_volume_slider(text_cache, volume)
+    draw_lcd_home_smeter(text_cache, smeter_dbm)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = lcd_nav_box(index)
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
@@ -8739,6 +8789,7 @@ def draw_ui(
     audio_jitter_target=SDR_AUDIO_JITTER_TARGET_PACKETS,
     audio_jitter_depth=0,
     audio_volume=None,
+    home_smeter_dbm=None,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -8819,7 +8870,7 @@ def draw_ui(
         )
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
-    draw_lcd_navigation(text_cache, audio_volume)
+    draw_lcd_navigation(text_cache, audio_volume, home_smeter_dbm)
 
 
 def drain_queue(line_queue):
@@ -13158,6 +13209,7 @@ def main():
                 audio_jitter_target=audio_jitter_target,
                 audio_jitter_depth=audio_jitter_depth,
                 audio_volume=audio_volume,
+                home_smeter_dbm=smeter_dbm,
             )
             if spectrum_foreground:
                 draw_spectrum(
