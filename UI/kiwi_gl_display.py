@@ -3494,6 +3494,28 @@ def draw_text_scaled_x(text_cache, x, y, text, color, size, x_scale, bold=False,
     draw_textured_quad(tex, x, y, x + width, y + height, 0, 0, 1, 1, alpha)
 
 
+def compact_vfo_text_width(text_cache, text, color, size, x_scale, family):
+    """Measure a block VFO string with deliberately narrow separators."""
+    return sum(
+        text_cache.texture(char, size, color, bold=True, family=family)[1]
+        * x_scale * (0.32 if char == "." else 1.0)
+        for char in str(text)
+    )
+
+
+def draw_compact_vfo_text(text_cache, right_x, center_y, text, color, size, x_scale, family):
+    """Draw blocky digits while preventing period glyphs wasting full cells."""
+    glyphs = []
+    for char in str(text):
+        tex, width, height = text_cache.texture(char, size, color, bold=True, family=family)
+        width *= x_scale * (0.32 if char == "." else 1.0)
+        glyphs.append((tex, width, height))
+    cursor_x = right_x - sum(width for _tex, width, _height in glyphs)
+    for tex, width, height in glyphs:
+        draw_textured_quad(tex, cursor_x, center_y - height / 2, cursor_x + width, center_y + height / 2, 0, 0, 1, 1)
+        cursor_x += width
+
+
 def draw_textured_quad(tex, x0, y0, x1, y1, u0, v0, u1, v1, alpha=1.0):
     GL.glEnable(GL.GL_TEXTURE_2D)
     GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
@@ -7785,21 +7807,22 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     frequency_left_margin = 10
     unit_right_margin = 10
     frequency_unit_gap = 3
-    frequency_size = 40
+    frequency_size = 44
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
         - (x0 + frequency_left_margin)
     )
+    frequency_color = (240, 242, 244)
     frequency_source_width = max(
-        text_cache.font(frequency_size, bold=True, family=frequency_family).size(frequency_text)[0],
-        text_cache.font(frequency_size, bold=True, family=frequency_family).size(fit_target)[0],
+        compact_vfo_text_width(text_cache, frequency_text, frequency_color, frequency_size, 1.0, frequency_family),
+        compact_vfo_text_width(text_cache, fit_target, frequency_color, frequency_size, 1.0, frequency_family),
     )
     frequency_x_scale = min(0.84, frequency_width_limit / max(1, frequency_source_width))
     # Keep the currently tuned value visually coupled to its unit. Shorter
     # frequencies therefore do not leave a distracting blank before MHz.
     frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
-    draw_text_scaled_x(text_cache, frequency_right, y0 + 30, frequency_text, (240, 242, 244), frequency_size, frequency_x_scale, True, False, "rm", family=frequency_family)
+    draw_compact_vfo_text(text_cache, frequency_right, y0 + 30, frequency_text, frequency_color, frequency_size, frequency_x_scale, frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
     meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 68, x1 - 6, y0 + 116
