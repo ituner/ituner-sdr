@@ -7715,24 +7715,24 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
     frequency_text = sdr_ui.format_freq(freq_khz)
     unit = "MHz"
     unit_width = text_cache.font(16, bold=True, family="Liberation Sans").size(unit)[0]
-    # Size against the widest normal HF presentation rather than the current
-    # frequency. That makes this secondary readout appreciably larger while
-    # guaranteeing that 30.000.000 MHz never touches the unit label.
+    # Use the installed condensed face for the numerals. It allows a larger,
+    # more legible VFO while guaranteeing that 30.000.000 MHz still fits.
+    frequency_family = "Liberation Sans Narrow"
     frequency_left_margin = 12
     unit_right_margin = 12
     frequency_unit_gap = 4
-    frequency_size = 42
+    frequency_size = 52
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
         - (x0 + frequency_left_margin)
     )
     while frequency_size > 20 and max(
-        text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(frequency_text)[0],
-        text_cache.font(frequency_size, bold=True, family="Liberation Sans").size(fit_target)[0],
+        text_cache.font(frequency_size, bold=True, family=frequency_family).size(frequency_text)[0],
+        text_cache.font(frequency_size, bold=True, family=frequency_family).size(fit_target)[0],
     ) > frequency_width_limit:
         frequency_size -= 1
-    draw_text(text_cache, x0 + frequency_left_margin, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + frequency_left_margin, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family=frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
