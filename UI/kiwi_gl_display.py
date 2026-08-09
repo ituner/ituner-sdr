@@ -3916,7 +3916,7 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
 def draw_muted_waterfall_badge(text_cache):
     """Keep an intentional mute obvious without obscuring live RF detail."""
     x0, y0, x1, y1 = mute_waterfall_box()
-    accent = (248, 122, 122, 238)
+    accent = (*MUTE_ACCENT, 246)
     quiet = (208, 226, 230)
     cy = (y0 + y1) / 2
     draw_logical_rect(x0, y0, x1, y1, (10, 16, 23, 152))
@@ -4518,6 +4518,10 @@ def volume_at_x(x, box):
 
 
 MAIN_VOLUME_MUTE_THRESHOLD = 0.005
+# A clean, fully saturated signal red. The earlier low-saturation alert red
+# rendered as brown/maroon on the Waveshare panel.
+MUTE_ACCENT = (255, 48, 66)
+MUTE_ACCENT_ALPHA = (*MUTE_ACCENT, 240)
 
 
 def main_volume_label(level):
@@ -6043,7 +6047,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     draw_text(text_cache, vx0 + 10, vy0 + 11, "VOLUME", (164, 193, 198), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
     track_y = vy1 - 16
     track_x0, track_x1 = vx0 + 10, vx1 - 10
     draw_logical_rect(track_x0, track_y - 5, track_x1, track_y + 5, (22, 35, 43, 230))
@@ -6062,7 +6066,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     denoise_level = int(controls["denoise_level"])
     denoise_detail = "BYPASS" if voice_level or hf_active else kiwi.DENOISE_PRESETS[denoise_level][0]
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
-    draw_lcd_audio_tile(text_cache, AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
+    draw_lcd_audio_tile(text_cache, AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
     draw_lcd_audio_tile(text_cache, AUDIO_VOICE_CLEAN_BOX, "VOICE", VOICE_CLEAN_PRESETS[voice_level], voice_level > 0, (123, 193, 250, 230))
     draw_lcd_audio_tile(text_cache, AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active, (93, 226, 170, 230))
     draw_lcd_audio_slider_tile(
@@ -6103,7 +6107,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     track_y = (vy0 + vy1) / 2 + 9
     draw_text(text_cache, vx0, vy0 + 2, "VOLUME", (164, 193, 198), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
+    draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
     draw_logical_rect(vx0, track_y - 7, vx1, track_y + 7, (22, 35, 43, 230))
     draw_logical_rect(vx0, track_y - 7, vx0 + (vx1 - vx0) * level, track_y + 7, (68, 209, 151, 226))
     knob_x = vx0 + (vx1 - vx0) * level
@@ -6168,7 +6172,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_logical_rect(current_x - 6, denoise_track_y - 10, current_x + 6, denoise_track_y + 10, (229, 246, 246, 255))
 
     muted = controls["mute"]
-    panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, (243, 118, 118, 230))
+    panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
     voice_clean_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
     voice_clean = voice_clean_level > 0
     panel_button(
@@ -7597,7 +7601,7 @@ def draw_lcd_home_volume_slider(text_cache, volume):
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
     draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, main_volume_label(level), (243, 118, 118) if level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y1 - 20
     draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
