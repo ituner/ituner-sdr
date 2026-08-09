@@ -7645,6 +7645,21 @@ LCD_NAV_TILE_W = 117
 LCD_NAV_TILE_H = 102
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
+# Temporary on-device VFO type comparison. Each sample ends in its selection
+# number so the operator can name a preferred candidate without a legend.
+FONT_GALLERY_TEST = True
+FONT_GALLERY_CHOICES = (
+    ("DejaVu Sans Mono", "DEJAVU MONO"),
+    ("Liberation Mono", "LIBERATION MONO"),
+    ("Noto Sans Mono", "NOTO MONO"),
+    ("Courier New", "COURIER NEW"),
+    ("PT Mono", "PT MONO"),
+    ("DejaVu Serif", "DEJAVU SERIF"),
+    ("Liberation Sans", "LIBERATION SANS"),
+    ("Cantarell", "CANTARELL"),
+    ("DejaVu Sans", "DEJAVU SANS"),
+    ("seven", "SEVEN SEGMENT"),
+)
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
@@ -7732,10 +7747,39 @@ def lcd_nav_box(index):
 def lcd_nav_item_at(x, y):
     if not LCD_800_MODE:
         return None
+    if FONT_GALLERY_TEST:
+        return None
     for index in range(len(MENU_ITEMS)):
         if contains(lcd_nav_box(index), x, y):
             return index
     return None
+
+
+def draw_lcd_font_gallery(text_cache):
+    """Temporary on-panel comparison of ten possible VFO faces."""
+    x0, x1 = LCD_NAV_X0, LOGICAL_W
+    draw_logical_rect(x0, 0, x1, LOGICAL_H, (3, 6, 9, 255))
+    row_h = 78
+    sample_y0 = 8
+    for index, (family, label) in enumerate(FONT_GALLERY_CHOICES):
+        y0 = sample_y0 + index * row_h
+        y1 = y0 + row_h - 5
+        draw_logical_rect(x0 + 8, y0, x1 - 8, y1, (10, 18, 24, 236))
+        draw_logical_line(x0 + 8, y0, x1 - 8, y0, (70, 111, 119, 120), 1)
+        draw_text(text_cache, x0 + 16, y0 + 11, f"{index}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
+        sample = f"5.216.00{index}"
+        sample_right = x1 - 15
+        sample_center_y = y0 + 51
+        if family == "seven":
+            draw_seven_segment_text(sample_right, sample_center_y, sample, 34, (91, 255, 168), 0.83, "rm")
+            continue
+        sample_size = 34
+        text_width = text_cache.font(sample_size, bold=True, family=family).size(sample)[0]
+        x_scale = min(1.0, (x1 - x0 - 30) / max(1, text_width))
+        draw_text_scaled_x(
+            text_cache, sample_right, sample_center_y, sample, (139, 246, 184), sample_size,
+            x_scale, bold=True, anchor="rm", family=family,
+        )
 
 
 def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
@@ -7815,6 +7859,9 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
+        return
+    if FONT_GALLERY_TEST:
+        draw_lcd_font_gallery(text_cache)
         return
     rail_bottom = lcd_rail_bottom()
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
@@ -9120,7 +9167,7 @@ def draw_ui(
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
-    if LCD_800_MODE:
+    if LCD_800_MODE and not FONT_GALLERY_TEST:
         draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
 
 
