@@ -4512,9 +4512,13 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, size, True, True, "cm")
 
 
-def audio_volume_at_x(x):
-    x0, _y0, x1, _y1 = AUDIO_VOLUME_BOX
+def volume_at_x(x, box):
+    x0, _y0, x1, _y1 = box
     return clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
+
+
+def audio_volume_at_x(x):
+    return volume_at_x(x, AUDIO_VOLUME_BOX)
 
 
 def squelch_maximum(radio_mode):
@@ -7542,6 +7546,14 @@ def lcd_nav_top():
     return max(LCD_NAV_TOP_MIN, lcd_content_bottom() - LCD_CONTROL_GAP - tiles_h)
 
 
+def lcd_home_volume_box():
+    """Persistent Home volume instrument in the calm upper right-rail gap."""
+    x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
+    y0 = LCD_ANNUNCIATOR_BOX[3] + 18
+    y1 = min(lcd_nav_top() - 18, y0 + 72)
+    return x0, y0, x1, max(y0 + 46, y1)
+
+
 def lcd_nav_box(index):
     """Return the logical box for the permanent LCD navigation rail."""
     col = index % 2
@@ -7560,7 +7572,24 @@ def lcd_nav_item_at(x, y):
     return None
 
 
-def draw_lcd_navigation(text_cache):
+def draw_lcd_home_volume_slider(text_cache, volume):
+    """Draw the same real PipeWire control used by the Audio drawer."""
+    x0, y0, x1, y1 = lcd_home_volume_box()
+    level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
+    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 228))
+    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
+    draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
+    draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, f"{round(level * 100):.0f}%", (239, 247, 248), 19, True, False, "rt", family="Liberation Sans")
+    track_x0, track_x1 = x0 + 12, x1 - 12
+    track_y = y1 - 20
+    draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
+    draw_logical_rect(track_x0, track_y - 6, track_x0 + (track_x1 - track_x0) * level, track_y + 6, (67, 205, 149, 230))
+    knob_x = track_x0 + (track_x1 - track_x0) * level
+    draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, (233, 247, 248, 255))
+
+
+def draw_lcd_navigation(text_cache, volume=None):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -7570,6 +7599,7 @@ def draw_lcd_navigation(text_cache):
     nav_y0 = max(sdr_ui.TOP_H, LCD_ANNUNCIATOR_BOX[3])
     draw_logical_rect(LCD_NAV_X0, nav_y0, LOGICAL_W, content_bottom, (6, 13, 19, 246))
     draw_logical_line(LCD_NAV_X0, nav_y0, LCD_NAV_X0, content_bottom, (125, 147, 158, 118), 1)
+    draw_lcd_home_volume_slider(text_cache, volume)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = lcd_nav_box(index)
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
@@ -8708,6 +8738,7 @@ def draw_ui(
     callsign_status="OFF",
     audio_jitter_target=SDR_AUDIO_JITTER_TARGET_PACKETS,
     audio_jitter_depth=0,
+    audio_volume=None,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -8788,7 +8819,7 @@ def draw_ui(
         )
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
-    draw_lcd_navigation(text_cache)
+    draw_lcd_navigation(text_cache, audio_volume)
 
 
 def drain_queue(line_queue):
@@ -11479,6 +11510,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
+                                gesture = "home_volume"
                             elif not picker_open and lcd_nav_item_at(x, y) is not None:
                                 gesture = "lcd_nav"
                             elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
@@ -11550,8 +11583,10 @@ def main():
                             # The Home screen is a fixed two-row grid; keep a
                             # finger within its original tile until release.
                             pass
-                        elif gesture == "audio_volume":
-                            desired_volume = audio_volume_at_x(x)
+                        elif gesture in ("audio_volume", "home_volume"):
+                            desired_volume = volume_at_x(
+                                x, AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_box()
+                            )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
                                 applied_volume = set_pipewire_default_volume(desired_volume)
                                 if applied_volume is not None:
@@ -11769,6 +11804,12 @@ def main():
                                 filter_panel_open = False
                         elif touch_started and gesture == "audio_volume":
                             applied_volume = set_pipewire_default_volume(audio_volume_at_x(x))
+                            if applied_volume is not None:
+                                audio_volume = applied_volume
+                                audio_volume_last_apply = time.monotonic()
+                            wake_controls()
+                        elif touch_started and gesture == "home_volume":
+                            applied_volume = set_pipewire_default_volume(volume_at_x(x, lcd_home_volume_box()))
                             if applied_volume is not None:
                                 audio_volume = applied_volume
                                 audio_volume_last_apply = time.monotonic()
@@ -13116,6 +13157,7 @@ def main():
                 callsign_status=callsign_status,
                 audio_jitter_target=audio_jitter_target,
                 audio_jitter_depth=audio_jitter_depth,
+                audio_volume=audio_volume,
             )
             if spectrum_foreground:
                 draw_spectrum(
