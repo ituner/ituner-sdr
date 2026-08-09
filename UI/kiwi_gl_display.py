@@ -3479,6 +3479,21 @@ def draw_text(text_cache, x, y, text, color, size, bold=False, mono=False, ancho
     draw_textured_quad(tex, x, y, x + width, y + height, 0, 0, 1, 1, alpha)
 
 
+def draw_text_scaled_x(text_cache, x, y, text, color, size, x_scale, bold=False, mono=False, anchor="lt", alpha=1.0, family=None):
+    """Draw text with a controlled horizontal squeeze for instrument faces."""
+    tex, width, height = text_cache.texture(text, size, color, bold=bold, mono=mono, family=family)
+    width *= clamp(x_scale, 0.1, 2.0)
+    if "m" in anchor:
+        y -= height / 2
+    elif "b" in anchor:
+        y -= height
+    if "c" in anchor:
+        x -= width / 2
+    elif "r" in anchor:
+        x -= width
+    draw_textured_quad(tex, x, y, x + width, y + height, 0, 0, 1, 1, alpha)
+
+
 def draw_textured_quad(tex, x0, y0, x1, y1, u0, v0, u1, v1, alpha=1.0):
     GL.glEnable(GL.GL_TEXTURE_2D)
     GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
@@ -7533,7 +7548,7 @@ LCD_NAV_GAP = 8
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 148)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 204)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -7698,7 +7713,6 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     draw_logical_rect(LCD_NAV_X0, nav_y0, LOGICAL_W, content_bottom, (6, 13, 19, 246))
     draw_logical_line(LCD_NAV_X0, nav_y0, LCD_NAV_X0, content_bottom, (125, 147, 158, 118), 1)
     draw_lcd_home_volume_slider(text_cache, volume, muted)
-    draw_lcd_home_smeter(text_cache, smeter_dbm)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = lcd_nav_box(index)
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
@@ -7712,7 +7726,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
 
 
-def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
+def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None):
     """Show a compact radio-style VFO and rounded mode annunciators."""
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
     # The main frequency display remains untouched. This smaller right-rail
@@ -7720,7 +7734,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
     # treatment so the mode row reads as one clean instrument.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    cache_key = ("surface", f"lcd_annunciator_radio_v2_{active_mode}_{digital.upper()}")
+    cache_key = ("surface", f"lcd_annunciator_radio_v3_{active_mode}_{digital.upper()}")
     cached = text_cache.cache.get(cache_key)
     if cached is None:
         width, height, scale = int(x1 - x0), int(y1 - y0), 2
@@ -7737,7 +7751,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
 
         surface.fill((3, 6, 9, 232))
         rounded(3, 3, width - 3, 56, (10, 13, 16, 246), (54, 60, 65, 232), 8)
-        grid_y0, grid_y1, gap = 63, height - 6, 5
+        grid_y0, grid_y1, gap = 108, height - 6, 5
         cell_w = (width - 12 - 3 * gap) / 4
         cell_h = (grid_y1 - grid_y0 - gap) / 2
         for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
@@ -7765,36 +7779,53 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
     unit = "MHz"
     unit_size = 11
     unit_width = text_cache.font(unit_size, bold=True, family="Liberation Sans").size(unit)[0]
-    # Use the installed condensed face for the numerals. It allows a larger,
-    # more legible VFO while guaranteeing that 30.000.000 MHz still fits.
-    frequency_family = "Liberation Sans Narrow"
+    # A compressed monospaced face gives the VFO a blockier instrument style
+    # while preserving room for the full 30 MHz presentation.
+    frequency_family = "DejaVu Sans Mono"
     frequency_left_margin = 10
     unit_right_margin = 10
     frequency_unit_gap = 3
-    frequency_size = 52
+    frequency_size = 40
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
         - (x0 + frequency_left_margin)
     )
-    while frequency_size > 20 and max(
+    frequency_source_width = max(
         text_cache.font(frequency_size, bold=True, family=frequency_family).size(frequency_text)[0],
         text_cache.font(frequency_size, bold=True, family=frequency_family).size(fit_target)[0],
-    ) > frequency_width_limit:
-        frequency_size -= 1
+    )
+    frequency_x_scale = min(0.84, frequency_width_limit / max(1, frequency_source_width))
     # Keep the currently tuned value visually coupled to its unit. Shorter
     # frequencies therefore do not leave a distracting blank before MHz.
     frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
-    draw_text(text_cache, frequency_right, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "rm", family=frequency_family)
+    draw_text_scaled_x(text_cache, frequency_right, y0 + 30, frequency_text, (240, 242, 244), frequency_size, frequency_x_scale, True, False, "rm", family=frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
+    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 62, x1 - 6, y0 + 103
+    meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+    meter_level = smeter_segment_position(meter_value)
+    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
+    draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
+    draw_text(text_cache, meter_x0 + 8, meter_y0 + 10, "S-METER", (149, 183, 191), 10, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, meter_x1 - 8, meter_y0 + 10, compact_smeter_label(meter_value), (220, 242, 245), 13, True, False, "rm", family="Liberation Sans")
+    meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
+    meter_track_y = meter_y1 - 10
+    segment_w = (meter_track_x1 - meter_track_x0) / 18
+    for index in range(18):
+        sx0 = meter_track_x0 + index * segment_w + 1
+        sx1 = meter_track_x0 + (index + 1) * segment_w - 1
+        active = index + 0.5 <= meter_level / 2
+        color = (92, 221, 231, 238) if index < 14 else (244, 104, 90, 238)
+        draw_logical_rect(sx0, meter_track_y - 4, sx1, meter_track_y + 4, color if active else (31, 52, 61, 208))
+
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
-    cell_h = (y1 - 6 - 63 - 5) / 2
+    cell_h = (y1 - 6 - 108 - 5) / 2
     for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
         col, row = index % 4, index // 4
         bx0 = x0 + 6 + col * (cell_w + 5)
         bx1 = bx0 + cell_w
-        by0 = y0 + 63 + row * (cell_h + 5)
+        by0 = y0 + 108 + row * (cell_h + 5)
         by1 = by0 + cell_h
         active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
@@ -8897,7 +8928,7 @@ def draw_ui(
     draw_logical_rect(68, 0, LOGICAL_W, sdr_ui.TOP_H, (0, 0, 0, 144))
     frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
     if LCD_800_MODE:
-        draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz)
+        draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
     if DESKTOP_1280_MODE:
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
