@@ -7789,14 +7789,15 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             col, row = index % 4, index // 4
             left = 6 + col * (cell_w + gap)
             top = grid_y0 + row * (cell_h + gap)
-            active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+            # Keep the grid cells neutral. The active state is drawn later as
+            # a compact pill tight to the mode label, not a full blue tile.
             rounded(
                 left,
                 top,
                 left + cell_w,
                 top + cell_h,
-                (41, 117, 221, 255) if active else (7, 10, 13, 238),
-                (80, 154, 247, 255) if active else (62, 67, 73, 228),
+                (7, 10, 13, 238),
+                (62, 67, 73, 228),
                 6,
             )
         surface = pygame.transform.smoothscale(surface, (width, height))
@@ -7862,6 +7863,16 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         by0 = y0 + 130 + row * (cell_h + 5)
         by1 = by0 + cell_h
         active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+        if active:
+            label_w, label_h = text_cache.font(16, bold=True, family="Liberation Sans").size(label)
+            pill_pad_x, pill_pad_y = 8, 5
+            pill_x0 = max(bx0 + 4, (bx0 + bx1 - label_w) / 2 - pill_pad_x)
+            pill_x1 = min(bx1 - 4, (bx0 + bx1 + label_w) / 2 + pill_pad_x)
+            pill_y0 = (by0 + by1 - label_h) / 2 - pill_pad_y
+            pill_y1 = (by0 + by1 + label_h) / 2 + pill_pad_y
+            draw_logical_rect(pill_x0, pill_y0, pill_x1, pill_y1, (39, 114, 218, 248))
+            draw_logical_line(pill_x0, pill_y0, pill_x1, pill_y0, (105, 176, 250, 255), 1)
+            draw_logical_line(pill_x0, pill_y1, pill_x1, pill_y1, (20, 74, 159, 255), 1)
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
                   (246, 248, 250) if active else (221, 224, 228), 16, True, False, "cm",
                   family="Liberation Sans")
