@@ -7651,36 +7651,42 @@ FONT_GALLERY_TEST = True
 FONT_GALLERY_PAGE = 0
 FONT_GALLERY_PAGE_SIZE = 8
 FONT_GALLERY_CHOICES = (
-    ("DejaVu Sans Mono", "DEJAVU MONO"),
-    ("Courier New", "COURIER NEW"),
-    ("Liberation Mono", "LIBERATION MONO"),
-    ("Noto Sans Mono", "NOTO MONO"),
-    ("PT Mono", "PT MONO"),
-    ("DejaVu Serif", "DEJAVU SERIF"),
-    ("Liberation Sans", "LIBERATION SANS"),
-    ("Cantarell", "CANTARELL"),
-    ("DejaVu Sans", "DEJAVU SANS"),
-    ("Space Mono", "SPACE MONO"),
-    ("Share Tech Mono", "SHARE TECH MONO"),
-    ("Orbitron", "ORBITRON"),
-    ("Audiowide", "AUDIOWIDE"),
-    ("Oxanium", "OXANIUM"),
-    ("Rajdhani", "RAJDHANI"),
-    ("Nimbus Mono PS", "NIMBUS MONO"),
-    ("FreeMono", "FREE MONO"),
-    ("DejaVu Sans Condensed", "DEJAVU COND"),
-    ("Nimbus Sans", "NIMBUS SANS"),
-    ("Nimbus Sans Narrow", "NIMBUS NARROW"),
-    ("URW Gothic", "URW GOTHIC"),
-    ("Noto Mono", "NOTO MONO"),
-    ("DejaVu Serif Condensed", "DEJAVU SERIF C"),
-    ("Liberation Serif", "LIBERATION SERIF"),
-    ("URW Bookman", "URW BOOKMAN"),
-    ("P052", "P052"),
-    ("C059", "C059"),
-    ("FreeSans", "FREE SANS"),
-    ("FreeSerif", "FREE SERIF"),
-    ("seven", "SEVEN SEGMENT"),
+    # Retained finalists from the first gallery.
+    (1, "Courier New", "COURIER NEW"),
+    (7, "Cantarell", "CANTARELL"),
+    (15, "Nimbus Mono PS", "NIMBUS MONO"),
+    (21, "DejaVu Serif Condensed", "DEJAVU SERIF C"),
+    # Fresh, clean SDR/VFO candidates. Imported display faces appear first.
+    (30, "Orbitron", "ORBITRON"),
+    (31, "Space Mono", "SPACE MONO"),
+    (32, "Share Tech Mono", "SHARE TECH MONO"),
+    (33, "Audiowide", "AUDIOWIDE"),
+    (34, "Oxanium", "OXANIUM"),
+    (35, "Rajdhani", "RAJDHANI"),
+    (36, "DejaVu Sans Mono", "DEJAVU MONO"),
+    (37, "Liberation Mono", "LIBERATION MONO"),
+    (38, "Noto Sans Mono", "NOTO SANS MONO"),
+    (39, "FreeMono", "FREE MONO"),
+    (40, "DejaVu Sans Condensed", "DEJAVU COND"),
+    (41, "Nimbus Sans Narrow", "NIMBUS NARROW"),
+    (42, "URW Gothic", "URW GOTHIC"),
+    (43, "Nimbus Sans", "NIMBUS SANS"),
+    (44, "Nimbus Roman", "NIMBUS ROMAN"),
+    (45, "URW Bookman", "URW BOOKMAN"),
+    (46, "P052", "P052"),
+    (47, "C059", "C059"),
+    (48, "DejaVu Serif", "DEJAVU SERIF"),
+    (49, "Liberation Serif", "LIBERATION SERIF"),
+    (50, "Liberation Sans Narrow", "LIBERATION NARROW"),
+    (51, "FreeSans", "FREE SANS"),
+    (52, "FreeSerif", "FREE SERIF"),
+    (53, "D050000L", "D050000L"),
+    (54, "Noto Mono", "NOTO MONO"),
+    (55, "DejaVu Sans ExtraLight", "DEJAVU LIGHT"),
+    (56, "Nimbus Mono PS", "NIMBUS MONO ALT"),
+    (57, "URW Gothic", "URW GOTHIC ALT"),
+    (58, "Liberation Sans", "LIBERATION SANS"),
+    (59, "seven", "SEVEN SEGMENT"),
 )
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
@@ -7808,14 +7814,13 @@ def draw_lcd_font_gallery(text_cache):
     start = page * FONT_GALLERY_PAGE_SIZE
     row_h = 80
     sample_y0 = 8
-    for row, (family, label) in enumerate(FONT_GALLERY_CHOICES[start:start + FONT_GALLERY_PAGE_SIZE]):
-        index = start + row
+    for row, (font_id, family, label) in enumerate(FONT_GALLERY_CHOICES[start:start + FONT_GALLERY_PAGE_SIZE]):
         y0 = sample_y0 + row * row_h
         y1 = y0 + row_h - 5
         draw_logical_rect(x0 + 8, y0, x1 - 8, y1, (10, 18, 24, 236))
         draw_logical_line(x0 + 8, y0, x1 - 8, y0, (70, 111, 119, 120), 1)
-        draw_text(text_cache, x0 + 16, y0 + 11, f"{index:02d}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
-        sample = f"5.216.{index:03d}"
+        draw_text(text_cache, x0 + 16, y0 + 11, f"{font_id:02d}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
+        sample = f"5.216.{font_id:03d}"
         sample_right = x1 - 15
         sample_center_y = y0 + 51
         if family == "seven":
