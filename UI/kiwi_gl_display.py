@@ -7732,7 +7732,10 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz):
         text_cache.font(frequency_size, bold=True, family=frequency_family).size(fit_target)[0],
     ) > frequency_width_limit:
         frequency_size -= 1
-    draw_text(text_cache, x0 + frequency_left_margin, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "lm", family=frequency_family)
+    # Keep the currently tuned value visually coupled to its unit. Shorter
+    # frequencies therefore do not leave a distracting blank before MHz.
+    frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
+    draw_text(text_cache, frequency_right, y0 + 30, frequency_text, (240, 242, 244), frequency_size, True, False, "rm", family=frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 34, unit, (218, 222, 226), 16, True, False, "rm", family="Liberation Sans")
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
