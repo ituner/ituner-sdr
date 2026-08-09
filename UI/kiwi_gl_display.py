@@ -752,17 +752,16 @@ def radio_panel_box():
 
 
 def lcd_radio_step_y0():
-    """Top of the bottom-anchored LCD tuning-step control pair."""
-    _x0, _y0, _x1, y1 = radio_panel_box()
-    return y1 - 12 - (2 * 52 + 7)
+    """Top-justified LCD tuning-step control pair, below mode families."""
+    grid_height = 4 * 62 + 3 * 7
+    return lcd_radio_mode_grid_y0() + grid_height + 30
 
 
 def lcd_radio_mode_grid_y0():
-    """Top of the bottom-anchored 2×4 LCD mode-family matrix."""
-    grid_height = 4 * 62 + 3 * 7
-    # Keep a compact section label and visual breath between the families and
-    # the tuning-step pair, while all unused drawer space stays above them.
-    return lcd_radio_step_y0() - 30 - grid_height
+    """Top of the top-justified 2×4 LCD mode-family matrix."""
+    # Keep all mode instruments together at the top; the lower area remains
+    # intentionally quiet until the separate Back control at the bottom.
+    return 88
 
 
 def radio_family_button_width():
@@ -784,7 +783,11 @@ def radio_variant_popup_box(modes):
     height = 42 + rows * RADIO_VARIANT_BUTTON_H + (rows - 1) * RADIO_VARIANT_BUTTON_GAP + 16
     panel_x0, _panel_y0, panel_x1, panel_y1 = radio_panel_box()
     x0 = min(max((family_box[0] + family_box[2] - width) / 2, panel_x0 + 8), panel_x1 - width - 8)
-    y0 = panel_y1 - height - 8
+    if LCD_800_MODE:
+        # Keep variants beside the selected top control and away from Back.
+        y0 = min(family_box[3] + 8, panel_y1 - height - 96)
+    else:
+        y0 = panel_y1 - height - 8
     return x0, y0, x0 + width, y0 + height
 
 
@@ -7605,10 +7608,10 @@ def lcd_rail_bottom():
 
 
 def lcd_radio_drawer_close_box():
-    x0, y0, x1, _y1 = radio_panel_box()
-    # Match the right-hand mode tile exactly, so Close is an equally obvious
-    # primary control rather than a tiny header affordance.
-    return x1 - 117, y0 + 8, x1 - 10, y0 + 70
+    x0, _y0, x1, y1 = radio_panel_box()
+    # The mode choices are top-justified. A broad, isolated bottom return is
+    # easy to find and cannot be confused with a mode-family control.
+    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
 
 
 def lcd_radio_drawer_reveal_y():
