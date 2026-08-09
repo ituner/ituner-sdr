@@ -8668,16 +8668,20 @@ def draw_ruler(
     )
     label_alpha = 0.84 if subdued else 1.0
     if tall_ruler:
-        # A quiet axis spine gives the ticks structure without turning the
-        # divider into another opaque panel.
-        draw_logical_line(0, y0 + 3, LOGICAL_W, y0 + 3, (189, 211, 220, int(145 * alpha)), 1)
+        # Keep the axis spine away from the scope's bright lower trace. The
+        # baseline sits at the waterfall side; ticks rise into the ruler and
+        # labels occupy the calm upper portion.
+        draw_logical_line(0, y0 + height - 3, LOGICAL_W, y0 + height - 3, (189, 211, 220, int(145 * alpha)), 1)
 
     hz = minor_start_hz
     while hz <= end_hz:
         if hz % major_step_hz:
             x = int(round((hz - start_hz) / hz_per_px))
             if 0 <= x < LOGICAL_W:
-                draw_logical_line(x, y0 + 4, x, y0 + (14 if tall_ruler else 5), (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5 if tall_ruler else 1)
+                if tall_ruler:
+                    draw_logical_line(x, y0 + height - 4, x, y0 + height - 15, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1.5)
+                else:
+                    draw_logical_line(x, y0 + 4, x, y0 + 5, (minor_color[0], minor_color[1], minor_color[2], int(minor_color[3] * alpha)), 1)
         hz += minor_step_hz
 
     hz = major_start_hz
@@ -8685,12 +8689,15 @@ def draw_ruler(
     while hz <= end_hz:
         x = int(round((hz - start_hz) / hz_per_px))
         if 0 <= x < LOGICAL_W:
-            draw_logical_line(x, y0 + 4, x, y0 + (25 if tall_ruler else 8), (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 3 if tall_ruler else 2)
+            if tall_ruler:
+                draw_logical_line(x, y0 + height - 4, x, y0 + height - 29, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 3)
+            else:
+                draw_logical_line(x, y0 + 4, x, y0 + 8, (major_color[0], major_color[1], major_color[2], int(major_color[3] * alpha)), 2)
             if x - last_label_x > 140:
                 draw_text(
                     text_cache,
                     x,
-                    y0 + (42 if tall_ruler else 18),
+                    y0 + (14 if tall_ruler else 18),
                     sdr_ui.format_ruler_label(hz, major_step_hz),
                     label_color,
                     20 if tall_ruler else 15,
