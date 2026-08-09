@@ -4262,14 +4262,14 @@ def frequency_right_x():
 
 def frequency_display_box(text_cache, freq_khz):
     frequency_text = sdr_ui.format_freq(freq_khz)
-    width = seven_segment_text_width(frequency_text, 54)
+    width = text_cache.font(58, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
     return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
 
 
 def top_instrument_layout(text_cache, freq_khz):
     """Return a right-aligned mode/frequency cluster next to the S-meter."""
     frequency_text = sdr_ui.format_freq(freq_khz)
-    frequency_width = seven_segment_text_width(frequency_text, 54)
+    frequency_width = text_cache.font(58, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
     frequency_left = frequency_right_x() - frequency_width
     radio_x1 = frequency_left - RADIO_SETUP_GAP
     radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
@@ -7645,21 +7645,8 @@ LCD_NAV_TILE_W = 117
 LCD_NAV_TILE_H = 102
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
-# Temporary on-device VFO type comparison. Each sample ends in its selection
-# number so the operator can name a preferred candidate without a legend.
-FONT_GALLERY_TEST = True
-FONT_GALLERY_PAGE = 0
-FONT_GALLERY_PAGE_SIZE = 8
-FONT_GALLERY_CHOICES = (
-    # Operator's retained VFO finalists, shown together on one large page.
-    (1, "Courier New", "COURIER NEW"),
-    (7, "Cantarell", "CANTARELL"),
-    (15, "Nimbus Mono PS", "NIMBUS MONO"),
-    (21, "DejaVu Serif Condensed", "DEJAVU SERIF C"),
-    (30, "Orbitron", "ORBITRON"),
-    (34, "Oxanium", "OXANIUM"),
-    (56, "Nimbus Mono PS", "NIMBUS MONO ALT"),
-)
+VFO_FONT_FAMILY = "Orbitron"
+VFO_NEON_COLOR = (115, 255, 177)
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
@@ -7747,79 +7734,10 @@ def lcd_nav_box(index):
 def lcd_nav_item_at(x, y):
     if not LCD_800_MODE:
         return None
-    if FONT_GALLERY_TEST:
-        return None
     for index in range(len(MENU_ITEMS)):
         if contains(lcd_nav_box(index), x, y):
             return index
     return None
-
-
-def font_gallery_page_count():
-    return max(1, math.ceil(len(FONT_GALLERY_CHOICES) / FONT_GALLERY_PAGE_SIZE))
-
-
-def font_gallery_control_boxes():
-    x0, x1 = LCD_NAV_X0, LOGICAL_W
-    y0, y1 = LOGICAL_H - 68, LOGICAL_H - 12
-    return {
-        "previous": (x0 + 10, y0, x0 + 76, y1),
-        "next": (x1 - 76, y0, x1 - 10, y1),
-    }
-
-
-def font_gallery_control_at(x, y):
-    if not (LCD_800_MODE and FONT_GALLERY_TEST):
-        return None
-    for action, box in font_gallery_control_boxes().items():
-        if contains(box, x, y):
-            return action
-    return None
-
-
-def draw_lcd_font_gallery(text_cache):
-    """Temporary paginated on-panel comparison of thirty VFO faces."""
-    x0, x1 = LCD_NAV_X0, LOGICAL_W
-    draw_logical_rect(x0, 0, x1, LOGICAL_H, (3, 6, 9, 255))
-    page_count = font_gallery_page_count()
-    page = int(clamp(FONT_GALLERY_PAGE, 0, page_count - 1))
-    start = page * FONT_GALLERY_PAGE_SIZE
-    single_page = page_count == 1
-    sample_y0 = 18 if single_page else 8
-    visible_rows = min(FONT_GALLERY_PAGE_SIZE, len(FONT_GALLERY_CHOICES) - start)
-    row_h = ((LOGICAL_H - 108 - sample_y0) / max(1, visible_rows)) if single_page else 80
-    for row, (font_id, family, label) in enumerate(FONT_GALLERY_CHOICES[start:start + FONT_GALLERY_PAGE_SIZE]):
-        y0 = sample_y0 + row * row_h
-        y1 = y0 + row_h - 5
-        draw_logical_rect(x0 + 8, y0, x1 - 8, y1, (10, 18, 24, 236))
-        draw_logical_line(x0 + 8, y0, x1 - 8, y0, (70, 111, 119, 120), 1)
-        draw_text(text_cache, x0 + 16, y0 + 11, f"{font_id:02d}  {label}", (145, 189, 195), 10, True, False, "lm", family="Liberation Sans")
-        sample = f"5.216.{font_id:03d}"
-        sample_right = x1 - 15
-        sample_center_y = y0 + (row_h * 0.66 if single_page else 51)
-        if family == "seven":
-            draw_seven_segment_text(sample_right, sample_center_y, sample, 42 if single_page else 34, (91, 255, 168), 0.83, "rm")
-            continue
-        sample_size = 42 if single_page else 34
-        text_width = text_cache.font(sample_size, bold=True, family=family).size(sample)[0]
-        x_scale = min(1.0, (x1 - x0 - 30) / max(1, text_width))
-        draw_text_scaled_x(
-            text_cache, sample_right, sample_center_y, sample, (139, 246, 184), sample_size,
-            x_scale, bold=True, anchor="rm", family=family,
-        )
-    if single_page:
-        draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 42, "PREFERRED VFO FONTS",
-                  (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
-    else:
-        controls = font_gallery_control_boxes()
-        for action, box in controls.items():
-            enabled = page > 0 if action == "previous" else page < page_count - 1
-            draw_lcd_audio_tile(
-                text_cache, box, "‹" if action == "previous" else "›", "PREV" if action == "previous" else "NEXT",
-                enabled, (91, 229, 204, 225), title_size=30, detail_size=11,
-            )
-        draw_text(text_cache, (x0 + x1) / 2, LOGICAL_H - 40, f"PAGE {page + 1}/{page_count}",
-                  (184, 219, 223), 14, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
@@ -7900,9 +7818,6 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
-    if FONT_GALLERY_TEST:
-        draw_lcd_font_gallery(text_cache)
-        return
     rail_bottom = lcd_rail_bottom()
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
     # uninterrupted black panel from the VFO to the physical bottom edge.
@@ -7979,22 +7894,25 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     frequency_left_margin = 10
     unit_right_margin = 10
     frequency_unit_gap = 3
-    frequency_height = 42
+    frequency_size = 42
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
         - (x0 + frequency_left_margin)
     )
-    frequency_color = (91, 255, 168)
+    frequency_color = VFO_NEON_COLOR
     frequency_source_width = max(
-        seven_segment_text_width(frequency_text, frequency_height),
-        seven_segment_text_width(fit_target, frequency_height),
+        text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0],
+        text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(fit_target)[0],
     )
-    frequency_x_scale = min(0.90, frequency_width_limit / max(1, frequency_source_width))
+    frequency_x_scale = min(1.0, frequency_width_limit / max(1, frequency_source_width))
     # Keep the currently tuned value visually coupled to its unit. Shorter
     # frequencies therefore do not leave a distracting blank before MHz.
     frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
-    draw_seven_segment_text(frequency_right, y0 + 30, frequency_text, frequency_height, frequency_color, frequency_x_scale, "rm")
+    draw_text_scaled_x(
+        text_cache, frequency_right, y0 + 30, frequency_text, frequency_color, frequency_size,
+        frequency_x_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+    )
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
     # Give the Home meter enough physical weight to read as an instrument,
@@ -9143,9 +9061,13 @@ def draw_ui(
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
-    # The VFO uses a self-rendered seven-segment face so it remains identical
-    # on macOS and the Pi, with no host-font packaging dependency.
-    draw_seven_segment_text(frequency_right_x(), 39, frequency_text, 54, (91, 255, 168), anchor="rm")
+    main_vfo_size = 58
+    main_vfo_width = text_cache.font(main_vfo_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
+    main_vfo_scale = min(1.0, 330.0 / max(1, main_vfo_width))
+    draw_text_scaled_x(
+        text_cache, frequency_right_x(), 39, frequency_text, VFO_NEON_COLOR, main_vfo_size,
+        main_vfo_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+    )
     draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
@@ -9207,7 +9129,7 @@ def draw_ui(
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
-    if LCD_800_MODE and not FONT_GALLERY_TEST:
+    if LCD_800_MODE:
         draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
 
 
@@ -10353,7 +10275,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
 
 
 def main():
-    global LCD_RADIO_DRAWER_PROGRESS, FONT_GALLERY_PAGE
+    global LCD_RADIO_DRAWER_PROGRESS
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
     parser.add_argument("--receiver-state-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-receiver.json")
@@ -11827,7 +11749,7 @@ def main():
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
-                            elif not FONT_GALLERY_TEST and contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif contains(radio_toggle_box(text_cache, display_freq), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -11918,8 +11840,6 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
-                            elif not picker_open and font_gallery_control_at(x, y) is not None:
-                                gesture = "font_gallery"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
                                 gesture = "home_volume_mute"
                             elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
@@ -12628,15 +12548,6 @@ def main():
                                 idx = menu_at(x, y, menu_scroll)
                                 if idx is not None:
                                     activate_navigation_item(idx)
-                        elif touch_started and gesture == "font_gallery":
-                            moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
-                                action = font_gallery_control_at(x, y)
-                                if action == "previous":
-                                    FONT_GALLERY_PAGE = max(0, FONT_GALLERY_PAGE - 1)
-                                elif action == "next":
-                                    FONT_GALLERY_PAGE = min(font_gallery_page_count() - 1, FONT_GALLERY_PAGE + 1)
-                            wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
