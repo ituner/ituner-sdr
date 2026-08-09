@@ -7613,7 +7613,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
     draw_text(text_cache, mute_x0 - 8, y0 + 13, status, status_color, 16, True, False, "rt", family="Liberation Sans")
     button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
     button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
-    icon_color = MUTE_ACCENT if muted else (145, 231, 242)
+    icon_color = (*MUTE_ACCENT, 255) if muted else (145, 231, 242, 255)
     draw_logical_rect(mute_x0, mute_y0, mute_x1, mute_y1, button_fill)
     draw_logical_line(mute_x0, mute_y0, mute_x1, mute_y0, button_edge, 1)
     draw_logical_line(mute_x0, mute_y1, mute_x1, mute_y1, button_edge, 1)
