@@ -7548,7 +7548,7 @@ LCD_NAV_GAP = 8
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 204)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 236)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -7751,7 +7751,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
 
         surface.fill((3, 6, 9, 232))
         rounded(3, 3, width - 3, 56, (10, 13, 16, 246), (54, 60, 65, 232), 8)
-        grid_y0, grid_y1, gap = 108, height - 6, 5
+        grid_y0, grid_y1, gap = 130, height - 6, 5
         cell_w = (width - 12 - 3 * gap) / 4
         cell_h = (grid_y1 - grid_y0 - gap) / 2
         for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
@@ -7802,7 +7802,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     draw_text_scaled_x(text_cache, frequency_right, y0 + 30, frequency_text, (240, 242, 244), frequency_size, frequency_x_scale, True, False, "rm", family=frequency_family)
     draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
-    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 62, x1 - 6, y0 + 103
+    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 68, x1 - 6, y0 + 116
     meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     meter_level = smeter_segment_position(meter_value)
     draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
@@ -7820,12 +7820,12 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         draw_logical_rect(sx0, meter_track_y - 4, sx1, meter_track_y + 4, color if active else (31, 52, 61, 208))
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
-    cell_h = (y1 - 6 - 108 - 5) / 2
+    cell_h = (y1 - 6 - 130 - 5) / 2
     for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
         col, row = index % 4, index // 4
         bx0 = x0 + 6 + col * (cell_w + 5)
         bx1 = bx0 + cell_w
-        by0 = y0 + 108 + row * (cell_h + 5)
+        by0 = y0 + 130 + row * (cell_h + 5)
         by1 = by0 + cell_h
         active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
@@ -8441,11 +8441,15 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     status_mid_y = (y0 + y1) / 2
     primary_y = y0 + height * 0.30 if two_row else status_mid_y
     secondary_y = y0 + height * 0.73 if two_row else status_mid_y
-    draw_logical_rect(0, y0, LOGICAL_W, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
+    # The permanent 256 px Home rail is not part of the radio status bar.
+    # Keeping this at the 1024 px RF canvas prevents status text or its dark
+    # backing from appearing beneath Home controls.
+    status_x1 = DESKTOP_1280_MAIN_W if LCD_800_MODE else LOGICAL_W
+    draw_logical_rect(0, y0, status_x1, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
     if station_name:
         # The station is deliberately limited to 40% of the logical display,
         # leaving a permanent clear lane before the right-side status readouts.
-        title = fit_station_text(text_cache, station_name, LOGICAL_W * (0.50 if two_row else 0.40), size, False, False, family="Cantarell")
+        title = fit_station_text(text_cache, station_name, status_x1 * (0.50 if two_row else 0.40), size, False, False, family="Cantarell")
         draw_text(text_cache, 18, primary_y, title, (151, 160, 165), size, False, False, "lm", alpha, family="Cantarell")
     if smeter_readout_dbm is not None:
         # Center this calm numeric readout in the permanent lane between the
@@ -8470,7 +8474,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     draw_text(text_cache, (call_x0 + call_x1) / 2, status_mid_y, call_label, call_color, size, True, False, "cm", alpha, family="Cantarell")
     asr_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
     asr_label = f"ASR {asr_engine_label(asr_engine, caption_mode)}" if transcription_enabled else "ASR OFF"
-    draw_text(text_cache, 944, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
+    _asr_x0, _asr_y0, asr_x1, _asr_y1 = ASR_TOGGLE_BOX
+    draw_text(text_cache, asr_x1 - 10, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
 
 def caption_translation_toggle_box(box):
