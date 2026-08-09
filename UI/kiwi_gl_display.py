@@ -296,8 +296,12 @@ SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
-BOTTOM_RULER_H = 30
-BOTTOM_STATUS_H = 28
+# The frequency ruler now separates scope and waterfall instead of consuming
+# the bottom edge. Keep the old name at zero so existing geometry helpers
+# reserve only the enlarged status strip below.
+BOTTOM_RULER_H = 0
+SPECTRUM_RULER_H = 30
+BOTTOM_STATUS_H = 52
 ASR_CAPTION_HEIGHT = 140
 CALLSIGN_CAPTION_HEIGHT = 68
 CALLSIGN_CONTEXT_MAX_AGE = 4.5
@@ -8396,10 +8400,11 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
                       alpha=1.0):
     if alpha <= 0.01:
         return
-    compact = y1 - y0 < 28
+    height = y1 - y0
+    compact = height < 28
     # One typography family, weight and vertical center makes this read as a
     # deliberate single status bar instead of independent overlay labels.
-    size = 14 if compact else 16
+    size = 14 if compact else (20 if height >= 44 else 16)
     status_mid_y = (y0 + y1) / 2
     draw_logical_rect(0, y0, LOGICAL_W, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
     if station_name:
@@ -8415,7 +8420,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     # receiver jitter has been characterized across a few stations.
     jitter_label = f"BUFFER {audio_jitter_depth}/{audio_jitter_target}"
     jitter_color = (113, 226, 172) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else (244, 186, 102)
-    draw_text(text_cache, 560, status_mid_y, jitter_label, jitter_color, 12 if compact else 14, True, False, "rm", alpha, family="Cantarell")
+    draw_text(text_cache, 560, status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if height >= 44 else 14), True, False, "rm", alpha, family="Cantarell")
     draw_system_annunciator(text_cache, cpu_percent, temp_c, status_mid_y, size, alpha)
     call_x0, _call_y0, call_x1, _call_y1 = CALLSIGN_TOGGLE_BOX
     if callsign_enabled:
@@ -8853,6 +8858,7 @@ def draw_ui(
     audio_volume=None,
     home_smeter_dbm=None,
     audio_muted=False,
+    status_y0=None,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -8891,12 +8897,15 @@ def draw_ui(
         background_alpha=ruler_background_alpha,
         subdued=bottom_ruler,
     )
+    status_y0 = (
+        ruler_y0 + ruler_height if bottom_ruler else WATERFALL_Y1
+    ) if status_y0 is None else status_y0
     if bottom_ruler:
         draw_lower_status(
             text_cache,
             cpu_percent,
             temp_c,
-            ruler_y0 + ruler_height,
+            status_y0,
             LOGICAL_H,
             station_name=station_name,
             smeter_readout_dbm=None,
@@ -8916,7 +8925,7 @@ def draw_ui(
             text_cache,
             cpu_percent,
             temp_c,
-            WATERFALL_Y1,
+            status_y0,
             LOGICAL_H,
             station_name=station_name,
             smeter_readout_dbm=None,
@@ -13171,14 +13180,15 @@ def main():
             # bar instead of leaving an arbitrary gap.
             spectrum_y0 = 40 if spectrum_enabled else sdr_ui.TOP_H
             spectrum_y1 = spectrum_y0 + spectrum_h
-            bottom_ruler = True
-            ruler_height = BOTTOM_RULER_H if bottom_ruler else sdr_ui.RULER_H
-            ruler_y0 = LOGICAL_H - BOTTOM_STATUS_H - ruler_height if bottom_ruler else sdr_ui.TOP_H
-            # The bottom ruler lives over live waterfall energy. Give its
-            # labels a steadier dark substrate without flattening the view.
-            ruler_background_alpha = 150 if bottom_ruler else 185
-            normal_waterfall_y0 = spectrum_y0 + spectrum_h
-            focus_waterfall_y0 = spectrum_y0 + spectrum_h
+            # The ruler is a physical divider between scope and waterfall.
+            # With scope hidden it follows the top instrument strip, so the
+            # same clear frequency reference remains available in full-WF.
+            bottom_ruler = False
+            ruler_height = SPECTRUM_RULER_H
+            ruler_y0 = spectrum_y1 if spectrum_enabled else sdr_ui.TOP_H
+            ruler_background_alpha = 224
+            normal_waterfall_y0 = ruler_y0 + ruler_height
+            focus_waterfall_y0 = normal_waterfall_y0
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
             normal_waterfall_y1 = LOGICAL_H if bottom_ruler else WATERFALL_Y1
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
@@ -13293,6 +13303,7 @@ def main():
                 audio_volume=audio_volume,
                 home_smeter_dbm=smeter_dbm,
                 audio_muted=live_audio_controls["mute"],
+                status_y0=LOGICAL_H - BOTTOM_STATUS_H,
             )
             if spectrum_foreground:
                 draw_spectrum(
