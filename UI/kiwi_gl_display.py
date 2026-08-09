@@ -313,7 +313,8 @@ CPU_ANNUNCIATOR_BOX = (565, LOGICAL_H - BOTTOM_STATUS_H, 676, LOGICAL_H)
 # choices. It is transient and leaves the radio view visible beneath it.
 ASR_PANEL_BOX = (244, 186, 716, 244)
 ASR_PANEL_WIDTH = 480
-ASR_PANEL_HEIGHT = 58
+ASR_PANEL_HEIGHT = 118
+ASR_ENGINE_ROW_HEIGHT = 58
 ASR_MOON_LANGUAGE_PANEL_BOX = (244, 126, 716, 244)
 ASR_MOON_LANGUAGE_PANEL_HEIGHT = 118
 ASR_ENGINES = ("off", "vosk", "moonshine", "parakeet", "whisper", "deepgram", "deepgram_ham")
@@ -321,6 +322,12 @@ ASR_ENGINE_LABELS = {
     "off": "OFF", "vosk": "VOSK", "moonshine": "MOON",
     "parakeet": "PARA", "whisper": "WHISPER", "deepgram": "DEEP",
     "deepgram_ham": "D-HAM",
+}
+CAPTION_MODES = ("original", "english", "both")
+CAPTION_MODE_LABELS = {
+    "original": "ORIGINAL",
+    "english": "ENGLISH",
+    "both": "BOTH",
 }
 DEEPGRAM_MODEL = os.environ.get("ITUNER_DEEPGRAM_MODEL", "nova-3")
 DEEPGRAM_LANGUAGE = os.environ.get("ITUNER_DEEPGRAM_LANGUAGE", "en-US")
@@ -440,12 +447,23 @@ def valid_asr_engine(engine):
     return asr_engine_family(engine) in ASR_ENGINES
 
 
-def asr_engine_label(engine):
+def valid_caption_mode(mode):
+    return str(mode).lower() in CAPTION_MODES
+
+
+def caption_mode_label(mode):
+    return CAPTION_MODE_LABELS.get(str(mode).lower(), "ORIGINAL")
+
+
+def asr_engine_label(engine, caption_mode="original"):
     family = asr_engine_family(engine)
     if family == "moonshine":
         return f"MOON {moonshine_language(engine).upper()}"
     if family == "whisper":
-        return "WHISPER AUTO" if WHISPER_LANGUAGE == "auto" else f"WHISPER {WHISPER_LANGUAGE.upper()}"
+        language = "AUTO" if WHISPER_LANGUAGE == "auto" else WHISPER_LANGUAGE.upper()
+        mode = str(caption_mode).lower()
+        short_mode = {"english": "EN", "both": "BOTH"}.get(mode)
+        return f"WHISPER {short_mode}" if short_mode else f"WHISPER {language}"
     return ASR_ENGINE_LABELS.get(family, "ASR")
 
 VOSK_CAPTION_BOX = (
@@ -2545,9 +2563,14 @@ class SharedState:
         self.asr_engine = "off"
         self.transcription_enabled = False
         self.transcription_generation = 0
+        # Caption language is an output choice. English/Both use Whisper's
+        # local translate task; the source text is retained for the callsign
+        # lane even when the operator chooses English-only captions.
+        self.caption_mode = "original"
         # Four finished phrases provide readable subtitle history without
         # turning the waterfall into a scrolling transcript pane.
         self.transcript_lines = deque(maxlen=4)
+        self.transcript_translation_lines = deque(maxlen=4)
         self.transcript_partial = ""
         self.transcript_status = "OFF"
         self.transcript_hold_until = 0.0
@@ -2880,6 +2903,14 @@ class SharedState:
                 self.transcription_generation,
             )
 
+    def caption_mode_snapshot(self):
+        with self.lock:
+            return self.caption_mode
+
+    def transcript_translation_snapshot(self):
+        with self.lock:
+            return tuple(self.transcript_translation_lines)
+
     def transcript_context_snapshot(self):
         """Return only a fresh, short caption context for ham-ASR fusion."""
         with self.lock:
@@ -2956,9 +2987,15 @@ class SharedState:
             enabled = engine != "off"
             if engine != self.asr_engine:
                 self.asr_engine = engine
+                # English captions are currently implemented by Whisper's
+                # local translation task. Selecting another ASR engine is an
+                # explicit return to its original-language captions.
+                if asr_engine_family(engine) != "whisper":
+                    self.caption_mode = "original"
                 self.transcription_enabled = enabled
                 self.transcription_generation += 1
                 self.transcript_lines.clear()
+                self.transcript_translation_lines.clear()
                 self.transcript_partial = ""
                 self.transcript_hold_until = 0.0
                 self.transcript_partial_updated_at = 0.0
@@ -2967,17 +3004,36 @@ class SharedState:
             self.transcript_status = "STARTING" if enabled else "OFF"
             return self.asr_engine, self.transcription_generation
 
+    def set_caption_mode(self, mode):
+        mode = str(mode).lower()
+        if not valid_caption_mode(mode):
+            raise ValueError(f"unsupported caption mode: {mode}")
+        with self.lock:
+            if mode != self.caption_mode:
+                self.caption_mode = mode
+                self.transcription_generation += 1
+                self.transcript_lines.clear()
+                self.transcript_translation_lines.clear()
+                self.transcript_partial = ""
+                self.transcript_hold_until = 0.0
+                self.transcript_partial_updated_at = 0.0
+                self.transcript_context_updated_at = 0.0
+            self.transcript_status = "STARTING" if self.transcription_enabled else "OFF"
+            return self.caption_mode, self.transcription_generation
+
     def set_transcription_enabled(self, enabled):
         # Compatibility with saved preferences from the Vosk-only release.
         return self.set_asr_engine("vosk" if enabled else "off")
 
-    def set_transcript(self, text=None, partial=None, status=None):
+    def set_transcript(self, text=None, translation=None, partial=None, status=None):
         with self.lock:
             now = time.monotonic()
             if text:
                 normalized = " ".join(str(text).split())
                 if normalized and (not self.transcript_lines or self.transcript_lines[-1] != normalized):
                     self.transcript_lines.append(normalized)
+                    translated = " ".join(str(translation or "").split())
+                    self.transcript_translation_lines.append(translated)
                     # A completed phrase is useful only if the operator can
                     # read it. Hold it briefly before live hypotheses resume.
                     self.transcript_hold_until = now + 2.0
@@ -5167,8 +5223,8 @@ class DeepgramStreamingTranscriber:
             pass
 
 
-def whisper_transcribe(pcm16):
-    """Run a bounded Whisper.cpp decode; stale source audio is dropped upstream."""
+def whisper_transcribe(pcm16, translate=False):
+    """Run one bounded Whisper.cpp decode, optionally translating into English."""
     if not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file():
         raise RuntimeError("Whisper.cpp model unavailable")
     with tempfile.TemporaryDirectory(prefix="kiwi-whisper-") as tmp:
@@ -5179,11 +5235,17 @@ def whisper_transcribe(pcm16):
             wav_file.setsampwidth(2)
             wav_file.setframerate(16000)
             wav_file.writeframes(pcm16)
+        command = [
+            str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
+            "-l", WHISPER_LANGUAGE, "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
+        ]
+        if translate:
+            # Whisper's multilingual models translate the source speech to
+            # English locally. The installer defaults to ggml-tiny.bin (not
+            # the English-only ggml-tiny.en.bin fallback).
+            command.append("--translate")
         result = subprocess.run(
-            [
-                str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
-                "-l", WHISPER_LANGUAGE, "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
-            ],
+            command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=18.0,
@@ -5571,6 +5633,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
     next_performance_report = time.monotonic() + 10.0
     while not stop_event.is_set():
         enabled, engine, _lines, _partial, _status, generation = state.transcription_snapshot()
+        caption_mode = state.caption_mode_snapshot()
         if not enabled:
             active_engine = None
             vosk_recognizer = None
@@ -5609,7 +5672,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
                     resampler.close()
                 resampler = VoskResampler()
                 drain_caption_audio(audio_queue)
-                state.set_transcript(status=f"LOADING {asr_engine_label(engine)}")
+                state.set_transcript(status=f"LOADING {asr_engine_label(engine, caption_mode)}")
             if engine_family == "vosk":
                 model_path = active_vosk_model_path()
                 if vosk is None or model_path is None:
@@ -5693,6 +5756,13 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 else:
                     target_seconds = 3.6
                     max_window_seconds = 4.0
+                    if engine_family == "whisper" and caption_mode == "both":
+                        # Two local passes are required to retain original
+                        # and translated text. A slightly longer window keeps
+                        # that optional mode from needlessly competing with
+                        # the renderer between short bursts of speech.
+                        target_seconds = 4.4
+                        max_window_seconds = 5.0
                 if offline_since_decode >= target_seconds:
                     # A five-second Moonshine window carries enough sentence
                     # context to reduce radio-noise substitutions, while its
@@ -5714,11 +5784,32 @@ def asr_caption_worker(stop_event, state, audio_queue):
                         parakeet.decode_stream(stream)
                         result_text = stream.result.text
                     else:
-                        result_text = whisper_transcribe(window)
+                        if caption_mode == "english":
+                            result_text = whisper_transcribe(window, translate=True)
+                            state.set_transcript(
+                                text=result_text,
+                                translation=result_text,
+                                partial="",
+                                status="LISTENING",
+                            )
+                            result_text = ""
+                        elif caption_mode == "both":
+                            source_text = whisper_transcribe(window)
+                            english_text = whisper_transcribe(window, translate=True)
+                            state.set_transcript(
+                                text=source_text,
+                                translation=english_text,
+                                partial="",
+                                status="LISTENING",
+                            )
+                            result_text = ""
+                        else:
+                            result_text = whisper_transcribe(window)
                     # These are completed offline decode windows, not live
                     # hypotheses. Commit them to the shared four-line caption
                     # history just like Deepgram and streaming Moonshine.
-                    state.set_transcript(text=result_text, partial="", status="LISTENING")
+                    if result_text:
+                        state.set_transcript(text=result_text, partial="", status="LISTENING")
             measured_audio_seconds += len(pcm16) / 32000.0
             measured_processing_seconds += time.monotonic() - process_started
             if time.monotonic() >= next_performance_report and measured_audio_seconds > 0.05:
@@ -5731,7 +5822,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 measured_processing_seconds = 0.0
                 next_performance_report = time.monotonic() + 10.0
         except Exception as exc:
-            label = asr_engine_label(active_engine)
+            label = asr_engine_label(active_engine, state.caption_mode_snapshot())
             state.set_transcript(status=f"{label} ERROR")
             print(f"gl ASR {active_engine}: {exc}", flush=True)
             vosk_recognizer = None
@@ -8065,6 +8156,7 @@ def format_smeter_readout(smeter_dbm):
 def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", smeter_readout_dbm=None,
                       transcription_enabled=False, asr_engine="off", callsign_enabled=False,
                       callsign_value="", ham_message="", callsign_status="OFF",
+                      caption_mode="original",
                       audio_jitter_target=SDR_AUDIO_JITTER_TARGET_PACKETS, audio_jitter_depth=0,
                       alpha=1.0):
     if alpha <= 0.01:
@@ -8102,18 +8194,40 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     call_label = fit_station_text(text_cache, call_label, call_x1 - call_x0 - 12, size, True, False, family="Cantarell")
     draw_text(text_cache, (call_x0 + call_x1) / 2, status_mid_y, call_label, call_color, size, True, False, "cm", alpha, family="Cantarell")
     asr_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
-    asr_label = f"ASR {asr_engine_label(asr_engine)}" if transcription_enabled else "ASR OFF"
+    asr_label = f"ASR {asr_engine_label(asr_engine, caption_mode)}" if transcription_enabled else "ASR OFF"
     draw_text(text_cache, 944, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
 
-def draw_vosk_captions(text_cache, lines, partial, status, box=None):
-    """Four-line live caption overlay; it never changes waterfall geometry."""
+def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None):
+    """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
     draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
+    caption_mode = str(caption_mode).lower()
+    if caption_mode == "both":
+        source = partial or (lines[-1] if lines else "")
+        english = translations[-1] if translations else ""
+        if not source and not english:
+            draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
+            return
+        draw_text(text_cache, x0 + 20, y0 + 15, "ORIGINAL", (112, 184, 202), 13, True, False, "lm", family=family)
+        source_rows = wrap_caption_lines(
+            text_cache, source, x1 - x0 - 40, 20, max_rows=2, max_characters=66, family=family
+        )
+        for index, caption in enumerate(source_rows):
+            draw_text(text_cache, x0 + 20, y0 + 36 + index * 22, caption, (165, 204, 213), 20, False, False, "lm", family=family)
+        english_y = y0 + 79
+        draw_text(text_cache, x0 + 20, english_y, "ENGLISH", (120, 241, 183), 13, True, False, "lm", family=family)
+        english_rows = wrap_caption_lines(
+            text_cache, english or "TRANSLATING...", x1 - x0 - 40, 24, max_rows=2, max_characters=55, family=family
+        )
+        for index, caption in enumerate(english_rows):
+            draw_text(text_cache, x0 + 20, english_y + 23 + index * 25, caption, (230, 248, 240), 24, True, False, "lm", family=family)
+        return
     # Keep finished phrases on screen and append the current live hypothesis.
     # Selecting only lines[-1] made a four-row panel appear to be one row.
-    source = " ".join((*lines, partial)).strip()
+    selected_lines = translations if caption_mode == "english" and any(translations) else lines
+    source = " ".join((*selected_lines, partial)).strip()
     # Four larger rows make finished radio speech readable at arm's length.
     display = wrap_caption_lines(
         text_cache, source, x1 - x0 - 40, 26, max_rows=4, max_characters=62, family=family
@@ -8174,12 +8288,15 @@ def asr_option_at(x, y, moon_language_menu=False):
         col = min(cols - 1, max(0, int((x - x0) * cols / (x1 - x0))))
         row = min(rows - 1, max(0, int((y - y0) * rows / (y1 - y0))))
         index = row * cols + col
-        return f"moonshine:{MOONSHINE_LANGUAGE_OPTIONS[index][0]}"
-    index = min(len(ASR_ENGINES) - 1, max(0, int((x - x0) * len(ASR_ENGINES) / (x1 - x0))))
-    return ASR_ENGINES[index]
+        return "engine", f"moonshine:{MOONSHINE_LANGUAGE_OPTIONS[index][0]}"
+    if y < y0 + ASR_ENGINE_ROW_HEIGHT:
+        index = min(len(ASR_ENGINES) - 1, max(0, int((x - x0) * len(ASR_ENGINES) / (x1 - x0))))
+        return "engine", ASR_ENGINES[index]
+    index = min(len(CAPTION_MODES) - 1, max(0, int((x - x0) * len(CAPTION_MODES) / (x1 - x0))))
+    return "caption_mode", CAPTION_MODES[index]
 
 
-def draw_asr_panel(text_cache, engine, moon_language_menu=False):
+def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
@@ -8203,19 +8320,36 @@ def draw_asr_panel(text_cache, engine, moon_language_menu=False):
 
     x0, y0, x1, y1 = ASR_PANEL_BOX
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 224))
+    engine_y1 = y0 + ASR_ENGINE_ROW_HEIGHT
     cell_w = (x1 - x0) / len(ASR_ENGINES)
     for index, candidate in enumerate(ASR_ENGINES):
         left = x0 + index * cell_w + 4
         right = x0 + (index + 1) * cell_w - 4
         active = candidate == asr_engine_family(engine)
-        draw_logical_rect(left, y0 + 5, right, y1 - 5, (24, 82, 61, 230) if active else (20, 32, 39, 210))
+        draw_logical_rect(left, y0 + 5, right, engine_y1 - 5, (24, 82, 61, 230) if active else (20, 32, 39, 210))
         if active:
-            draw_logical_rect(left, y1 - 8, right, y1 - 5, (100, 255, 163, 245))
+            draw_logical_rect(left, engine_y1 - 8, right, engine_y1 - 5, (100, 255, 163, 245))
         draw_text(
-            text_cache, (left + right) / 2, (y0 + y1) / 2,
+            text_cache, (left + right) / 2, (y0 + engine_y1) / 2,
             ASR_ENGINE_LABELS[candidate], (180, 248, 207) if active else (197, 211, 215),
             17 if candidate != "whisper" else 15, active, False, "cm", family="Cantarell",
         )
+    mode_y0 = engine_y1
+    mode_cell_w = (x1 - x0) / len(CAPTION_MODES)
+    for index, mode in enumerate(CAPTION_MODES):
+        left = x0 + index * mode_cell_w + 4
+        right = x0 + (index + 1) * mode_cell_w - 4
+        active = mode == caption_mode
+        draw_logical_rect(left, mode_y0 + 4, right, y1 - 5, (22, 74, 59, 230) if active else (15, 29, 36, 214))
+        if active:
+            draw_logical_rect(left, y1 - 8, right, y1 - 5, (105, 239, 177, 245))
+        label = "ENGLISH\nWHISPER" if mode == "english" else ("BOTH\nWHISPER" if mode == "both" else "ORIGINAL")
+        if "\n" in label:
+            first, second = label.split("\n")
+            draw_text(text_cache, (left + right) / 2, mode_y0 + 22, first, (181, 248, 210) if active else (197, 211, 215), 16, active, False, "cm", family="Cantarell")
+            draw_text(text_cache, (left + right) / 2, mode_y0 + 39, second, (132, 206, 172) if active else (141, 164, 170), 11, True, False, "cm", family="Cantarell")
+        else:
+            draw_text(text_cache, (left + right) / 2, (mode_y0 + y1) / 2, label, (181, 248, 210) if active else (197, 211, 215), 16, active, False, "cm", family="Cantarell")
 
 
 def draw_ruler(
@@ -8443,6 +8577,7 @@ def draw_ui(
     bandwidth_hz=2400,
     transcription_enabled=False,
     asr_engine="off",
+    caption_mode="original",
     callsign_enabled=False,
     callsign_value="",
     ham_message="",
@@ -8498,6 +8633,7 @@ def draw_ui(
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
             asr_engine=asr_engine,
+            caption_mode=caption_mode,
             callsign_enabled=callsign_enabled,
             callsign_value=callsign_value,
             ham_message=ham_message,
@@ -8517,6 +8653,7 @@ def draw_ui(
             smeter_readout_dbm=None,
             transcription_enabled=transcription_enabled,
             asr_engine=asr_engine,
+            caption_mode=caption_mode,
             callsign_enabled=callsign_enabled,
             callsign_value=callsign_value,
             ham_message=ham_message,
@@ -9848,6 +9985,18 @@ def main():
             # Migrate the prior Vosk-only preference without surprising the
             # existing operator after a software update.
             state.set_transcription_enabled(remembered_preferences["vosk_enabled"])
+        saved_caption_mode = remembered_preferences.get("caption_mode")
+        if valid_caption_mode(saved_caption_mode):
+            # Translation is local Whisper work. Preserve a saved OFF state,
+            # but restore an active non-Whisper engine as Whisper whenever
+            # English/Both was the operator's deliberate prior choice.
+            if (
+                saved_caption_mode != "original"
+                and state.transcription_snapshot()[0]
+                and asr_engine_family(state.transcription_snapshot()[1]) != "whisper"
+            ):
+                state.set_asr_engine("whisper")
+            state.set_caption_mode(saved_caption_mode)
         if isinstance(remembered_preferences.get("callsign_enabled"), bool):
             state.set_callsign_enabled(remembered_preferences["callsign_enabled"])
         audio_preferences = remembered_preferences.get("audio", {})
@@ -10153,6 +10302,7 @@ def main():
             "filter_custom_width": bool(filter_custom_width),
             "spectrum_enabled": bool(spectrum_enabled),
             "asr_engine": state.transcription_snapshot()[1],
+            "caption_mode": state.caption_mode_snapshot(),
             "callsign_enabled": state.callsign_snapshot()[0],
             "caption_anchor": caption_anchor,
             "callsign_anchor": callsign_anchor,
@@ -11994,25 +12144,35 @@ def main():
                         elif touch_started and gesture == "asr_select":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                selected_engine = asr_option_at(x, y, asr_moon_language_open)
-                                if selected_engine == "moonshine" and not asr_moon_language_open:
+                                selection = asr_option_at(x, y, asr_moon_language_open)
+                                selection_kind, selected_value = selection if selection else (None, None)
+                                if selection_kind == "caption_mode":
+                                    if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
+                                        state.set_asr_engine("whisper")
+                                    state.set_caption_mode(selected_value)
+                                    drain_caption_audio(transcript_queue)
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                    asr_panel_open = False
+                                    asr_moon_language_open = False
+                                elif selected_value == "moonshine" and not asr_moon_language_open:
                                     asr_moon_language_open = True
-                                elif selected_engine in DEEPGRAM_ENGINES and (
+                                elif selected_value in DEEPGRAM_ENGINES and (
                                     not deepgram_api_key()
-                                    or selected_engine == asr_engine_family(state.transcription_snapshot()[1])
+                                    or selected_value == asr_engine_family(state.transcription_snapshot()[1])
                                 ):
                                     # Selecting a cloud profile without a key opens setup.
                                     # Tapping an active cloud profile is also the
                                     # deliberate way to replace a stored key.
                                     deepgram_setup_open = True
-                                    deepgram_setup_engine = selected_engine
+                                    deepgram_setup_engine = selected_value
                                     deepgram_key_value = ""
                                     deepgram_key_mode = "lower"
                                     deepgram_key_error = ""
                                     asr_panel_open = False
                                     asr_moon_language_open = False
-                                elif selected_engine is not None:
-                                    state.set_asr_engine(selected_engine)
+                                elif selected_value is not None:
+                                    state.set_asr_engine(selected_value)
                                     drain_caption_audio(transcript_queue)
                                     # ASR selection is an explicit, infrequent
                                     # preference and is worth committing now.
@@ -12736,6 +12896,8 @@ def main():
             connection_status = state.connection_snapshot()
             connection_timeout_seconds = state.connection_timeout_snapshot()
             transcription_enabled, asr_engine, transcript_lines, transcript_partial, transcript_status, _transcription_generation = state.transcription_snapshot()
+            caption_mode = state.caption_mode_snapshot()
+            transcript_translations = state.transcript_translation_snapshot()
             callsign_enabled, callsign_value, ham_message, callsign_status, _callsign_updated_at = state.callsign_snapshot()
             callsign_history = state.callsign_history_snapshot()
             audio_jitter_target, audio_jitter_depth = state.audio_jitter_snapshot()
@@ -12765,6 +12927,7 @@ def main():
                 bandwidth_hz=high_cut - low_cut,
                 transcription_enabled=transcription_enabled,
                 asr_engine=asr_engine,
+                caption_mode=caption_mode,
                 callsign_enabled=callsign_enabled,
                 callsign_value=callsign_value,
                 ham_message=ham_message,
@@ -12787,8 +12950,10 @@ def main():
                 draw_vosk_captions(
                     text_cache,
                     transcript_lines,
+                    transcript_translations,
                     transcript_partial,
                     transcript_status,
+                    caption_mode,
                     caption_box,
                 )
             draw_callsign_captions(
@@ -12843,7 +13008,7 @@ def main():
                     cpu_graph_box,
                 )
             if asr_panel_open:
-                draw_asr_panel(text_cache, asr_engine, asr_moon_language_open)
+                draw_asr_panel(text_cache, asr_engine, caption_mode, asr_moon_language_open)
             if deepgram_setup_open:
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_entry_open:
