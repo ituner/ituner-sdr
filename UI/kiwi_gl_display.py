@@ -7570,13 +7570,13 @@ def lcd_home_volume_box():
 def lcd_home_volume_mute_box():
     """Compact speaker toggle at the left of the Home slider line."""
     x0, _y0, _x1, y1 = lcd_home_volume_box()
-    return x0 + 6, y1 - 37, x0 + 40, y1 - 7
+    return x0 + 6, y1 - 39, x0 + 46, y1 - 5
 
 
 def lcd_home_volume_track_box():
     """The actual finger range excludes the separate speaker toggle."""
     x0, _y0, x1, y1 = lcd_home_volume_box()
-    return x0 + 50, y1 - 32, x1 - 12, y1 - 8
+    return x0 + 56, y1 - 32, x1 - 12, y1 - 8
 
 
 def home_volume_at_x(x):
@@ -7630,10 +7630,10 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
     draw_logical_line(mute_x0, mute_y0, mute_x0, mute_y1, button_edge, 1)
     draw_logical_line(mute_x1, mute_y0, mute_x1, mute_y1, button_edge, 1)
     cx, cy = (mute_x0 + mute_x1) / 2, (mute_y0 + mute_y1) / 2
-    draw_logical_rect(cx - 10, cy - 4, cx - 5, cy + 4, icon_color)
-    draw_logical_polyline(((cx - 5, cy - 4), (cx + 3, cy - 10), (cx + 3, cy + 10), (cx - 5, cy + 4)), icon_color, 2)
+    draw_logical_rect(cx - 13, cy - 5, cx - 6, cy + 5, icon_color)
+    draw_logical_polyline(((cx - 6, cy - 5), (cx + 5, cy - 13), (cx + 5, cy + 13), (cx - 6, cy + 5)), icon_color, 2.5)
     if muted:
-        draw_logical_line(cx - 13, cy - 12, cx + 13, cy + 12, icon_color, 2.5)
+        draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
     track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box()
     track_y = (track_y0 + track_y1) / 2
     draw_logical_rect(track_x0, track_y - 6, track_x1, track_y + 6, (20, 34, 42, 235))
