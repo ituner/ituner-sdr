@@ -99,7 +99,7 @@ class KiwiWebSocket:
         self.lock = threading.Lock()
 
     @staticmethod
-    def connect(endpoint, stream_name, timeout=8.0):
+    def connect(endpoint, stream_name, timeout=8.0, session_timestamp=None):
         # Kiwi's public proxy fleet occasionally moves a receiver between
         # proxy hosts. It answers the initial WebSocket upgrade with a normal
         # HTTP 307 rather than a WebSocket close. Follow at most two trusted
@@ -117,7 +117,12 @@ class KiwiWebSocket:
                     raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
 
                 key = base64.b64encode(os.urandom(16)).decode("ascii")
-                path = f"/{int(time.time())}/{stream_name}"
+                # SND and W/F are a *single* Kiwi listener. The official web
+                # client gives both WebSockets the same millisecond session
+                # timestamp; without it a receiver at capacity treats W/F as
+                # a second listener (badp=5), leaving no waterfall.
+                timestamp = int(time.time() * 1000) if session_timestamp is None else int(session_timestamp)
+                path = f"/ws/kiwi/{timestamp}/{stream_name}"
                 request = (
                     f"GET {path} HTTP/1.1\r\n"
                     f"Host: {host}:{port}\r\n"
@@ -465,7 +470,9 @@ def recv_exact(sock, count):
 
 
 def send_kiwi_setup(ws, client_type, user):
-    ws.send_text(f"SET auth t={client_type} p=")
+    # ``#`` is the Kiwi web client's explicit marker for an empty public
+    # listener password.
+    ws.send_text(f"SET auth t={client_type} p=#")
     ws.send_text(f"SET ident_user={user}")
     ws.send_text("SET geo=Ituner receiver")
 
@@ -601,12 +608,19 @@ class WaterfallLeveler:
         return self.floor, self.ceiling
 
 
-def waterfall_line(samples, mapper, floor, ceiling):
+def waterfall_line(samples, mapper, floor, ceiling, width=None):
+    """Convert one Kiwi W/F row at the requested RF-canvas width.
+
+    `LOGICAL_W` remains the complete UI/touch coordinate space.  The GL LCD
+    frontend can reserve a right-hand control rail, so its waterfall source
+    needs a narrower width without changing Goodix touch transformation.
+    """
+    width = max(1, int(width if width is not None else LOGICAL_W))
     if not samples:
-        return Image.new("RGB", (LOGICAL_W, 1), (0, 0, 16))
+        return Image.new("RGB", (width, 1), (0, 0, 16))
     scale = 255.0 / max(1, ceiling - floor)
     normalized = bytes(max(0, min(255, int((value - floor) * scale))) for value in samples)
-    gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((LOGICAL_W, 1), Image.Resampling.BILINEAR)
+    gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((width, 1), Image.Resampling.BILINEAR)
     r_lut, g_lut, b_lut = mapper
     return Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
 
