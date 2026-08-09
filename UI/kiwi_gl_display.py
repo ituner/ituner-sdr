@@ -503,6 +503,45 @@ WHISPER_MODEL = next(
      if vendor_path("whisper.cpp", "models", name).is_file()),
     vendor_path("whisper.cpp", "models", _WHISPER_MODEL_NAMES[0]),
 )
+
+
+def _bounded_env_int(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+# Whisper's decoder is CPU-bound. Reserve two CPU cores for the SDL/OpenGL
+# renderer, Kiwi transport, and PipeWire rather than letting one subtitle
+# decode starve live audio. Advanced builds may override the thread count, but
+# never exceed the two-core guard by default.
+WHISPER_THREADS = _bounded_env_int("ITUNER_WHISPER_THREADS", 2, 1, 2)
+WHISPER_NICE = _bounded_env_int("ITUNER_WHISPER_NICE", 12, 0, 19)
+_WHISPER_CPU_COUNT = os.cpu_count() or 1
+WHISPER_CPUSET = (
+    f"{_WHISPER_CPU_COUNT - 2}-{_WHISPER_CPU_COUNT - 1}"
+    if sys.platform.startswith("linux") and _WHISPER_CPU_COUNT >= 4 and Path("/usr/bin/taskset").is_file()
+    else ""
+)
+
+
+def whisper_command_prefix():
+    """Return a low-priority, audio-safe launcher for the local decoder."""
+    if not sys.platform.startswith("linux"):
+        return []
+    prefix = []
+    if WHISPER_CPUSET:
+        prefix.extend(("/usr/bin/taskset", "--cpu-list", WHISPER_CPUSET))
+    if Path("/usr/bin/nice").is_file():
+        prefix.extend(("/usr/bin/nice", "-n", str(WHISPER_NICE)))
+    return prefix
+
+
+def whisper_guard_description():
+    affinity = f" cpu={WHISPER_CPUSET}" if WHISPER_CPUSET else ""
+    return f"threads={WHISPER_THREADS}{affinity} nice={WHISPER_NICE}"
 PARAKEET_MODEL_DIR = vendor_path("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
 HF_ENHANCE_MODEL = vendor_path("hf-enhance-tiny", "hf-enhance-tiny.onnx")
 WF_TEX_W = 960
@@ -5235,9 +5274,9 @@ def whisper_transcribe(pcm16, translate=False):
             wav_file.setsampwidth(2)
             wav_file.setframerate(16000)
             wav_file.writeframes(pcm16)
-        command = [
+        command = whisper_command_prefix() + [
             str(WHISPER_CLI), "-m", str(WHISPER_MODEL), "-f", str(wav_path),
-            "-l", WHISPER_LANGUAGE, "-t", "4", "-nt", "-np", "-otxt", "-of", str(result_base),
+            "-l", WHISPER_LANGUAGE, "-t", str(WHISPER_THREADS), "-nt", "-np", "-otxt", "-of", str(result_base),
         ]
         if translate:
             # Whisper's multilingual models translate the source speech to
@@ -5631,6 +5670,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
     measured_audio_seconds = 0.0
     measured_processing_seconds = 0.0
     next_performance_report = time.monotonic() + 10.0
+    whisper_guard_announced_generation = -1
     while not stop_event.is_set():
         enabled, engine, _lines, _partial, _status, generation = state.transcription_snapshot()
         caption_mode = state.caption_mode_snapshot()
@@ -5703,6 +5743,10 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 pass
             elif engine_family == "whisper" and (not WHISPER_CLI.is_file() or not WHISPER_MODEL.is_file()):
                 raise RuntimeError("Whisper.cpp model unavailable")
+            elif engine_family == "whisper":
+                if whisper_guard_announced_generation != generation:
+                    print(f"gl Whisper guard {whisper_guard_description()}", flush=True)
+                    whisper_guard_announced_generation = generation
             state.set_transcript(
                 status=(
                     "WAITING AUDIO"
