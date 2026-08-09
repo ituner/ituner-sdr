@@ -1,19 +1,18 @@
 # iTuner SDR for Raspberry Pi 5
 
-One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
+One self-contained installer for the Waveshare 8-DSI-TOUCH-A display, Goodix touch controller, and iTuner SDR radio interface on a Raspberry Pi 5 running current Raspberry Pi OS. It installs the required packages, Waveshare DSI overlay, UI, configuration, and boot services.
 
 ## Hardware connection
 
-Use **only Raspberry Pi 5 CAM/DISP 1 (DSI1)**. The 22-pin FFC from the adapter board connects to CAM/DISP 1; do **not** move it to CAM/DISP 0. The display overlay targets DSI1 and the bundled GT911 touch overlay targets the matching `i2c_csi_dsi1` controller (Linux I2C bus 11, address `0x5d`).
+Use the Raspberry Pi 5 DSI connector required by the Waveshare 8-DSI-TOUCH-A cable assembly. The installer configures the in-kernel `vc4-kms-dsi-waveshare-panel-v2,8_0_inch_a` overlay; no replacement panel driver is required.
 
-The display framebuffer is **400x960**, not 320x960. The panel is physically 960 pixels tall and is used in the installed flipped/portrait orientation.
+The native framebuffer is **800x1280** portrait. The panel is physically mounted landscape, so the SDR application uses a **1280x800** logical UI. This is the only active platform profile.
 
 ## Architecture
 
 ```text
-CAM/DISP 1 (DSI1) ── display overlay + rebuilt ST7701 panel module ── DRM/KMS framebuffer (400x960)
-                    └─ GT911 overlay ── Goodix input event ── OpenGL SDR UI
-                                                           └─ KiwiSDR WebSocket receiver + PipeWire audio
+Waveshare DSI ── vc4-kms-dsi-waveshare-panel-v2 overlay ── DRM framebuffer (800x1280)
+               └─ Goodix input event ── rotated OpenGL UI (1280x800) ── KiwiSDR + PipeWire audio
 ```
 
 `UI/` contains two UI implementations:
@@ -35,7 +34,15 @@ All current and future UI updates are made to the **OpenGL implementation**. The
    sudo reboot
    ```
 
-The install is idempotent. It rebuilds the display module for the currently running kernel, stores the original module under `/var/lib/ituner-sdr/`, installs the display and touch overlays, configures the required boot settings in one marked block, installs Python/OpenGL/PipeWire dependencies, and enables all boot services.
+The install is idempotent. It configures the in-kernel Waveshare display and
+touch overlay, installs the complete UI asset set, Python/OpenGL/PipeWire
+runtime, every local ASR engine and model, Whisper.cpp, RNNoise neural voice
+cleaner, and both bundled HF Enhance ONNX listening models. It then verifies the installed AI runtime before enabling the
+boot services. The initial download is about 500 MB of models plus build
+artifacts, so allow several minutes and keep the Pi online.
+
+Deepgram is included as a client but still requires the operator's own API key;
+all other caption engines work locally after installation.
 
 The public receiver configured by default is the established working initial endpoint. To use a receiver you are authorized to access, configure it after reboot:
 
@@ -73,11 +80,10 @@ Available output modes, run from the repository root:
 
 | Output | Command | Layout |
 | --- | --- | --- |
-| Standard macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 30` | `960x320` SDR canvas |
-| Wide macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop-1280 --fps 30` | `1024x480` SDR canvas plus a `256x480` navigation rail (`1280x480` total) |
-| Raspberry Pi display | `UI/.venv/bin/python UI/kiwi_gl_display.py` | Fullscreen rotated `400x960` KMS/DRM framebuffer |
+| macOS LCD simulator | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 24` | The target `1280x800` landscape UI |
+| Raspberry Pi LCD | `python3 UI/kiwi_gl_display.py --orientation flipped --swap-x-y` | Fullscreen rotated `800x1280` Waveshare framebuffer |
 
-The Raspberry Pi command requires its KMS/DRM display and touch environment and is normally started by `ituner-sdr.service` rather than launched from macOS.
+The Raspberry Pi command requires its DSI/Wayland display and touch environment. See [the LCD platform guide](docs/lcd-800x1280-platform.md) for the tested launch command and dependency inventory.
 
 Desktop controls:
 
@@ -140,8 +146,8 @@ sudo reboot
 
 ## Repository layout
 
-- `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
-- `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
+- `docs/lcd-800x1280-platform.md` — active Waveshare LCD geometry, launch, and dependency guide.
+- `touch-driver/` — Goodix touch test utility retained for diagnostics.
 - `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture assets.
 - `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.

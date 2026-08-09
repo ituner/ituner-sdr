@@ -1,0 +1,8 @@
+# ASR and cloud-caption clients. scripts/install-ai-runtime.sh installs these
+# with the matching local model bundle under vendor/.
+vosk>=0.3.45
+sherpa-onnx>=1.12
+moonshine-voice
+deepgram-sdk>=3
+numpy>=1.26
+onnxruntime>=1.18
