@@ -8536,7 +8536,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         ("utc", "UTC", "lm"), ("snr", "SNR", "rm"), ("call", "CALLSIGN", "lm"),
         ("grid", "GRID", "lm"), ("pwr", "PWR", "rm"), ("km", "KM", "rm"),
     ):
-        draw_text(text_cache, columns[key], y0 + 16, label, header_color, 12, True, True, anchor, family="Liberation Mono")
+        draw_text(text_cache, columns[key], y0 + 16, label, header_color, 13, True, True, anchor, family="Liberation Mono")
     draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, (84, 142, 148, 112), 1)
     # Seven compact rows make the in-card decode view useful without forcing
     # the operator into the full log. A slightly tighter baseline still gives
@@ -8546,8 +8546,8 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         waiting = "ARMED · WAITING FOR UTC TWO-MINUTE CYCLE" if decode_status == "ARMED" else detail
         draw_text(text_cache, (log_x0 + log_x1) / 2, (y0 + y1) / 2 + 4, waiting, status_color, 13, True, True, "cm", family="Liberation Sans")
     for index, spot in enumerate(spots):
-        y = y0 + 39 + index * 18
-        draw_logical_line(log_x0, y + 10, log_x1, y + 10, (75, 116, 124, 72), 1)
+        y = y0 + 40 + index * 19
+        draw_logical_line(log_x0, y + 11, log_x1, y + 11, (75, 116, 124, 72), 1)
         distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
         values = {
             "utc": str(spot.get("utc", "----"))[-4:],
@@ -8558,7 +8558,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
             "km": f"{distance:,}" if distance is not None else "--",
         }
         for key, anchor in (("utc", "lm"), ("snr", "rm"), ("call", "lm"), ("grid", "lm"), ("pwr", "rm"), ("km", "rm")):
-            draw_text(text_cache, columns[key], y, values[key], (225, 241, 242), 13, False, True, anchor, family="Liberation Mono")
+            draw_text(text_cache, columns[key], y, values[key], (225, 241, 242), 15, False, True, anchor, family="Liberation Mono")
 
     # Status moves to the right, so it cannot steal rows from the decode log.
     detail_label = "NEXT" if detail.startswith("NEXT ") else "INFO"
