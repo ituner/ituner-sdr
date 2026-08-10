@@ -35,6 +35,14 @@ RULER_MAJOR_STEPS_HZ = (
     200_000,
     500_000,
     1_000_000,
+    # The broad Kiwi views need labelled graduations that are far enough
+    # apart to remain individually legible. Without these 1-5 MHz choices
+    # the 30 MHz ruler chose 1 MHz ticks, then hid most labels, producing
+    # arbitrary-looking values such as 1, 6, 11 MHz.
+    2_000_000,
+    2_500_000,
+    5_000_000,
+    10_000_000,
 )
 
 

@@ -44,6 +44,7 @@ ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 SND_FLAG_COMPRESSED = 0x10
 SND_FLAG_STEREO = 0x08
+SND_FLAG_SQUELCH_UI = 0x40
 SND_FLAG_LITTLE_ENDIAN = 0x80
 # The denoise slider reserves more useful range for stronger filtering. Kiwi's
 # browser expresses gain/leakage as 1-based slider values; convert them to the
@@ -98,41 +99,69 @@ class KiwiWebSocket:
         self.lock = threading.Lock()
 
     @staticmethod
-    def connect(endpoint, stream_name, timeout=8.0):
-        scheme, host, port = parse_endpoint(endpoint)
-        ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
-        raw = socket.create_connection((host, port), timeout=timeout)
-        raw.settimeout(timeout)
-        if ws_scheme == "wss":
-            raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+    def connect(endpoint, stream_name, timeout=8.0, session_timestamp=None):
+        # Kiwi's public proxy fleet occasionally moves a receiver between
+        # proxy hosts. It answers the initial WebSocket upgrade with a normal
+        # HTTP 307 rather than a WebSocket close. Follow at most two trusted
+        # absolute redirects, so a stale directory URL remains listenable
+        # without allowing a redirect loop to churn connections.
+        current_endpoint = endpoint
+        for redirect_count in range(3):
+            scheme, host, port = parse_endpoint(current_endpoint)
+            ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
+            raw = None
+            try:
+                raw = socket.create_connection((host, port), timeout=timeout)
+                raw.settimeout(timeout)
+                if ws_scheme == "wss":
+                    raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
 
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        path = f"/{int(time.time())}/{stream_name}"
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}:{port}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            f"Origin: http://{host}:{port}\r\n"
-            "User-Agent: Codex-KiwiSDR-display\r\n"
-            "\r\n"
-        ).encode("ascii")
-        raw.sendall(request)
+                key = base64.b64encode(os.urandom(16)).decode("ascii")
+                # SND and W/F are a *single* Kiwi listener. The official web
+                # client gives both WebSockets the same millisecond session
+                # timestamp; without it a receiver at capacity treats W/F as
+                # a second listener (badp=5), leaving no waterfall.
+                timestamp = int(time.time() * 1000) if session_timestamp is None else int(session_timestamp)
+                path = f"/ws/kiwi/{timestamp}/{stream_name}"
+                request = (
+                    f"GET {path} HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {key}\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    f"Origin: http://{host}:{port}\r\n"
+                    "User-Agent: Codex-KiwiSDR-display\r\n"
+                    "\r\n"
+                ).encode("ascii")
+                raw.sendall(request)
 
-        response = read_http_header(raw)
-        status = response.split(b"\r\n", 1)[0]
-        if b" 101 " not in status:
-            raise RuntimeError(f"websocket handshake failed for {stream_name}: {status.decode('latin1', 'replace')}")
-        expected = base64.b64encode(
-            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
-        )
-        if expected not in response:
-            raise RuntimeError(f"websocket accept check failed for {stream_name}")
-
-        raw.settimeout(1.0)
-        return KiwiWebSocket(raw)
+                response = read_http_header(raw)
+                status = response.split(b"\r\n", 1)[0]
+                if b" 101 " in status:
+                    expected = base64.b64encode(
+                        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+                    )
+                    if expected not in response:
+                        raise RuntimeError(f"websocket accept check failed for {stream_name}")
+                    raw.settimeout(1.0)
+                    return KiwiWebSocket(raw)
+                redirect = websocket_redirect_endpoint(response)
+                if redirect and redirect_count < 2:
+                    raw.close()
+                    raw = None
+                    print(f"kiwi websocket redirect {host}:{port} -> {redirect}", flush=True)
+                    current_endpoint = redirect
+                    continue
+                raise RuntimeError(f"websocket handshake failed for {stream_name}: {status.decode('latin1', 'replace')}")
+            except Exception:
+                if raw is not None:
+                    try:
+                        raw.close()
+                    except OSError:
+                        pass
+                raise
+        raise RuntimeError(f"websocket redirect limit reached for {stream_name}")
 
     def send_text(self, text):
         self._send_frame(0x1, text.encode("utf-8"))
@@ -404,6 +433,20 @@ def parse_endpoint(endpoint):
     return scheme, host, port
 
 
+def websocket_redirect_endpoint(response):
+    """Return a safe absolute HTTP(S) redirect advertised by a Kiwi proxy."""
+    status = response.split(b"\r\n", 1)[0]
+    if not any(code in status for code in (b" 301 ", b" 302 ", b" 307 ", b" 308 ")):
+        return None
+    for line in response.split(b"\r\n")[1:]:
+        if line.lower().startswith(b"location:"):
+            candidate = line.split(b":", 1)[1].strip().decode("latin1", "replace")
+            parsed = urlparse(candidate)
+            if parsed.scheme in ("http", "https", "ws", "wss") and parsed.hostname:
+                return candidate
+    return None
+
+
 def read_http_header(sock):
     data = bytearray()
     while b"\r\n\r\n" not in data:
@@ -427,7 +470,9 @@ def recv_exact(sock, count):
 
 
 def send_kiwi_setup(ws, client_type, user):
-    ws.send_text(f"SET auth t={client_type} p=")
+    # ``#`` is the Kiwi web client's explicit marker for an empty public
+    # listener password.
+    ws.send_text(f"SET auth t={client_type} p=#")
     ws.send_text(f"SET ident_user={user}")
     ws.send_text("SET geo=Ituner receiver")
 
@@ -563,12 +608,19 @@ class WaterfallLeveler:
         return self.floor, self.ceiling
 
 
-def waterfall_line(samples, mapper, floor, ceiling):
+def waterfall_line(samples, mapper, floor, ceiling, width=None):
+    """Convert one Kiwi W/F row at the requested RF-canvas width.
+
+    `LOGICAL_W` remains the complete UI/touch coordinate space.  The GL LCD
+    frontend can reserve a right-hand control rail, so its waterfall source
+    needs a narrower width without changing Goodix touch transformation.
+    """
+    width = max(1, int(width if width is not None else LOGICAL_W))
     if not samples:
-        return Image.new("RGB", (LOGICAL_W, 1), (0, 0, 16))
+        return Image.new("RGB", (width, 1), (0, 0, 16))
     scale = 255.0 / max(1, ceiling - floor)
     normalized = bytes(max(0, min(255, int((value - floor) * scale))) for value in samples)
-    gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((LOGICAL_W, 1), Image.Resampling.BILINEAR)
+    gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((width, 1), Image.Resampling.BILINEAR)
     r_lut, g_lut, b_lut = mapper
     return Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
 
