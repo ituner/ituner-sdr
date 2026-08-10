@@ -1084,10 +1084,9 @@ WSPR_BANDS_PER_PAGE = 12
 WSPR_HISTORY_SECONDS = 12 * 60 * 60
 WSPR_GRAPH_WINDOWS = (300, 1800, 7200, 43200)
 WSPR_GRAPH_LABELS = ("5 MIN", "30 MIN", "2 HR", "12 HR")
-# Tile MRTG view retains a stable 48-minute two-minute-bin timeline. Keeping
-# empty bins is intentional: activity bars no longer expand across the whole
-# card when only a few decode cycles have completed.
-WSPR_MRTG_CYCLE_BINS = 24
+# Tile distance view retains a stable one-hour two-minute-bin timeline. Empty
+# bins preserve actual elapsed time instead of expanding sparse activity.
+WSPR_MRTG_CYCLE_BINS = 30
 WSPR_LOCAL_LOG_HEARTBEAT_SECONDS = 300.0
 WSPR_LOCAL_LOG_MAX_BYTES = 64 * 1024 * 1024
 # The monitor is intentionally bounded. Public Kiwis may expose only one or
@@ -8681,7 +8680,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
 
 
 def draw_wspr_distance_history(text_cache, box, snapshot, receiver_grid):
-    """Show recent WSPR spot density and path distance in one compact plot."""
+    """Show a pure WSPR distance-versus-time scatter plot."""
     x0, y0, x1, y1 = box
     draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
     spots = tuple(snapshot.get("decoded_spots", ()))
@@ -8694,7 +8693,7 @@ def draw_wspr_distance_history(text_cache, box, snapshot, receiver_grid):
         # useful until new decode cycles replace them.
         cycle = float(spot.get("cycle_start", index * WSPR_DECODE_CYCLE_SECONDS))
         resolved.append((cycle, distance, spot))
-    draw_text(text_cache, x0 + 12, y0 + 15, "SPOTS / DISTANCE", (203, 235, 234), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", (203, 235, 234), 14, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 15, f"{len(resolved)} SPOTS", (108, 229, 179), 13, True, True, "rm", family="Liberation Sans")
     if not resolved:
         message = "WAITING FOR DECODED SPOTS" if receiver_grid else "WAITING FOR RECEIVER GRID"
@@ -8714,29 +8713,26 @@ def draw_wspr_distance_history(text_cache, box, snapshot, receiver_grid):
 
     latest_cycle = max(cycle for cycle, _distance, _spot in resolved)
     cycle_start = latest_cycle - (WSPR_MRTG_CYCLE_BINS - 1) * WSPR_DECODE_CYCLE_SECONDS
-    counts = [0] * WSPR_MRTG_CYCLE_BINS
     cycle_index = {}
+    cycle_spots = {}
     for cycle, _distance, _spot in resolved:
         slot = int(round((cycle - cycle_start) / WSPR_DECODE_CYCLE_SECONDS))
         if 0 <= slot < WSPR_MRTG_CYCLE_BINS:
             cycle_index[cycle] = slot
-            counts[slot] += 1
-    max_count = max(counts) if counts else 1
+            cycle_spots.setdefault(cycle, []).append((_distance, _spot))
     step = (plot_x1 - plot_x0) / max(1, WSPR_MRTG_CYCLE_BINS - 1)
-    bar_base = plot_y1
-    for index, count in enumerate(counts):
-        x = plot_x0 + index * step
-        bar_h = max(2, (plot_y1 - plot_y0) * 0.22 * count / max_count)
-        draw_logical_rect(x - max(4, step * 0.13), bar_base - bar_h, x + max(4, step * 0.13), bar_base, (49, 172, 161, 156))
-    for sequence, (cycle, distance, _spot) in enumerate(resolved):
-        if cycle not in cycle_index:
-            continue
-        x = plot_x0 + cycle_index[cycle] * step
-        # A tiny deterministic offset preserves nearby simultaneous spots.
-        x += ((sequence % 3) - 1) * 3
-        y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
-        draw_logical_circle(x, y, 3.4, (178, 232, 229, 230), segments=12)
-    draw_text(text_cache, plot_x0, y1 - 7, "48 MIN · BARS = SPOTS / 2 MIN", (93, 184, 174), 10, True, True, "lm", family="Liberation Sans")
+    # Spread simultaneous paths slightly within their two-minute bin. This
+    # keeps a busy decode visually legible without implying false timestamps.
+    dot_spread = min(10.0, step * 0.36)
+    for cycle, cycle_values in cycle_spots.items():
+        center_x = plot_x0 + cycle_index[cycle] * step
+        count = len(cycle_values)
+        for index, (distance, _spot) in enumerate(cycle_values):
+            fraction = 0.0 if count == 1 else index / (count - 1) - 0.5
+            x = center_x + fraction * 2.0 * dot_spread
+            y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
+            draw_logical_circle(x, y, 3.6, (186, 232, 229, 235), segments=12)
+    draw_text(text_cache, plot_x0, y1 - 7, "1 HOUR · TWO-MINUTE BINS", (93, 184, 174), 10, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, plot_x1, y1 - 7, "DOTS = PATH km", (143, 190, 193), 10, True, True, "rm", family="Liberation Sans")
 
 

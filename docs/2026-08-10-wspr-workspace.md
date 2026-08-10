@@ -35,14 +35,16 @@ and W/F protocols rather than browser automation.
 
 ## MRTG distance view
 
-The compact tile plot uses a stable 48-minute timeline:
+The compact tile plot is a pure distance-versus-time scatter view using a
+stable one-hour timeline:
 
-- 24 fixed bins, one for each two-minute WSPR cycle.
-- Bars represent the number of spots decoded in that cycle.
-- Dots represent individual path distances in kilometres.
-- Empty cycles remain visible as gaps. This is deliberate: it prevents a few
-  active bars from stretching across the whole graph and makes activity density
-  readable at a glance.
+- 30 fixed bins, one for each two-minute WSPR cycle.
+- Dots represent individual path distances in kilometres; there are no count
+  bars in this view.
+- Simultaneous spots are spread slightly within their true two-minute bin so a
+  busy decode can be read without inventing false timestamps.
+- Empty cycles remain visible as gaps. This is deliberate: it prevents sparse
+  activity from stretching across the whole graph and keeps elapsed time honest.
 
 ## Kiwi receiver capacity and waterfall detail
 
@@ -92,4 +94,3 @@ Implications:
   ```sh
   systemctl is-active ituner-sdr-lcd-kms.service
   ```
-
