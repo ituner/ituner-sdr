@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import calendar
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
@@ -318,7 +319,6 @@ class HamCallsignBook:
 
 MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
-    "local_rx": "receivers.png",
     "digital": "digi.png",
     "wspr": "digi.png",
 }
@@ -327,6 +327,9 @@ LCD_SPECTRUM_H = 240
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
 # the recovered vertical space directly to the live waterfall.
 SPECTRUM_WIDE_H = 109
+SCOPE_HEIGHT_MIN = 70
+SCOPE_HEIGHT_MAX = 350
+SCOPE_ADJUST_VISIBLE_SECONDS = 6.0
 SPECTRUM_WIDE_RAISE_Y = 10
 SPECTRUM_RAISE_Y = 12
 # In the wide display's Waterfall-only view, let live RF content occupy the
@@ -1089,6 +1092,15 @@ WSPR_GRAPH_LABELS = ("5 MIN", "30 MIN", "2 HR", "12 HR")
 WSPR_MRTG_CYCLE_BINS = 30
 WSPR_LOCAL_LOG_HEARTBEAT_SECONDS = 300.0
 WSPR_LOCAL_LOG_MAX_BYTES = 64 * 1024 * 1024
+# The expanded path-distance plot reads a compact in-memory index. It is
+# hydrated once from the durable JSONL log in the background, then rebuilt only
+# when a new decode is published (never once per paint frame).
+WSPR_DISTANCE_WINDOWS = (60 * 60, 2 * 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60, 365 * 24 * 60 * 60)
+WSPR_DISTANCE_WINDOW_LABELS = ("1 H", "2 H", "24 H", "7 D", "1 Y")
+# One point column remains a two-minute WSPR decode period at the detail
+# ranges; the wider two-hour view consequently has twice the useful history.
+WSPR_DISTANCE_BUCKETS = (30, 60, 96, 168, 365)
+WSPR_DISTANCE_CACHE_MAX_RECORDS = 300_000
 # The monitor is intentionally bounded. Public Kiwis may expose only one or
 # two listener slots, while a local Kiwi/FPGA can make all six live.
 WSPR_WORKSPACE_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
@@ -1100,7 +1112,11 @@ WSPR_WORKSPACE_SLOT_COUNT = WSPR_WORKSPACE_COLS * WSPR_WORKSPACE_ROWS
 # remain available for actual WSPR sessions.
 WSPR_WORKSPACE_SESSION_SLOTS = WSPR_WORKSPACE_SLOT_COUNT
 WSPR_MONITOR_MAX_LIVE = 6
-WSPR_START_STAGGER_SECONDS = 5.0
+# On boot the selected receiver needs first claim on Kiwi's audio socket and
+# PipeWire's USB route. Let that path settle before any persisted WSPR jobs
+# begin their paired SND/W/F connections, then stagger the jobs deliberately.
+WSPR_MAIN_AUDIO_SETTLE_SECONDS = 35.0
+WSPR_START_STAGGER_SECONDS = 12.0
 WSPR_MINI_WF_SOURCE_W = 1024
 WSPR_MINI_WF_H = 92
 WSPR_MINI_WF_ZOOM = 16
@@ -1170,6 +1186,7 @@ WSPR_EXPANDED_LOG_BACK_BOX = (1102, 10, 1262, 66)
 WSPR_EXPANDED_LOG_HEADER_H = 92
 WSPR_EXPANDED_LOG_ROWS = 15
 WSPR_EXPANDED_LOG_ROW_H = 42
+WSPR_EXPANDED_GRAPH_PER_PAGE = 2
 # Identity is deliberately separate from the receiver stream. A bare SWL is
 # valid for private/local reception logs; a Maidenhead grid makes a future
 # external report geographically meaningful.
@@ -1636,8 +1653,421 @@ MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
     ("digital", "DIGI"),
+    ("dual", "DUAL"),
     ("settings", "SETTINGS"),
 )
+
+
+def dual_vfo_layout():
+    """Geometry for the non-stretched 1024 px Dual VFO experiment."""
+    rf_w = rf_canvas_width()
+    # No decorative workspace title: Dual mode is an operating screen.
+    # Reclaim that former strip for VFO A's live waterfall.
+    top_h = 0
+    header_h = 46
+    split_y0 = 398
+    split_y1 = 414
+    return {
+        "rf_w": rf_w,
+        "a_header": (0, top_h, rf_w, top_h + header_h),
+        "a_waterfall": (0, top_h + header_h, rf_w, split_y0),
+        "split": (0, split_y0, rf_w, split_y1),
+        "b_header": (0, split_y1, rf_w, split_y1 + header_h),
+        "b_waterfall": (0, split_y1 + header_h, rf_w, LOGICAL_H),
+        "rail": (rf_w, 0, LOGICAL_W, LOGICAL_H),
+        "home": (1040, 10, 1264, 64),
+        # Per-VFO zoom stays over the matching waterfall, using the same
+        # quiet glass control language as the primary receiver.
+        "zoom_a_group": (16, 324, 248, 386),
+        "zoom_a_minus": (24, 327, 88, 383),
+        "zoom_a_plus": (176, 327, 240, 383),
+        "zoom_b_group": (16, 724, 248, 786),
+        "zoom_b_minus": (24, 727, 88, 783),
+        "zoom_b_plus": (176, 727, 240, 783),
+        # Receiver selection is part of the VFO header, where its context is
+        # immediately obvious. The rail repeats the live instrument stack.
+        "rx_a": (126, top_h + 6, 570, top_h + 40),
+        "rx_b": (126, split_y1 + 12, 570, split_y1 + 46),
+        # Frequency is an open readout, so it can use the full Home-rail
+        # width even though the framed tools beneath retain their inset.
+        # Leave a deliberate quiet gap below Home before the live VFO A
+        # instrument stack begins.
+        "freq_a": (1031, 80, 1273, 136),
+        "mode_a": (1042, 144, 1262, 182),
+        "smeter_a": (1042, 192, 1262, 268),
+        # Start B's tools immediately below its header, visually tied to the
+        # top edge of the B waterfall rather than crowded against Clone.
+        "freq_b": (1031, 494, 1273, 550),
+        "mode_b": (1042, 558, 1262, 596),
+        "smeter_b": (1042, 606, 1262, 682),
+        # One shared left/right audio blend lives in the calm center of the
+        # tool rail, rather than competing with either VFO header.
+        "mix_track": (1042, 371, 1262, 435),
+        # Cloning is an occasional setup action, so keep it out of the
+        # mixer/receiver flow at the quiet bottom of the rail.
+        "clone": (1042, 742, 1262, 790),
+    }
+
+
+def dual_vfo_action_at(x, y):
+    """Return a small, explicit action for the experimental Dual VFO view."""
+    boxes = dual_vfo_layout()
+    if contains(boxes["home"], x, y):
+        return "home"
+    if contains(boxes["rx_a"], x, y):
+        return "rx_A"
+    if contains(boxes["rx_b"], x, y):
+        return "rx_B"
+    if contains(boxes["mode_a"], x, y):
+        return "mode_A"
+    if contains(boxes["mode_b"], x, y):
+        return "mode_B"
+    for vfo, sign, key in (
+        ("A", -1, "zoom_a_minus"), ("A", 1, "zoom_a_plus"),
+        ("B", -1, "zoom_b_minus"), ("B", 1, "zoom_b_plus"),
+    ):
+        if contains(boxes[key], x, y):
+            return f"zoom_{vfo}_{sign}"
+    if contains(boxes["mix_track"], x, y):
+        return "mix"
+    if contains(boxes["clone"], x, y):
+        return "clone"
+    if contains(boxes["a_header"], x, y) or contains(boxes["a_waterfall"], x, y):
+        return "A"
+    if contains(boxes["b_header"], x, y) or contains(boxes["b_waterfall"], x, y):
+        return "B"
+    return None
+
+
+def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, receiver_name, status="LIVE"):
+    """One compact VFO instrument strip above an unscaled RF pane."""
+    x0, y0, x1, y1 = box
+    active_accent = (90, 222, 245, 255)
+    muted = (102, 126, 134, 255)
+    # Keep the header completely open to the waterfall. The brighter VFO
+    # name alone communicates focus without introducing any perimeter or
+    # side marker into either RF pane.
+    draw_text(
+        text_cache, x0 + 18, (y0 + y1) / 2, f"VFO {vfo}",
+        active_accent if active else muted, 25, True, False, "lm", family="Liberation Sans",
+    )
+    rx0, ry0, rx1, ry1 = dual_vfo_layout()[f"rx_{vfo.lower()}"]
+    change_x0 = rx1 - 132
+    name = fit_station_text(
+        text_cache, receiver_name or "CURRENT RECEIVER", change_x0 - rx0 - 14,
+        16, True, False, family=VFO_FONT_FAMILY,
+    )
+    draw_text(text_cache, rx0, (ry0 + ry1) / 2, name, (224, 240, 241), 16, True, False, "lm", family=VFO_FONT_FAMILY)
+    draw_logical_rect(change_x0, ry0, rx1, ry1, (18, 42, 50, 204))
+    draw_logical_line(change_x0, ry0, rx1, ry0, (90, 164, 176, 176), 1)
+    draw_logical_line(change_x0, ry1, rx1, ry1, (45, 86, 97, 178), 1)
+    draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", (221, 241, 243), 14, True, False, "cm", family="Liberation Sans")
+    detail = status.upper()
+    detail_color = (126, 230, 188) if detail == "LIVE" else (165, 177, 178)
+    draw_text(text_cache, x1 - 18, (y0 + y1) / 2, detail, detail_color, 13, True, False, "rm", family="Liberation Sans")
+
+
+def draw_dual_vfo_mode_annunciator(text_cache, box, vfo, mode, active=False):
+    """Draw one Home-style mode control in the matching VFO tool stack."""
+    x0, y0, x1, y1 = box
+    accent = (90, 222, 245) if vfo == "A" else (242, 181, 92)
+    # This remains a generous invisible touch target, but reads as a quiet
+    # status annunciator rather than another boxed tool in the dense rail.
+    draw_text(text_cache, x0 + 14, (y0 + y1) / 2, "MODE", (156, 189, 195), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 28, (y0 + y1) / 2, str(mode).upper(), (*accent, 255) if active else (218, 235, 237), 21, True, False, "rm", family="Liberation Sans")
+    chevron_x, chevron_y = x1 - 13, (y0 + y1) / 2
+    draw_logical_line(chevron_x - 4, chevron_y - 3, chevron_x, chevron_y + 2, (*accent, 244), 1.5)
+    draw_logical_line(chevron_x, chevron_y + 2, chevron_x + 4, chevron_y - 3, (*accent, 244), 1.5)
+
+
+def draw_dual_vfo_zoom_controls(text_cache, group, minus, plus):
+    """A compact, translucent Zoom control over one VFO's own waterfall."""
+    separator_left = minus[2] - group[0] + 8
+    separator_right = plus[0] - group[0] - 8
+    draw_control_group_background(
+        text_cache, group, "dual_vfo_zoom_glass_v1", (separator_left, separator_right), 0.82, separator_bottom=11
+    )
+    draw_zoom_button(text_cache, minus, "-", 0.86)
+    draw_zoom_button(text_cache, plus, "+", 0.86)
+    draw_text(
+        text_cache,
+        (minus[2] + plus[0]) / 2,
+        (group[1] + group[3]) / 2,
+        "ZOOM",
+        (211, 227, 231),
+        16,
+        True,
+        False,
+        "cm",
+        0.86,
+        family="Liberation Sans",
+    )
+
+
+def dual_vfo_squelch_level_at_x(x, box, maximum):
+    """Map the useful inner slider span to the receiver's native range."""
+    x0, _y0, x1, _y1 = box
+    inset = 16
+    fraction = clamp((x - (x0 + inset)) / max(1.0, (x1 - inset) - (x0 + inset)), 0.0, 1.0)
+    return int(round(fraction * max(0, int(maximum))))
+
+
+def draw_dual_vfo_smeter(text_cache, box, smeter_dbm, accent=None, staged=False):
+    """The Home rail S-meter, reused without a Dual-specific variant."""
+    x0, y0, x1, y1 = box
+    dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+    live_segments = smeter_segment_position(dbm)
+    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
+    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
+    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
+    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 12, True, False, "rt", family="Liberation Sans")
+    track_x0, track_x1 = x0 + 12, x1 - 12
+    track_y = y0 + 47
+    segment_w = (track_x1 - track_x0) / 36.0
+    for index in range(36):
+        sx0 = track_x0 + index * segment_w + 1
+        sx1 = track_x0 + (index + 1) * segment_w - 1
+        active = index + 0.5 <= live_segments
+        red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
+        if active:
+            color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
+        else:
+            color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
+        draw_logical_rect(sx0, track_y - 6, sx1, track_y + 6, color)
+    for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
+        lx = track_x0 + (track_x1 - track_x0) * position / 36.0
+        draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+
+
+def draw_dual_vfo_audio_mixer(text_cache, box, mix):
+    """One shared horizontal mixer, styled as a Home-rail instrument."""
+    x0, y0, x1, y1 = box
+    mix = clamp(float(mix), 0.0, 1.0)
+    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
+    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
+    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
+    draw_text(text_cache, x0 + 12, y0 + 6, "AUDIO MIX", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
+    track_x0, track_x1 = x0 + 14, x1 - 14
+    track_y = y0 + 33
+    knob_x = track_x0 + (track_x1 - track_x0) * mix
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (29, 52, 61, 255))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, (83, 216, 248, 228))
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (228, 244, 245, 238))
+    legend_y = y1 - 9
+    draw_text(text_cache, track_x0, legend_y, "VFO A", (138, 166, 176), 10, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, (track_x0 + track_x1) / 2, legend_y, "MIX", (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, track_x1, legend_y, "VFO B", (138, 166, 176), 10, True, False, "rm", family="Liberation Sans")
+
+
+def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING"):
+    """Render two independent VFO instruments with a shared audio blend."""
+    boxes = dual_vfo_layout()
+    rf_w = boxes["rf_w"]
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 255))
+    source_a = sources.get("A", {})
+    source_b = sources.get("B", {})
+    profile_a = profiles.get("A", {})
+    profile_b = profiles.get("B", {})
+    # Both panes preserve the exact 1024-pixel horizontal RF geometry. Their
+    # textures arrive from separate Kiwi W/F clients and may be tuned/zoomed
+    # independently.
+    for key, profile, texture in (("a_waterfall", profile_a, wf_texture_a), ("b_waterfall", profile_b, wf_texture_b)):
+        x0, y0, x1, y1 = boxes[key]
+        pane_freq = float(profile.get("freq_khz", frequency_khz))
+        pane_span = kiwi.zoom_to_span_khz(int(profile.get("zoom", 0))) if profile else span_khz
+        texture.draw(x0, y0, x1, y1, center_khz=waterfall_view_center_khz(pane_freq, pane_span), span_khz=pane_span)
+        draw_logical_rect(x0, y0, x1, y1, (0, 6, 14, 28 if key == "a_waterfall" else 58))
+
+    draw_dual_vfo_header(text_cache, boxes["a_header"], "A", profile_a.get("freq_khz", frequency_khz), profile_a.get("mode", mode), active_vfo == "A", source_a.get("name", "CURRENT RECEIVER"))
+    draw_dual_vfo_header(text_cache, boxes["b_header"], "B", profile_b.get("freq_khz", frequency_khz), profile_b.get("mode", mode), active_vfo == "B", source_b.get("name", "CURRENT RECEIVER"), status=b_status)
+    # No midpoint band or rule: the adjacent open headers are enough to
+    # identify the two receivers without carving a border across the RF view.
+
+    rx0, ry0, rx1, ry1 = boxes["rail"]
+    draw_logical_rect(rx0, ry0, rx1, ry1, (5, 12, 18, 255))
+    draw_logical_line(rx0, ry0, rx0, ry1, (105, 139, 150, 175), 1)
+    draw_radio_close_button(text_cache, boxes["home"])
+
+    draw_dual_vfo_zoom_controls(
+        text_cache, boxes["zoom_a_group"], boxes["zoom_a_minus"], boxes["zoom_a_plus"]
+    )
+    draw_dual_vfo_zoom_controls(
+        text_cache, boxes["zoom_b_group"], boxes["zoom_b_minus"], boxes["zoom_b_plus"]
+    )
+
+    # Each VFO keeps the same compact Home instrument order: frequency, mode,
+    # and calibrated S-meter. The shared fader is drawn separately below.
+    for vfo, accent, source, profile in (("A", (90, 222, 245), source_a, profile_a), ("B", (90, 222, 245), source_b, profile_b)):
+        suffix = vfo.lower()
+        freq_box = boxes[f"freq_{suffix}"]
+        fx0, fy0, fx1, fy1 = freq_box
+        # Copy the Home rail VFO treatment exactly: a large, open instrument
+        # value rather than a boxed digital control.
+        frequency_text = sdr_ui.format_freq(profile.get("freq_khz", frequency_khz))
+        reference_text = "30.000.000"
+        frequency_size = 48
+        unit = "MHz"
+        unit_size = 13
+        unit_width = text_cache.font(unit_size, bold=True, family="Liberation Sans").size(unit)[0]
+        unit_right_margin = 10
+        frequency_unit_gap = 3
+        # Match draw_lcd_mode_annunciators' Home VFO fitting math exactly.
+        available_width = (
+            (fx1 - unit_right_margin - unit_width - frequency_unit_gap)
+            - (fx0 + 10)
+        )
+        source_width = max(
+            text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0],
+            text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(reference_text)[0],
+        )
+        frequency_right = fx1 - unit_right_margin - unit_width - frequency_unit_gap
+        draw_text_scaled_x(
+            text_cache, frequency_right, (fy0 + fy1) / 2 + 2,
+            frequency_text, VFO_NEON_COLOR, frequency_size,
+            min(1.0, available_width / max(1, source_width)),
+            bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+        )
+        draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
+
+        draw_dual_vfo_mode_annunciator(
+            text_cache,
+            boxes[f"mode_{suffix}"],
+            vfo,
+            profile.get("mode", mode),
+            active_vfo == vfo,
+        )
+
+        draw_dual_vfo_smeter(text_cache, boxes[f"smeter_{suffix}"], smeters.get(vfo, SMETER_FLOOR_DBM), (90, 222, 245))
+
+    draw_dual_vfo_audio_mixer(text_cache, boxes["mix_track"], mix)
+    for key, label, active in (("clone", "CLONE VFO A", False),):
+        x0, y0, x1, y1 = boxes[key]
+        draw_logical_rect(x0, y0, x1, y1, (19, 54, 61, 235) if active else (14, 28, 36, 232))
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (221, 240, 241), 16, True, False, "cm", family="Liberation Sans")
+
+
+def dual_vfo_mode_picker_boxes():
+    """Large direct mode choices: predictable and comfortably touch-sized."""
+    panel = (96, 176, 928, 620)
+    x0, y0, x1, y1 = panel
+    cols = 4
+    gap = 12
+    button_w = (x1 - x0 - 48 - gap * (cols - 1)) / cols
+    button_h = 92
+    buttons = []
+    for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
+        col = index % cols
+        row = index // cols
+        bx0 = x0 + 24 + col * (button_w + gap)
+        by0 = y0 + 128 + row * (button_h + 16)
+        buttons.append((family, modes[0], (bx0, by0, bx0 + button_w, by0 + button_h)))
+    return {
+        "panel": panel,
+        "close": (x1 - 132, y0 + 20, x1 - 24, y0 + 62),
+        "buttons": tuple(buttons),
+    }
+
+
+def dual_vfo_mode_picker_action_at(x, y):
+    boxes = dual_vfo_mode_picker_boxes()
+    if contains(boxes["close"], x, y):
+        return "close", None
+    for _family, mode, box in boxes["buttons"]:
+        if contains(box, x, y):
+            return "mode", mode
+    return "outside", None
+
+
+def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
+    boxes = dual_vfo_mode_picker_boxes()
+    x0, y0, x1, y1 = boxes["panel"]
+    accent = (90, 222, 245) if target_vfo == "A" else (242, 181, 92)
+    draw_logical_rect(0, 58, LOGICAL_W, LOGICAL_H, (0, 0, 0, 128))
+    draw_logical_rect(x0, y0, x1, y1, (7, 18, 25, 244))
+    draw_logical_line(x0, y0, x1, y0, (*accent, 220), 2)
+    draw_logical_line(x0, y1, x1, y1, (82, 116, 126, 160), 1)
+    draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", (231, 246, 247), 24, True, False, "lm", family="Liberation Sans")
+    state_label = "APPLIES LIVE" if target_vfo == "A" else "STAGES VFO B"
+    draw_text(text_cache, x0 + 26, y0 + 66, state_label, accent, 13, True, False, "lm", family="Liberation Sans")
+    cx0, cy0, cx1, cy1 = boxes["close"]
+    draw_logical_rect(cx0, cy0, cx1, cy1, (20, 43, 53, 240))
+    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (220, 239, 241), 13, True, False, "cm", family="Liberation Sans")
+    current_family = KIWI_MODE_FAMILY.get(str(active_mode).upper(), str(active_mode).upper())
+    for family, selected_mode, box in boxes["buttons"]:
+        bx0, by0, bx1, by1 = box
+        active = family == current_family
+        fill = (*accent, 72) if active else (18, 35, 44, 222)
+        edge = (*accent, 230) if active else (95, 126, 136, 130)
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        draw_logical_line(bx0, by0, bx1, by0, edge, 2 if active else 1)
+        draw_logical_line(bx0, by1, bx1, by1, edge, 1)
+        label = "FM" if family == "FM" else family
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2 - 10, label, (240, 253, 252) if active else (202, 221, 224), 21, True, False, "cm", family="Liberation Sans")
+        detail = KIWI_MODE_LABELS.get(selected_mode, selected_mode)
+        draw_text(text_cache, (bx0 + bx1) / 2, by1 - 17, detail, accent if active else (136, 169, 176), 12, True, False, "cm", family="Liberation Sans")
+
+
+def dual_vfo_receiver_picker_boxes():
+    """A large list is safer than burying receiver selection in a tiny menu."""
+    panel = (42, 72, 982, 748)
+    x0, y0, x1, y1 = panel
+    return {
+        "panel": panel,
+        "close": (x1 - 144, y0 + 16, x1 - 20, y0 + 62),
+        "previous": (x0 + 20, y1 - 66, x0 + 172, y1 - 16),
+        "next": (x1 - 172, y1 - 66, x1 - 20, y1 - 16),
+        "rows": tuple((x0 + 20, y0 + 104 + index * 98, x1 - 20, y0 + 188 + index * 98) for index in range(5)),
+    }
+
+
+def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
+    boxes = dual_vfo_receiver_picker_boxes()
+    x0, y0, x1, y1 = boxes["panel"]
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (0, 4, 8, 188))
+    draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 250))
+    draw_logical_line(x0, y0, x1, y0, (111, 214, 210, 220), 2)
+    draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", (230, 245, 246), 22, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 24, y0 + 56, "VFO A changes the live receiver. VFO B is staged for the second client.", (144, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+    cx0, cy0, cx1, cy1 = boxes["close"]
+    draw_logical_rect(cx0, cy0, cx1, cy1, (28, 52, 61, 245))
+    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (230, 244, 245), 14, True, False, "cm", family="Liberation Sans")
+    start = max(0, int(page)) * len(boxes["rows"])
+    for row_index, box in enumerate(boxes["rows"]):
+        index = start + row_index
+        if index >= len(stations):
+            break
+        station = stations[index]
+        name, location, server, _used, _total = station_fields(station)
+        bx0, by0, bx1, by1 = box
+        draw_logical_rect(bx0, by0, bx1, by1, (15, 33, 42, 244))
+        draw_logical_line(bx0, by0, bx1, by0, (82, 125, 134, 165), 1)
+        draw_text(text_cache, bx0 + 18, by0 + 27, fit_station_text(text_cache, name, bx1 - bx0 - 36, 19, True, False, family="Liberation Sans"), (228, 244, 245), 19, True, False, "lm", family="Liberation Sans")
+        detail = bottom_station_title(name, location) if location else server
+        draw_text(text_cache, bx0 + 18, by1 - 20, fit_station_text(text_cache, detail, bx1 - bx0 - 36, 14, False, False, family="Liberation Sans"), (138, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+    for key, label in (("previous", "PREV"), ("next", "NEXT")):
+        bx0, by0, bx1, by1 = boxes[key]
+        draw_logical_rect(bx0, by0, bx1, by1, (22, 45, 55, 240))
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (220, 240, 241), 14, True, False, "cm", family="Liberation Sans")
+    page_count = max(1, math.ceil(len(stations) / len(boxes["rows"])))
+    draw_text(text_cache, (x0 + x1) / 2, y1 - 40, f"PAGE {page + 1} / {page_count}", (147, 188, 194), 13, True, False, "cm", family="Liberation Sans")
+
+
+def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
+    boxes = dual_vfo_receiver_picker_boxes()
+    if contains(boxes["close"], x, y):
+        return "close", None
+    if contains(boxes["previous"], x, y):
+        return "previous", None
+    if contains(boxes["next"], x, y):
+        return "next", None
+    start = max(0, int(page)) * len(boxes["rows"])
+    for index, box in enumerate(boxes["rows"]):
+        station_index = start + index
+        if station_index < station_count and contains(box, x, y):
+            return "station", station_index
+    return None, None
 SETTINGS_MENU_ITEMS = (
     ("display", "DISPLAY"),
     ("network", "NETWORK"),
@@ -2685,7 +3115,7 @@ def stream_waterfall_box():
     # Center this 72x58 target on the fixed connection OSD at y=154. It is
     # deliberately a companion to that message rather than a second overlay
     # farther down the waterfall.
-    y0 = 125
+    y0 = 100
     return x0, y0, x1, y0 + height
 
 
@@ -2978,6 +3408,26 @@ def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_r
         print(f"gl receiver state save failed: {exc}", flush=True)
 
 
+def abort_kiwi_transport(ws):
+    """Immediately release a Kiwi listener socket without waiting for I/O."""
+    if ws is None:
+        return
+    try:
+        ws.send_close()
+    except (AttributeError, OSError):
+        pass
+    raw_socket = getattr(ws, "sock", None)
+    if raw_socket is not None:
+        try:
+            raw_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            raw_socket.close()
+        except OSError:
+            pass
+
+
 class SharedState:
     def __init__(
         self,
@@ -3087,6 +3537,9 @@ class SharedState:
         self.connection_failures = 0
         self.connection_streams = {"audio": False, "waterfall": False}
         self.connection_stream_failures = {"audio": 0, "waterfall": 0}
+        # Workers register live sockets here so Pause can release Kiwi client
+        # slots immediately instead of waiting for their next poll cycle.
+        self.transport_sockets = {}
         # Kiwi pairs SND and W/F by this browser-style millisecond session id.
         self.kiwi_session_timestamp = next_kiwi_session_timestamp()
         # This is transport pause, not audio mute: it deliberately closes the
@@ -3170,7 +3623,8 @@ class SharedState:
             return self.stream_paused
 
     def set_stream_paused(self, paused):
-        """Stop or resume both Kiwi transport workers without retuning."""
+        """Hard-stop or resume the paired Kiwi listener transports."""
+        transports_to_abort = ()
         with self.lock:
             paused = bool(paused)
             if paused == self.stream_paused:
@@ -3189,7 +3643,33 @@ class SharedState:
             self.connection_failures = 0
             self.connection_streams = {"audio": False, "waterfall": False}
             self.connection_stream_failures = {"audio": 0, "waterfall": 0}
-            return self.stream_paused
+            if paused:
+                transports_to_abort = tuple(self.transport_sockets.values())
+                self.transport_sockets.clear()
+            result = self.stream_paused
+        # Socket shutdown wakes select()/recv() immediately, so Pause means
+        # the remote listener is genuinely gone, not just locally muted.
+        for transport in transports_to_abort:
+            abort_kiwi_transport(transport)
+        return result
+
+    def register_transport_socket(self, generation, stream, ws):
+        """Publish a live socket for an immediate Pause teardown."""
+        abort = False
+        with self.lock:
+            if generation != self.server_generation or self.stream_paused:
+                abort = True
+            else:
+                self.transport_sockets[stream] = ws
+        if abort:
+            abort_kiwi_transport(ws)
+            return False
+        return True
+
+    def unregister_transport_socket(self, stream, ws):
+        with self.lock:
+            if self.transport_sockets.get(stream) is ws:
+                self.transport_sockets.pop(stream, None)
 
     def connection_attempt(self, generation, stream):
         with self.lock:
@@ -4869,7 +5349,10 @@ class WSPRDecodeWorker:
                     )
                 except TypeError:
                     ws = kiwi.KiwiWebSocket.connect(server, "SND")
-                kiwi.send_kiwi_setup(ws, "kiwi", f"{self.session.user}-WSPR-DECODE")
+                # Kiwi 1.902 also keys the paired SND/W/F listener by its
+                # presented identity. Keep it identical to the mini-W/F
+                # stream below so one WSPR tile occupies one receiver slot.
+                kiwi.send_kiwi_setup(ws, "kiwi", f"{self.session.user}-WSPR")
                 configured = False
                 # Keep one SND socket alive across decode boundaries. Closing
                 # it every two minutes while its paired W/F socket remains
@@ -5302,9 +5785,10 @@ class WSPRMonitorManager:
         self.receiver_grids = {}
         self.capacity_inflight = set()
         self.start_at = {}
-        # First saved tile starts five seconds after renderer boot; each
-        # additional tile follows at the same measured interval.
-        self.next_start_at = time.monotonic() + WSPR_START_STAGGER_SECONDS
+        # Main radio audio must settle before saved WSPR workers open their
+        # own paired SND/W/F lanes. This avoids a restart burst that can make
+        # the audible receiver stutter despite modest average CPU use.
+        self.next_start_at = time.monotonic() + WSPR_MAIN_AUDIO_SETTLE_SECONDS
 
     def set_log_callback(self, callback):
         self.log_callback = callback
@@ -5357,8 +5841,9 @@ class WSPRMonitorManager:
             value = self.receiver_grids.get(str(server))
         return value[0] if value and wspr_grid_is_valid(value[0]) else None
 
-    def sync(self, configs):
+    def sync(self, configs, immediate_keys=()):
         now = time.monotonic()
+        immediate_keys = {str(key) for key in immediate_keys}
         self.refresh_capacities(configs)
         wanted = {str(config.get("id")): config for config in configs if config.get("id")}
         for key in tuple(self.sessions):
@@ -5381,9 +5866,13 @@ class WSPRMonitorManager:
                 self.sessions[key] = session
             needs_start = needs_start or session.stop_event.is_set()
             if needs_start and key not in self.start_at:
-                start_at = max(now + WSPR_START_STAGGER_SECONDS, self.next_start_at)
+                # Restored sessions must remain staggered after a boot so the
+                # main receiver gets first claim on audio. An explicit +WSPR
+                # or Start action is an operator request and starts now.
+                start_at = now if key in immediate_keys else max(now + WSPR_START_STAGGER_SECONDS, self.next_start_at)
                 self.start_at[key] = start_at
-                self.next_start_at = start_at + WSPR_START_STAGGER_SECONDS
+                if key not in immediate_keys:
+                    self.next_start_at = start_at + WSPR_START_STAGGER_SECONDS
             session.set_receiver_grid(self.receiver_grid_snapshot(config.get("server", "")))
             start_at = self.start_at.get(key)
             if start_at is not None and now < start_at:
@@ -5588,7 +6077,7 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = SPECTRUM_TOGGLE_BOX
-    key = f"spectrum_toggle_v3_{int(enabled)}"
+    key = f"spectrum_toggle_display_v1_{int(enabled)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -5600,20 +6089,14 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
             return int(round(value * scale))
 
         color = (218, 223, 225, 234) if enabled else (220, 224, 226, 170)
-        fill = (184, 189, 193, 72) if enabled else (220, 224, 226, 36)
         label_size = max(16, round(h * 0.24))
-        icon_w = min(w - 22, round(h * 0.92))
-        icon_x0 = (w - icon_w) / 2
-        baseline = h * 0.46
-        points = tuple(
-            (icon_x0 + icon_w * fraction, baseline - h * rise)
-            for fraction, rise in ((0.00, 0.00), (0.14, 0.07), (0.30, 0.03),
-                                  (0.46, 0.25), (0.62, 0.10), (0.80, 0.17), (1.00, 0.00))
-        )
-        pygame.draw.polygon(hi, fill, [(p(x), p(baseline)) for x, _y in points] + [(p(x), p(y)) for x, y in reversed(points)])
-        pygame.draw.line(hi, color, (p(icon_x0), p(baseline)), (p(icon_x0 + icon_w), p(baseline)), p(max(1.1, h * 0.016)))
-        pygame.draw.lines(hi, color, False, [(p(x), p(y)) for x, y in points], p(max(1.8, h * 0.025)))
-        label = text_cache.font(label_size * scale, bold=True, mono=True).render("SCOPE", True, color[:3])
+        screen_w = min(w - 30, round(h * 0.84))
+        screen_h = round(h * 0.38)
+        screen_x = (w - screen_w) / 2
+        screen_y = h * 0.08
+        stroke = max(2.5, h * 0.034)
+        pygame.draw.rect(hi, color, (p(screen_x), p(screen_y), p(screen_w), p(screen_h)), p(stroke), border_radius=p(2))
+        label = text_cache.font(label_size * scale, bold=True, mono=True).render("DISPLAY", True, color[:3])
         hi.blit(label, ((hi.get_width() - label.get_width()) // 2, p(h - label_size - 5)))
         surface = pygame.transform.smoothscale(hi, (w, h))
         cached = text_cache.surface_texture(key, surface)
@@ -5683,6 +6166,33 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
         draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
         draw_filter_toggle_button(text_cache, alpha)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, alpha)
+
+
+def scope_height_grip_box(scope_bottom_y):
+    """A generous invisible drag target centred on the scope boundary."""
+    return 72, scope_bottom_y - 24, rf_canvas_width() - 18, scope_bottom_y + 24
+
+
+def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
+    """A transparent direct-manipulation divider between scope and waterfall."""
+    x0, y0, x1, y1 = scope_height_grip_box(scope_bottom_y)
+    center_x = (x0 + x1) / 2
+    # A muted amber seam separates the blue RF field without competing with
+    # stations or the cyan tuning reference. The larger centre grip reads as
+    # a physical, touchable divider on the 4.8-inch panel.
+    seam = (228, 170, 79, 238)
+    seam_dim = (160, 112, 55, 188)
+    grip_fill = (55, 43, 25, 214)
+    grip_marks = (255, 224, 166, 244)
+    draw_logical_rect(x0, y0, x1, y1, (14, 18, 22, 116))
+    draw_logical_line(x0, scope_bottom_y, x1, scope_bottom_y, seam_dim, 6)
+    draw_logical_line(x0, scope_bottom_y, x1, scope_bottom_y, seam, 3)
+    draw_logical_rect(center_x - 70, scope_bottom_y - 15, center_x + 70, scope_bottom_y + 15, grip_fill)
+    draw_logical_line(center_x - 70, scope_bottom_y - 15, center_x + 70, scope_bottom_y - 15, seam, 2)
+    draw_logical_line(center_x - 70, scope_bottom_y + 15, center_x + 70, scope_bottom_y + 15, seam_dim, 1)
+    for offset in (-27, -18, -9, 0, 9, 18, 27):
+        draw_logical_line(center_x + offset, scope_bottom_y - 7, center_x + offset, scope_bottom_y + 7, grip_marks, 3)
+    draw_text(text_cache, x0 + 12, scope_bottom_y - 15, f"SCOPE {int(round(scope_height))}", (229, 195, 134), 12, True, False, "lm", family="Liberation Sans")
 
 
 def draw_muted_waterfall_badge(text_cache):
@@ -7891,8 +8401,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     track_y = (vy0 + vy1) / 2 + 9
     draw_text(text_cache, vx0, vy0 + 2, "VOLUME", (164, 193, 198), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
     draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
-    draw_logical_rect(vx0, track_y - 4, vx1, track_y + 4, (22, 35, 43, 230))
-    draw_logical_rect(vx0, track_y - 4, vx0 + (vx1 - vx0) * level, track_y + 4, (68, 209, 151, 226))
+    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 35, 43, 230))
+    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx0 + (vx1 - vx0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, (68, 209, 151, 226))
     knob_x = vx0 + (vx1 - vx0) * level
     draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, (226, 246, 246, 255))
 
@@ -8280,6 +8790,477 @@ def append_wspr_local_log(log_file, event, record, max_bytes=WSPR_LOCAL_LOG_MAX_
         pass
 
 
+def wspr_distance_cache_key(tile_id, server, band):
+    return "|".join((str(tile_id or ""), str(server or "").rstrip("/"), str(band or "")))
+
+
+def wspr_log_utc_seconds(record):
+    """Read one persisted WSPR event time without depending on local TZ."""
+    for field in ("cycle_start", "cycle_start_utc", "timestamp"):
+        value = record.get(field)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if not value:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return float(calendar.timegm(time.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ")))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+class WSPRDistanceHistoryCache:
+    """Precompute WSPR distance scatter points away from the GL paint loop.
+
+    The durable JSONL history is parsed once after launch. Four display-ready
+    views are then rebuilt only when a new decode appears, yielding at most
+    three representative dots per time bucket (nearest, farthest, newest).
+    """
+
+    def __init__(self, log_file):
+        self.log_file = Path(log_file).expanduser()
+        self.cache_file = self.log_file.with_name(f"{self.log_file.stem}-distance-cache.json")
+        self.lock = threading.Lock()
+        self.records = defaultdict(list)
+        self.precomputed = {}
+        self.loading = False
+        self.ready = False
+        self.version = 0
+        self.dirty = False
+        self.persist_timer = None
+
+    def _source_fingerprint(self):
+        paths = [self.log_file]
+        paths.extend(self.log_file.parent.glob(f"{self.log_file.stem}.*{self.log_file.suffix}"))
+        fingerprint = []
+        for path in sorted(paths):
+            try:
+                stat = path.stat()
+                fingerprint.append((path.name, stat.st_size, stat.st_mtime_ns))
+            except OSError:
+                continue
+        return fingerprint
+
+    def _read_snapshot(self):
+        try:
+            payload = json.loads(self.cache_file.read_text(encoding="utf-8"))
+            if payload.get("schema") != "ituner-wspr-distance-cache/v1":
+                return None, None
+            hydrated = defaultdict(list)
+            for key, values in payload.get("records", {}).items():
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    if not isinstance(value, list) or len(value) != 2:
+                        continue
+                    hydrated[str(key)].append((float(value[0]), float(value[1])))
+            for key, values in hydrated.items():
+                hydrated[key] = sorted(set(values), key=lambda item: item[0])
+            return hydrated, payload.get("sources")
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None, None
+
+    def _write_snapshot_locked(self):
+        """Persist the compact index atomically; never make graph paint do I/O."""
+        try:
+            self.cache_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            payload = {
+                "schema": "ituner-wspr-distance-cache/v1",
+                "sources": self._source_fingerprint(),
+                "records": {key: [[stamp, distance] for stamp, distance in values] for key, values in self.records.items()},
+            }
+            temporary = self.cache_file.with_name(self.cache_file.name + ".tmp")
+            temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            os.replace(temporary, self.cache_file)
+            try:
+                os.chmod(self.cache_file, 0o600)
+            except OSError:
+                pass
+        except OSError as exc:
+            print(f"gl WSPR distance cache {exc}", flush=True)
+
+    def _flush_timer(self):
+        with self.lock:
+            self.persist_timer = None
+            if not self.dirty:
+                return
+            self._rebuild_locked()
+            self._write_snapshot_locked()
+            self.dirty = False
+
+    def _schedule_flush_locked(self):
+        if self.persist_timer is not None:
+            return
+        self.persist_timer = threading.Timer(1.5, self._flush_timer)
+        self.persist_timer.daemon = True
+        self.persist_timer.start()
+
+    @staticmethod
+    def _entry(record):
+        if str(record.get("event", "")) != "wspr_decode":
+            return None
+        tile_id = str(record.get("wspr_tile_id", "")).strip()
+        band = str(record.get("band_m", "")).strip()
+        server = str(record.get("session_server", "")).strip()
+        receiver_grid = str(record.get("receiver_grid", "")).strip().upper()
+        tx_grid = str(record.get("grid", "")).strip().upper()[:6]
+        stamp = wspr_log_utc_seconds(record)
+        if not tile_id or not band or not stamp or not receiver_grid or not tx_grid:
+            return None
+        distance = wspr_distance_km(receiver_grid, tx_grid)
+        if distance is None:
+            return None
+        return wspr_distance_cache_key(tile_id, server, band), (float(stamp), float(distance))
+
+    @staticmethod
+    def _representative_points(records, window_s, bucket_count, now):
+        cutoff = now - window_s
+        buckets = {}
+        bucket_width = window_s / bucket_count
+        for stamp, distance in records:
+            if stamp < cutoff or stamp > now + 30.0:
+                continue
+            index = int(clamp((stamp - cutoff) / bucket_width, 0, bucket_count - 1))
+            current = buckets.get(index)
+            if current is None:
+                buckets[index] = [stamp, distance, stamp, distance, stamp, distance]
+            else:
+                if distance < current[1]:
+                    current[0], current[1] = stamp, distance
+                if distance > current[3]:
+                    current[2], current[3] = stamp, distance
+                if stamp >= current[4]:
+                    current[4], current[5] = stamp, distance
+        points = []
+        for index in sorted(buckets):
+            values = buckets[index]
+            points.extend(((values[0], values[1]), (values[2], values[3]), (values[4], values[5])))
+        # Keep the graph quiet when min/max/latest are identical in a bucket.
+        return tuple(dict.fromkeys(points))
+
+    def _rebuild_locked(self, now=None):
+        now = time.time() if now is None else float(now)
+        self.precomputed = {
+            key: {
+                window: self._representative_points(records, window, buckets, now)
+                for window, buckets in zip(WSPR_DISTANCE_WINDOWS, WSPR_DISTANCE_BUCKETS)
+            }
+            for key, records in self.records.items()
+        }
+        self.version += 1
+
+    def ingest(self, event, record):
+        entry = self._entry({"event": event, **record})
+        if entry is None:
+            return
+        key, point = entry
+        with self.lock:
+            records = self.records[key]
+            records.append(point)
+            if len(records) > WSPR_DISTANCE_CACHE_MAX_RECORDS:
+                del records[:len(records) - WSPR_DISTANCE_CACHE_MAX_RECORDS]
+            self.dirty = True
+            # A decode cycle can emit dozens of spots. Coalesce that burst into
+            # one precompute/persist pass instead of writing per spot.
+            self._schedule_flush_locked()
+
+    def _load_worker(self):
+        records = defaultdict(list)
+        try:
+            hydrated, cached_sources = self._read_snapshot()
+            # JSON restores tuple fingerprints as lists. Compare the same
+            # JSON-shaped form or every restart falsely looks stale and keeps
+            # the otherwise hydrated graph in its loading state.
+            current_sources = [list(item) for item in self._source_fingerprint()]
+            if hydrated is not None:
+                with self.lock:
+                    self.records = hydrated
+                    self._rebuild_locked()
+                    self.ready = True
+                # The sidecar is the normal fast path: all four spans are
+                # ready before the operator enters the WSPR workspace.
+                if cached_sources == current_sources:
+                    # Also compact any duplicate points written by an older
+                    # cache build before returning through the fast path.
+                    self._write_snapshot_locked()
+                    return
+            candidates = [self.log_file]
+            candidates.extend(sorted(
+                self.log_file.parent.glob(f"{self.log_file.stem}.*{self.log_file.suffix}"),
+                key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+            ))
+            one_year_ago = time.time() - max(WSPR_DISTANCE_WINDOWS) - 86400
+            for path in candidates:
+                try:
+                    if not path.exists() or path.stat().st_mtime < one_year_ago:
+                        continue
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        for line in handle:
+                            try:
+                                entry = self._entry(json.loads(line))
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                continue
+                            if entry is not None:
+                                key, point = entry
+                                records[key].append(point)
+                except OSError:
+                    continue
+            for key, values in records.items():
+                values.sort(key=lambda item: item[0])
+                if len(values) > WSPR_DISTANCE_CACHE_MAX_RECORDS:
+                    del values[:len(values) - WSPR_DISTANCE_CACHE_MAX_RECORDS]
+            with self.lock:
+                # Keep any live decode that arrived while the loader ran.
+                known = {key: set(values) for key, values in records.items()}
+                for key, values in self.records.items():
+                    existing = known.setdefault(key, set(records[key]))
+                    for point in values:
+                        if point not in existing:
+                            records[key].append(point)
+                            existing.add(point)
+                for values in records.values():
+                    values[:] = sorted(set(values), key=lambda item: item[0])
+                self.records = records
+                self._rebuild_locked()
+                self._write_snapshot_locked()
+                self.dirty = False
+                self.ready = True
+        finally:
+            with self.lock:
+                self.loading = False
+
+    def start(self):
+        with self.lock:
+            if self.loading or self.ready:
+                return
+            self.loading = True
+        threading.Thread(target=self._load_worker, name="wspr-distance-history", daemon=True).start()
+
+    def points_for(self, tile, window_index):
+        window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
+        key = wspr_distance_cache_key(tile.get("id"), tile.get("server"), tile.get("band"))
+        with self.lock:
+            # A live decode arriving before its short coalescing timer fires
+            # should still appear on the first graph paint, without disk I/O.
+            if self.dirty:
+                self._rebuild_locked()
+            return self.precomputed.get(key, {}).get(WSPR_DISTANCE_WINDOWS[window_index], ()), self.loading, self.ready
+
+    def flush(self):
+        with self.lock:
+            if self.persist_timer is not None:
+                self.persist_timer.cancel()
+                self.persist_timer = None
+            if self.dirty:
+                self._rebuild_locked()
+            self._write_snapshot_locked()
+            self.dirty = False
+
+
+class WSPRDecodeRateTracker:
+    """Track a rolling one-hour decode rate without making the UI parse logs.
+
+    The current rate belongs to the monitor tile. Its personal best belongs to
+    the more durable receiver-and-band identity so replacing a tile does not
+    erase useful performance history. The small sidecar is only written when
+    a new best is achieved (or at a controlled service shutdown).
+    """
+
+    SCHEMA = "ituner-wspr-decode-rate/v1"
+    WINDOW_SECONDS = 60.0 * 60.0
+    NEW_BEST_SECONDS = 4.0 * 60.0
+
+    def __init__(self, log_file):
+        self.log_file = Path(log_file).expanduser()
+        self.cache_file = self.log_file.with_name(f"{self.log_file.stem}-decode-rate.json")
+        self.lock = threading.Lock()
+        self.events_by_tile = defaultdict(deque)
+        self.seen_by_tile = defaultdict(set)
+        self.best_by_receiver_band = {}
+        self.new_best_until = {}
+        self.loading = False
+        self.ready = False
+        self.dirty = False
+
+    @staticmethod
+    def _receiver_band_key(record):
+        server = str(record.get("session_server", "")).strip().rstrip("/")
+        band = str(record.get("band_m", "")).strip()
+        return f"{server}|{band}" if server and band else ""
+
+    @staticmethod
+    def _tile_receiver_band_key(tile_id, receiver_band):
+        return f"{tile_id}|{receiver_band}"
+
+    @classmethod
+    def _entry(cls, event, record):
+        if str(event) != "wspr_decode":
+            return None
+        tile_id = str(record.get("wspr_tile_id", "")).strip()
+        receiver_band = cls._receiver_band_key(record)
+        stamp = wspr_log_utc_seconds(record)
+        if not tile_id or not receiver_band or stamp is None:
+            return None
+        # A decoder occasionally emits the same spot twice while a receiver
+        # reconnects. Count a decoded transmission once in the hourly rate.
+        signature = (
+            round(float(stamp), 3),
+            str(record.get("callsign", "")).strip().upper(),
+            str(record.get("grid", "")).strip().upper(),
+            str(record.get("snr_db", "")).strip(),
+            str(record.get("power_dbm", "")).strip(),
+        )
+        return tile_id, receiver_band, float(stamp), signature
+
+    def _read_snapshot(self):
+        try:
+            payload = json.loads(self.cache_file.read_text(encoding="utf-8"))
+            if payload.get("schema") != self.SCHEMA:
+                return {}
+            result = {}
+            for key, value in payload.get("best", {}).items():
+                if not isinstance(value, dict):
+                    continue
+                rate = int(value.get("rate", 0))
+                achieved_at = float(value.get("achieved_at", 0.0))
+                if rate > 0 and achieved_at > 0.0:
+                    result[str(key)] = {"rate": rate, "achieved_at": achieved_at}
+            return result
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _write_snapshot_locked(self):
+        if not self.dirty:
+            return
+        try:
+            self.cache_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            payload = {
+                "schema": self.SCHEMA,
+                "best": self.best_by_receiver_band,
+            }
+            temporary = self.cache_file.with_name(self.cache_file.name + ".tmp")
+            temporary.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+            os.replace(temporary, self.cache_file)
+            try:
+                os.chmod(self.cache_file, 0o600)
+            except OSError:
+                pass
+            self.dirty = False
+        except OSError as exc:
+            print(f"gl WSPR decode-rate cache {exc}", flush=True)
+
+    def _prune_tile_locked(self, tile_id, now):
+        events = self.events_by_tile[tile_id]
+        seen = self.seen_by_tile[tile_id]
+        cutoff = now - self.WINDOW_SECONDS
+        while events and events[0][0] < cutoff:
+            _stamp, signature = events.popleft()
+            seen.discard(signature)
+
+    def _ingest_locked(self, tile_id, receiver_band, stamp, signature, now, live=False):
+        stream_key = self._tile_receiver_band_key(tile_id, receiver_band)
+        events = self.events_by_tile[stream_key]
+        seen = self.seen_by_tile[stream_key]
+        if signature in seen:
+            return
+        events.append((stamp, signature))
+        seen.add(signature)
+        self._prune_tile_locked(stream_key, now)
+        rate = len(events)
+        best = self.best_by_receiver_band.get(receiver_band, {})
+        prior = int(best.get("rate", 0))
+        if rate > prior:
+            self.best_by_receiver_band[receiver_band] = {"rate": rate, "achieved_at": float(now)}
+            self.dirty = True
+            if live and prior > 0:
+                self.new_best_until[tile_id] = time.monotonic() + self.NEW_BEST_SECONDS
+
+    def ingest(self, event, record):
+        entry = self._entry(event, record)
+        if entry is None:
+            return
+        tile_id, receiver_band, stamp, signature = entry
+        with self.lock:
+            self._ingest_locked(tile_id, receiver_band, stamp, signature, time.time(), live=True)
+
+    def _load_worker(self):
+        best = self._read_snapshot()
+        now = time.time()
+        records = []
+        try:
+            candidates = [self.log_file]
+            candidates.extend(sorted(self.log_file.parent.glob(f"{self.log_file.stem}.*{self.log_file.suffix}")))
+            for path in candidates:
+                try:
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        for line in handle:
+                            try:
+                                record = json.loads(line)
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                continue
+                            entry = self._entry(record.get("event"), record)
+                            if entry is not None:
+                                records.append(entry)
+                except OSError:
+                    continue
+            records.sort(key=lambda item: item[2])
+            with self.lock:
+                self.best_by_receiver_band = best
+                for tile_id, receiver_band, stamp, signature in records:
+                    # Historical data establishes both a useful immediate
+                    # rolling rate and the all-time best; it never raises a
+                    # user-facing NEW BEST badge after a restart.
+                    self._ingest_locked(tile_id, receiver_band, stamp, signature, stamp, live=False)
+                for stream_key in tuple(self.events_by_tile):
+                    self._prune_tile_locked(stream_key, now)
+                self._write_snapshot_locked()
+                self.ready = True
+        finally:
+            with self.lock:
+                self.loading = False
+
+    def start(self):
+        with self.lock:
+            if self.loading or self.ready:
+                return
+            self.loading = True
+        threading.Thread(target=self._load_worker, name="wspr-decode-rate", daemon=True).start()
+
+    def snapshot_for_tiles(self, tiles):
+        now = time.time()
+        with self.lock:
+            for stream_key in tuple(self.events_by_tile):
+                self._prune_tile_locked(stream_key, now)
+            rates = {}
+            for tile in tiles:
+                tile_id = str(tile.get("id", ""))
+                receiver_band = f"{str(tile.get('server', '')).strip().rstrip('/')}|{str(tile.get('band', '')).strip()}"
+                stream_key = self._tile_receiver_band_key(tile_id, receiver_band)
+                rates[tile_id] = len(self.events_by_tile.get(stream_key, ()))
+            leader_rate = max(rates.values(), default=0)
+            result = {}
+            for tile in tiles:
+                tile_id = str(tile.get("id", ""))
+                receiver_band = f"{str(tile.get('server', '')).strip().rstrip('/')}|{str(tile.get('band', '')).strip()}"
+                best = self.best_by_receiver_band.get(receiver_band, {})
+                result[tile_id] = {
+                    "rate": rates.get(tile_id, 0),
+                    "best": int(best.get("rate", 0)),
+                    "leader": leader_rate > 0 and rates.get(tile_id, 0) == leader_rate,
+                    "new_best": time.monotonic() < self.new_best_until.get(tile_id, 0.0),
+                    "loading": self.loading,
+                }
+            return result
+
+    def flush(self):
+        with self.lock:
+            self._write_snapshot_locked()
+
+
 def wspr_identity_open_box():
     x0, y0, x1, _y1 = WSPR_PANEL_BOX
     return x1 - 210, y0 + 4, x1 - 14, y0 + 44
@@ -8469,6 +9450,15 @@ def wspr_card_waterfall_expand_hit_box(box):
     return x0 - 12, y0 - 10, x1 + 8, y1 + 10
 
 
+def wspr_card_distance_expand_box(box):
+    return wspr_card_log_expand_box(box)
+
+
+def wspr_card_distance_expand_hit_box(box):
+    x0, y0, x1, y1 = wspr_card_distance_expand_box(box)
+    return x0 - 12, y0 - 10, x1 + 8, y1 + 10
+
+
 def draw_wspr_settings_button(text_cache, box):
     """A clear cog affordance instead of a tiny text-only settings target."""
     x0, y0, x1, y1 = box
@@ -8503,7 +9493,15 @@ def draw_wspr_waterfall_expand_button(text_cache, box):
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "W/F FULL", (209, 242, 235), 12, True, True, "cm", family="Liberation Sans")
 
 
-def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=None, settings_box=None, expand_box=None):
+def draw_wspr_distance_expand_button(text_cache, box):
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, (12, 42, 47, 226))
+    draw_logical_line(x0, y0, x1, y0, (100, 218, 187, 184), 1)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "GRAPH", (209, 242, 235), 13, True, True, "cm", family="Liberation Sans")
+
+
+def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=None, settings_box=None, expand_box=None,
+                                 rate_info=None):
     """Dense left log plus a right-side receiver/decode status column."""
     x0, y0, x1, y1 = box
     draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
@@ -8562,12 +9560,21 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
     # Status moves to the right, so it cannot steal rows from the decode log.
     detail_label = "NEXT" if detail.startswith("NEXT ") else "INFO"
     detail_value = detail[5:] if detail.startswith("NEXT ") else detail
+    rate_info = rate_info or {}
+    hourly_rate = int(rate_info.get("rate", 0))
+    if rate_info.get("new_best"):
+        rank_label, rank_color = "NEW BEST", (247, 207, 105)
+    elif rate_info.get("loading"):
+        rank_label, rank_color = "INDEXING", (154, 189, 193)
+    else:
+        rank_label, rank_color = "BEST", (163, 204, 207)
     side_items = (
         ("DECODE", decode_status, status_color),
         (detail_label, fit_station_text(text_cache, detail_value, x1 - side_x0 - 54, 12, False, False, "Liberation Sans"), (176, 211, 213)),
         ("RX", str(snapshot.get("status", "QUEUED")), (116, 232, 181) if snapshot.get("status") == "LIVE" else (225, 190, 111)),
         ("GRID", str(receiver_grid or "NO GRID"), (166, 211, 214)),
-        ("SPOTS", str(len(tuple(snapshot.get("decoded_spots", ())))), (165, 207, 209)),
+        ("RATE", f"{hourly_rate}/H", (176, 229, 221)),
+        (rank_label, f"{int(rate_info.get('best', 0))}/H" if rank_label == "BEST" else (f"{hourly_rate}/H" if rank_label == "NEW BEST" else ""), rank_color),
     )
     for index, (label, value, color) in enumerate(side_items):
         sy = y0 + 18 + index * 25
@@ -8736,7 +9743,158 @@ def draw_wspr_distance_history(text_cache, box, snapshot, receiver_grid):
     draw_text(text_cache, plot_x1, y1 - 7, "DOTS = PATH km", (143, 190, 193), 10, True, True, "rm", family="Liberation Sans")
 
 
-def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(None, None), receiver_grid=None):
+def wspr_distance_range_boxes():
+    x0, x1 = 28, 1074
+    gap = 12
+    width = (x1 - x0 - gap * (len(WSPR_DISTANCE_WINDOWS) - 1)) / len(WSPR_DISTANCE_WINDOWS)
+    return tuple((x0 + index * (width + gap), 84, x0 + index * (width + gap) + width, 132) for index in range(len(WSPR_DISTANCE_WINDOWS)))
+
+
+def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_index):
+    """Full-screen cached WSPR path-distance scatter with familiar MRTG spans."""
+    window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
+    points, loading, ready = history_cache.points_for(tile, window_index)
+    window_s = WSPR_DISTANCE_WINDOWS[window_index]
+    now = time.time()
+    x0, x1 = 28, LOGICAL_W - 28
+    header_h = 146
+    plot_x0, plot_x1 = x0 + 74, x1 - 24
+    plot_y0, plot_y1 = header_h + 22, LOGICAL_H - 64
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 11, 16, 255))
+    draw_logical_rect(0, 0, LOGICAL_W, header_h, (8, 29, 35, 250))
+    draw_logical_line(0, header_h - 1, LOGICAL_W, header_h - 1, (81, 184, 166, 176), 1)
+    band = str(tile.get("band", "?"))
+    receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 680, 20, True, False, "Liberation Sans")
+    draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 57, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
+    state = "LOADING HISTORY" if loading else ("PRECOMPUTED" if ready else "WAITING")
+    draw_text(text_cache, 888, 57, state, (118, 224, 185) if ready else (234, 187, 106), 15, True, True, "lm", family="Liberation Sans")
+    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
+    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
+    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
+    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
+    for index, box in enumerate(wspr_distance_range_boxes()):
+        active = index == window_index
+        draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
+        draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
+        draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
+
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    max_distance = max((distance for _stamp, distance in points), default=0.0)
+    distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
+    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = plot_y1 - (plot_y1 - plot_y0) * fraction
+        draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 94), 1)
+        draw_text(text_cache, plot_x0 - 11, y, f"{int(distance_top * fraction / 1000)}k", (151, 199, 200), 15, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, plot_x0 - 12, plot_y0 - 11, "km", (108, 185, 180), 13, True, True, "rm", family="Liberation Sans")
+    for index in range(1, 5):
+        x = plot_x0 + (plot_x1 - plot_x0) * index / 5
+        draw_logical_line(x, plot_y0, x, plot_y1, (74, 127, 132, 56), 1)
+    cutoff = now - window_s
+    for stamp, distance in points:
+        x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
+        y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
+        draw_logical_circle(x, y, 4.2, (186, 232, 229, 232), segments=14)
+    if not points:
+        message = "LOADING LOCAL WSPR HISTORY" if loading else "NO DISTANCE SPOTS IN THIS RANGE"
+        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, (132, 192, 192), 21, True, True, "cm", family="Liberation Sans")
+    span_labels = {
+        0: ("60m", "45m", "30m", "15m", "NOW"),
+        1: ("2h", "90m", "60m", "30m", "NOW"),
+        2: ("24h", "18h", "12h", "6h", "NOW"),
+        3: ("7d", "5d", "3d", "1d", "NOW"),
+        4: ("1y", "9m", "6m", "3m", "NOW"),
+    }[window_index]
+    for index, label in enumerate(span_labels):
+        x = plot_x0 + (plot_x1 - plot_x0) * index / (len(span_labels) - 1)
+        draw_text(text_cache, x, plot_y1 + 24, label, (123, 186, 184), 15, True, True, "cm", family="Liberation Mono")
+    footer = f"{len(points)} CACHED DISTANCE POINTS  ·  DOTS = DECODED PATHS"
+    draw_text(text_cache, x0, LOGICAL_H - 22, footer, (112, 185, 182), 14, True, True, "lm", family="Liberation Sans")
+
+
+def wspr_expanded_graph_boxes(tile_count, page):
+    """Two long MRTG plots per page, with vertical swipe for later receivers."""
+    page_count = max(1, math.ceil(max(1, tile_count) / WSPR_EXPANDED_GRAPH_PER_PAGE))
+    page = int(clamp(page, 0, page_count - 1))
+    x0, y0, x1, y1 = 28, 154, LOGICAL_W - 28, LOGICAL_H - 42
+    gap = 16
+    width = x1 - x0
+    height = (y1 - y0 - gap) / WSPR_EXPANDED_GRAPH_PER_PAGE
+    return tuple(
+        (x0, y0 + index * (height + gap), x0 + width, y0 + index * (height + gap) + height)
+        for index in range(WSPR_EXPANDED_GRAPH_PER_PAGE)
+    ), page, page_count
+
+
+def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_index, focused=False):
+    """A compact, fixed-scale-by-card MRTG-style distance history panel."""
+    x0, y0, x1, y1 = box
+    points, loading, ready = history_cache.points_for(tile, window_index)
+    window_s = WSPR_DISTANCE_WINDOWS[window_index]
+    now = time.time()
+    border = (104, 239, 184, 230) if focused else (81, 154, 158, 154)
+    draw_logical_rect(x0, y0, x1, y1, (5, 18, 24, 246))
+    for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
+        draw_logical_line(ax0, ay0, ax1, ay1, border, 1)
+    band = str(tile.get("band", "?"))
+    receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), x1 - x0 - 114, 16, True, False, "Liberation Sans")
+    draw_text(text_cache, x0 + 14, y0 + 17, f"{band} m", (235, 248, 248), 18, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 70, y0 + 17, receiver, (155, 207, 208), 15, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 17, f"{len(points)}", (111, 229, 181), 14, True, True, "rm", family="Liberation Mono")
+    plot_x0, plot_x1 = x0 + 49, x1 - 14
+    plot_y0, plot_y1 = y0 + 38, y1 - 30
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    distance_top = max(1000, int(math.ceil(max((distance for _stamp, distance in points), default=0.0) / 1000.0)) * 1000)
+    for fraction in (0.0, 0.5, 1.0):
+        y = plot_y1 - (plot_y1 - plot_y0) * fraction
+        draw_logical_line(plot_x0, y, plot_x1, y, (76, 134, 140, 90), 1)
+        draw_text(text_cache, plot_x0 - 7, y, f"{int(distance_top * fraction / 1000)}k", (126, 184, 186), 11, True, True, "rm", family="Liberation Mono")
+    cutoff = now - window_s
+    for stamp, distance in points:
+        x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
+        y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
+        draw_logical_circle(x, y, 3.0, (188, 233, 230, 235), segments=12)
+    if not points:
+        message = "LOADING" if loading else ("WAITING" if not ready else "NO SPOTS")
+        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, (133, 190, 190), 15, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, plot_x0, y1 - 12, WSPR_DISTANCE_WINDOW_LABELS[window_index], (97, 186, 174), 12, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, plot_x1, y1 - 12, "km", (135, 183, 186), 12, True, True, "rm", family="Liberation Sans")
+
+
+def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, window_index, page, focused_id=""):
+    """A familiar MRTG overview: two detailed receiver histories per page."""
+    window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
+    boxes, page, page_count = wspr_expanded_graph_boxes(len(tiles), page)
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 11, 16, 255))
+    draw_logical_rect(0, 0, LOGICAL_W, 140, (8, 29, 35, 250))
+    draw_logical_line(0, 139, LOGICAL_W, 139, (81, 184, 166, 176), 1)
+    draw_text(text_cache, 28, 28, "WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 28, 57, "CACHED PATH HISTORY  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
+    for index, box in enumerate(wspr_distance_range_boxes()):
+        active = index == window_index
+        draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
+        draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
+        draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
+    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
+    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
+    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
+    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
+    start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
+    visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
+    for index, box in enumerate(boxes):
+        if index < len(visible):
+            tile = visible[index]
+            draw_wspr_distance_mrtg_card(
+                text_cache, box, tile, history_cache, window_index,
+                focused=str(tile.get("id", "")) == str(focused_id),
+            )
+        else:
+            draw_logical_rect(*box, (4, 14, 20, 160))
+    draw_text(text_cache, LOGICAL_W - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", (132, 194, 191), 14, True, True, "rm", family="Liberation Mono")
+
+
+def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(None, None), receiver_grid=None,
+                           rate_info=None):
     x0, y0, x1, y1 = box
     snapshot = monitor.snapshot() if monitor is not None else {
         "status": "QUEUED", "logs": (), "history": (), "smeter_dbm": None,
@@ -8761,9 +9919,19 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     capacity_label = f"{used}/{total}" if used is not None and total is not None else "--/--"
     capacity_color = (127, 230, 186) if used is not None and total is not None else (113, 146, 151)
     capacity_x = x1 - 52
-    name = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), capacity_x - (x0 + 86) - 14, 19, True, False, "Liberation Sans")
+    rate_info = rate_info or {}
+    leader = bool(rate_info.get("leader")) and int(rate_info.get("rate", 0)) > 0
+    leader_x1 = capacity_x - 18
+    leader_x0 = leader_x1 - 88 if leader else capacity_x
+    name = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), leader_x0 - (x0 + 86) - 14, 19, True, False, "Liberation Sans")
     draw_text(text_cache, x0 + 16, y0 + 20, f"{band} m", (234, 247, 247), 22, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 86, y0 + 20, name, (179, 208, 212), 17, True, False, "lm", family="Liberation Sans")
+    if leader:
+        # Annunciator, not another button: a compact bright indicator placed
+        # in the instrument header immediately before receiver capacity.
+        draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, (19, 91, 65, 240))
+        draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, (120, 255, 187, 250), 1.5)
+        draw_text(text_cache, (leader_x0 + leader_x1) / 2, y0 + 20, "LEADER", (202, 255, 220), 12, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, capacity_x, y0 + 20, capacity_label, capacity_color, 15, True, True, "rm", family="Liberation Sans")
     draw_wspr_cycle_timer(x1 - 28, y0 + 22, 10)
     view = int(tile.get("view", 0)) % 3
@@ -8781,10 +9949,12 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     elif view == 1:
         draw_wspr_decode_placeholder(
             text_cache, wf_box, tile, snapshot, card_receiver_grid,
-            wspr_card_settings_box(box), wspr_card_log_expand_box(box),
+            wspr_card_settings_box(box), wspr_card_log_expand_box(box), rate_info,
         )
     else:
         draw_wspr_distance_history(text_cache, wf_box, snapshot, card_receiver_grid)
+        draw_wspr_distance_expand_button(text_cache, wspr_card_distance_expand_box(box))
+        draw_wspr_settings_button(text_cache, wspr_card_settings_box(box))
     # A remote W/F row and a locally computed audio FFT can look similar at
     # this scale. Label the source directly on the signal view so the operator
     # always knows whether the card has genuine Kiwi spectral data.
@@ -8817,8 +9987,23 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         decode_state = str(snapshot.get("decode_status", ""))
         if decode_state and decode_state not in ("ARMED", "STOPPED"):
             status_text += f"  ·  DEC {decode_state}"
+        if rate_info.get("new_best"):
+            rate_text, rate_color = f"{int(rate_info.get('rate', 0))}/H NEW BEST", (247, 207, 105)
+        elif rate_info.get("loading"):
+            rate_text, rate_color = "RATE INDEX", (153, 188, 192)
+        else:
+            rate_text, rate_color = f"{int(rate_info.get('rate', 0))}/H · BEST {int(rate_info.get('best', 0))}", (163, 204, 207)
         settings_box = wspr_card_settings_box(box)
-        draw_text(text_cache, x0 + 16, y1 - 22, fit_station_text(text_cache, status_text, settings_box[0] - x0 - 26, 14, True, False, "Liberation Sans"), color, 14, True, True, "lm", family="Liberation Sans")
+        # The distance view owns both GRAPH and settings controls at the
+        # bottom-right. Its status must not run behind either one.
+        footer_x1 = settings_box[0] - 10
+        if view == 2:
+            footer_x1 = min(footer_x1, wspr_card_distance_expand_box(box)[0] - 10)
+            compact_level = f"{level:.0f} dBm" if level is not None else "-- dBm"
+            status_text = f"{status}  ·  {compact_level}  ·  {rate_text}"
+        else:
+            status_text += f"  ·  {rate_text}"
+        draw_text(text_cache, x0 + 16, y1 - 22, fit_station_text(text_cache, status_text, footer_x1 - (x0 + 16), 14, True, False, "Liberation Sans"), color, 14, True, True, "lm", family="Liberation Sans")
         draw_wspr_settings_button(text_cache, settings_box)
 
 
@@ -9092,7 +10277,8 @@ def wspr_decoder_settings_action_at(x, y):
     return None, None
 
 
-def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, cpu_percent=None, receiver_grid=None):
+def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, cpu_percent=None, receiver_grid=None,
+                        decode_rates=None):
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 9, 14, 253))
     card_boxes = wspr_workspace_card_boxes(len(tiles), scroll_y)
     for index, box in enumerate(card_boxes):
@@ -9104,6 +10290,7 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
             draw_wspr_session_card(
                 text_cache, box, tile, monitor_manager.sessions.get(key), textures.get(key),
                 monitor_manager.capacity_snapshot(tile.get("server", "")), receiver_grid,
+                (decode_rates or {}).get(key),
             )
         else:
             draw_logical_rect(*box, (5, 14, 20, 142))
@@ -9225,6 +10412,8 @@ def wspr_workspace_action_at(x, y, tiles, scroll_y):
                 return "expanded_waterfall", tile
             if int(tile.get("view", 0) or 0) % 3 == 1 and contains(wspr_card_log_expand_box(box), x, y):
                 return "expanded_log", tile
+            if int(tile.get("view", 0) or 0) % 3 == 2 and contains(wspr_card_distance_expand_hit_box(box), x, y):
+                return "expanded_graph", tile
             return "cycle", tile
     return None
 
@@ -10354,7 +11543,22 @@ def menu_at(x, y, scroll):
 
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
-    if kind == "rx":
+    if kind == "local_rx":
+        # LAN: the familiar hub-and-spokes local-network topology. It is
+        # deliberately literal, distinct from both the global receiver globe
+        # and the abstract constellation tool.
+        mono = (224, 237, 239, 238)
+        stroke = 2
+        top = pygame.Rect(cx - 9, cy - 22, 18, 13)
+        pygame.draw.rect(surface, mono, top, stroke, border_radius=5)
+        bus_y = cy - 2
+        pygame.draw.line(surface, mono, (cx, top.bottom + 3), (cx, bus_y), stroke)
+        pygame.draw.line(surface, mono, (cx - 20, bus_y), (cx + 20, bus_y), stroke)
+        for node_x in (cx - 20, cx, cx + 20):
+            node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
+            pygame.draw.line(surface, mono, (node_x, bus_y), (node_x, node.top - 3), stroke)
+            pygame.draw.rect(surface, mono, node, stroke, border_radius=4)
+    elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
         mono = (218, 228, 230, 225)
@@ -10401,6 +11605,14 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.lines(surface, speaker, True, ((cx - 13, cy - 15), (cx + 11, cy - 31), (cx + 11, cy + 31), (cx - 13, cy + 15)), 5)
         pygame.draw.arc(surface, speaker, (cx - 10, cy - 22, 38, 44), math.radians(-58), math.radians(58), 6)
         pygame.draw.arc(surface, speaker, (cx - 17, cy - 34, 62, 68), math.radians(-58), math.radians(58), 6)
+    elif kind == "dual":
+        # Two stacked RF panes: a clear, monochrome Dual VFO mark that stays
+        # readable at the deliberately restrained menu-icon scale.
+        for offset, accent in ((-15, color), (15, dim)):
+            pygame.draw.rect(surface, accent, (cx - 31, cy + offset - 10, 62, 20), 2, border_radius=3)
+            pygame.draw.line(surface, accent, (cx - 21, cy + offset + 3), (cx - 7, cy + offset - 4), 2)
+            pygame.draw.line(surface, accent, (cx - 7, cy + offset - 4), (cx + 6, cy + offset + 4), 2)
+            pygame.draw.line(surface, accent, (cx + 6, cy + offset + 4), (cx + 20, cy + offset - 2), 2)
     elif kind == "tests":
         # Checklist fallback matching the supplied diagnostics artwork.
         pygame.draw.rect(surface, color, (cx - 23, cy - 31, 46, 62), 3, border_radius=3)
@@ -10451,15 +11663,21 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
     if cached is not None:
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
-    asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
     try:
-        icon = pygame.image.load(str(asset_path)).convert_alpha()
-        # Keep the supplied vector-derived art deliberately understated in the
-        # compact menu. Its transparent alpha allows one clean 30% reduction.
-        icon_size = round(icon.get_width() * 0.70)
-        icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
-        icon_y = max(0, (height - 26 - icon_size) // 2)
-        surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
+        if kind in ("local_rx", "network"):
+            # Network is the configuration side of the same local-LAN path
+            # represented by LOCAL RX, so reuse that exact hub glyph.
+            draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
+                           (232, 248, 250, 232), (82, 235, 231, 150))
+        else:
+            asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
+            icon = pygame.image.load(str(asset_path)).convert_alpha()
+            # Keep the supplied vector-derived art deliberately understated in the
+            # compact menu. Its transparent alpha allows one clean 30% reduction.
+            icon_size = round(icon.get_width() * 0.70)
+            icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+            icon_y = max(0, (height - 26 - icon_size) // 2)
+            surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
     except (pygame.error, OSError):
         # Keep development builds usable if the optional icon package is absent.
         color = (232, 248, 250, 232)
@@ -10527,6 +11745,8 @@ LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
 LCD_DRAWER_HEADING_SIZE = 13
 VFO_FONT_FAMILY = "Orbitron"
 VFO_NEON_COLOR = (115, 255, 177)
+# Shared active-line half-height for every continuous control.
+SLIDER_STEM_HALF_HEIGHT = 3
 # 118 px was visually too dominant in the compact right rail. Keep the
 # instrument centred but reduce its height by exactly 25% (rounded to 89 px).
 LCD_HOME_PASSBAND_HEIGHT = 89
@@ -10667,8 +11887,8 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
     track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box()
     track_y = (track_y0 + track_y1) / 2
-    draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (20, 34, 42, 235))
-    draw_logical_rect(track_x0, track_y - 4, track_x0 + (track_x1 - track_x0) * level, track_y + 4, (67, 205, 149, 230))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (20, 34, 42, 235))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, (67, 205, 149, 230))
     knob_x = track_x0 + (track_x1 - track_x0) * level
     draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, (233, 247, 248, 255))
 
@@ -10869,12 +12089,12 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
     draw_text(text_cache, x0 + 10, label_y, "SHIFT", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, shift_label, (113, 236, 190), 17, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (22, 39, 47, 248))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 39, 47, 248))
     zero_x = (track_x0 + track_x1) / 2
     draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, (241, 193, 82, 248), 2)
     draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, (77, 126, 139, 188), 1)
     draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, (77, 126, 139, 188), 1)
-    draw_logical_rect(min(zero_x, knob_x), track_y - 4, max(zero_x, knob_x), track_y + 4, (76, 214, 170, 184))
+    draw_logical_rect(min(zero_x, knob_x), track_y - SLIDER_STEM_HALF_HEIGHT, max(zero_x, knob_x), track_y + SLIDER_STEM_HALF_HEIGHT, (76, 214, 170, 184))
     draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (231, 247, 247, 255))
 
 
@@ -10888,8 +12108,8 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
     draw_text(text_cache, x0 + 10, label_y, "WIDTH", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), (110, 222, 242), 17, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - 4, track_x1, track_y + 4, (22, 39, 47, 248))
-    draw_logical_rect(track_x0, track_y - 4, knob_x, track_y + 4, (84, 188, 226, 184))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 39, 47, 248))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, (84, 188, 226, 184))
     for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
         mark_x = track_x0 + (track_x1 - track_x0) * fraction_mark
         draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, (98, 154, 170, 156), 1)
@@ -10959,11 +12179,10 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     """Show a compact radio-style VFO and rounded mode annunciators."""
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
     # The main frequency display remains untouched. This smaller right-rail
-    # readout deliberately uses the familiar dark, rounded radio-control
-    # treatment so the mode row reads as one clean instrument.
+    # readout stays visually open: it is a live value, not a second button.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    cache_key = ("surface", f"lcd_annunciator_radio_v3_{active_mode}_{digital.upper()}")
+    cache_key = ("surface", f"lcd_annunciator_radio_v4_{active_mode}_{digital.upper()}")
     cached = text_cache.cache.get(cache_key)
     if cached is None:
         width, height, scale = int(x1 - x0), int(y1 - y0), 2
@@ -10979,7 +12198,6 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
                 pygame.draw.rect(surface, edge, rect, width=pixel(1), border_radius=pixel(radius))
 
         surface.fill((3, 6, 9, 232))
-        rounded(3, 3, width - 3, 56, (10, 13, 16, 246), (54, 60, 65, 232), 8)
         grid_y0, grid_y1, gap = 130, height - 6, 5
         cell_w = (width - 12 - 3 * gap) / 4
         cell_h = (grid_y1 - grid_y0 - gap) / 2
@@ -11007,12 +12225,12 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # the primary tuning readout.
     frequency_text = sdr_ui.format_freq(freq_khz)
     unit = "MHz"
-    unit_size = 11
+    unit_size = 13
     unit_width = text_cache.font(unit_size, bold=True, family="Liberation Sans").size(unit)[0]
     frequency_left_margin = 10
     unit_right_margin = 10
     frequency_unit_gap = 3
-    frequency_size = 42
+    frequency_size = 48
     fit_target = "30.000.000"
     frequency_width_limit = (
         (x1 - unit_right_margin - unit_width - frequency_unit_gap)
@@ -11028,10 +12246,10 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # frequencies therefore do not leave a distracting blank before MHz.
     frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
     draw_text_scaled_x(
-        text_cache, frequency_right, y0 + 30, frequency_text, frequency_color, frequency_size,
+        text_cache, frequency_right, y0 + 31, frequency_text, frequency_color, frequency_size,
         frequency_x_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
     )
-    draw_text(text_cache, x1 - unit_right_margin, y0 + 35, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x1 - unit_right_margin, y0 + 36, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
     # Give the Home meter enough physical weight to read as an instrument,
     # rather than a thin status decoration beside the VFO.
@@ -11887,7 +13105,10 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
     # Temporary operator diagnostic: this will be removed once public Kiwi
     # receiver jitter has been characterized across a few stations.
-    jitter_label = f"BUFFER {audio_jitter_depth}/{audio_jitter_target}"
+    # Queue depth may legitimately sit above the target while incoming Kiwi
+    # packets arrive in a burst. Label both values explicitly so ``15/12`` is
+    # not mistaken for an invalid min/max reading.
+    jitter_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
     jitter_color = (113, 226, 172) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else (244, 186, 102)
     draw_text(text_cache, 18 if two_row else 560, secondary_y if two_row else status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if two_row else 14), True, False, "lm" if two_row else "rm", alpha, family="Cantarell")
     if two_row:
@@ -12660,6 +13881,78 @@ def stop_audio_player(player):
             pass
 
 
+UI_CONFIRMATION_TONE_HZ = 587.33
+UI_CONFIRMATION_TONE_SECONDS = 0.070
+UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS = 0.075
+_ui_confirmation_tone_last_at = 0.0
+_ui_confirmation_tone_payload = None
+TOOLBOX_CONTINUOUS_GESTURES = frozenset((
+    "audio_volume",
+    "home_volume",
+    "audio_squelch_level",
+    "audio_denoise_level",
+    "display_floor_slider",
+    "display_ceiling_slider",
+    "fan_start_slider",
+    "fan_full_slider",
+    "fan_minimum_slider",
+    "lcd_filter_shift",
+    "lcd_filter_width",
+    # Dual owns a mixture of buttons and continuous tuning instruments. Its
+    # confirmation language can be designed separately from the Home rail.
+    "dual_vfo",
+))
+
+
+def play_toolbox_confirmation_tone(args):
+    """Play one restrained Icom-like confirmation tone for a toolbox touch."""
+    global _ui_confirmation_tone_last_at, _ui_confirmation_tone_payload
+    if args.desktop or not sys.platform.startswith("linux"):
+        return
+
+    now = time.monotonic()
+    if now - _ui_confirmation_tone_last_at < UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS:
+        return
+    _ui_confirmation_tone_last_at = now
+
+    if _ui_confirmation_tone_payload is None:
+        rate = 48000
+        count = int(rate * UI_CONFIRMATION_TONE_SECONDS)
+        fade = max(1, int(rate * 0.008))
+        samples = []
+        for index in range(count):
+            edge = min(1.0, index / fade, (count - index - 1) / fade)
+            samples.append(
+                int(32767 * 0.105 * max(0.0, edge) * math.sin(math.tau * UI_CONFIRMATION_TONE_HZ * index / rate))
+            )
+        _ui_confirmation_tone_payload = struct.pack(f"<{len(samples)}h", *samples)
+
+    def worker(payload):
+        try:
+            process = subprocess.Popen(
+                [
+                    "pw-cat", "--playback", "--raw", "--rate", "48000",
+                    "--channels", "1", "--format", "s16", "--latency", "10000", "-",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            process.communicate(payload, timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except (OSError, UnboundLocalError):
+                pass
+
+    threading.Thread(
+        target=worker,
+        args=(_ui_confirmation_tone_payload,),
+        name="sdr-toolbox-tone",
+        daemon=True,
+    ).start()
+
+
 def play_startup_chime(args):
     """Play one quiet, original two-note UI-ready chime on the Pi sink."""
     if args.desktop or not sys.platform.startswith("linux"):
@@ -13027,6 +14320,111 @@ class BufferedAudioPlayer:
         stop_audio_player(raw_player)
 
 
+class DualVFOAudioMixer:
+    """Bounded local A/B PCM crossfader for the Dual VFO workspace.
+
+    VFO A owns the output clock. VFO B is allowed a small reserve so normal
+    packet-arrival skew does not make the blend flutter, but a failing B
+    receiver simply contributes silence and can never stall the main VFO.
+    """
+
+    def __init__(self, args):
+        self.args = args
+        self.lock = threading.Lock()
+        self.active = False
+        self.mix = 0.0
+        self.player = None
+        self.pending = {"A": bytearray(), "B": bytearray()}
+        self.packets = {"A": deque(), "B": deque()}
+        self.packet_bytes = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2
+        self.live_sources = set()
+
+    def start(self, mix=0.0):
+        self.stop()
+        with self.lock:
+            self.active = True
+            self.mix = clamp(float(mix), 0.0, 1.0)
+            self.pending = {"A": bytearray(), "B": bytearray()}
+            self.packets = {"A": deque(), "B": deque()}
+            self.live_sources = set()
+
+    def stop(self):
+        with self.lock:
+            self.active = False
+            player, self.player = self.player, None
+            self.pending = {"A": bytearray(), "B": bytearray()}
+            self.packets = {"A": deque(), "B": deque()}
+            self.live_sources = set()
+        if player is not None:
+            player.close()
+
+    def active_snapshot(self):
+        with self.lock:
+            return self.active
+
+    def set_mix(self, mix):
+        with self.lock:
+            self.mix = clamp(float(mix), 0.0, 1.0)
+            return self.mix
+
+    @staticmethod
+    def _mix_pcm(a_audio, b_audio, mix):
+        """Equal-power mixing keeps a centered blend from sounding louder."""
+        if mix <= 0.001:
+            return a_audio
+        if mix >= 0.999:
+            return b_audio
+        gain_a = math.cos(mix * math.pi * 0.5)
+        gain_b = math.sin(mix * math.pi * 0.5)
+        if audioop is not None:
+            return audioop.add(
+                audioop.mul(a_audio, 2, gain_a),
+                audioop.mul(b_audio, 2, gain_b),
+                2,
+            )
+        count = min(len(a_audio), len(b_audio)) // 2
+        a_samples = struct.unpack(f"<{count}h", a_audio[:count * 2])
+        b_samples = struct.unpack(f"<{count}h", b_audio[:count * 2])
+        mixed = tuple(
+            int(clamp(round(left * gain_a + right * gain_b), -32768, 32767))
+            for left, right in zip(a_samples, b_samples)
+        )
+        return struct.pack(f"<{count}h", *mixed)
+
+    def submit(self, source, audio, silence=False):
+        """Accept mono PCM. A packets produce the hardware-output timeline."""
+        if source not in self.pending or not audio:
+            return
+        outputs = []
+        player = None
+        with self.lock:
+            if not self.active:
+                return
+            if source not in self.live_sources:
+                self.live_sources.add(source)
+                print(f"gl dual audio {source} PCM live", flush=True)
+            pending = self.pending[source]
+            pending.extend(bytes(len(audio)) if silence else audio)
+            while len(pending) >= self.packet_bytes:
+                packet = bytes(pending[:self.packet_bytes])
+                del pending[:self.packet_bytes]
+                if source == "B":
+                    queue_b = self.packets["B"]
+                    while len(queue_b) >= 10:
+                        queue_b.popleft()
+                    queue_b.append(packet)
+                    continue
+                queue_b = self.packets["B"]
+                b_packet = queue_b.popleft() if queue_b else bytes(self.packet_bytes)
+                outputs.append(self._mix_pcm(packet, b_packet, self.mix))
+                if self.player is None:
+                    self.player = BufferedAudioPlayer(self.args, 1)
+                player = self.player
+        if player is not None:
+            for output in outputs:
+                player.submit(output, silence=False)
+
+
 def pipewire_default_volume():
     """Read the real default-sink level used by the USB speaker path."""
     if DESKTOP_MODE:
@@ -13065,7 +14463,10 @@ def set_pipewire_default_volume(volume):
         return None
 
 
-def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_queue=None):
+def snd_meter_worker(
+    args, stop_event, state, transcript_queue=None, callsign_queue=None,
+    dual_mixer=None, dual_source=None, enable_listener_dsp=True,
+):
     seen_view_generation = -1
     seen_radio_generation = -1
     seen_server_generation = -1
@@ -13090,6 +14491,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
     while not stop_event.is_set():
         ws = None
         try:
+            mixer_active = bool(dual_mixer and dual_mixer.active_snapshot())
             if state.stream_paused_snapshot():
                 stop_audio_player(player)
                 player = None
@@ -13097,7 +14499,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 if stop_event.wait(0.10):
                     break
                 continue
-            if state.external_audio_snapshot():
+            if state.external_audio_snapshot() and not mixer_active:
                 stop_audio_player(player)
                 player = None
                 player_channels = None
@@ -13111,7 +14513,11 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
             state.connection_attempt(server_generation, "audio")
             radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
             desired_channels = kiwi_audio_channels(radio_mode)
-            if desired_channels != player_channels or (player is not None and player.poll() is not None):
+            if mixer_active:
+                stop_audio_player(player)
+                player = None
+                player_channels = None
+            elif desired_channels != player_channels or (player is not None and player.poll() is not None):
                 stop_audio_player(player)
                 player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
                 player_channels = desired_channels
@@ -13129,6 +14535,9 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
             if session_timestamp is None:
                 continue
             ws = kiwi.KiwiWebSocket.connect(server, "SND", session_timestamp=session_timestamp)
+            if not state.register_transport_socket(server_generation, "audio", ws):
+                ws = None
+                continue
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             configured = False
             authenticated = False
@@ -13136,16 +14545,22 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
             # Do not send keepalive into Kiwi's authentication exchange. The
             # periodic command starts only after a configured SND stream.
             last_keepalive = time.monotonic()
+            startup_deadline = last_keepalive + WATERFALL_STARTUP_TIMEOUT_SECONDS
             next_view_send_at = 0.0
             while not stop_event.is_set():
-                if state.external_audio_snapshot():
+                mixer_active = bool(dual_mixer and dual_mixer.active_snapshot())
+                if state.external_audio_snapshot() and not mixer_active:
                     break
                 if state.stream_paused_snapshot():
                     break
                 server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
                 radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
                 desired_channels = kiwi_audio_channels(radio_mode)
-                if desired_channels != player_channels or (player is not None and player.poll() is not None):
+                if mixer_active:
+                    stop_audio_player(player)
+                    player = None
+                    player_channels = None
+                elif desired_channels != player_channels or (player is not None and player.poll() is not None):
                     stop_audio_player(player)
                     player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
                     player_channels = desired_channels
@@ -13172,7 +14587,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                         print(f"gl HF Enhance unavailable: {exc}", flush=True)
                     hf_load_future = None
                     hf_load_model = None
-                if want_voice_clean != voice_clean_requested:
+                if enable_listener_dsp and want_voice_clean != voice_clean_requested:
                     if voice_cleaner is not None:
                         voice_cleaner.close()
                         voice_cleaner = None
@@ -13183,6 +14598,9 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                             print("gl RNNoise voice clean enabled", flush=True)
                         except (OSError, RuntimeError) as exc:
                             print(f"gl RNNoise unavailable: {exc}", flush=True)
+                if not enable_listener_dsp:
+                    hf_enhance_model = None
+                    want_voice_clean = False
                 if hf_enhance_model != hf_enhance_requested:
                     hf_enhance_requested = hf_enhance_model
                     hf_enhancer = None
@@ -13211,6 +14629,11 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 elif server_generation != seen_server_generation:
                     seen_server_generation = server_generation
                     break
+                # A Kiwi can accept TCP while it is still unwinding the prior
+                # paused listener. Do not leave Resume at CONNECTING forever
+                # when that socket never reaches the sample-rate handshake.
+                if not configured and time.monotonic() >= startup_deadline:
+                    raise RuntimeError("sound startup timeout")
                 now_monotonic = time.monotonic()
                 if (
                     configured
@@ -13368,7 +14791,18 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                     # though the slider command had been accepted.
                     squelched = bool(flags & kiwi.SND_FLAG_SQUELCH_UI)
                     state.set_squelch_closed(squelched)
-                    if player and listening_audio:
+                    if dual_mixer and dual_mixer.active_snapshot() and dual_source and listening_audio:
+                        # The shared Dual VFO sink is mono even when either
+                        # receiver is in a stereo mode. Downmix at the edge
+                        # of each Kiwi client so the fader has a single,
+                        # deterministic PCM format.
+                        mix_audio = (
+                            stereo_s16le_to_mono(listening_audio)
+                            if packet_is_stereo else listening_audio
+                        )
+                        conceal_with_silence = bool(audio_controls.get("mute", False) or squelched)
+                        dual_mixer.submit(dual_source, mix_audio, silence=conceal_with_silence)
+                    elif player and listening_audio:
                         # Deliberate mute/squelch must feed quiet PCM into the
                         # same clock. Otherwise it would look like a network
                         # starvation and incorrectly grow the reserve.
@@ -13379,6 +14813,10 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                             silence=conceal_with_silence,
                         )
         except Exception as exc:
+            # Pausing deliberately closes this socket. It is not a listener
+            # failure and must not create a retry/backoff cycle or a scary log.
+            if state.stream_paused_snapshot():
+                continue
             print(f"gl SND {exc}", flush=True)
             if state.connection_failed(server_generation, "audio"):
                 persist_live_station_health(server, "audio", False)
@@ -13391,6 +14829,7 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 break
         finally:
             if ws:
+                state.unregister_transport_socket("audio", ws)
                 ws.send_close()
     if voice_cleaner is not None:
         voice_cleaner.close()
@@ -13671,6 +15110,9 @@ def waterfall_worker(args, line_queue, stop_event, state):
             if session_timestamp is None:
                 continue
             ws = kiwi.KiwiWebSocket.connect(server, "W/F", session_timestamp=session_timestamp)
+            if not state.register_transport_socket(seen_server_generation, "waterfall", ws):
+                ws = None
+                continue
             kiwi.send_kiwi_setup(ws, "kiwi", args.user)
             sent_freq_khz = waterfall_view_center_khz(
                 freq_khz, kiwi.zoom_source_span_khz(zoom)
@@ -13781,6 +15223,10 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     # The SND worker supplies the real RF level. Avoid a
                     # second per-row sort solely for a redundant W/F estimate.
         except Exception as exc:
+            # As above, the hard Pause action aborts the live socket on
+            # purpose. Resume starts a completely fresh W/F session.
+            if state.stream_paused_snapshot():
+                continue
             print(f"gl WF {exc}", flush=True)
             if state.connection_failed(seen_server_generation, "waterfall"):
                 persist_live_station_health(server, "waterfall", False)
@@ -13793,6 +15239,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
                 break
         finally:
             if ws:
+                state.unregister_transport_socket("waterfall", ws)
                 ws.send_close()
 
 
@@ -13821,6 +15268,7 @@ def main():
     parser.add_argument("--desktop", action="store_true", help="run the LCD 1280x800 landscape UI locally with mouse input")
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
@@ -14017,8 +15465,28 @@ def main():
             state.set_audio_controls(**restored_audio)
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
+    # VFO B is intentionally dormant until Dual opens. It has a complete
+    # independent state/transport pair so it never reuses or retunes VFO A.
+    dual_audio_mixer = DualVFOAudioMixer(args)
+    dual_b_state = SharedState(
+        args.server, args.freq_khz, args.zoom, -95.0,
+        args.wf_floor, args.wf_ceil, args.wf_speed, radio_mode.lower(), args.spectrum,
+    )
+    dual_b_line_queue = queue.Queue(maxsize=96)
+    dual_b_wf_texture = WaterfallTexture()
+    dual_b_stop_event = None
+    dual_b_snd_thread = None
+    dual_b_wf_thread = None
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
-    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue, callsign_queue), daemon=True)
+    # The main listener normally owns the speaker. When Dual opens the same
+    # live A worker atomically switches into the shared mixer, becoming its
+    # timing source instead of continuing to bypass VFO B.
+    snd_thread = threading.Thread(
+        target=snd_meter_worker,
+        args=(args, stop_event, state, transcript_queue, callsign_queue),
+        kwargs={"dual_mixer": dual_audio_mixer, "dual_source": "A"},
+        daemon=True,
+    )
     caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
     callsign_thread = threading.Thread(target=callsign_worker, args=(stop_event, state, callsign_queue), daemon=True)
     snd_thread.start()
@@ -14058,6 +15526,12 @@ def main():
     frames = 0
     display_freq = args.freq_khz
     display_span = kiwi.zoom_to_span_khz(args.zoom)
+    # Scope sizing is an experimental live layout control. It begins at the
+    # established wide-layout height and changes only while its grab rail is
+    # visible, so ordinary waterfall gestures remain untouched.
+    scope_height = float(LCD_SPECTRUM_H if LCD_800_MODE else (SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H))
+    scope_adjust_until = 0.0
+    scope_adjust_box = None
     anim_from_freq = display_freq
     anim_from_span = display_span
     anim_to_freq = display_freq
@@ -14197,6 +15671,112 @@ def main():
         return applied_volume
 
     tests_panel_open = False
+    # Dual VFO begins as a visual interaction study. Keeping its state here
+    # makes it independent from the one live KiWi client until the second
+    # transport/audio path is implemented deliberately.
+    dual_vfo_open = bool(args.dual_vfo_preview)
+    dual_vfo_active = "A"
+    dual_vfo_mix = 0.0
+    dual_vfo_sources = {
+        "A": {"server": args.server, "name": "CURRENT RECEIVER", "location": ""},
+        "B": {"server": args.server, "name": "CURRENT RECEIVER", "location": ""},
+    }
+    dual_vfo_profiles = {
+        "A": {"freq_khz": args.freq_khz, "zoom": args.zoom, "mode": radio_mode, "squelch_level": 0},
+        "B": {"freq_khz": args.freq_khz, "zoom": args.zoom, "mode": radio_mode, "squelch_level": 0},
+    }
+    dual_vfo_picker_open = False
+    dual_vfo_picker_target = "A"
+    dual_vfo_picker_page = 0
+    dual_vfo_mode_open = False
+    dual_vfo_mode_target = "A"
+    dual_vfo_gesture_vfo = None
+    dual_vfo_dragging = False
+    dual_vfo_start_freq = args.freq_khz
+    dual_vfo_start_zoom = args.zoom
+    dual_vfo_pinch_distance = None
+
+    def sync_dual_vfo_b_state():
+        """Publish the editable B profile to its own live Kiwi state."""
+        source = dict(dual_vfo_sources.get("B", {}))
+        profile = dict(dual_vfo_profiles.get("B", {}))
+        target_server = str(source.get("server") or args.server)
+        current_server, _freq, _zoom, _dbm, _view_gen, _server_gen = dual_b_state.snapshot()
+        if target_server != current_server:
+            dual_b_state.set_server(target_server)
+            drain_queue(dual_b_line_queue)
+            dual_b_wf_texture.clear()
+        dual_b_state.set_view(
+            freq_khz=float(profile.get("freq_khz", args.freq_khz)),
+            zoom=int(profile.get("zoom", args.zoom)),
+        )
+        desired_mode = str(profile.get("mode", radio_mode)).lower()
+        current_mode, _low_cut, _high_cut, _radio_gen = dual_b_state.radio_snapshot()
+        if desired_mode != current_mode:
+            actual_mode, low_cut, high_cut, _generation = dual_b_state.set_radio_mode(desired_mode)
+            profile.update({"mode": actual_mode.upper(), "low_cut": low_cut, "high_cut": high_cut})
+            dual_vfo_profiles["B"] = profile
+        controls = dict(profile.get("audio_controls", {}))
+        controls["squelch_level"] = int(profile.get("squelch_level", controls.get("squelch_level", 0)) or 0)
+        if controls:
+            dual_b_state.set_audio_controls(**controls)
+
+    def start_dual_vfo_clients():
+        """Start B's real SND/W/F clients and make A+B own one PCM sink."""
+        nonlocal dual_b_stop_event, dual_b_snd_thread, dual_b_wf_thread
+        # B is deliberately dormant outside the workspace. Resume its state
+        # only as part of an explicit Dual entry, after a prior hard teardown.
+        dual_b_state.set_stream_paused(False)
+        sync_dual_vfo_b_state()
+        dual_audio_mixer.start(dual_vfo_mix)
+        if dual_b_stop_event is not None and not dual_b_stop_event.is_set():
+            return
+        dual_b_stop_event = threading.Event()
+        dual_b_snd_thread = threading.Thread(
+            target=snd_meter_worker,
+            args=(args, dual_b_stop_event, dual_b_state),
+            kwargs={"dual_mixer": dual_audio_mixer, "dual_source": "B", "enable_listener_dsp": False},
+            name="dual-vfo-b-snd",
+            daemon=True,
+        )
+        dual_b_wf_thread = threading.Thread(
+            target=waterfall_worker,
+            args=(args, dual_b_line_queue, dual_b_stop_event, dual_b_state),
+            name="dual-vfo-b-waterfall",
+            daemon=True,
+        )
+        dual_b_snd_thread.start()
+        dual_b_wf_thread.start()
+        print("gl dual VFO B client started", flush=True)
+
+    def stop_dual_vfo_clients():
+        """Hard-release B's Kiwi slots immediately when Dual is dismissed."""
+        nonlocal dual_b_stop_event, dual_b_snd_thread, dual_b_wf_thread
+        was_running = dual_b_stop_event is not None or dual_audio_mixer.active_snapshot()
+        dual_audio_mixer.stop()
+        # Do not merely ask the threads to stop: close the live B transports
+        # now, so the Kiwi server frees both listener slots before Home draws.
+        dual_b_state.set_stream_paused(True)
+        if dual_b_stop_event is not None:
+            dual_b_stop_event.set()
+        if dual_b_snd_thread is not None:
+            dual_b_snd_thread.join(timeout=1.2)
+        if dual_b_wf_thread is not None:
+            dual_b_wf_thread.join(timeout=1.2)
+        dual_b_stop_event = None
+        dual_b_snd_thread = None
+        dual_b_wf_thread = None
+        drain_queue(dual_b_line_queue)
+        if was_running:
+            print("gl dual VFO B client stopped", flush=True)
+
+    def dual_vfo_b_status():
+        """Return a compact status without pretending B is live before PCM."""
+        _server, _freq, _zoom, _dbm, _view_generation, server_generation = dual_b_state.snapshot()
+        if dual_b_state.audio_stream_ready_snapshot(server_generation):
+            return "LIVE"
+        return str(dual_b_state.connection_snapshot() or "CONNECTING").replace("_", " ").upper()
+
     wspr_preferences = remembered_preferences.get("wspr", {})
     if not isinstance(wspr_preferences, dict):
         wspr_preferences = {}
@@ -14254,6 +15834,16 @@ def main():
     wspr_expanded_waterfall_open = False
     wspr_expanded_waterfall_id = ""
     wspr_expanded_waterfall_scroll = 0
+    wspr_expanded_graph_open = False
+    wspr_expanded_graph_id = ""
+    wspr_expanded_graph_page = 0
+    try:
+        wspr_expanded_graph_window = int(wspr_preferences.get("distance_graph_window", 0))
+    except (TypeError, ValueError):
+        wspr_expanded_graph_window = 0
+    wspr_expanded_graph_window = int(clamp(
+        wspr_expanded_graph_window, 0, len(WSPR_DISTANCE_WINDOWS) - 1
+    ))
     wspr_tile_settings_open = False
     wspr_tile_settings_id = ""
     wspr_tile_receiver_open = False
@@ -14269,6 +15859,14 @@ def main():
         args.user, decoder_settings=wspr_decoder_settings,
         decode_scheduler=wspr_decode_scheduler,
     )
+    # Parsing historic JSONL happens once off the render thread. The active
+    # graph thereafter receives precomputed dots directly from this cache.
+    wspr_distance_cache = WSPRDistanceHistoryCache(args.wspr_log_file)
+    wspr_distance_cache.start()
+    # The decoder ranking is similarly hydrated off-thread. Its compact
+    # sidecar retains personal best hourly decode rates across reboots.
+    wspr_decode_rates = WSPRDecodeRateTracker(args.wspr_log_file)
+    wspr_decode_rates.start()
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
@@ -14457,6 +16055,7 @@ def main():
                 "decoder_profile": wspr_decoder_profile,
                 "decoder_osd_depth": int(wspr_decoder_osd_depth),
                 "graph_window": int(wspr_graph_window_index),
+                "distance_graph_window": int(wspr_expanded_graph_window),
                 "band_page": int(wspr_band_page),
                 "workspace_page": int(wspr_workspace_page),
                 "workspace_scroll": round(float(wspr_workspace_scroll), 1),
@@ -14582,6 +16181,10 @@ def main():
         record.update(extra)
         try:
             append_wspr_local_log(args.wspr_log_file, event, record)
+            # New WSPR decodes are folded into all four graph spans once here,
+            # never re-parsed from disk by the OpenGL render loop.
+            wspr_distance_cache.ingest(event, record)
+            wspr_decode_rates.ingest(event, record)
         except OSError as exc:
             print(f"gl WSPR local log {exc}", flush=True)
 
@@ -14603,6 +16206,8 @@ def main():
         one exception and force one atomic write of the complete preference
         document.
         """
+        wspr_distance_cache.flush()
+        wspr_decode_rates.flush()
         write_remembered_view(save_current_frequency=True, force=True)
         print(f"gl persisted receiver preferences before signal {signum}", flush=True)
         raise SystemExit(0)
@@ -14871,15 +16476,21 @@ def main():
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_notice, network_next_refresh
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dual_vfo_open, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
+        nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
         nonlocal wspr_tile_band_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         wake_controls()
         menu_open = False
+        # Navigating away from Dual must release its extra SND/W/F pair before
+        # another receiver-facing page has a chance to open sockets.
+        if dual_vfo_open and kind != "dual":
+            stop_dual_vfo_clients()
+        dual_vfo_open = False
         wspr_panel_open = False
         wspr_identity_open = False
         wspr_add_open = False
@@ -14890,6 +16501,9 @@ def main():
         wspr_expanded_waterfall_open = False
         wspr_expanded_waterfall_id = ""
         wspr_expanded_waterfall_scroll = 0
+        wspr_expanded_graph_open = False
+        wspr_expanded_graph_id = ""
+        wspr_expanded_graph_page = 0
         wspr_tile_band_open = False
         # Home only hides WSPR. Monitors keep their paired Kiwi audio/W/F
         # sockets and decode cadence alive in the background.
@@ -14988,6 +16602,48 @@ def main():
             tests_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
+        elif kind == "dual":
+            settings_menu_open = False
+            digital_menu_open = False
+            dual_vfo_open = True
+            dual_vfo_active = "A"
+            dual_vfo_mix = 0.0
+            dual_vfo_picker_open = False
+            dual_vfo_picker_target = "A"
+            dual_vfo_picker_page = 0
+            dual_vfo_mode_open = False
+            dual_vfo_mode_target = "A"
+            live_server, live_freq, live_zoom, _live_smeter, _live_generation, _live_server_generation = state.snapshot()
+            live_mode, live_low_cut, live_high_cut, _live_radio_generation = state.radio_snapshot()
+            live_controls, _live_audio_generation = state.audio_controls_snapshot()
+            live_station = next(
+                (station for station in all_stations if station_fields(station)[2] == live_server),
+                None,
+            )
+            if live_station is not None:
+                live_name, live_location, _live_server, _live_used, _live_total = station_fields(live_station)
+            else:
+                live_name, live_location = "CURRENT RECEIVER", ""
+            # A Dual entry must feel continuous: the operator's live VFO is
+            # copied exactly into A, then cloned into B as the ready-to-edit
+            # starting point for its independent Kiwi/audio path.
+            dual_vfo_sources = {
+                "A": {"server": live_server, "name": live_name, "location": live_location},
+                "B": {"server": live_server, "name": live_name, "location": live_location},
+            }
+            carried_profile = {
+                "freq_khz": live_freq,
+                "zoom": live_zoom,
+                "mode": live_mode.upper(),
+                "low_cut": live_low_cut,
+                "high_cut": live_high_cut,
+                "audio_controls": dict(live_controls),
+                "squelch_level": int(live_controls.get("squelch_level", 0) or 0),
+            }
+            dual_vfo_profiles = {"A": dict(carried_profile), "B": dict(carried_profile)}
+            start_dual_vfo_clients()
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
             settings_menu_open = False
             digital_menu_open = False
@@ -15372,6 +17028,8 @@ def main():
 
 
     try:
+        if dual_vfo_open:
+            start_dual_vfo_clients()
         while not stop_event.is_set():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -15638,6 +17296,29 @@ def main():
                                 gesture = "asr_select"
                             elif asr_panel_open:
                                 gesture = "asr_outside"
+                            # Dual VFO is a self-contained experimental
+                            # workspace. It must claim its whole canvas before
+                            # retained waterfall, rail, or Home controls see
+                            # a touch.
+                            elif dual_vfo_mode_open:
+                                gesture = "dual_vfo_mode"
+                            elif dual_vfo_picker_open:
+                                gesture = "dual_vfo_picker"
+                            elif dual_vfo_open:
+                                gesture = "dual_vfo"
+                                dual_action = dual_vfo_action_at(x, y)
+                                if dual_action in ("A", "B"):
+                                    dual_vfo_gesture_vfo = dual_action
+                                elif dual_action and dual_action.startswith(("rx_", "zoom_")):
+                                    dual_vfo_gesture_vfo = dual_action.split("_")[1]
+                                else:
+                                    dual_vfo_gesture_vfo = None
+                                dual_vfo_dragging = False
+                                dual_vfo_pinch_distance = None
+                                if dual_vfo_gesture_vfo in ("A", "B"):
+                                    profile = dual_vfo_profiles.get(dual_vfo_gesture_vfo, {})
+                                    dual_vfo_start_freq = float(profile.get("freq_khz", display_freq))
+                                    dual_vfo_start_zoom = int(profile.get("zoom", zoom))
                             elif not picker_open and (settings_menu_open or digital_menu_open) and (nav_items := lcd_nav_items(settings_menu_open, digital_menu_open)) and (nav_index := lcd_nav_item_at(x, y, nav_items)) is not None:
                                 # Second-level rail pages must claim their
                                 # icons before any retained RF/waterfall
@@ -15654,6 +17335,8 @@ def main():
                                 gesture = "wspr_decoder_settings"
                             elif wspr_add_open:
                                 gesture = "wspr_add"
+                            elif wspr_panel_open and wspr_expanded_graph_open:
+                                gesture = "wspr_expanded_graph"
                             elif wspr_panel_open and wspr_expanded_waterfall_open:
                                 gesture = "wspr_expanded_waterfall"
                             elif wspr_panel_open and wspr_expanded_log_open:
@@ -15671,6 +17354,11 @@ def main():
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
                                 gesture = "zoom_minus"
+                            # The scope-height rail is deliberately a wide,
+                            # transparent target. Claim it before the
+                            # waterfall so resizing never becomes a tune.
+                            elif not picker_open and scope_adjust_box and contains(scope_adjust_box, x, y):
+                                gesture = "scope_height_adjust"
                             elif not picker_open and contains(SPECTRUM_TOGGLE_BOX, x, y):
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
@@ -16090,11 +17778,87 @@ def main():
                                 next_low, next_high, _radio_generation = state.set_filter(low_cut=low_cut, high_cut=audio_cut_hz)
                             if (next_low, next_high) != (low_cut, high_cut):
                                 filter_custom_width = True
+                        elif gesture == "dual_vfo":
+                            action = dual_vfo_action_at(start_x, start_y)
+                            vfo = dual_vfo_gesture_vfo
+                            if action == "mix":
+                                mix_box = dual_vfo_layout()["mix_track"]
+                                dual_vfo_mix = clamp(
+                                    (x - mix_box[0]) / max(1.0, mix_box[2] - mix_box[0]),
+                                    0.0, 1.0,
+                                )
+                                dual_audio_mixer.set_mix(dual_vfo_mix)
+                            elif vfo not in ("A", "B") or action not in ("A", "B"):
+                                # Buttons are release-to-activate. They must
+                                # never turn into an accidental frequency drag.
+                                pass
+                            elif len(points) >= 2:
+                                px0, py0 = points[0]
+                                px1, py1 = points[1]
+                                distance = max(1.0, math.hypot(px1 - px0, py1 - py0))
+                                if dual_vfo_pinch_distance is None:
+                                    dual_vfo_pinch_distance = distance
+                                else:
+                                    zoom_delta = int(round(math.log(distance / dual_vfo_pinch_distance, 1.22)))
+                                    if zoom_delta:
+                                        next_zoom = int(clamp(dual_vfo_start_zoom + zoom_delta, 0, args.max_zoom))
+                                        targets = (vfo,)
+                                        for target in targets:
+                                            profile = dict(dual_vfo_profiles.get(target, {}))
+                                            profile["zoom"] = next_zoom
+                                            dual_vfo_profiles[target] = profile
+                                        if "A" in targets:
+                                            state.set_view(zoom=next_zoom)
+                                            display_span = kiwi.zoom_to_span_khz(next_zoom)
+                                            anim_start = 0.0
+                                        else:
+                                            dual_b_state.set_view(zoom=next_zoom)
+                                        dual_vfo_start_zoom = next_zoom
+                                        dual_vfo_pinch_distance = distance
+                            elif is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
+                                dual_vfo_dragging = True
+                                profile = dict(dual_vfo_profiles.get(vfo, {}))
+                                span = kiwi.zoom_to_span_khz(dual_vfo_start_zoom)
+                                raw_frequency = retune_from_drag(
+                                    dual_vfo_start_freq, start_x, x, span,
+                                    args.invert_tune, args.swipe_slow_sensitivity,
+                                )
+                                step_hz = finger_tune_step_hz(dual_vfo_start_zoom, tune_step_hz)
+                                next_frequency = snap_frequency_khz(
+                                    clamp(raw_frequency, 0.0, TUNING_MAX_KHZ), step_hz
+                                )
+                                profile["freq_khz"] = next_frequency
+                                dual_vfo_profiles[vfo] = profile
+                                dual_vfo_active = vfo
+                                if vfo == "A":
+                                    state.set_view(freq_khz=next_frequency)
+                                    display_freq = next_frequency
+                                    candidate_freq = next_frequency
+                                    anim_start = 0.0
+                                else:
+                                    dual_b_state.set_view(freq_khz=next_frequency)
                         elif gesture in ("zoom_plus", "zoom_minus"):
                             # A control owns its entire touch from press to
                             # release. It must never leak into waterfall
                             # tuning, even if the finger slides away from it.
                             pass
+                        elif gesture == "scope_height_adjust":
+                            # Keep the scope/waterfall seam directly under
+                            # the finger. The ruler follows this boundary on
+                            # the next frame, so the response feels like one
+                            # live surface rather than a separate settings
+                            # dialog.
+                            max_scope_height = min(
+                                SCOPE_HEIGHT_MAX,
+                                LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - spectrum_y0 - 96,
+                            )
+                            scope_height = clamp(
+                                float(y - spectrum_y0),
+                                SCOPE_HEIGHT_MIN,
+                                max_scope_height,
+                            )
+                            scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
+                            wake_controls()
                         elif gesture == "waterfall":
                             last_x = x
                             if not swipe_started and is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
@@ -16102,7 +17866,133 @@ def main():
                             if swipe_started:
                                 advance_waterfall_drag(x)
                     else:
-                        if touch_started and gesture == "frequency_entry":
+                        # Confirm completed discrete Home/drawer actions only.
+                        # A slider is an instrument, so its entire drag stays
+                        # silent even though it shares the same right-hand rail.
+                        if (
+                            touch_started
+                            and LCD_800_MODE
+                            and start_x is not None
+                            and start_x >= LCD_NAV_X0
+                            and gesture not in TOOLBOX_CONTINUOUS_GESTURES
+                        ):
+                            play_toolbox_confirmation_tone(args)
+                        if touch_started and gesture == "dual_vfo_mode":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action, selected_mode = dual_vfo_mode_picker_action_at(x, y)
+                                if action in ("close", "outside"):
+                                    dual_vfo_mode_open = False
+                                elif action == "mode" and selected_mode:
+                                    target_vfo = dual_vfo_mode_target
+                                    profile = dict(dual_vfo_profiles.get(target_vfo, {}))
+                                    profile["mode"] = selected_mode.upper()
+                                    dual_vfo_profiles[target_vfo] = profile
+                                    if target_vfo == "A":
+                                        radio_mode, low_cut, high_cut, _radio_generation = state.set_radio_mode(selected_mode)
+                                        manual_radio_mode = True
+                                        filter_custom_width = False
+                                        digital_mode = "IQ" if radio_mode.upper() == "IQ" else "DIG"
+                                        profile.update({"mode": radio_mode, "low_cut": low_cut, "high_cut": high_cut})
+                                        dual_vfo_profiles["A"] = profile
+                                        remember_current_view()
+                                    else:
+                                        next_mode, low_cut, high_cut, _radio_generation = dual_b_state.set_radio_mode(selected_mode)
+                                        profile.update({"mode": next_mode.upper(), "low_cut": low_cut, "high_cut": high_cut})
+                                        dual_vfo_profiles["B"] = profile
+                                    dual_vfo_mode_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "dual_vfo_picker":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action, value = dual_vfo_receiver_picker_action_at(
+                                    x, y, len(all_stations), dual_vfo_picker_page
+                                )
+                                page_count = max(1, math.ceil(len(all_stations) / 5))
+                                if action == "close":
+                                    dual_vfo_picker_open = False
+                                elif action == "previous":
+                                    dual_vfo_picker_page = max(0, dual_vfo_picker_page - 1)
+                                elif action == "next":
+                                    dual_vfo_picker_page = min(page_count - 1, dual_vfo_picker_page + 1)
+                                elif action == "station" and value is not None:
+                                    name, location, selected_server, _used, _total = station_fields(all_stations[value])
+                                    target_vfo = dual_vfo_picker_target
+                                    dual_vfo_sources[target_vfo] = {
+                                        "server": selected_server,
+                                        "name": name,
+                                        "location": location,
+                                    }
+                                    if target_vfo == "A":
+                                        _server, next_freq, next_zoom, _generation, _server_generation = state.set_server(selected_server)
+                                        display_freq = next_freq
+                                        display_span = kiwi.zoom_to_span_khz(next_zoom)
+                                        profile = dict(dual_vfo_profiles.get("A", {}))
+                                        profile.update({"freq_khz": next_freq, "zoom": next_zoom})
+                                        dual_vfo_profiles["A"] = profile
+                                        drain_queue(line_queue)
+                                        wf_texture.clear()
+                                        animate_to(next_freq, display_span, 0.20)
+                                        write_remembered_view(save_current_frequency=True, force=True)
+                                    else:
+                                        _server, next_freq, next_zoom, _generation, _server_generation = dual_b_state.set_server(selected_server)
+                                        profile = dict(dual_vfo_profiles.get("B", {}))
+                                        profile.update({"freq_khz": next_freq, "zoom": next_zoom})
+                                        dual_vfo_profiles["B"] = profile
+                                        drain_queue(dual_b_line_queue)
+                                        dual_b_wf_texture.clear()
+                                    dual_vfo_picker_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "dual_vfo":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = dual_vfo_action_at(x, y)
+                                if action == "home":
+                                    dual_vfo_open = False
+                                    stop_dual_vfo_clients()
+                                elif action in ("A", "B"):
+                                    dual_vfo_active = action
+                                elif action == "mix":
+                                    mix_box = dual_vfo_layout()["mix_track"]
+                                    dual_vfo_mix = clamp(
+                                        (x - mix_box[0]) / max(1.0, mix_box[2] - mix_box[0]),
+                                        0.0,
+                                        1.0,
+                                    )
+                                    dual_audio_mixer.set_mix(dual_vfo_mix)
+                                elif action in ("rx_A", "rx_B"):
+                                    dual_vfo_picker_target = action[-1]
+                                    dual_vfo_picker_page = 0
+                                    dual_vfo_picker_open = True
+                                elif action in ("mode_A", "mode_B"):
+                                    dual_vfo_mode_target = action[-1]
+                                    dual_vfo_mode_open = True
+                                elif action and action.startswith("zoom_"):
+                                    _prefix, target_vfo, direction = action.split("_", 2)
+                                    delta = -1 if direction == "-1" else 1
+                                    target_profile = dict(dual_vfo_profiles.get(target_vfo, {}))
+                                    next_zoom = int(clamp(int(target_profile.get("zoom", 0)) + delta, 0, args.max_zoom))
+                                    targets = (target_vfo,)
+                                    for target in targets:
+                                        profile = dict(dual_vfo_profiles.get(target, {}))
+                                        profile["zoom"] = next_zoom
+                                        dual_vfo_profiles[target] = profile
+                                    if "A" in targets:
+                                        state.set_view(zoom=next_zoom)
+                                        display_span = kiwi.zoom_to_span_khz(next_zoom)
+                                        anim_start = 0.0
+                                        remember_current_view()
+                                    else:
+                                        dual_b_state.set_view(zoom=next_zoom)
+                                elif action == "clone":
+                                    dual_vfo_active = "B"
+                                    dual_vfo_mix = 0.0
+                                    dual_vfo_sources["B"] = dict(dual_vfo_sources.get("A", {}))
+                                    dual_vfo_profiles["B"] = dict(dual_vfo_profiles.get("A", {}))
+                                    dual_audio_mixer.set_mix(dual_vfo_mix)
+                                    sync_dual_vfo_b_state()
+                            wake_controls()
+                        elif touch_started and gesture == "frequency_entry":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action = frequency_entry_action_at(x, y)
@@ -16511,12 +18401,33 @@ def main():
                                             wspr_selected_band = wspr_add_band
                                             wspr_workspace_scroll = wspr_workspace_scroll_max(wspr_tiles)
                                             wspr_add_open = False
-                                            wspr_monitor.sync(wspr_tiles)
+                                            wspr_monitor.sync(wspr_tiles, immediate_keys={tile["id"]})
                                             write_wspr_local_log("monitor_session_added", band_m=wspr_add_band, receiver=name, server=selected_server)
                                             preferences_dirty = True
                                             write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "wspr_add_outside":
+                            wake_controls()
+                        elif touch_started and gesture == "wspr_expanded_graph":
+                            moved_y = y - start_y
+                            moved = max(abs(x - start_x), abs(moved_y))
+                            if moved <= args.tap_px:
+                                if contains(WSPR_EXPANDED_LOG_BACK_BOX, x, y):
+                                    wspr_expanded_graph_open = False
+                                    wspr_expanded_graph_id = ""
+                                else:
+                                    for index, box in enumerate(wspr_distance_range_boxes()):
+                                        if contains(box, x, y):
+                                            wspr_expanded_graph_window = index
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
+                                            break
+                            elif abs(moved_y) >= max(28, args.tap_px * 2):
+                                page_count = max(1, math.ceil(len(wspr_tiles) / WSPR_EXPANDED_GRAPH_PER_PAGE))
+                                direction = 1 if moved_y < 0 else -1
+                                wspr_expanded_graph_page = int(clamp(
+                                    wspr_expanded_graph_page + direction, 0, page_count - 1
+                                ))
                             wake_controls()
                         elif touch_started and gesture == "wspr_expanded_waterfall":
                             moved_y = y - start_y
@@ -16574,7 +18485,10 @@ def main():
                                             session = wspr_monitor.sessions.get(wspr_tile_settings_id)
                                             if session is not None:
                                                 session.retry_now()
-                                        wspr_monitor.sync(wspr_tiles)
+                                        wspr_monitor.sync(
+                                            wspr_tiles,
+                                            immediate_keys={wspr_tile_settings_id} if not tile["paused"] else (),
+                                        )
                                         write_wspr_local_log(
                                             "monitor_session_started" if not tile["paused"] else "monitor_session_stopped",
                                             band_m=tile.get("band"),
@@ -16702,6 +18616,8 @@ def main():
                                         wspr_expanded_waterfall_open = False
                                         wspr_expanded_waterfall_id = ""
                                         wspr_expanded_waterfall_scroll = 0
+                                        wspr_expanded_graph_open = False
+                                        wspr_expanded_graph_id = ""
                                         wspr_add_open = False
                                         wspr_decoder_settings_open = False
                                         wspr_tile_settings_open = False
@@ -16738,6 +18654,8 @@ def main():
                                         wspr_expanded_waterfall_open = False
                                         wspr_expanded_waterfall_id = ""
                                         wspr_expanded_waterfall_scroll = 0
+                                        wspr_expanded_graph_open = False
+                                        wspr_expanded_graph_id = ""
                                         wspr_add_open = False
                                         wspr_tile_settings_open = False
                                         wspr_cpu_detail_open = False
@@ -16745,6 +18663,28 @@ def main():
                                     elif kind == "expanded_waterfall":
                                         wspr_expanded_waterfall_id = str(_value.get("id", ""))
                                         wspr_expanded_waterfall_open = bool(wspr_expanded_waterfall_id)
+                                        wspr_expanded_waterfall_scroll = 0
+                                        wspr_expanded_log_open = False
+                                        wspr_expanded_log_id = ""
+                                        wspr_expanded_log_scroll = 0
+                                        wspr_expanded_graph_open = False
+                                        wspr_expanded_graph_id = ""
+                                        wspr_add_open = False
+                                        wspr_tile_settings_open = False
+                                        wspr_cpu_detail_open = False
+                                        cpu_utilization_graph_open = False
+                                    elif kind == "expanded_graph":
+                                        wspr_expanded_graph_id = str(_value.get("id", ""))
+                                        wspr_expanded_graph_open = bool(wspr_expanded_graph_id)
+                                        try:
+                                            wspr_expanded_graph_page = next(
+                                                index for index, item in enumerate(wspr_tiles)
+                                                if str(item.get("id", "")) == wspr_expanded_graph_id
+                                            ) // WSPR_EXPANDED_GRAPH_PER_PAGE
+                                        except StopIteration:
+                                            wspr_expanded_graph_page = 0
+                                        wspr_expanded_waterfall_open = False
+                                        wspr_expanded_waterfall_id = ""
                                         wspr_expanded_waterfall_scroll = 0
                                         wspr_expanded_log_open = False
                                         wspr_expanded_log_id = ""
@@ -17290,8 +19230,17 @@ def main():
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                state.set_spectrum_enabled(not state.spectrum_snapshot()[0])
+                                # Scope is now a direct layout tool: a tap
+                                # ensures it is visible and reveals its grab
+                                # rail. The Display drawer remains the
+                                # explicit on/off control.
+                                if not state.spectrum_snapshot()[0]:
+                                    state.set_spectrum_enabled(True)
+                                scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                                 wake_controls()
+                        elif touch_started and gesture == "scope_height_adjust":
+                            scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
+                            wake_controls()
                         elif touch_started and gesture == "filter_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -17901,23 +19850,42 @@ def main():
                 except queue.Empty:
                     break
 
+            # B has its own W/F socket in Dual mode. Limit consumption to the
+            # same bounded amount as the main pane so rendering stays smooth
+            # if a server bursts several queued waterfall rows at once.
+            if dual_vfo_open:
+                consumed_b = 0
+                max_consume_b = 2 if dual_b_line_queue.qsize() > 30 else 1
+                while consumed_b < max_consume_b:
+                    try:
+                        item = dual_b_line_queue.get_nowait()
+                        if isinstance(item, tuple):
+                            line, row_center_khz, row_span_khz = item
+                        else:
+                            b_profile = dual_vfo_profiles.get("B", {})
+                            line = item
+                            row_center_khz = float(b_profile.get("freq_khz", display_freq))
+                            row_span_khz = kiwi.zoom_to_span_khz(int(b_profile.get("zoom", zoom)))
+                        dual_b_wf_texture.push_line(line, row_center_khz, row_span_khz)
+                        consumed_b += 1
+                    except queue.Empty:
+                        break
+
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
-            spectrum_h = (
-                LCD_SPECTRUM_H
-                if LCD_800_MODE
-                else (SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H)
-            ) if spectrum_enabled else 0
+            spectrum_h = int(round(clamp(scope_height, SCOPE_HEIGHT_MIN, SCOPE_HEIGHT_MAX))) if spectrum_enabled else 0
             # Scope begins at y=40 so its axis can remain visible under the
             # translucent header. In full-waterfall mode there is no scope
             # layer to overlap, so begin the waterfall exactly below the top
             # bar instead of leaving an arbitrary gap.
             spectrum_y0 = 40 if spectrum_enabled else sdr_ui.TOP_H
             spectrum_y1 = spectrum_y0 + spectrum_h
+            scope_adjust_active = spectrum_enabled and now < scope_adjust_until
+            scope_adjust_box = scope_height_grip_box(spectrum_y1) if scope_adjust_active else None
             # The ruler overlays the first waterfall rows at the scope edge:
             # it remains readable without reserving a black separator band.
             bottom_ruler = False
@@ -18072,6 +20040,8 @@ def main():
                     source_span_khz=kiwi.zoom_source_span_khz(zoom),
                     visible_span_khz=display_span,
                 )
+            if scope_adjust_active:
+                draw_scope_height_grip(text_cache, spectrum_y1, scope_height)
             if transcription_enabled:
                 draw_vosk_captions(
                     text_cache,
@@ -18221,12 +20191,25 @@ def main():
             if wspr_tiles or wspr_monitor.sessions:
                 refresh_wspr_waterfalls()
             if wspr_panel_open:
+                wspr_rate_snapshot = wspr_decode_rates.snapshot_for_tiles(wspr_tiles)
                 draw_wspr_workspace(
                     text_cache, wspr_tiles, wspr_workspace_scroll,
                     wspr_monitor, wspr_mini_textures, cpu_percent,
                     wspr_log_identity(wspr_identity_values)["rx_grid"],
+                    wspr_rate_snapshot,
                 )
-                if wspr_expanded_waterfall_open:
+                if wspr_expanded_graph_open:
+                    tile = next((item for item in wspr_tiles if str(item.get("id")) == wspr_expanded_graph_id), None)
+                    if tile is None:
+                        wspr_expanded_graph_open = False
+                        wspr_expanded_graph_id = ""
+                    else:
+                        draw_wspr_expanded_distance_dashboard(
+                            text_cache, wspr_tiles, wspr_distance_cache,
+                            wspr_expanded_graph_window, wspr_expanded_graph_page,
+                            wspr_expanded_graph_id,
+                        )
+                elif wspr_expanded_waterfall_open:
                     tile = next((item for item in wspr_tiles if str(item.get("id")) == wspr_expanded_waterfall_id), None)
                     if tile is None:
                         wspr_expanded_waterfall_open = False
@@ -18310,14 +20293,44 @@ def main():
                 )
             if filter_panel_open:
                 draw_filter_setup_panel(text_cache, radio_mode, low_cut, high_cut, filter_custom_width)
+            if dual_vfo_open:
+                dual_a_dbm, _dual_a_peak = state.smeter_snapshot()
+                dual_b_dbm, _dual_b_peak = dual_b_state.smeter_snapshot()
+                draw_dual_vfo_workspace(
+                    text_cache,
+                    wf_texture,
+                    dual_b_wf_texture,
+                    display_freq,
+                    display_span,
+                    radio_mode,
+                    dual_vfo_active,
+                    dual_vfo_mix,
+                    {"A": dual_a_dbm, "B": dual_b_dbm},
+                    dual_vfo_sources,
+                    dual_vfo_profiles,
+                    dual_vfo_b_status(),
+                )
+                if dual_vfo_mode_open:
+                    draw_dual_vfo_mode_picker(
+                        text_cache,
+                        dual_vfo_mode_target,
+                        dual_vfo_profiles.get(dual_vfo_mode_target, {}).get("mode", radio_mode),
+                    )
+                elif dual_vfo_picker_open:
+                    draw_dual_vfo_receiver_picker(
+                        text_cache,
+                        dual_vfo_picker_target,
+                        all_stations,
+                        dual_vfo_picker_page,
+                    )
             osd_remaining = zoom_osd_until - now
-            if osd_remaining > 0:
+            if osd_remaining > 0 and not dual_vfo_open:
                 alpha = 220
                 fade = min(0.45, args.zoom_osd_seconds * 0.33)
                 if osd_remaining < fade:
                     alpha = int(220 * osd_remaining / fade)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
-            if not picker_open:
+            if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
@@ -18347,6 +20360,7 @@ def main():
         write_remembered_view(save_current_frequency=True)
         globe_mixer.stop()
         scout_probe.stop()
+        stop_dual_vfo_clients()
         wspr_monitor.stop()
         for texture in wspr_mini_textures.values():
             texture.close()
