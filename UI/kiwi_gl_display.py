@@ -27,7 +27,7 @@ import re
 import html
 import wave
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -233,7 +233,17 @@ DESKTOP_1280_TOP_H = 96
 # The wide layout's radio-status control deliberately shares the exact outer
 # bounds of the two-column navigation rail beneath it. It is one touch target.
 DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
-DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NBFM", "IQ")
+# NFM is the familiar compact panel label; Kiwi's wire-mode remains NBFM.
+DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NFM", "IQ")
+
+
+def mode_annunciator_active(label, active_mode, digital):
+    """Map compact panel labels onto Kiwi's internal demodulator names."""
+    return (
+        label == active_mode
+        or (label == "NFM" and active_mode == "NBFM")
+        or (label == "IQ" and str(digital).upper() == "IQ")
+    )
 
 
 def rf_canvas_width():
@@ -412,6 +422,9 @@ KIWI_RAW_AUDIO_QUANTUM_FRAMES = 512
 # A gap concealment packet must not step abruptly from arbitrary PCM to zero
 # (or back again): that discontinuity is heard as a click even at low volume.
 SDR_AUDIO_CONCEALMENT_FADE_SECONDS = 0.006
+# A one-packet (43 ms at 12 kHz) miss is already audible. Keep sub-underflow
+# deadline slips in the in-RAM trace, but do not journal them continuously.
+SDR_AUDIO_TRACE_LATE_SECONDS = 0.005
 # A tiny noise bridge can hide a single late packet from an already-playing
 # station, but it must never become a synthetic "radio" while a stream is
 # starting or retrying. After this many audio quanta, rebuffering is silent.
@@ -711,6 +724,119 @@ def whisper_command_prefix():
 def whisper_guard_description():
     affinity = f" cpu={WHISPER_CPUSET}" if WHISPER_CPUSET else ""
     return f"threads={WHISPER_THREADS}{affinity} nice={WHISPER_NICE}"
+
+
+# Audio has a hard playback deadline whereas decoding and rendering merely
+# benefit from promptness. Reserve the highest available CPU for the PCM clock
+# and its pw-cat writer on Linux. The service grants only CAP_SYS_NICE and a
+# modest RR priority; no whole-process real-time policy is used.
+AUDIO_RT_ENABLED = os.environ.get("ITUNER_AUDIO_RT", "1") != "0"
+AUDIO_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_RT_PRIORITY", 12, 1, 20)
+AUDIO_PLAYER_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_PLAYER_RT_PRIORITY", 10, 1, 20)
+AUDIO_INGRESS_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_INGRESS_RT_PRIORITY", 8, 1, 20)
+AUDIO_RT_CPU_OVERRIDE = os.environ.get("ITUNER_AUDIO_RT_CPU", "").strip()
+_AUDIO_RT_LOCK = threading.Lock()
+_AUDIO_RT_TIDS = set()
+try:
+    # Capture the service CPU set before any protected child thread inherits
+    # the audio-only affinity. Later calls from that child must still know the
+    # UI cores that make up the rest of the partition.
+    _AUDIO_RT_SERVICE_CPUS = tuple(sorted(os.sched_getaffinity(0)))
+except (AttributeError, OSError):
+    _AUDIO_RT_SERVICE_CPUS = tuple(range(max(1, os.cpu_count() or 1)))
+
+
+def audio_realtime_cpu_plan():
+    """Return the dedicated audio CPU and the remaining UI CPU set."""
+    if not AUDIO_RT_ENABLED or not sys.platform.startswith("linux"):
+        return None, set()
+    available = list(_AUDIO_RT_SERVICE_CPUS)
+    if len(available) < 2:
+        return None, set()
+    try:
+        requested = int(AUDIO_RT_CPU_OVERRIDE) if AUDIO_RT_CPU_OVERRIDE else available[-1]
+    except ValueError:
+        requested = available[-1]
+    audio_cpu = requested if requested in available else available[-1]
+    return audio_cpu, set(available) - {audio_cpu}
+
+
+def configure_realtime_audio_path(player=None, announce=True, priority=AUDIO_RT_PRIORITY, role="clock"):
+    """Give the PCM clock a CPU and a bounded, audio-only RR priority.
+
+    The clock runs in a Python thread, so PipeWire cannot protect it by itself.
+    Pinning all non-clock renderer threads away from this CPU prevents a burst
+    of waterfall parsing or WSPR bookkeeping from delaying a 512-frame write.
+    Failure to obtain RT permission remains a safe affinity-only fallback.
+    """
+    audio_cpu, ui_cpus = audio_realtime_cpu_plan()
+    if audio_cpu is None or not ui_cpus:
+        return False
+    try:
+        audio_tid = threading.get_native_id()
+    except AttributeError:
+        return False
+    with _AUDIO_RT_LOCK:
+        try:
+            active_tids = set()
+            task_paths = tuple(Path("/proc/self/task").iterdir())
+            for task_path in task_paths:
+                try:
+                    active_tids.add(int(task_path.name))
+                except ValueError:
+                    continue
+            _AUDIO_RT_TIDS.intersection_update(active_tids)
+            _AUDIO_RT_TIDS.add(audio_tid)
+            for task_path in task_paths:
+                try:
+                    tid = int(task_path.name)
+                except ValueError:
+                    continue
+                if tid not in _AUDIO_RT_TIDS:
+                    os.sched_setaffinity(tid, ui_cpus)
+            for tid in _AUDIO_RT_TIDS:
+                os.sched_setaffinity(tid, {audio_cpu})
+            if player is not None and getattr(player, "pid", None):
+                os.sched_setaffinity(player.pid, {audio_cpu})
+        except OSError as exc:
+            if announce:
+                print(f"gl audio affinity unavailable {exc}", flush=True)
+            return False
+
+        clock_rt = False
+        try:
+            os.sched_setscheduler(audio_tid, os.SCHED_RR, os.sched_param(priority))
+            clock_rt = True
+        except (AttributeError, OSError, PermissionError) as exc:
+            if announce:
+                print(f"gl audio RT clock unavailable {exc}", flush=True)
+        if player is not None and getattr(player, "pid", None):
+            try:
+                os.sched_setscheduler(
+                    player.pid, os.SCHED_RR, os.sched_param(AUDIO_PLAYER_RT_PRIORITY)
+                )
+            except (AttributeError, OSError, PermissionError) as exc:
+                if announce:
+                    print(f"gl audio RT player unavailable {exc}", flush=True)
+        if announce:
+            print(
+                f"gl audio priority cpu={audio_cpu} ui={','.join(map(str, sorted(ui_cpus)))} "
+                f"{role}={'RR' if clock_rt else 'TS'} p={priority}",
+                flush=True,
+            )
+        return clock_rt
+
+
+def release_realtime_audio_thread():
+    """Forget a terminating audio-path thread before its TID can be reused."""
+    try:
+        tid = threading.get_native_id()
+    except AttributeError:
+        return
+    with _AUDIO_RT_LOCK:
+        _AUDIO_RT_TIDS.discard(tid)
+
+
 PARAKEET_MODEL_DIR = vendor_path("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
 HF_ENHANCE_MODEL = vendor_path("hf-enhance-tiny", "hf-enhance-tiny.onnx")
 WF_TEX_W = 960
@@ -812,6 +938,61 @@ KIWI_MODE_FAMILY = {
     "NBFM": "NBFM", "NNFM": "NBFM",
     "IQ": "IQ", "DRM": "DRM",
 }
+
+# Tune destinations for the touch-first band navigator. Frequencies are
+# conservative listening centres in kHz, not asserted channel assignments.
+# Keeping broadcast and amateur destinations together lets the operator move
+# across the whole HF receiver without first choosing a separate application.
+BAND_NAV_PRESETS = (
+    ("LW", 198.0, "broadcast"), ("MW", 1000.0, "broadcast"),
+    ("120 m", 2490.0, "broadcast"), ("90 m", 3330.0, "broadcast"),
+    ("75 m", 3985.0, "broadcast"), ("60 m", 5000.0, "broadcast"),
+    ("49 m", 6070.0, "broadcast"), ("41 m", 7265.0, "broadcast"),
+    ("31 m", 9650.0, "broadcast"), ("25 m", 11940.0, "broadcast"),
+    ("22 m", 13760.0, "broadcast"), ("19 m", 15400.0, "broadcast"),
+    ("16 m", 17640.0, "broadcast"), ("15 m", 19020.0, "broadcast"),
+    ("13 m", 21550.0, "broadcast"), ("11 m", 25850.0, "broadcast"),
+    ("160 m", 1900.0, "ham"), ("80 m", 3750.0, "ham"),
+    ("60 m H", 5357.0, "ham"), ("40 m", 7100.0, "ham"),
+    ("30 m", 10136.0, "ham"), ("20 m", 14100.0, "ham"),
+    ("17 m", 18100.0, "ham"), ("15 m H", 21200.0, "ham"),
+    ("12 m", 24920.0, "ham"), ("10 m", 28400.0, "ham"),
+    ("6 m", 50100.0, "ham"),
+)
+
+# Frequency context intentionally stays modest: these are useful operating
+# landmarks, not a band-plan authority. FT8 ranges are narrow enough that an
+# ordinary nearby USB QSO is never labelled as a digital transmission.
+HAM_BANDS = (
+    (1800.0, 2000.0, "160 m"), (3500.0, 4000.0, "80 m"),
+    (5330.0, 5407.0, "60 m"), (7000.0, 7300.0, "40 m"),
+    (10100.0, 10150.0, "30 m"), (14000.0, 14350.0, "20 m"),
+    (18068.0, 18168.0, "17 m"), (21000.0, 21450.0, "15 m"),
+    (24890.0, 24990.0, "12 m"), (28000.0, 29700.0, "10 m"),
+    (50000.0, 54000.0, "6 m"),
+)
+SW_BROADCAST_BANDS = (
+    (150.0, 300.0, "LW"), (520.0, 1710.0, "MW"),
+    (2300.0, 2495.0, "120 m"), (3200.0, 3400.0, "90 m"),
+    (3900.0, 4000.0, "75 m"), (4750.0, 5060.0, "60 m"),
+    (5730.0, 6200.0, "49 m"), (7200.0, 7450.0, "41 m"),
+    (9400.0, 9900.0, "31 m"), (11600.0, 12100.0, "25 m"),
+    (13570.0, 13870.0, "22 m"), (15100.0, 15830.0, "19 m"),
+    (17480.0, 17900.0, "16 m"), (18900.0, 19020.0, "15 m"),
+    (21450.0, 21850.0, "13 m"), (25670.0, 26100.0, "11 m"),
+)
+FT8_SUBBANDS = (
+    (1840.0, 1842.5), (3573.0, 3575.5), (5356.0, 5358.5),
+    (7073.0, 7075.5), (10135.0, 10137.5), (14073.0, 14075.5),
+    (18100.0, 18102.5), (21073.0, 21075.5), (24914.0, 24916.5),
+    (28073.0, 28075.5), (50313.0, 50315.5),
+)
+CW_SUBBANDS = (
+    (1800.0, 1840.0), (3500.0, 3570.0), (7000.0, 7040.0),
+    (10100.0, 10135.0), (14000.0, 14070.0), (18068.0, 18100.0),
+    (21000.0, 21070.0), (24890.0, 24910.0), (28000.0, 28070.0),
+    (50000.0, 50300.0),
+)
 # Defaults match Kiwi's mode_hbw/mode_offset table. Values are the actual
 # low_cut/high_cut sent to the SND stream and remain user-adjustable afterward.
 KIWI_MODE_FILTERS = {
@@ -960,6 +1141,7 @@ DISPLAY_FLOOR_PLUS_BOX = (330, 130, 402, 180)
 DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
+DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -1004,7 +1186,7 @@ FILTER_WIDTH_PRESETS = (
     ("WIDE 6k", 6000),
     ("WIDE 9/12k", 9000),
 )
-AUDIO_PANEL_BOX = (12, 34, 948, 316)
+AUDIO_PANEL_BOX = (12, 34, 948, 380)
 AUDIO_VOLUME_BOX = (42, 76, 612, 128)
 AUDIO_MUTE_BOX = (624, 76, 710, 128)
 AUDIO_VOICE_CLEAN_BOX = (722, 76, 818, 128)
@@ -1017,6 +1199,7 @@ AUDIO_NOTCH_BOX = (42, 224, 256, 280)
 AUDIO_DEEMP_BOX = (268, 224, 482, 280)
 AUDIO_FILTER_BOX = (494, 224, 706, 280)
 AUDIO_RESET_BOX = (718, 224, 918, 280)
+AUDIO_TONE_BOX = (42, 294, 256, 350)
 # Six evenly spaced, discrete Denoise settings. The DSP presets themselves
 # remain intentionally useful at the strong end; only the touch scale is linear.
 DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
@@ -1034,6 +1217,9 @@ HF_ENHANCE_MODELS = (
     HF_ENHANCE_MODEL,
 )
 HF_ENHANCE_PRESETS = ("OFF", "EPOCH 1", "EPOCH 8")
+# A deliberately small output-only equalizer. It gives ordinary AM/SW listening
+# a useful presence contour without turning the drawer into a studio console.
+TONE_PRESETS = ("OFF", "SW", "PRES", "WARM")
 # RNNoise remains local: KiwiSDR demodulates remotely and this stage cleans
 # received mono PCM before it reaches the Pi USB path or the Mac CoreAudio
 # player. The desktop bundle carries matching Apple Silicon dylibs so its
@@ -1056,11 +1242,50 @@ SPEEXDSP_LIBRARY = os.environ.get("ITUNER_SPEEXDSP_LIBRARY", str(_DEFAULT_SPEEXD
 # write no more often than every 30 seconds.
 PERSISTENCE_INTERVAL_SECONDS = 30.0
 PREFERENCES_POLL_SECONDS = 0.25
-TEST_PANEL_BOX = (12, 72, 948, 288)
+TEST_PANEL_BOX = (12, 72, 948, 422)
 TEST_GLOBE_BOX = (42, 112, 468, 166)
 TEST_DJ_BOX = (492, 112, 918, 166)
-TEST_PATTERN_BOX = (42, 178, 918, 224)
-TEST_RUN_BOX = (42, 236, 918, 280)
+TEST_RTL_BOX = (42, 178, 468, 232)
+TEST_PATTERN_BOX = (492, 178, 918, 232)
+TEST_FONT_BOX = (42, 244, 468, 298)
+TEST_RUN_BOX = (42, 310, 918, 366)
+FONT_LAB_PREV_BOX = (936, 16, 1020, 62)
+FONT_LAB_NEXT_BOX = (1028, 16, 1136, 62)
+FONT_LAB_BACK_BOX = (1144, 16, 1264, 62)
+FONT_LAB_SAMPLE = "13.784.290"
+# Five physical 256 px columns, each with six real Pi-installed candidates.
+# The sample width is normalised so the comparison is about legibility and
+# character shape rather than one face merely being drawn smaller.
+FONT_LAB_FAMILIES = (
+    "Orbitron", "Oxanium", "Rajdhani", "Audiowide", "Share Tech Mono",
+    "Space Mono", "Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Nimbus Mono PS",
+    "DejaVu Sans", "Liberation Sans", "Nimbus Sans", "Noto Sans", "Nunito Sans",
+    "Cantarell", "Droid Sans Fallback", "FreeSans", "URW Gothic", "Nimbus Sans Narrow",
+    "DejaVu Serif", "FreeMono", "FreeSerif", "Liberation Sans Narrow", "Nimbus Roman",
+    "Liberation Serif", "URW Bookman", "P052", "C059", "D050000L",
+)
+# The live compact readout can safely explore every additional installed face
+# that renders a numeric specimen on the Pi. The static Font Lab remains a
+# deliberately curated 30-face sheet so its fixed grid stays legible.
+COMPACT_FONT_REVIEW_EXTRA_FAMILIES = (
+    "Noto Mono", "DejaVu Math TeX Gyre", "Open Sans Condensed",
+    "FontAwesome", "Standard Symbols PS", "Z003",
+)
+COMPACT_FONT_REVIEW_FAMILIES = FONT_LAB_FAMILIES + COMPACT_FONT_REVIEW_EXTRA_FAMILIES
+FONT_LAB_PAGES = (
+    ("BOLD WEIGHTS", FONT_LAB_FAMILIES, True),
+    ("REGULAR WEIGHTS", FONT_LAB_FAMILIES, False),
+)
+FONT_LAB_COLUMN_WIDTH = 256
+FONT_LAB_SAMPLE_WIDTH = 230
+FONT_LAB_SIZE_CACHE = {}
+# The USB-radio workbench deliberately remains outside the normal receiver
+# flow until it has earned the same stability guarantees as KiwiSource.
+RTL_LAB_PANEL_BOX = (12, 72, 948, 342)
+RTL_LAB_PROBE_BOX = (42, 132, 312, 194)
+RTL_LAB_PRESET_BOX = (330, 132, 918, 194)
+RTL_LAB_RUN_BOX = (42, 212, 474, 278)
+RTL_LAB_BACK_BOX = (492, 212, 918, 278)
 # WSPR is a large operating workspace. The full set of bands remains visible
 # at once, leaving enough room for genuine finger-sized session controls.
 WSPR_PANEL_BOX = (12, -220, 948, 316)
@@ -1398,15 +1623,18 @@ POPUP_LAYOUT_BASE = {
     "display": (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
                 DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
                 DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
-                DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES),
+                DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES,
+                DISPLAY_INSTRUMENTS_BOX),
     "filter": (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
                FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX),
     "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
               AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
-              AUDIO_FILTER_BOX, AUDIO_RESET_BOX),
-    "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX,
-              TEST_RUN_BOX),
+              AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX),
+    "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
+              TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX),
+    "rtl_lab": (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
+                RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX),
     "wspr": (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES,
              WSPR_BAND_GRID_BOX),
     "wspr_identity": (WSPR_IDENTITY_BOX,),
@@ -1425,15 +1653,16 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
-    global DISPLAY_RESET_BOX
+    global DISPLAY_RESET_BOX, DISPLAY_INSTRUMENTS_BOX
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
     global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
-    global AUDIO_FILTER_BOX, AUDIO_RESET_BOX
-    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX, TEST_RUN_BOX
+    global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX
+    global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
     global CALLSIGN_TOGGLE_BOX, ASR_TOGGLE_BOX, CPU_ANNUNCIATOR_BOX, ASR_PANEL_BOX, ASR_MOON_LANGUAGE_PANEL_BOX, VOSK_CAPTION_BOX
@@ -1450,7 +1679,7 @@ def configure_popup_layout():
     (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
      DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
      DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
-     base_rates, base_palettes) = POPUP_LAYOUT_BASE["display"]
+     base_rates, base_palettes, _base_instruments) = POPUP_LAYOUT_BASE["display"]
     DISPLAY_PANEL_BOX = popup_shift_box(DISPLAY_PANEL_BOX, dy)
     DISPLAY_SPECTRUM_BOX = popup_shift_box(DISPLAY_SPECTRUM_BOX, dy)
     DISPLAY_AUTO_BOX = popup_shift_box(DISPLAY_AUTO_BOX, dy)
@@ -1459,6 +1688,7 @@ def configure_popup_layout():
     DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
+    DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
@@ -1483,6 +1713,8 @@ def configure_popup_layout():
         rate_y1 = rate_y0 + tile_h
         palette_y0 = rate_y1 + 16
         palette_y1 = palette_y0 + tile_h
+        instruments_y0 = palette_y1 + 16
+        instruments_y1 = instruments_y0 + tile_h
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
         DISPLAY_AUTO_BOX = (inner_x0 + half_w + column_gap, toggle_y0, inner_x1, toggle_y1)
@@ -1505,6 +1737,7 @@ def configure_popup_layout():
                     inner_x0 + index * (palette_w + column_gap) + palette_w, palette_y1), label)
             for index, (name, _box, label) in enumerate(base_palettes)
         )
+        DISPLAY_INSTRUMENTS_BOX = (inner_x0, instruments_y0, inner_x1, instruments_y1)
 
     dy = offset("filter")
     (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
@@ -1516,7 +1749,7 @@ def configure_popup_layout():
     (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
      AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
      AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
-     AUDIO_FILTER_BOX, AUDIO_RESET_BOX) = (
+     AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["audio"]
     )
     if LCD_800_MODE:
@@ -1532,7 +1765,9 @@ def configure_popup_layout():
         left_x0, left_x1 = audio_x0 + 10, audio_x0 + 117
         right_x0, right_x1 = audio_x0 + 124, audio_x1 - 10
         AUDIO_MUTE_BOX = (audio_x0 + 10, 80, audio_x1 - 10, 142)
-        tile_h, tile_gap = 72, 16
+        # Five compact rows leave space for the listening EQ without making
+        # the Audio drawer scroll. Each target remains comfortably touchable.
+        tile_h, tile_gap = 60, 8
         volume_y0, volume_y1 = 160, 222
         squelch_y0, squelch_y1 = 230, 294
         denoise_y0, denoise_y1 = 302, 366
@@ -1540,19 +1775,26 @@ def configure_popup_layout():
         AUDIO_VOLUME_BOX = (slider_x0, volume_y0, slider_x1, volume_y1)
         AUDIO_SQUELCH_BOX = (slider_x0, squelch_y0, slider_x1, squelch_y1)
         AUDIO_DENOISE_BOX = (slider_x0, denoise_y0, slider_x1, denoise_y1)
-        rows = tuple(rows_y0 + index * (tile_h + tile_gap) for index in range(4))
+        rows = tuple(rows_y0 + index * (tile_h + tile_gap) for index in range(5))
         AUDIO_VOICE_CLEAN_BOX = (left_x0, rows[0], left_x1, rows[0] + tile_h)
         AUDIO_HF_ENHANCE_BOX = (right_x0, rows[0], right_x1, rows[0] + tile_h)
         AUDIO_AGC_BOX = (left_x0, rows[1], left_x1, rows[1] + tile_h)
         AUDIO_BLANKER_BOX = (right_x0, rows[1], right_x1, rows[1] + tile_h)
         AUDIO_NOTCH_BOX = (left_x0, rows[2], left_x1, rows[2] + tile_h)
         AUDIO_DEEMP_BOX = (right_x0, rows[2], right_x1, rows[2] + tile_h)
-        AUDIO_FILTER_BOX = (left_x0, rows[3], left_x1, rows[3] + tile_h)
-        AUDIO_RESET_BOX = (right_x0, rows[3], right_x1, rows[3] + tile_h)
+        AUDIO_TONE_BOX = (left_x0, rows[3], left_x1, rows[3] + tile_h)
+        AUDIO_FILTER_BOX = (right_x0, rows[3], right_x1, rows[3] + tile_h)
+        AUDIO_RESET_BOX = (audio_x0 + 10, rows[4], audio_x1 - 10, rows[4] + tile_h)
 
     dy = offset("tests")
-    (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX,
-     TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+    (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
+     TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+
+    dy = offset("rtl_lab")
+    (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
+     RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX) = (
+        popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["rtl_lab"]
+    )
 
     dy = offset("wspr")
     (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, base_wspr_windows,
@@ -1739,7 +1981,7 @@ def dual_vfo_action_at(x, y):
     return None
 
 
-def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, receiver_name, status="LIVE"):
+def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, receiver_name, status="LIVE", best=False):
     """One compact VFO instrument strip above an unscaled RF pane."""
     x0, y0, x1, y1 = box
     active_accent = (90, 222, 245, 255)
@@ -1763,8 +2005,37 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
     draw_logical_line(change_x0, ry1, rx1, ry1, (45, 86, 97, 178), 1)
     draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", (221, 241, 243), 14, True, False, "cm", family="Liberation Sans")
     detail = status.upper()
-    detail_color = (126, 230, 188) if detail == "LIVE" else (165, 177, 178)
-    draw_text(text_cache, x1 - 18, (y0 + y1) / 2, detail, detail_color, 13, True, False, "rm", family="Liberation Sans")
+    badge_x0 = None
+    if detail.startswith("MATCH "):
+        detail_color = (119, 244, 177)
+        detail_size = 25
+        badge_x0 = max(x0 + 260, x1 - 178)
+        draw_logical_rect(badge_x0, y0 + 4, x1 - 12, y1 - 4, (20, 91, 65, 172))
+        draw_logical_line(badge_x0, y0 + 4, x1 - 12, y0 + 4, (119, 244, 177, 225), 1)
+    elif detail.startswith("SCORE "):
+        detail_color = (124, 215, 239)
+        detail_size = 21
+        badge_x0 = max(x0 + 260, x1 - 166)
+        draw_logical_rect(badge_x0, y0 + 5, x1 - 12, y1 - 5, (20, 62, 79, 166))
+    elif detail.startswith("MATCHING"):
+        detail_color = (124, 215, 239)
+        detail_size = 16
+    elif detail in ("LIVE", "WAITING AUDIO"):
+        detail_color = (126, 230, 188)
+        detail_size = 15
+    else:
+        detail_color = (165, 177, 178)
+        detail_size = 14
+    if best:
+        # Keep reception quality with the programme-match conclusion rather
+        # than burying it beside the VFO name. This reads as one short result:
+        # MATCH xx% + the source judged clearer.
+        best_x1 = (badge_x0 - 8) if badge_x0 is not None else (x1 - 146)
+        best_x0 = best_x1 - 54
+        draw_logical_rect(best_x0, y0 + 9, best_x1, y1 - 9, (23, 112, 74, 214))
+        draw_logical_line(best_x0, y0 + 9, best_x1, y0 + 9, (126, 252, 181, 244), 1)
+        draw_text(text_cache, (best_x0 + best_x1) / 2, (y0 + y1) / 2, "BEST", (220, 255, 235), 12, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 18, (y0 + y1) / 2 + 1, detail, detail_color, detail_size, True, False, "rm", family="Liberation Sans")
 
 
 def draw_dual_vfo_mode_annunciator(text_cache, box, vfo, mode, active=False):
@@ -1861,7 +2132,7 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     draw_text(text_cache, track_x1, legend_y, "VFO B", (138, 166, 176), 10, True, False, "rm", family="Liberation Sans")
 
 
-def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING"):
+def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING", best_vfo=None):
     """Render two independent VFO instruments with a shared audio blend."""
     boxes = dual_vfo_layout()
     rf_w = boxes["rf_w"]
@@ -1880,8 +2151,8 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
         texture.draw(x0, y0, x1, y1, center_khz=waterfall_view_center_khz(pane_freq, pane_span), span_khz=pane_span)
         draw_logical_rect(x0, y0, x1, y1, (0, 6, 14, 28 if key == "a_waterfall" else 58))
 
-    draw_dual_vfo_header(text_cache, boxes["a_header"], "A", profile_a.get("freq_khz", frequency_khz), profile_a.get("mode", mode), active_vfo == "A", source_a.get("name", "CURRENT RECEIVER"))
-    draw_dual_vfo_header(text_cache, boxes["b_header"], "B", profile_b.get("freq_khz", frequency_khz), profile_b.get("mode", mode), active_vfo == "B", source_b.get("name", "CURRENT RECEIVER"), status=b_status)
+    draw_dual_vfo_header(text_cache, boxes["a_header"], "A", profile_a.get("freq_khz", frequency_khz), profile_a.get("mode", mode), active_vfo == "A", source_a.get("name", "CURRENT RECEIVER"), best=best_vfo == "A")
+    draw_dual_vfo_header(text_cache, boxes["b_header"], "B", profile_b.get("freq_khz", frequency_khz), profile_b.get("mode", mode), active_vfo == "B", source_b.get("name", "CURRENT RECEIVER"), status=b_status, best=best_vfo == "B")
     # No midpoint band or rule: the adjacent open headers are enough to
     # identify the two receivers without carving a border across the RF view.
 
@@ -2143,6 +2414,29 @@ RECEIVER_HOME_FALLBACK = {
     "lon": -121.8863,
     "source": "fallback",
 }
+SHORTWAVE_DB_QUICKSEARCH_URL = "https://shortwavedb.org/cgi-bin/quicksearch.cgi"
+SHORTWAVE_LIVE_KHZ_URL = "https://shortwave.live/khz?q={frequency}"
+# Shortwave.Live provides a helpful fallback for schedules absent from the
+# first source. Its frequency page does not expose transmitter coordinates;
+# keep verified site locations here as they are encountered, rather than
+# inventing a location from a country label.
+SHORTWAVE_LIVE_SITE_COORDINATES = {
+    "greenville, nc": (35.61, -77.37),
+}
+# Shortwave DB's own quick search returns a deliberately broad +/-2.5 kHz
+# set. The radio UI accepts a useful +/-1.0 kHz operator-tuning tolerance.
+# That is still well inside normal 5 kHz shortwave channel spacing. A separate
+# ambiguity guard below suppresses the OSD rather than guessing between two
+# distinctly scheduled frequencies that are virtually equally close.
+FREQUENCY_ID_TOLERANCE_KHZ = 1.0
+FREQUENCY_ID_AMBIGUITY_KHZ = 0.25
+FREQUENCY_ID_SETTLE_SECONDS = 0.85
+FREQUENCY_ID_CACHE_SECONDS = 600.0
+FREQUENCY_ID_OSD_SECONDS = 10.0
+FREQUENCY_ID_CACHE = {}
+FREQUENCY_ID_CACHE_LOCK = threading.Lock()
+FREQUENCY_ID_PREFETCH_OFFSETS_KHZ = (-10.0, -5.0, 5.0, 10.0)
+FREQUENCY_ID_PREFETCH_INFLIGHT = set()
 station_health_write_lock = threading.Lock()
 
 # This receiver is intentionally a first-class local instrument, rather than
@@ -2418,6 +2712,291 @@ def format_station_distance(station, home_profile):
     if distance_miles is None:
         return "DIST ?"
     return f"{int(round(distance_miles)):,} MI"
+
+
+def _frequency_id_text(value):
+    """Turn one HTML cell into a compact, display-safe schedule field."""
+    value = re.sub(r"<br\s*/?>", " ", str(value), flags=re.I)
+    value = re.sub(r"<[^>]+>", "", value)
+    return " ".join(html.unescape(value).replace("\xa0", " ").split())
+
+
+def select_frequency_identity_candidates(candidates, frequency_khz):
+    """Keep one clear schedule frequency and fold duplicate source rows."""
+    frequency_groups = {}
+    for candidate in candidates:
+        frequency_groups.setdefault(round(candidate["frequency_khz"], 3), []).append(candidate)
+    closest_frequencies = sorted(
+        frequency_groups,
+        key=lambda listed_frequency: (abs(listed_frequency - float(frequency_khz)), listed_frequency),
+    )
+    if not closest_frequencies:
+        return []
+    nearest_frequency = closest_frequencies[0]
+    nearest_error = abs(nearest_frequency - float(frequency_khz))
+    if len(closest_frequencies) > 1:
+        next_error = abs(closest_frequencies[1] - float(frequency_khz))
+        if next_error - nearest_error <= FREQUENCY_ID_AMBIGUITY_KHZ:
+            return []
+
+    # The source tables often repeat a station/site pair. EiBi rows commonly
+    # omit power while the matching AOKI/HFCC row supplies it, so merge the
+    # complementary fields instead of discarding the later row outright.
+    unique_by_key = {}
+    for candidate in frequency_groups[nearest_frequency]:
+        key = (
+            round(candidate["frequency_khz"], 3),
+            candidate["station"].casefold(), candidate["transmitter"].casefold(),
+        )
+        existing = unique_by_key.get(key)
+        if existing is None:
+            unique_by_key[key] = dict(candidate)
+            continue
+        for field in ("power_kw", "country", "language", "days", "lat", "lon"):
+            if not existing.get(field) and candidate.get(field):
+                existing[field] = candidate[field]
+    return list(unique_by_key.values())[:4]
+
+
+def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ):
+    """Parse the public Quick Search page without treating its HTML as code.
+
+    The page merges EiBi, AOKI, HFCC, and ITU results. Those sources often
+    repeat one actual transmission, so normalize them down to distinct station
+    and transmitter-site entries before the small LCD OSD sees them.
+    """
+    candidates = []
+    for table_match in re.finditer(r'<table\s+class=["\']results["\']\s*>(.*?)</table>', document, re.I | re.S):
+        prior = document[max(0, table_match.start() - 260):table_match.start()]
+        headings = re.findall(r"<h2[^>]*>(.*?)</h2>", prior, re.I | re.S)
+        source = _frequency_id_text(headings[-1]) if headings else "Shortwave DB"
+        table = table_match.group(1)
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table, re.I | re.S):
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.I | re.S)
+            if len(cells) < 8:
+                continue
+            values = tuple(_frequency_id_text(cell) for cell in cells[:8])
+            try:
+                listed_frequency = float(values[0].replace(",", ""))
+            except ValueError:
+                continue
+            if abs(listed_frequency - float(frequency_khz)) > float(tolerance_khz):
+                continue
+            coordinates = re.search(
+                r"center=\s*([-+0-9.]+)\s*,\s*([-+0-9.]+)", cells[7], re.I
+            )
+            try:
+                latitude = float(coordinates.group(1)) if coordinates else None
+                longitude = float(coordinates.group(2)) if coordinates else None
+            except (TypeError, ValueError):
+                latitude = longitude = None
+            candidates.append({
+                "frequency_khz": listed_frequency,
+                "time": values[1],
+                "station": values[2] or "Unidentified broadcaster",
+                "country": values[3],
+                "language": values[4],
+                "days": values[5],
+                "power_kw": values[6],
+                "transmitter": values[7] or values[3],
+                "lat": latitude,
+                "lon": longitude,
+                "source": source,
+            })
+    return select_frequency_identity_candidates(candidates, frequency_khz)
+
+
+def _frequency_identity_schedule_active(start_text, end_text, timestamp=None):
+    """Whether a UTC HH:MM schedule window contains the current moment."""
+    def minutes_since_midnight(value):
+        cleaned = str(value).strip()
+        if ":" in cleaned:
+            hour, minute = (int(part) for part in cleaned.split(":", 1))
+        elif len(cleaned) == 4 and cleaned.isdigit():
+            hour, minute = int(cleaned[:2]), int(cleaned[2:])
+        else:
+            raise ValueError("unsupported schedule time")
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("invalid schedule time")
+        return hour * 60 + minute
+
+    try:
+        start_minute_of_day = minutes_since_midnight(start_text)
+        end_minute_of_day = minutes_since_midnight(end_text)
+    except (TypeError, ValueError):
+        return False
+    now = time.gmtime(time.time() if timestamp is None else timestamp)
+    now_minute = now.tm_hour * 60 + now.tm_min
+    if start_minute_of_day == end_minute_of_day:
+        return True
+    if start_minute_of_day < end_minute_of_day:
+        return start_minute_of_day <= now_minute < end_minute_of_day
+    return now_minute >= start_minute_of_day or now_minute < end_minute_of_day
+
+
+def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, timestamp=None):
+    """Parse currently scheduled rows from Shortwave.Live's frequency page."""
+    candidates = []
+    for row_match in re.finditer(r"<tr[^>]*start_time=[\"']([^\"']+)[\"'][^>]*end_time=[\"']([^\"']+)[\"'][^>]*>(.*?)</tr>", document, re.I | re.S):
+        start_text = row_match.group(1)
+        end_text = row_match.group(2)
+        if not _frequency_identity_schedule_active(start_text, end_text, timestamp):
+            continue
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row_match.group(3), re.I | re.S)
+        if len(cells) < 8:
+            continue
+        values = tuple(_frequency_id_text(cell) for cell in cells[:8])
+        try:
+            listed_frequency = float(values[0].replace(",", ""))
+        except ValueError:
+            continue
+        if abs(listed_frequency - float(frequency_khz)) > float(tolerance_khz):
+            continue
+        transmitter = values[2]
+        normalized_site = transmitter.casefold().replace("🇺🇸", "").strip()
+        coordinates = SHORTWAVE_LIVE_SITE_COORDINATES.get(normalized_site)
+        candidates.append({
+            "frequency_khz": listed_frequency,
+            "time": f"{start_text}-{end_text}",
+            "station": values[1] or "Unidentified broadcaster",
+            "country": "",
+            "language": values[3],
+            "days": values[7],
+            "power_kw": "",
+            "transmitter": transmitter,
+            "lat": coordinates[0] if coordinates else None,
+            "lon": coordinates[1] if coordinates else None,
+            "source": "Shortwave.Live",
+        })
+    return select_frequency_identity_candidates(candidates, frequency_khz)
+
+
+def lookup_shortwave_frequency(frequency_khz):
+    """Fetch a small, cached online AM/SW schedule lookup off the UI thread."""
+    lookup_frequency = round(float(frequency_khz) * 2.0) / 2.0
+    now = time.monotonic()
+    with FREQUENCY_ID_CACHE_LOCK:
+        cached = FREQUENCY_ID_CACHE.get(lookup_frequency)
+        if cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS:
+            return lookup_frequency, list(cached[1]), None
+    try:
+        request = Request(
+            SHORTWAVE_DB_QUICKSEARCH_URL,
+            data=urlencode({"freq": f"{lookup_frequency:.3f}"}).encode("ascii"),
+            headers={"User-Agent": "iTuner-SDR/1.0"},
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            document = response.read(512 * 1024).decode("utf-8", "replace")
+        candidates = parse_shortwave_db_quicksearch(document, frequency_khz)
+        if not candidates:
+            fallback_frequency = int(round(float(frequency_khz) / 5.0) * 5)
+            fallback_request = Request(
+                SHORTWAVE_LIVE_KHZ_URL.format(frequency=fallback_frequency),
+                headers={"User-Agent": "iTuner-SDR/1.0"},
+            )
+            with urlopen(fallback_request, timeout=10) as response:
+                fallback_document = response.read(512 * 1024).decode("utf-8", "replace")
+            candidates = parse_shortwave_live_frequency(fallback_document, frequency_khz)
+        with FREQUENCY_ID_CACHE_LOCK:
+            FREQUENCY_ID_CACHE[lookup_frequency] = (time.monotonic(), tuple(candidates))
+        return lookup_frequency, candidates, None
+    except Exception as exc:
+        return lookup_frequency, [], str(exc)
+
+
+def cached_frequency_identity_candidates(frequency_khz):
+    """Return a still-valid nearby scheduled frequency without network I/O."""
+    now = time.monotonic()
+    candidates = []
+    with FREQUENCY_ID_CACHE_LOCK:
+        for cached_at, cached_candidates in FREQUENCY_ID_CACHE.values():
+            if now - cached_at < FREQUENCY_ID_CACHE_SECONDS:
+                candidates.extend(cached_candidates)
+    return select_frequency_identity_candidates(candidates, frequency_khz)
+
+
+def _frequency_identity_prefetch_worker(frequency_khz):
+    try:
+        lookup_shortwave_frequency(frequency_khz)
+    finally:
+        with FREQUENCY_ID_CACHE_LOCK:
+            FREQUENCY_ID_PREFETCH_INFLIGHT.discard(round(float(frequency_khz) * 2.0) / 2.0)
+
+
+def prefetch_frequency_identity_neighbours(frequency_khz):
+    """Warm the immediately adjacent SW channels after a real lookup.
+
+    Prefetch is deliberately tiny: the two neighbouring 5 kHz channels on
+    either side. It never changes the receiver state and is skipped entirely
+    when a fresh answer is already cached or in flight.
+    """
+    base_frequency = round(float(frequency_khz) / 5.0) * 5.0
+    now = time.monotonic()
+    for offset in FREQUENCY_ID_PREFETCH_OFFSETS_KHZ:
+        target_frequency = base_frequency + offset
+        if not 2300.0 <= target_frequency <= 30000.0:
+            continue
+        cache_key = round(target_frequency * 2.0) / 2.0
+        with FREQUENCY_ID_CACHE_LOCK:
+            cached = FREQUENCY_ID_CACHE.get(cache_key)
+            if (
+                (cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS)
+                or cache_key in FREQUENCY_ID_PREFETCH_INFLIGHT
+            ):
+                continue
+            FREQUENCY_ID_PREFETCH_INFLIGHT.add(cache_key)
+        threading.Thread(
+            target=_frequency_identity_prefetch_worker,
+            args=(target_frequency,),
+            name=f"frequency-prefetch-{int(target_frequency)}",
+            daemon=True,
+        ).start()
+
+
+def frequency_identity_worker(result_queue, frequency_khz):
+    """One bounded schedule lookup; it can never stall touch or audio."""
+    lookup_frequency, candidates, error = lookup_shortwave_frequency(frequency_khz)
+    try:
+        result_queue.put_nowait((lookup_frequency, candidates, error))
+    except queue.Full:
+        pass
+
+
+def frequency_identity_eligible(frequency_khz, radio_mode):
+    """Keep automatic identification focused on AM/SW broadcast listening."""
+    return (
+        2300.0 <= float(frequency_khz) <= 30000.0
+        and str(radio_mode).lower() in {"am", "amn", "amw", "sam", "sau", "sal", "sas"}
+    )
+
+
+def receiver_coordinates_for_frequency_identity(server, stations, fallback_profile):
+    """Prefer the selected Kiwi GPS point; use the saved listener home only as fallback."""
+    normalized_server = str(server).rstrip("/")
+    for station in stations:
+        try:
+            if str(station[2]).rstrip("/") != normalized_server or len(station) < 7:
+                continue
+            return float(station[5]), float(station[6])
+        except (IndexError, TypeError, ValueError):
+            continue
+    try:
+        return float(fallback_profile["lat"]), float(fallback_profile["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def frequency_identity_distance_km(candidate, receiver_coordinates):
+    if not receiver_coordinates or candidate.get("lat") is None or candidate.get("lon") is None:
+        return None
+    try:
+        return globe_haversine_km(
+            {"lat": float(receiver_coordinates[0]), "lon": float(receiver_coordinates[1])},
+            {"lat": float(candidate["lat"]), "lon": float(candidate["lon"])},
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def station_health_summary(entry, fresh):
@@ -2944,14 +3523,15 @@ def frequency_entry_action_at(x, y):
     return None
 
 
-def parse_frequency_entry_mhz(value):
+def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
     """Accept MHz primarily, while tolerating a pasted kHz value."""
     try:
         numeric = float(value.strip())
     except (TypeError, ValueError):
         return None
-    frequency_khz = numeric * 1000.0 if numeric <= 30.0 else numeric
-    return frequency_khz if 0.0 <= frequency_khz <= TUNING_MAX_KHZ else None
+    max_frequency_khz = float(max_frequency_khz)
+    frequency_khz = numeric * 1000.0 if numeric <= max_frequency_khz / 1000.0 else numeric
+    return frequency_khz if 0.0 <= frequency_khz <= max_frequency_khz else None
 
 
 ZOOM_OSD_SECONDS = 1.4
@@ -3228,19 +3808,21 @@ def snap_frequency_khz(freq_khz, step_hz):
 
 
 def finger_tune_step_hz(zoom, base_step_hz):
-    """Use close zoom levels as a fine VFO without changing the base setting."""
-    zoom = int(zoom)
-    if zoom >= kiwi.DIGITAL_ZOOM_LEVEL:
-        return min(int(base_step_hz), 1)
-    if zoom >= 14:
-        return min(int(base_step_hz), 5)
-    if zoom >= 13:
-        return min(int(base_step_hz), 10)
-    if zoom >= 12:
-        return min(int(base_step_hz), 25)
-    if zoom >= 11:
-        return min(int(base_step_hz), 50)
-    return int(base_step_hz)
+    """Choose a tactile tuning increment no coarser than the visible span.
+
+    The user's base step remains the upper limit. At close Kiwi zoom levels
+    the RC-28 and direct finger tuner instead choose a normal 1-2-5 VFO step
+    that represents about one horizontal display pixel (or less). This keeps
+    a physical encoder detent precise as the waterfall becomes magnified.
+    """
+    base_step_hz = max(1, int(base_step_hz))
+    span_hz = max(1.0, kiwi.zoom_to_span_khz(int(zoom)) * 1000.0)
+    target_step_hz = span_hz / max(1, rf_canvas_width())
+    allowed_step_hz = min(float(base_step_hz), target_step_hz)
+    # Familiar receiver increments, ordered so the chosen detent is never
+    # larger than the on-screen resolution it is meant to control.
+    preferred_steps = (1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000)
+    return max(step for step in preferred_steps if step <= allowed_step_hz) if allowed_step_hz >= 1 else 1
 
 
 RETUNE_TEST_PATTERNS = (
@@ -3485,6 +4067,7 @@ class SharedState:
         self.voice_clean_enabled = False
         self.voice_clean_level = 0
         self.hf_enhance_level = 0
+        self.tone_profile = 0
         self.autonotch_enabled = False
         self.audio_generation = 0
         # Temporary on-screen diagnostic for the adaptive SDR PCM reserve.
@@ -3496,6 +4079,9 @@ class SharedState:
         # second instead of repainting each packet transition.
         self.audio_jitter_display_after = 0.0
         self.external_audio = False
+        # A local I/Q source can temporarily own the waterfall texture while
+        # preserving the selected Kiwi receiver for an instant return.
+        self.external_waterfall = False
         self.asr_engine = "off"
         self.transcription_enabled = False
         self.transcription_generation = 0
@@ -3857,6 +4443,7 @@ class SharedState:
                 "voice_clean": self.voice_clean_enabled,
                 "voice_clean_level": self.voice_clean_level,
                 "hf_enhance_level": self.hf_enhance_level,
+                "tone_profile": self.tone_profile,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -3907,6 +4494,14 @@ class SharedState:
     def external_audio_snapshot(self):
         with self.lock:
             return self.external_audio
+
+    def set_external_waterfall(self, enabled):
+        with self.lock:
+            self.external_waterfall = bool(enabled)
+
+    def external_waterfall_snapshot(self):
+        with self.lock:
+            return self.external_waterfall
 
     def transcription_snapshot(self):
         with self.lock:
@@ -4093,7 +4688,7 @@ class SharedState:
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
             "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
-            "hf_enhance_level",
+            "hf_enhance_level", "tone_profile",
             "autonotch_enabled",
         }
         with self.lock:
@@ -4119,6 +4714,8 @@ class SharedState:
                 self.voice_clean_level = 2 if bool(self.voice_clean_enabled) else 0
             if "hf_enhance_level" in changes:
                 self.hf_enhance_level = int(clamp(int(self.hf_enhance_level), 0, len(HF_ENHANCE_MODELS) - 1))
+            if "tone_profile" in changes:
+                self.tone_profile = int(clamp(int(self.tone_profile), 0, len(TONE_PRESETS) - 1))
             # The control touched most recently wins. This avoids a stale
             # Voice setting silently blocking a newly selected HF epoch.
             if "hf_enhance_level" in changes and self.hf_enhance_level > 0:
@@ -4149,6 +4746,7 @@ class SharedState:
                 "voice_clean": self.voice_clean_enabled,
                 "voice_clean_level": self.voice_clean_level,
                 "hf_enhance_level": self.hf_enhance_level,
+                "tone_profile": self.tone_profile,
                 "autonotch": self.autonotch_enabled,
             }, self.audio_generation
 
@@ -4158,6 +4756,7 @@ class SharedState:
             agc_enabled=True, agc_hang=False, agc_threshold=-100, agc_slope=6,
             agc_decay=1000, agc_manual_gain=50, deemphasis=0, nb_algo=0,
             nr_algo=1, denoise_level=0, voice_clean_enabled=False, voice_clean_level=0, hf_enhance_level=0,
+            tone_profile=0,
             autonotch_enabled=False,
         )
 
@@ -4248,11 +4847,41 @@ class SharedState:
                 )
             else:
                 self.spectrum_values = tuple(values)
+                # A local RTL FFT has 1,024 bins while Kiwi's scope uses the
+                # regular display-bin count. Never mix their peak histories:
+                # indexed max-hold would otherwise fail in the RTL worker.
+                self.spectrum_peak_history.clear()
             # Icom's default Max Hold mode is a 10-second peak window, not a
             # gradual decay. Keep the recent sweep maxima, then draw their
             # per-bin envelope behind the live trace.
             now = time.monotonic()
             self.spectrum_peak_history.append((now, tuple(values)))
+            cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
+            while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
+                self.spectrum_peak_history.popleft()
+            self.spectrum_peak_values = tuple(
+                max(frame[index] for _timestamp, frame in self.spectrum_peak_history)
+                for index in range(len(values))
+            )
+
+    def update_spectrum_values(self, values):
+        """Accept already-normalized bins from an external local I/Q source."""
+        values = tuple(clamp(float(value), 0.0, 1.0) for value in values)
+        if not values:
+            return
+        with self.lock:
+            if len(self.spectrum_values) == len(values):
+                self.spectrum_values = tuple(
+                    old * 0.56 + new * 0.44
+                    for old, new in zip(self.spectrum_values, values)
+                )
+            else:
+                self.spectrum_values = values
+                # Source resolution changed (e.g. Kiwi -> RTL I/Q). Reset
+                # the hold window before combining frames of different width.
+                self.spectrum_peak_history.clear()
+            now = time.monotonic()
+            self.spectrum_peak_history.append((now, values))
             cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
             while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
                 self.spectrum_peak_history.popleft()
@@ -4275,7 +4904,19 @@ class TextCache:
                 names = [family] if isinstance(family, str) else list(family)
             else:
                 names = ["DejaVu Sans Mono", "monospace"] if mono else ["DejaVu Sans", "sans"]
-            font = pygame.font.SysFont(names, size, bold=bold)
+            try:
+                font = pygame.font.SysFont(names, size, bold=bold)
+            except (OSError, pygame.error) as exc:
+                # Some fontconfig entries on the Pi can survive an interrupted
+                # package update while their target font file no longer exists.
+                # A display tool must degrade to Pygame's built-in face, never
+                # repeatedly retry the broken path and take the receiver down.
+                print(f"gl font fallback {names!r}: {exc}", flush=True)
+                fallback_key = ("font-fallback", size, bold, mono)
+                font = self.cache.get(fallback_key)
+                if font is None:
+                    font = pygame.font.Font(None, size)
+                    self.cache[fallback_key] = font
             self.cache[key] = font
         return font
 
@@ -4403,6 +5044,82 @@ def draw_logical_circle(cx, cy, radius, color, segments=72, outline=False):
         GL.glVertex2f(*logical_to_native(cx + radius * math.cos(theta), cy + radius * math.sin(theta)))
     GL.glEnd()
     GL.glEnable(GL.GL_TEXTURE_2D)
+
+
+COUNTRY_FLAG_STYLES = {
+    "Iran": ("horizontal", ((35, 136, 79), (241, 243, 239), (213, 54, 54))),
+    "North Korea": ("north_korea", ()),
+    "South Korea": ("south_korea", ()),
+    "China": ("solid", ((212, 54, 58), (250, 212, 69))),
+    "Japan": ("disc", ((244, 244, 240), (204, 53, 60))),
+    "Germany": ("horizontal", ((25, 25, 28), (201, 51, 50), (232, 189, 54))),
+    "France": ("vertical", ((54, 88, 168), (242, 242, 239), (213, 57, 63))),
+    "Italy": ("vertical", ((46, 145, 88), (243, 244, 239), (208, 57, 65))),
+    "Romania": ("vertical", ((37, 74, 151), (242, 198, 52), (201, 56, 61))),
+    "Russia": ("horizontal", ((244, 244, 241), (52, 93, 177), (202, 55, 60))),
+    "Netherlands": ("horizontal", ((183, 54, 59), (241, 241, 236), (47, 80, 156))),
+    "Austria": ("horizontal", ((194, 53, 59), (244, 244, 240), (194, 53, 59))),
+    "Spain": ("horizontal", ((178, 48, 53), (241, 193, 50), (178, 48, 53))),
+    "Turkey": ("solid", ((195, 56, 62), (242, 242, 236))),
+    "United States": ("united_states", ()),
+    "United Kingdom": ("united_kingdom", ()),
+    "Canada": ("vertical", ((196, 55, 60), (244, 244, 240), (196, 55, 60))),
+    "Australia": ("solid", ((39, 74, 139), (244, 244, 240))),
+    "Ecuador": ("horizontal", ((236, 195, 54), (47, 83, 159), (198, 57, 59))),
+    "Brazil": ("solid", ((39, 132, 84), (241, 203, 58))),
+}
+
+
+def draw_country_flag(country, x, y, width=30, height=18, alpha=1.0):
+    """Render a compact, independent-of-font country flag beside a schedule."""
+    style, colors = COUNTRY_FLAG_STYLES.get(str(country or "").strip(), ("unknown", ()))
+    fill_alpha = int(clamp(alpha, 0.0, 1.0) * 255)
+    edge = (157, 194, 201, int(fill_alpha * 0.85))
+    draw_logical_rect(x, y, x + width, y + height, (27, 53, 62, fill_alpha))
+    if style == "horizontal":
+        stripe_h = height / len(colors)
+        for index, color in enumerate(colors):
+            draw_logical_rect(x, y + index * stripe_h, x + width, y + (index + 1) * stripe_h, (*color, fill_alpha))
+    elif style == "vertical":
+        stripe_w = width / len(colors)
+        for index, color in enumerate(colors):
+            draw_logical_rect(x + index * stripe_w, y, x + (index + 1) * stripe_w, y + height, (*color, fill_alpha))
+    elif style == "north_korea":
+        draw_logical_rect(x, y, x + width, y + height, (32, 83, 147, fill_alpha))
+        draw_logical_rect(x, y + 3, x + width, y + height - 3, (241, 241, 237, fill_alpha))
+        draw_logical_rect(x, y + 5, x + width, y + height - 5, (193, 54, 62, fill_alpha))
+        draw_logical_circle(x + width * 0.31, y + height / 2, height * 0.27, (244, 244, 240, fill_alpha), segments=18)
+        draw_logical_circle(x + width * 0.31, y + height / 2, height * 0.12, (196, 54, 61, fill_alpha), segments=12)
+    elif style == "south_korea":
+        draw_logical_rect(x, y, x + width, y + height, (244, 244, 240, fill_alpha))
+        draw_logical_circle(x + width / 2, y + height / 2, height * 0.28, (209, 55, 63, fill_alpha), segments=18)
+        draw_logical_circle(x + width / 2 + height * 0.12, y + height / 2, height * 0.14, (44, 88, 163, fill_alpha), segments=14)
+    elif style == "disc":
+        base, disc = colors
+        draw_logical_rect(x, y, x + width, y + height, (*base, fill_alpha))
+        draw_logical_circle(x + width / 2, y + height / 2, height * 0.29, (*disc, fill_alpha), segments=18)
+    elif style == "solid":
+        base, accent = colors
+        draw_logical_rect(x, y, x + width, y + height, (*base, fill_alpha))
+        draw_logical_circle(x + width * 0.32, y + height * 0.36, height * 0.12, (*accent, fill_alpha), segments=12)
+    elif style == "united_states":
+        for index in range(7):
+            color = (191, 54, 62) if index % 2 == 0 else (242, 242, 239)
+            draw_logical_rect(x, y + index * height / 7, x + width, y + (index + 1) * height / 7, (*color, fill_alpha))
+        draw_logical_rect(x, y, x + width * 0.43, y + height * 0.55, (42, 75, 143, fill_alpha))
+    elif style == "united_kingdom":
+        draw_logical_rect(x, y, x + width, y + height, (39, 73, 144, fill_alpha))
+        draw_logical_line(x, y, x + width, y + height, (242, 242, 238, fill_alpha), 3)
+        draw_logical_line(x, y + height, x + width, y, (242, 242, 238, fill_alpha), 3)
+        draw_logical_line(x + width / 2, y, x + width / 2, y + height, (194, 54, 61, fill_alpha), 3)
+        draw_logical_line(x, y + height / 2, x + width, y + height / 2, (194, 54, 61, fill_alpha), 3)
+    else:
+        draw_logical_rect(x, y, x + width, y + height, (63, 105, 115, fill_alpha))
+        draw_logical_line(x + 3, y + height / 2, x + width - 3, y + height / 2, (160, 205, 212, fill_alpha), 1)
+    draw_logical_line(x, y, x + width, y, edge, 1)
+    draw_logical_line(x, y + height, x + width, y + height, edge, 1)
+    draw_logical_line(x, y, x, y + height, edge, 1)
+    draw_logical_line(x + width, y, x + width, y + height, edge, 1)
 
 
 def draw_logical_points(points, color, size):
@@ -4662,8 +5379,19 @@ class WaterfallTexture:
         self.row_center_khz[self.row] = center_khz
         self.row_span_khz[self.row] = span_khz
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
-        data = line.convert("RGBA").tobytes("raw", "RGBA")
+        try:
+            if isinstance(line, (bytes, bytearray, memoryview)):
+                data = bytes(line)
+            else:
+                data = line.convert("RGBA").tobytes("raw", "RGBA")
+            if len(data) != WF_TEX_W * 4:
+                raise ValueError(f"waterfall row has {len(data)} bytes")
+        except (TypeError, ValueError, pygame.error) as exc:
+            # A malformed producer row must never terminate the display.
+            print(f"gl discarded waterfall row: {exc}", flush=True)
+            return False
         GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, self.row, WF_TEX_W, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
+        return True
 
     def draw(self, x0, y0, x1, y1, center_khz=None, span_khz=None, row_offset=0):
         if center_khz is not None and span_khz is not None:
@@ -5177,9 +5905,11 @@ def wsprd_background_command(command):
         cpu_ids = []
     taskset = "/usr/bin/taskset"
     if len(cpu_ids) > 1 and Path(taskset).is_file():
-        # Reserve the highest available core for analysis; the OpenGL/audio
-        # process remains free to schedule across every core.
-        wrapped = [taskset, "-c", str(cpu_ids[-1]), *wrapped]
+        # The highest core belongs to the real-time PCM path. Keep decoding
+        # one core away from it; nice +15 remains the primary yielding rule.
+        audio_cpu, _ui_cpus = audio_realtime_cpu_plan()
+        decode_cpu = next((cpu for cpu in reversed(cpu_ids) if cpu != audio_cpu), cpu_ids[0])
+        wrapped = [taskset, "-c", str(decode_cpu), *wrapped]
     nice = "/usr/bin/nice"
     if Path(nice).is_file():
         wrapped = [nice, "-n", str(WSPR_DECODE_NICE), *wrapped]
@@ -5491,6 +6221,30 @@ class WSPRMonitorSession:
         with self.lock:
             self.receiver_grid = grid if wspr_grid_is_valid(grid) else None
 
+    def restore_decoded_spots(self, spots):
+        """Merge persisted history without displacing live decodes."""
+        if not spots:
+            return
+        with self.lock:
+            existing = {
+                (str(item.get("cycle_start", "")), str(item.get("callsign", "")), str(item.get("grid", "")))
+                for item in self.decoded_spots
+            }
+            restored = []
+            for spot in spots:
+                identity = (
+                    str(spot.get("cycle_start", "")), str(spot.get("callsign", "")),
+                    str(spot.get("grid", "")),
+                )
+                if identity not in existing:
+                    restored.append(spot)
+                    existing.add(identity)
+            if restored:
+                self.decoded_spots = deque(
+                    (list(self.decoded_spots) + restored)[:self.decoded_spots.maxlen],
+                    maxlen=self.decoded_spots.maxlen,
+                )
+
     def _report(self, status, message=None):
         with self.lock:
             self.status = status
@@ -5773,11 +6527,12 @@ class WSPRMonitorSession:
 class WSPRMonitorManager:
     """Own the bounded live-session set without leaking public Kiwi slots."""
 
-    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None):
+    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None, log_file=None):
         self.user = user
         self.log_callback = log_callback
         self.decoder_settings = decoder_settings or WSPRDecoderSettings()
         self.decode_scheduler = decode_scheduler or WSPRDecodeScheduler()
+        self.log_file = Path(log_file).expanduser() if log_file else None
         self.sessions = {}
         self.active_keys = ()
         self.capacity_lock = threading.Lock()
@@ -5789,6 +6544,19 @@ class WSPRMonitorManager:
         # own paired SND/W/F lanes. This avoids a restart burst that can make
         # the audible receiver stutter despite modest average CPU use.
         self.next_start_at = time.monotonic() + WSPR_MAIN_AUDIO_SETTLE_SECONDS
+
+    def _hydrate_session_async(self, session):
+        """Load saved display history off the render thread once per session."""
+        if self.log_file is None:
+            return
+        expected_config = dict(session.config)
+
+        def worker():
+            spots = load_wspr_recent_spots(self.log_file, expected_config, session.decoded_spots.maxlen)
+            if self.sessions.get(session.key) is session and session.matches_config(expected_config):
+                session.restore_decoded_spots(spots)
+
+        threading.Thread(target=worker, name=f"wspr-log-restore-{session.key}", daemon=True).start()
 
     def set_log_callback(self, callback):
         self.log_callback = callback
@@ -5864,6 +6632,7 @@ class WSPRMonitorManager:
                     self.decode_scheduler,
                 )
                 self.sessions[key] = session
+                self._hydrate_session_async(session)
             needs_start = needs_start or session.stop_event.is_set()
             if needs_start and key not in self.start_at:
                 # Restored sessions must remain staggered after a boot so the
@@ -6506,7 +7275,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         # Keep the mode matrix clear of the top edge of the wide status button.
         by0 = y0 + 26 + row * 23
         by1 = by0 + 20
-        active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+        active = mode_annunciator_active(label, active_mode, digital)
         if active:
             draw_native_rect(bx0 + 3, by0 + 1, bx1 - 3, by1 - 1, (43, 121, 81, 205))
             # Layered underlines give the selected mode a readable neon halo
@@ -6755,6 +7524,8 @@ def display_option_at(x, y):
         return "close", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
+    if LCD_800_MODE and contains(DISPLAY_INSTRUMENTS_BOX, x, y):
+        return "instruments", None
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -6870,6 +7641,93 @@ def apply_denoise_makeup_gain(audio, gain_db):
     samples = struct.unpack(f"<{sample_count}h", audio[:sample_count * 2])
     boosted = (int(clamp(round(sample * multiplier), -32768, 32767)) for sample in samples)
     return struct.pack(f"<{sample_count}h", *boosted)
+
+
+class ListenerToneShaper:
+    """Small stateful AM/SW listening EQ for the speaker path only."""
+
+    SAMPLE_RATE = 12000.0
+
+    def __init__(self):
+        self.profile = None
+        self.filters = []
+        self.set_profile(0)
+
+    @staticmethod
+    def _normalized(b0, b1, b2, a0, a1, a2):
+        return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
+
+    @classmethod
+    def _highpass(cls, frequency, q=0.707):
+        omega = math.tau * frequency / cls.SAMPLE_RATE
+        cosine, sine = math.cos(omega), math.sin(omega)
+        alpha = sine / (2.0 * q)
+        return cls._normalized((1.0 + cosine) / 2.0, -(1.0 + cosine), (1.0 + cosine) / 2.0,
+                               1.0 + alpha, -2.0 * cosine, 1.0 - alpha)
+
+    @classmethod
+    def _peaking(cls, frequency, gain_db, q=0.9):
+        amplitude = 10.0 ** (gain_db / 40.0)
+        omega = math.tau * frequency / cls.SAMPLE_RATE
+        cosine, alpha = math.cos(omega), math.sin(omega) / (2.0 * q)
+        return cls._normalized(1.0 + alpha * amplitude, -2.0 * cosine, 1.0 - alpha * amplitude,
+                               1.0 + alpha / amplitude, -2.0 * cosine, 1.0 - alpha / amplitude)
+
+    @classmethod
+    def _high_shelf(cls, frequency, gain_db):
+        amplitude = 10.0 ** (gain_db / 40.0)
+        omega = math.tau * frequency / cls.SAMPLE_RATE
+        cosine, sine = math.cos(omega), math.sin(omega)
+        alpha = sine / 2.0 * math.sqrt((amplitude + 1.0 / amplitude) * 2.0)
+        beta = 2.0 * math.sqrt(amplitude) * alpha
+        return cls._normalized(
+            amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine + beta),
+            -2.0 * amplitude * ((amplitude - 1.0) + (amplitude + 1.0) * cosine),
+            amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine - beta),
+            (amplitude + 1.0) - (amplitude - 1.0) * cosine + beta,
+            2.0 * ((amplitude - 1.0) - (amplitude + 1.0) * cosine),
+            (amplitude + 1.0) - (amplitude - 1.0) * cosine - beta,
+        )
+
+    def set_profile(self, profile):
+        profile = int(clamp(int(profile), 0, len(TONE_PRESETS) - 1))
+        if profile == self.profile:
+            return
+        recipes = {
+            # Remove sub-audible rumble, then restore a little 2.2 kHz speech
+            # detail while taking the sharpest Kiwi hiss down just a touch.
+            1: (("hp", 110.0, 0.0), ("peak", 2200.0, 2.2), ("shelf", 4300.0, -1.5)),
+            # A deliberate intelligibility contour for AM and weak SW speech.
+            2: (("hp", 150.0, 0.0), ("peak", 2450.0, 4.0), ("shelf", 4600.0, -1.0)),
+            # Softer, long-listening tonal balance for bright portable speakers.
+            3: (("peak", 260.0, 1.6), ("shelf", 2800.0, -2.3)),
+        }
+        self.filters = []
+        for kind, frequency, gain in recipes.get(profile, ()):
+            coefficients = (
+                self._highpass(frequency) if kind == "hp"
+                else self._peaking(frequency, gain) if kind == "peak"
+                else self._high_shelf(frequency, gain)
+            )
+            self.filters.append([*coefficients, 0.0, 0.0])
+        self.profile = profile
+
+    def process_pcm(self, audio):
+        if not self.filters or not audio:
+            return audio
+        sample_count = len(audio) // 2
+        samples = struct.unpack(f"<{sample_count}h", audio[:sample_count * 2])
+        output = []
+        for sample in samples:
+            value = float(sample)
+            for filt in self.filters:
+                b0, b1, b2, a1, a2, z1, z2 = filt
+                shaped = b0 * value + z1
+                filt[5] = b1 * value - a1 * shaped + z2
+                filt[6] = b2 * value - a2 * shaped
+                value = shaped
+            output.append(int(clamp(round(value), -32768, 32767)))
+        return struct.pack(f"<{sample_count}h", *output)
 
 
 class RNNoiseVoiceCleaner:
@@ -8214,7 +9072,7 @@ def audio_option_at(x, y):
         ("squelch", AUDIO_SQUELCH_BOX),
         ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
         ("notch", AUDIO_NOTCH_BOX),
-        ("deemphasis", AUDIO_DEEMP_BOX), ("filter", AUDIO_FILTER_BOX),
+        ("deemphasis", AUDIO_DEEMP_BOX), ("tone", AUDIO_TONE_BOX), ("filter", AUDIO_FILTER_BOX),
         ("reset", AUDIO_RESET_BOX),
     ):
         if contains(box, x, y):
@@ -8351,6 +9209,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     muted = controls["mute"]
     voice_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
     hf_level = int(clamp(controls.get("hf_enhance_level", 0), 0, len(HF_ENHANCE_PRESETS) - 1))
+    tone_profile = int(clamp(controls.get("tone_profile", 0), 0, len(TONE_PRESETS) - 1))
     hf_active = hf_level > 0
     sq = int(controls["squelch_level"])
     sq_maximum = squelch_maximum(radio_mode)
@@ -8376,6 +9235,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     )
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
+    draw_lcd_audio_tile(text_cache, AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
     draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "FILTER", format_filter_width(high_cut - low_cut))
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
 
@@ -8498,6 +9358,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
+    tone_profile = int(clamp(controls.get("tone_profile", 0), 0, len(TONE_PRESETS) - 1))
+    panel_button(AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
     panel_button(AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False)
     panel_button(AUDIO_RESET_BOX, "RESTORE", "KIWI DEFAULTS", False)
 
@@ -8507,10 +9369,53 @@ def tests_option_at(x, y):
         return "globe"
     if contains(TEST_DJ_BOX, x, y):
         return "dj"
+    if contains(TEST_RTL_BOX, x, y):
+        return "rtl"
     if contains(TEST_PATTERN_BOX, x, y):
         return "pattern"
+    if contains(TEST_FONT_BOX, x, y):
+        return "font_lab"
     if contains(TEST_RUN_BOX, x, y):
         return "run"
+    return None
+
+
+def font_lab_option_at(x, y):
+    if contains(FONT_LAB_PREV_BOX, x, y):
+        return "previous"
+    if contains(FONT_LAB_NEXT_BOX, x, y):
+        return "next"
+    if contains(FONT_LAB_BACK_BOX, x, y):
+        return "back"
+    return None
+
+
+def font_lab_sample_size(text_cache, family, bold):
+    """Choose the largest readable specimen that stays in a 230 px ruler."""
+    cache_key = family, bool(bold)
+    cached = FONT_LAB_SIZE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    # Do not scan every possible pixel size here. Pygame's SysFont keeps an
+    # OS file handle per constructed face on this Pi, and a 30-face scan can
+    # exhaust the service limit. One measurement provides an exact enough
+    # proportional fit and leaves only the actual rendered face cached.
+    probe_size = 64
+    measured_width = max(1, text_cache.font(probe_size, bold=bold, family=family).size(FONT_LAB_SAMPLE)[0])
+    fitted_size = int(round(probe_size * FONT_LAB_SAMPLE_WIDTH / measured_width))
+    FONT_LAB_SIZE_CACHE[cache_key] = int(clamp(fitted_size, 16, 86))
+    return FONT_LAB_SIZE_CACHE[cache_key]
+
+
+def rtl_lab_option_at(x, y):
+    if contains(RTL_LAB_PROBE_BOX, x, y):
+        return "probe"
+    if contains(RTL_LAB_PRESET_BOX, x, y):
+        return "preset"
+    if contains(RTL_LAB_RUN_BOX, x, y):
+        return "run"
+    if contains(RTL_LAB_BACK_BOX, x, y):
+        return "back"
     return None
 
 
@@ -8523,8 +9428,8 @@ def draw_tests_button(text_cache, box, title, detail, active=False):
     draw_logical_line(x0, y1, x1, y1, line, 1)
     draw_logical_line(x0, y0, x0, y1, line, 1)
     draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, (237, 248, 248), 20, True, True, "lm")
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, (237, 248, 248), 20, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm", family="Liberation Sans")
 
 
 def draw_tests_panel(text_cache, pattern_index, sweep):
@@ -8539,7 +9444,9 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
     draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
+    draw_tests_button(text_cache, TEST_RTL_BOX, "RTL-SDR LAB", "LOCAL USB RADIO  /  ISOLATED EXPERIMENT")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
+    draw_tests_button(text_cache, TEST_FONT_BOX, "FONT LAB", "30 FACES  /  256 PX COLUMN COMPARISON")
     if sweep is None:
         draw_tests_button(text_cache, TEST_RUN_BOX, "RUN TEST", "LIVE KIWI WATERFALL + USB AUDIO")
     else:
@@ -8550,6 +9457,96 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
             f"{sweep.name}  {sweep.index}/{sweep.command_count}",
             active=True,
         )
+
+
+def draw_font_lab(text_cache, page):
+    """Full-canvas comparison sheet for the compact frequency readout."""
+    page = int(clamp(page, 0, len(FONT_LAB_PAGES) - 1))
+    page_title, families, specimen_bold = FONT_LAB_PAGES[page]
+    rows = len(families) // 5
+    header_h = 68
+    row_h = (LOGICAL_H - header_h) / rows
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (6, 15, 21, 255))
+    draw_text(
+        text_cache, 18, 25, "FONT LAB", (225, 239, 241), 22, True, False,
+        "lm", family="Liberation Sans",
+    )
+    draw_text(
+        text_cache, 18, 48, f"PAGE {page + 1}/{len(FONT_LAB_PAGES)}  /  {page_title}  /  230 PX WIDTH", (121, 164, 171), 13,
+        True, False, "lm", family="Liberation Sans",
+    )
+    for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT"), (FONT_LAB_BACK_BOX, "BACK")):
+        x0, y0, x1, y1 = box
+        draw_logical_rect(x0, y0, x1, y1, (17, 35, 43, 246))
+        for line in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
+            draw_logical_line(*line, (112, 181, 187, 178), 1)
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (231, 243, 244), 16, True, False, "cm", family="Liberation Sans")
+
+    for column in range(5):
+        column_x0 = column * FONT_LAB_COLUMN_WIDTH
+        column_x1 = min(LOGICAL_W, column_x0 + FONT_LAB_COLUMN_WIDTH)
+        if column % 2:
+            draw_logical_rect(column_x0, header_h, column_x1, LOGICAL_H, (9, 23, 30, 255))
+        draw_logical_line(column_x0, header_h, column_x0, LOGICAL_H, (98, 140, 147, 108), 1)
+        guide_x0 = column_x0 + (FONT_LAB_COLUMN_WIDTH - FONT_LAB_SAMPLE_WIDTH) / 2
+        guide_x1 = guide_x0 + FONT_LAB_SAMPLE_WIDTH
+        for row in range(rows):
+            family = families[row * 5 + column]
+            specimen_y0 = header_h + row * row_h
+            specimen_y1 = specimen_y0 + row_h
+            if row:
+                draw_logical_line(column_x0 + 10, specimen_y0, column_x1 - 10, specimen_y0, (83, 126, 133, 74), 1)
+            draw_text(
+                text_cache, column_x0 + 13, specimen_y0 + 22, family.upper(), (128, 170, 176), 13,
+                True, False, "lm", family="Liberation Sans",
+            )
+            size = font_lab_sample_size(text_cache, family, specimen_bold)
+            sample_y = specimen_y0 + row_h * 0.58
+            draw_logical_line(guide_x0, specimen_y1 - 22, guide_x1, specimen_y1 - 22, (55, 108, 114, 166), 1)
+            draw_logical_line(guide_x0, specimen_y1 - 25, guide_x0, specimen_y1 - 19, (69, 144, 150, 178), 1)
+            draw_logical_line(guide_x1, specimen_y1 - 25, guide_x1, specimen_y1 - 19, (69, 144, 150, 178), 1)
+            draw_text(
+                text_cache, (column_x0 + column_x1) / 2, sample_y, FONT_LAB_SAMPLE, (223, 238, 240), size,
+                specimen_bold, False, "cm", family=family,
+            )
+    draw_logical_line(LOGICAL_W - 1, header_h, LOGICAL_W - 1, LOGICAL_H, (98, 140, 147, 108), 1)
+
+
+def draw_rtl_lab_panel(text_cache, rtl_lab):
+    """Draw the intentionally isolated first local-USB radio experiment."""
+    x0, y0, x1, y1 = RTL_LAB_PANEL_BOX
+    snapshot = rtl_lab.snapshot()
+    name, frequency_hz, mode, _rate = snapshot["preset"]
+    running = snapshot["running"]
+    status = snapshot["status"]
+    status_color = {
+        "READY": (111, 234, 177), "LIVE": (111, 234, 177),
+        "STARTING": (244, 193, 104), "PROBING": (244, 193, 104),
+        "NOT FOUND": (244, 156, 110), "PROBE ERROR": (244, 156, 110),
+        "ERROR": (244, 132, 111),
+    }.get(status, (184, 207, 210))
+    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
+    draw_logical_rect(x0, y0, x1, y1, (7, 17, 24, 244))
+    draw_logical_line(x0, y0, x1, y0, (102, 220, 183, 158), 1)
+    draw_logical_line(x0, y1, x1, y1, (82, 151, 158, 126), 1)
+    draw_text(text_cache, x0 + 24, y0 + 24, "LOCAL RTL-SDR LAB", (232, 246, 247), 22, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 24, y0 + 24, status, status_color, 16, True, True, "rm", family="Liberation Sans")
+    device = fit_station_text(text_cache, snapshot["device"], x1 - x0 - 48, 18, True, False, family="Liberation Sans")
+    tuner = f"  ·  {snapshot['tuner']}" if snapshot["tuner"] else ""
+    draw_text(text_cache, x0 + 24, y0 + 54, f"{device}{tuner}", (166, 205, 207), 18, True, False, "lm", family="Liberation Sans")
+    draw_tests_button(text_cache, RTL_LAB_PROBE_BOX, "PROBE", "USB DEVICE + TUNER", snapshot["probing"])
+    draw_tests_button(
+        text_cache, RTL_LAB_PRESET_BOX, name,
+        f"{frequency_hz / 1e6:.3f} MHz  ·  {mode.upper()}  ·  TAP TO CHANGE", running,
+    )
+    draw_tests_button(
+        text_cache, RTL_LAB_RUN_BOX, "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
+        "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else "RTL-FM PCM → EXISTING USB AUDIO OUTPUT",
+        running,
+    )
+    draw_tests_button(text_cache, RTL_LAB_BACK_BOX, "BACK TO TESTS", "STOP AND RETURN", False)
+    detail = fit_station_text(text_cache, snapshot["detail"], x1 - x0 - 48, 15, False, False, family="Liberation Sans")
+    draw_text(text_cache, x0 + 24, y1 - 18, detail, (149, 190, 194), 15, False, True, "lm", family="Liberation Sans")
 
 
 def wspr_band_page_count():
@@ -8788,6 +9785,39 @@ def append_wspr_local_log(log_file, event, record, max_bytes=WSPR_LOCAL_LOG_MAX_
         os.chmod(log_file, 0o600)
     except OSError:
         pass
+
+
+def load_wspr_recent_spots(log_file, config, limit=96):
+    """Restore the newest durable decode lines for one unchanged WSPR tile.
+
+    The live session keeps a compact RAM deque for paint speed.  After a
+    renderer restart, refill it from the append-only local log so the card
+    and expanded log do not appear empty while the next two-minute cycle is
+    being captured.
+    """
+    tile_id = str(config.get("id", "")).strip()
+    if not tile_id:
+        return ()
+    records = deque(maxlen=max(1, int(limit)))
+    try:
+        with Path(log_file).expanduser().open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if str(record.get("event", "")) != "wspr_decode":
+                    continue
+                if str(record.get("wspr_tile_id", "")).strip() != tile_id:
+                    continue
+                spot = dict(record)
+                spot["cycle_start"] = wspr_log_utc_seconds(record) or 0.0
+                records.append(spot)
+    except OSError as exc:
+        print(f"gl WSPR log restore {exc}", flush=True)
+        return ()
+    # The UI's deque is newest-first, unlike the append-only file.
+    return tuple(reversed(records))
 
 
 def wspr_distance_cache_key(tile_id, server, band):
@@ -9794,7 +10824,9 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     for stamp, distance in points:
         x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
         y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
-        draw_logical_circle(x, y, 4.2, (186, 232, 229, 232), segments=14)
+        # The full-screen MRTG view has enough air for more legible decoded
+        # path marks; compact widget cards deliberately retain their denser dots.
+        draw_logical_circle(x, y, 10.0, (143, 204, 199, 205), segments=20)
     if not points:
         message = "LOADING LOCAL WSPR HISTORY" if loading else "NO DISTANCE SPOTS IN THIS RANGE"
         draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, (132, 192, 192), 21, True, True, "cm", family="Liberation Sans")
@@ -9869,7 +10901,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_logical_rect(0, 0, LOGICAL_W, 140, (8, 29, 35, 250))
     draw_logical_line(0, 139, LOGICAL_W, 139, (81, 184, 166, 176), 1)
     draw_text(text_cache, 28, 28, "WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 28, 57, "CACHED PATH HISTORY  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
         draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
@@ -11214,7 +12246,8 @@ def draw_filter_width_control(text_cache, box, label):
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 42, True, True, "cm")
 
 
-def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, spectrum_enabled):
+def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, spectrum_enabled,
+                             instrument_layout="expanded"):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
@@ -11222,6 +12255,11 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
         draw_lcd_audio_tile(
             text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS", False,
             title_size=20, detail_size=16,
+        )
+        draw_lcd_audio_tile(
+            text_cache, DISPLAY_INSTRUMENTS_BOX, "INSTRUMENTS",
+            str(instrument_layout).upper(), instrument_layout == "expanded",
+            title_size=19, detail_size=17,
         )
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
@@ -11466,6 +12504,127 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
         fill = green if level <= zoom else dim
         h = 36 if level == zoom else 24
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
+
+
+def draw_rc28_mode_osd(text_cache, mode, alpha):
+    """Brief hardware-mode acknowledgement for the Icom RC-28 dial."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = 330, 72, 630, 130
+    green = (72, 255, 122, alpha)
+    draw_logical_rect(x0, y0, x1, y1, (0, 9, 5, int(alpha * 0.58)))
+    draw_logical_line(x0 + 10, y1 - 8, x1 - 10, y1 - 8, (72, 255, 122, int(alpha * 0.42)), 1)
+    draw_text(text_cache, x0 + 16, (y0 + y1) / 2, "RC-28", green[:3], 22, True, True, "lm")
+    draw_text(text_cache, x1 - 16, (y0 + y1) / 2, mode, green[:3], 30, True, True, "rm")
+
+
+def frequency_identity_osd_bounds(candidates):
+    """Shared geometry for drawing and the exact-frequency touch target."""
+    max_rows = min(3, len(candidates))
+    x0 = 28
+    x1 = min(rf_canvas_width() - 18, 790)
+    y0 = 452
+    return x0, y0, x1, y0 + 62 + max_rows * 56
+
+
+def frequency_identity_schedule_touch_box(candidates):
+    """The scheduled RF readout is the only tuning action in the OSD."""
+    x0, y0, x1, _y1 = frequency_identity_osd_bounds(candidates)
+    return max(x0 + 430, x1 - 220), y0 + 2, x1 - 8, y0 + 44
+
+
+def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_coordinates, alpha):
+    """Small, cautious station-identification panel over the live waterfall."""
+    alpha = int(clamp(alpha, 0, 255))
+    if alpha <= 0 or not candidates:
+        return
+    x0, y0, x1, y1 = frequency_identity_osd_bounds(candidates)
+    max_rows = min(3, len(candidates))
+    cyan = (92, 222, 247)
+    draw_logical_rect(x0, y0, x1, y1, (5, 15, 25, int(alpha * 0.88)))
+    draw_logical_line(x0, y0, x1, y0, (*cyan, int(alpha * 0.96)), 2)
+    scheduled_frequency_khz = float(candidates[0].get("frequency_khz", frequency_khz))
+    draw_text(text_cache, x0 + 16, y0 + 23, "BROADCAST NOW", (224, 248, 253), 24, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 23, f"SCHEDULE {scheduled_frequency_khz / 1000.0:.3f} MHz", (150, 232, 249), 20, True, False, "rm", family="Liberation Sans")
+    source_label = str(candidates[0].get("source", "Shortwave DB")).upper()
+    draw_text(text_cache, x0 + 16, y0 + 49, f"{source_label} · STATION / TX SITE / SCHEDULE", (150, 185, 196), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 49, "DIST / PWR", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
+    for index, candidate in enumerate(candidates[:max_rows]):
+        row_y = y0 + 76 + index * 56
+        if index:
+            draw_logical_line(x0 + 14, row_y - 24, x1 - 14, row_y - 24, (98, 151, 166, int(alpha * 0.35)), 1)
+        distance = frequency_identity_distance_km(candidate, receiver_coordinates)
+        distance_label = f"{int(round(distance)):,} km" if distance is not None else "DIST ?"
+        # The flag intentionally spans both information rows. It acts as a
+        # compact country marker, not a tiny inline ornament on the detail row.
+        flag_x = x0 + 16
+        flag_y = row_y - 13
+        flag_width = 54
+        flag_height = 36
+        text_x = flag_x + flag_width + 12
+        station = fit_station_text(text_cache, candidate["station"], x1 - text_x - 218, 23, True, False, family="Liberation Sans")
+        power_kw = str(candidate.get("power_kw") or "").strip()
+        if power_kw.casefold() in {"", "-", "?", "0", "0.0", "0 kw"}:
+            power_label = "PWR N/L"
+        elif re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", power_kw):
+            power_label = f"PWR {power_kw} kW"
+        else:
+            power_label = f"PWR {power_kw}"
+        detail_parts = [
+            part for part in (
+                candidate.get("transmitter"), candidate.get("language"),
+                candidate.get("time"),
+            ) if part
+        ]
+        detail = fit_station_text(text_cache, " · ".join(detail_parts), x1 - text_x - 218, 17, False, False, family="Liberation Sans")
+        draw_country_flag(candidate.get("country"), flag_x, flag_y, flag_width, flag_height, alpha / 255.0)
+        draw_text(text_cache, text_x, row_y, station, (238, 248, 250), 23, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, text_x, row_y + 24, detail, (174, 202, 209), 17, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, x1 - 16, row_y - 2, distance_label, (126, 232, 250), 19, True, False, "rm", family="Liberation Sans")
+        power_color = (139, 220, 235) if power_label != "PWR N/L" else (183, 205, 211)
+        draw_text(text_cache, x1 - 16, row_y + 22, power_label, power_color, 18, True, False, "rm", family="Liberation Sans")
+
+
+def active_wspr_decode_tiles(tiles, monitor_manager):
+    """Return only sessions with a live wsprd process, in tile display order."""
+    active = []
+    for tile in tiles:
+        session = monitor_manager.sessions.get(str(tile.get("id", "")))
+        if session is None:
+            continue
+        snapshot = session.snapshot()
+        if snapshot.get("decode_status") == "DECODING":
+            active.append((tile, snapshot))
+    return tuple(active)
+
+
+def draw_wspr_decode_osd(text_cache, active_tiles, y0):
+    """Persistent main-waterfall marker for an actual, active wsprd decode."""
+    if not active_tiles:
+        return
+    tile, snapshot = active_tiles[0]
+    x1 = rf_canvas_width() - 20
+    width = min(510, x1 - 40)
+    x0 = int((rf_canvas_width() - width) / 2)
+    y0 = int(clamp(y0, 8, LOGICAL_H - 76))
+    y1 = y0 + 58
+    pulse = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(time.monotonic() * 5.5))
+    amber = (251, 186, 79)
+    draw_logical_rect(x0, y0, x1, y1, (18, 13, 5, 214))
+    draw_logical_line(x0, y0, x1, y0, (*amber, 235), 1.5)
+    draw_logical_line(x0, y1, x1, y1, (*amber, 160), 1)
+    dot_x, dot_y = x0 + 22, y0 + 21
+    draw_logical_circle(dot_x, dot_y, 7 + 3 * pulse, (*amber, int(65 + 95 * pulse)), 24, True)
+    draw_logical_circle(dot_x, dot_y, 5, (*amber, 245), 20)
+    draw_text(text_cache, x0 + 40, y0 + 20, "WSPR DECODING", (255, 224, 160), 20, True, True, "lm", family="Liberation Sans")
+    band = str(tile.get("band", "?"))
+    receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 215, 15, True, False, "Liberation Sans")
+    profile = str(snapshot.get("decode_detail", "NORMAL")).upper() or "NORMAL"
+    detail = f"{band} m  ·  {receiver}  ·  {profile}"
+    if len(active_tiles) > 1:
+        detail += f"  ·  +{len(active_tiles) - 1} QUEUED"
+    draw_text(text_cache, x0 + 18, y0 + 43, detail, (239, 199, 120), 15, True, False, "lm", family="Liberation Sans")
 
 
 def station_page_max(stations):
@@ -11737,13 +12896,19 @@ def draw_desktop_1280_navigation(text_cache):
 
 LCD_NAV_X0 = 1024
 LCD_NAV_TOP_MIN = 88
-LCD_NAV_TILE_W = 117
-LCD_NAV_TILE_H = 102
-LCD_NAV_GAP = 8
+# The right rail is an instrument launcher, not an iPad home screen. Keep its
+# 2x4 composition but give each action 20% less visual mass and generous
+# gutters around it, so the waterfall remains the primary surface.
+LCD_NAV_TILE_W = 94
+LCD_NAV_TILE_H = 82
+LCD_NAV_GAP = 20
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
 LCD_DRAWER_HEADING_SIZE = 13
-VFO_FONT_FAMILY = "Orbitron"
+VFO_FONT_FAMILY = "Oxanium"
+# One face across the radio avoids a visual hand-off between the Home rail,
+# large VFO readout and Dual VFO. Oxanium remains clear at the small rail size.
+COMPACT_FREQUENCY_FONT_FAMILY = "Oxanium"
 VFO_NEON_COLOR = (115, 255, 177)
 # Shared active-line half-height for every continuous control.
 SLIDER_STEM_HALF_HEIGHT = 3
@@ -11753,7 +12918,7 @@ LCD_HOME_PASSBAND_HEIGHT = 89
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 236)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 271)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -11795,43 +12960,254 @@ def lcd_nav_top(item_count=None):
     return max(LCD_NAV_TOP_MIN, lcd_rail_bottom() - LCD_CONTROL_GAP - tiles_h)
 
 
-def lcd_home_volume_box():
+def lcd_home_mode_grid_geometry(show_compact_readouts=True):
+    """Return the fixed-size Home mode grid within its reserved rail area.
+
+    Expanded presentation removes the duplicate compact VFO instruments.  It
+    must not turn that freed area into giant mode buttons: use the same
+    two-row mode grid height in both presentations and simply top-align it.
+    """
+    _x0, y0, _x1, y1 = LCD_ANNUNCIATOR_BOX
+    # These are status annunciators, not primary action buttons. A restrained
+    # 15% reduction keeps the group calm without making the labels fussy.
+    gap = 4
+    # Keep a distinct 17 px air gap beneath the compact S-meter scale. The
+    # mode annunciators are a separate control group, not its bottom label.
+    compact_grid_y0 = 186
+    compact_cell_h = 31
+    grid_y0 = compact_grid_y0 if show_compact_readouts else 28
+    return grid_y0, compact_cell_h, gap
+
+
+def lcd_home_mode_grid_bottom(show_compact_readouts=True):
+    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
+    return LCD_ANNUNCIATOR_BOX[1] + grid_y0 + 2 * cell_h + gap
+
+
+def compact_frequency_touch_box():
+    """The open compact frequency digits, distinct from the mode matrix."""
+    x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
+    return x0 + 4, y0 + 12, x1 - 4, y0 + 83
+
+
+def frequency_band_context(freq_khz, mode=""):
+    """Return a concise, frequency-derived band/sub-band operating label."""
+    freq_khz = float(freq_khz or 0.0)
+    mode = str(mode or "").upper()
+    ham_band = next((label for low, high, label in HAM_BANDS if low <= freq_khz <= high), None)
+    if ham_band:
+        if any(low <= freq_khz <= high for low, high in FT8_SUBBANDS):
+            return f"{ham_band} · FT8", "ham"
+        if any(low <= freq_khz <= high for low, high in CW_SUBBANDS):
+            return f"{ham_band} · CW", "ham"
+        # AM/SAM/DRM listeners normally care more about the shortwave meter
+        # band than an overlapping amateur allocation, especially at 41 m.
+        if mode not in ("AM", "AMN", "AMW", "SAM", "SAU", "SAL", "SAS", "QAM", "DRM"):
+            return f"{ham_band} · HAM", "ham"
+    sw_band = next((label for low, high, label in SW_BROADCAST_BANDS if low <= freq_khz <= high), None)
+    if sw_band:
+        suffix = "AM" if sw_band in ("LW", "MW") else "SW AM"
+        return f"{sw_band} · {suffix}", "broadcast"
+    if ham_band:
+        return f"{ham_band} · HAM", "ham"
+    return "HF · GENERAL", "general"
+
+
+def compact_band_context_touch_box():
+    """A real touch target for the persistent compact band indicator."""
+    x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
+    return x0 + 4, y0 + 78, x1 - 4, y0 + 105
+
+
+def main_band_context_box(text_cache, freq_khz):
+    """Place the large-layout band tag beside, never over, the VFO digits."""
+    freq_box = frequency_display_box(text_cache, freq_khz)
+    x1 = freq_box[0] - 12
+    x0 = max(HOME_BOX[2] + 14, x1 - 142)
+    return x0, 13, x1, 43
+
+
+def draw_band_context_chip(text_cache, box, freq_khz, mode, compact=False):
+    """Render the band location as a neutral, quiet text annunciator."""
+    x0, y0, x1, y1 = box
+    label, _kind = frequency_band_context(freq_khz, mode)
+    # The band label identifies context; it should never compete with the
+    # frequency by looking like a coloured button or a separate status lamp.
+    color = (171, 178, 181) if compact else (188, 195, 197)
+    size = 17 if compact else 18
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 0.5, label, color, size, True, False, "cm", family="Liberation Sans")
+
+
+def band_navigation_panel_box():
+    """Large lower-sheet bounds, leaving the permanent status strip visible."""
+    x0, x1 = 18, rf_canvas_width() - 18
+    y1 = lcd_content_bottom() - 8
+    return x0, max(148, y1 - 360), x1, y1
+
+
+def band_navigation_layout():
+    """Return touch-safe preset cells for the lower band sheet."""
+    x0, y0, x1, y1 = band_navigation_panel_box()
+    header_h, gap, columns = 47, 8, 6
+    grid_y0 = y0 + header_h + 10
+    rows = math.ceil(len(BAND_NAV_PRESETS) / columns)
+    cell_w = (x1 - x0 - 20 - gap * (columns - 1)) / columns
+    cell_h = (y1 - grid_y0 - 12 - gap * (rows - 1)) / rows
+    cells = []
+    for index, preset in enumerate(BAND_NAV_PRESETS):
+        col, row = index % columns, index // columns
+        left = x0 + 10 + col * (cell_w + gap)
+        top = grid_y0 + row * (cell_h + gap)
+        cells.append((preset, (left, top, left + cell_w, top + cell_h)))
+    return {
+        "panel": (x0, y0, x1, y1),
+        "close": (x1 - 66, y0 + 8, x1 - 12, y0 + header_h - 7),
+        "cells": cells,
+    }
+
+
+def band_navigation_action_at(x, y):
+    boxes = band_navigation_layout()
+    if contains(boxes["close"], x, y):
+        return "close"
+    for index, (_preset, box) in enumerate(boxes["cells"]):
+        if contains(box, x, y):
+            return index
+    return None
+
+
+def draw_band_navigation(text_cache, freq_khz, mode):
+    """Touch-first HF/SW navigator with enough button size for the LCD."""
+    boxes = band_navigation_layout()
+    x0, y0, x1, y1 = boxes["panel"]
+    draw_logical_rect(x0, y0, x1, y1, (5, 13, 19, 241))
+    draw_logical_line(x0 + 14, y0, x1 - 14, y0, (143, 190, 198, 176), 1)
+    draw_text(text_cache, x0 + 18, y0 + 24, "BAND NAVIGATION", (226, 242, 244), 20, True, False, "lm", family="Liberation Sans")
+    context, _kind = frequency_band_context(freq_khz, mode)
+    draw_text(text_cache, x0 + 232, y0 + 24, context, (126, 187, 196), 15, True, False, "lm", family="Liberation Sans")
+    close = boxes["close"]
+    draw_logical_rect(*close, (25, 53, 66, 232))
+    for ax0, ay0, ax1, ay1 in ((close[0], close[1], close[2], close[1]), (close[0], close[3], close[2], close[3]), (close[0], close[1], close[0], close[3]), (close[2], close[1], close[2], close[3])):
+        draw_logical_line(ax0, ay0, ax1, ay1, (115, 215, 229, 216), 1)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[2] - 17, (close[1] + close[3]) / 2, (235, 250, 251, 255), 2)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[1] + 13, (235, 250, 251, 255), 2)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[3] - 13, (235, 250, 251, 255), 2)
+    active_context, _active_kind = frequency_band_context(freq_khz, mode)
+    for preset, box in boxes["cells"]:
+        label, _target_khz, kind = preset
+        is_active = label.replace(" H", "") in active_context
+        if kind == "broadcast":
+            fill = (57, 40, 13, 235) if is_active else (38, 30, 17, 220)
+            edge, accent = (237, 180, 75, 228), (247, 203, 125)
+            group = "BROADCAST"
+        else:
+            fill = (12, 51, 68, 236) if is_active else (13, 31, 42, 222)
+            edge, accent = (75, 205, 234, 225), (162, 232, 247)
+            group = "HAM"
+        bx0, by0, bx1, by1 = box
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
+            draw_logical_line(ax0, ay0, ax1, ay1, edge if is_active else (*edge[:3], 105), 1)
+        if is_active:
+            draw_logical_line(bx0 + 12, by1 - 5, bx1 - 12, by1 - 5, edge, 2)
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2 - 8, label, accent, 20, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, (bx0 + bx1) / 2, by1 - 13, group, (*accent[:3], 190), 11, True, False, "cm", family="Liberation Sans")
+
+
+def compact_font_review_boxes():
+    """Temporary opaque rail workspace for evaluating compact VFO typefaces."""
+    x0, x1 = LCD_NAV_X0 + 8, LOGICAL_W - 8
+    y0 = 99
+    y1 = lcd_nav_top(len(MENU_ITEMS)) - 8
+    gap = 8
+    half = (x1 - x0 - gap) / 2
+    return {
+        "panel": (LCD_NAV_X0, y0, LOGICAL_W, y1),
+        "previous": (x0, y0 + 58, x0 + half, y0 + 124),
+        "next": (x0 + half + gap, y0 + 58, x1, y0 + 124),
+        "like": (x0, y0 + 138, x0 + half, y0 + 204),
+        "delete": (x0 + half + gap, y0 + 138, x1, y0 + 204),
+        "use": (x0, y0 + 218, x1, y0 + 274),
+        "exit": (x0, y1 - 64, x1, y1 - 10),
+    }
+
+
+def compact_font_review_action_at(x, y):
+    for action, box in compact_font_review_boxes().items():
+        if action != "panel" and contains(box, x, y):
+            return action
+    return None
+
+
+def draw_compact_font_review(text_cache, family, index, families, liked_fonts, active_family):
+    """Opaque temporary controls so font testing never competes with Home UI."""
+    boxes = compact_font_review_boxes()
+    x0, y0, x1, y1 = boxes["panel"]
+    draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 255))
+    draw_logical_line(x0, y0, x1, y0, (100, 149, 155, 178), 1)
+    draw_text(text_cache, x0 + 16, y0 + 20, "FONT REVIEW", (215, 231, 234), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 20, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 42, family.upper(), (170, 198, 202), 16, True, False, "cm", family="Liberation Sans")
+
+    def button(box, label, active=False, destructive=False):
+        bx0, by0, bx1, by1 = box
+        fill = (24, 67, 49, 255) if active else ((61, 25, 26, 255) if destructive else (17, 32, 40, 255))
+        edge = (112, 234, 176, 228) if active else ((228, 112, 106, 198) if destructive else (103, 141, 149, 172))
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        draw_logical_line(bx0, by0, bx1, by0, edge, 1)
+        draw_logical_line(bx0, by1, bx1, by1, edge, 1)
+        draw_logical_line(bx0, by0, bx0, by1, edge, 1)
+        draw_logical_line(bx1, by0, bx1, by1, edge, 1)
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (238, 246, 247), 20, True, False, "cm", family="Liberation Sans")
+
+    button(boxes["previous"], "<")
+    button(boxes["next"], ">")
+    button(boxes["like"], "LIKED" if family in liked_fonts else "LIKE", family in liked_fonts)
+    button(boxes["delete"], "DELETE", destructive=True)
+    button(boxes["use"], "USING" if family == active_family else "USE", family == active_family)
+    button(boxes["exit"], "BACK TO HOME")
+
+
+def lcd_home_volume_box(show_compact_readouts=True):
     """Persistent Home volume instrument in the calm upper right-rail gap."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box()
+    _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
     y0 = pass_y1 + 10
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 18, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 
 
-def lcd_home_volume_mute_box():
+def lcd_home_volume_mute_box(show_compact_readouts=True):
     """Compact speaker toggle at the left of the Home slider line."""
-    x0, _y0, _x1, y1 = lcd_home_volume_box()
+    x0, _y0, _x1, y1 = lcd_home_volume_box(show_compact_readouts)
     return x0 + 6, y1 - 39, x0 + 46, y1 - 5
 
 
-def lcd_home_volume_track_box():
+def lcd_home_volume_track_box(show_compact_readouts=True):
     """The actual finger range excludes the separate speaker toggle."""
-    x0, _y0, x1, y1 = lcd_home_volume_box()
+    x0, _y0, x1, y1 = lcd_home_volume_box(show_compact_readouts)
     return x0 + 56, y1 - 32, x1 - 12, y1 - 8
 
 
-def home_volume_at_x(x):
-    return volume_at_x(x, lcd_home_volume_track_box())
+def home_volume_at_x(x, show_compact_readouts=True):
+    return volume_at_x(x, lcd_home_volume_track_box(show_compact_readouts))
 
 
-def lcd_home_smeter_box():
+def lcd_home_smeter_box(show_compact_readouts=True):
     """Compact RF meter below Home volume and above the tile grid."""
-    x0, _volume_y0, x1, volume_y1 = lcd_home_volume_box()
+    x0, _volume_y0, x1, volume_y1 = lcd_home_volume_box(show_compact_readouts)
     y0 = volume_y1 + 10
     y1 = min(lcd_nav_top() - 16, y0 + 76)
     return x0, y0, x1, max(y0 + 48, y1)
 
 
-def lcd_home_bandwidth_box():
-    """Dedicated Home-rail passband instrument beneath the live controls."""
+def lcd_home_bandwidth_box(show_compact_readouts=True):
+    """Dedicated Home-rail passband instrument beneath the mode cluster."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    y0 = LCD_ANNUNCIATOR_BOX[3] + 14
+    # The compressed mode cells need a real quiet strip below them. Without
+    # it the passband heading visually runs into the lower annunciator row.
+    # Preserve the established passband position after lowering the modes.
+    y0 = lcd_home_mode_grid_bottom(show_compact_readouts) + 20
     return x0, y0, x1, y0 + LCD_HOME_PASSBAND_HEIGHT
 
 
@@ -11839,7 +13215,8 @@ def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
     col = index % 2
     row = index // 2
-    x0 = LCD_NAV_X0 + 7 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+    grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
+    x0 = LCD_NAV_X0 + (LOGICAL_W - LCD_NAV_X0 - grid_width) / 2 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
     y0 = lcd_nav_top(item_count) + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
     return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
 
@@ -11860,17 +13237,37 @@ def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     return None
 
 
-def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
+def lcd_nav_tile_background(text_cache):
+    """Return the lightly rounded shared Home-tile background texture."""
+    key = "lcd_nav_tile_background_v3_compact"
+    cached = text_cache.cache.get(("surface", key))
+    if cached is not None:
+        return cached
+    scale = 2
+    width, height = LCD_NAV_TILE_W * scale, LCD_NAV_TILE_H * scale
+    surface = pygame.Surface((width, height), pygame.SRCALPHA)
+    rect = pygame.Rect(0, 0, width, height)
+    radius = 10 * scale
+    pygame.draw.rect(surface, (17, 29, 38, 218), rect, border_radius=radius)
+    # One restrained outline preserves the instrument-panel treatment while
+    # rounding the formerly abrupt corners just enough for a touch UI.
+    pygame.draw.rect(surface, (86, 111, 122, 182), rect, width=scale, border_radius=radius)
+    pygame.draw.line(surface, (142, 164, 173, 116), (radius, 1), (width - radius, 1), scale)
+    pygame.draw.line(surface, (30, 49, 59, 188), (radius, height - 1), (width - radius, height - 1), scale)
+    return text_cache.surface_texture(key, surface)
+
+
+def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_readouts=True):
     """Draw the master slider and its compact, independent mute switch."""
-    x0, y0, x1, y1 = lcd_home_volume_box()
+    x0, y0, x1, y1 = lcd_home_volume_box(show_compact_readouts)
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
-    mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box()
+    mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box(show_compact_readouts)
     status = "MUTE" if muted else main_volume_label(level)
     status_color = MUTE_ACCENT if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248)
     draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 228))
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
     draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 13, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, y0 + 9, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 13, status, status_color, 18, True, False, "rt", family="Liberation Sans")
     button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
     button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
@@ -11885,7 +13282,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False):
     draw_logical_polyline(((cx - 6, cy - 5), (cx + 5, cy - 13), (cx + 5, cy + 13), (cx - 6, cy + 5)), icon_color, 2.5)
     if muted:
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
-    track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box()
+    track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box(show_compact_readouts)
     track_y = (track_y0 + track_y1) / 2
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (20, 34, 42, 235))
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, (67, 205, 149, 230))
@@ -11985,7 +13382,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     draw_logical_polyline(passband_points, edge, 1.8)
     draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, (238, 202, 96, 232), 1.5)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
-        draw_text(text_cache, x, y1 - 8, label, (137, 171, 181), 10, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, x, y1 - 8, label, (137, 171, 181), 12, True, False, "cm", family="Liberation Sans")
     draw_text(
         text_cache,
         center_x,
@@ -12149,7 +13546,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
 
 
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
-                        digital_open=False, low_cut=None, high_cut=None):
+                        digital_open=False, low_cut=None, high_cut=None, instrument_layout="expanded"):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -12160,29 +13557,36 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     items = lcd_nav_items(settings_open, digital_open)
     if not settings_open and not digital_open:
-        draw_lcd_home_bandwidth(text_cache, low_cut, high_cut)
-        draw_lcd_home_volume_slider(text_cache, volume, muted)
+        show_compact_readouts = instrument_layout == "compact"
+        draw_lcd_home_bandwidth(
+            text_cache, low_cut, high_cut,
+            box=lcd_home_bandwidth_box(show_compact_readouts),
+        )
+        draw_lcd_home_volume_slider(
+            text_cache, volume, muted,
+            show_compact_readouts=show_compact_readouts,
+        )
     for index, (kind, label) in enumerate(items):
         bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
-        draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
-        draw_logical_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
-        draw_logical_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
-        draw_logical_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
-        draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
+        tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
+        draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
         tex, _tex_w, _tex_h = menu_icon_texture(
             text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
 
 
-def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None):
-    """Show a compact radio-style VFO and rounded mode annunciators."""
+def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
+                               show_compact_readouts=True,
+                               compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY):
+    """Show Home-rail modes, optionally with the compact VFO instruments."""
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
     # The main frequency display remains untouched. This smaller right-rail
     # readout stays visually open: it is a live value, not a second button.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    cache_key = ("surface", f"lcd_annunciator_radio_v4_{active_mode}_{digital.upper()}")
+    layout_key = "compact" if show_compact_readouts else "expanded"
+    cache_key = ("surface", f"lcd_annunciator_radio_v9_compact_{layout_key}_{active_mode}_{digital.upper()}")
     cached = text_cache.cache.get(cache_key)
     if cached is None:
         width, height, scale = int(x1 - x0), int(y1 - y0), 2
@@ -12191,19 +13595,20 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         def pixel(value):
             return int(round(value * scale))
 
-        def rounded(left, top, right, bottom, fill, edge=None, radius=7):
+        def rounded(left, top, right, bottom, fill, edge=None, radius=5):
             rect = pygame.Rect(pixel(left), pixel(top), pixel(right - left), pixel(bottom - top))
             pygame.draw.rect(surface, fill, rect, border_radius=pixel(radius))
             if edge is not None:
                 pygame.draw.rect(surface, edge, rect, width=pixel(1), border_radius=pixel(radius))
 
         surface.fill((3, 6, 9, 232))
-        grid_y0, grid_y1, gap = 130, height - 6, 5
-        cell_w = (width - 12 - 3 * gap) / 4
-        cell_h = (grid_y1 - grid_y0 - gap) / 2
+        grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
+        grid_w = (width - 12) * 0.85
+        grid_x0 = (width - grid_w) / 2
+        cell_w = (grid_w - 3 * gap) / 4
         for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
             col, row = index % 4, index // 4
-            left = 6 + col * (cell_w + gap)
+            left = grid_x0 + col * (cell_w + gap)
             top = grid_y0 + row * (cell_h + gap)
             # Keep the grid cells neutral. The active state is drawn later as
             # a compact pill tight to the mode label, not a full blue tile.
@@ -12214,74 +13619,83 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
                 top + cell_h,
                 (7, 10, 13, 238),
                 (62, 67, 73, 228),
-                6,
+                5,
             )
         surface = pygame.transform.smoothscale(surface, (width, height))
         cached = text_cache.surface_texture(cache_key[1], surface)
     texture, texture_w, texture_h = cached
     draw_textured_quad(texture, x0, y0, x0 + texture_w, y0 + texture_h, 0, 0, 1, 1)
 
-    # This is deliberately secondary; the larger top-bar frequency remains
-    # the primary tuning readout.
-    frequency_text = sdr_ui.format_freq(freq_khz)
-    unit = "MHz"
-    unit_size = 13
-    unit_width = text_cache.font(unit_size, bold=True, family="Liberation Sans").size(unit)[0]
-    frequency_left_margin = 10
-    unit_right_margin = 10
-    frequency_unit_gap = 3
-    frequency_size = 48
-    fit_target = "30.000.000"
-    frequency_width_limit = (
-        (x1 - unit_right_margin - unit_width - frequency_unit_gap)
-        - (x0 + frequency_left_margin)
-    )
-    frequency_color = VFO_NEON_COLOR
-    frequency_source_width = max(
-        text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0],
-        text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(fit_target)[0],
-    )
-    frequency_x_scale = min(1.0, frequency_width_limit / max(1, frequency_source_width))
-    # Keep the currently tuned value visually coupled to its unit. Shorter
-    # frequencies therefore do not leave a distracting blank before MHz.
-    frequency_right = x1 - unit_right_margin - unit_width - frequency_unit_gap
-    draw_text_scaled_x(
-        text_cache, frequency_right, y0 + 31, frequency_text, frequency_color, frequency_size,
-        frequency_x_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
-    )
-    draw_text(text_cache, x1 - unit_right_margin, y0 + 36, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
+    if show_compact_readouts:
+        # Compact mode makes this the primary frequency readout. The SDR is
+        # frequency-centric, so do not waste this narrow rail on a repeated
+        # MHz unit: give the digits the entire available width instead.
+        frequency_text = sdr_ui.format_freq(freq_khz)
+        frequency_left_margin = 8
+        frequency_right_margin = 8
+        frequency_size = 60
+        fit_target = "30.000.000"
+        frequency_width_limit = (x1 - frequency_right_margin) - (x0 + frequency_left_margin)
+        # The compact rail is a secondary instrument lane. Keep its enlarged
+        # digits calm in neutral gray rather than competing with the primary
+        # green VFO readout across the display.
+        frequency_color = (161, 169, 172)
+        frequency_source_width = max(
+            text_cache.font(frequency_size, bold=True, family=compact_frequency_font_family).size(frequency_text)[0],
+            text_cache.font(frequency_size, bold=True, family=compact_frequency_font_family).size(fit_target)[0],
+        )
+        frequency_x_scale = min(1.0, frequency_width_limit / max(1, frequency_source_width))
+        frequency_right = x1 - frequency_right_margin
+        draw_text_scaled_x(
+            text_cache, frequency_right, y0 + 53, frequency_text, frequency_color, frequency_size,
+            frequency_x_scale, bold=True, anchor="rm", family=compact_frequency_font_family,
+        )
+        # This narrow, persistent context line answers the basic operating
+        # question at a glance and doubles as the entry point to the large
+        # band navigator. It deliberately sits outside the frequency tap box.
+        draw_band_context_chip(
+            text_cache, compact_band_context_touch_box(), freq_khz, mode, compact=True
+        )
 
-    # Give the Home meter enough physical weight to read as an instrument,
-    # rather than a thin status decoration beside the VFO.
-    meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 64, x1 - 6, y0 + 124
-    meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
-    meter_level = smeter_segment_position(meter_value)
-    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
-    draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
-    draw_text(text_cache, meter_x0 + 9, meter_y0 + 14, "S-METER", (165, 199, 207), 12, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, compact_smeter_label(meter_value), (230, 247, 249), 18, True, False, "rm", family="Liberation Sans")
-    meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-    meter_track_y = meter_y1 - 15
-    segment_w = (meter_track_x1 - meter_track_x0) / 18
-    for index in range(18):
-        sx0 = meter_track_x0 + index * segment_w + 1
-        sx1 = meter_track_x0 + (index + 1) * segment_w - 1
-        active = index + 0.5 <= meter_level / 2
-        color = (92, 221, 231, 238) if index < 14 else (244, 104, 90, 238)
-        draw_logical_rect(sx0, meter_track_y - 7, sx1, meter_track_y + 7, color if active else (31, 52, 61, 208))
+        # Give the Home meter enough physical weight to read as an instrument,
+        # rather than a thin status decoration beside the VFO.
+        # Reserve quiet air around the meter so it reads as its own small
+        # instrument rather than touching either the band tag or mode grid.
+        meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 113, x1 - 6, y0 + 169
+        meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+        meter_level = smeter_segment_position(meter_value)
+        draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
+        draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
+        draw_text(text_cache, meter_x0 + 9, meter_y0 + 14, "S-METER", (165, 199, 207), 12, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 15, True, False, "rm", family="Liberation Sans")
+        meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
+        meter_track_y = meter_y0 + 32
+        segment_w = (meter_track_x1 - meter_track_x0) / 36
+        for index in range(36):
+            sx0 = meter_track_x0 + index * segment_w + 1
+            sx1 = meter_track_x0 + (index + 1) * segment_w - 1
+            active = index + 0.5 <= meter_level
+            color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
+            draw_logical_rect(sx0, meter_track_y - 7, sx1, meter_track_y + 7, color if active else (31, 52, 61, 208))
+        for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
+            lx = meter_track_x0 + (meter_track_x1 - meter_track_x0) * position / 36.0
+            color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
+            draw_text(text_cache, lx, meter_y1 - 8, label, color, 12, True, False, "cm", family="Liberation Sans")
 
-    cell_w = (x1 - x0 - 12 - 3 * 5) / 4
-    cell_h = (y1 - 6 - 130 - 5) / 2
+    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
+    grid_w = (x1 - x0 - 12) * 0.85
+    grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
+    cell_w = (grid_w - 3 * gap) / 4
     for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
         col, row = index % 4, index // 4
-        bx0 = x0 + 6 + col * (cell_w + 5)
+        bx0 = grid_x0 + col * (cell_w + gap)
         bx1 = bx0 + cell_w
-        by0 = y0 + 130 + row * (cell_h + 5)
+        by0 = y0 + grid_y0 + row * (cell_h + gap)
         by1 = by0 + cell_h
-        active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
+        active = mode_annunciator_active(label, active_mode, digital)
         if active:
-            label_w, label_h = text_cache.font(16, bold=True, family="Liberation Sans").size(label)
-            pill_pad_x, pill_pad_y = 8, 5
+            label_w, label_h = text_cache.font(14, bold=True, family="Liberation Sans").size(label)
+            pill_pad_x, pill_pad_y = 7, 3
             pill_x0 = max(bx0 + 4, (bx0 + bx1 - label_w) / 2 - pill_pad_x)
             pill_x1 = min(bx1 - 4, (bx0 + bx1 + label_w) / 2 + pill_pad_x)
             pill_y0 = (by0 + by1 - label_h) / 2 - pill_pad_y
@@ -12290,7 +13704,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             draw_logical_line(pill_x0, pill_y0, pill_x1, pill_y0, (105, 176, 250, 255), 1)
             draw_logical_line(pill_x0, pill_y1, pill_x1, pill_y1, (20, 74, 159, 255), 1)
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  (246, 248, 250) if active else (221, 224, 228), 16, True, False, "cm",
+                  (246, 248, 250) if active else (205, 211, 215), 14, True, False, "cm",
                   family="Liberation Sans")
 
 
@@ -13034,18 +14448,24 @@ def read_cpu_percentages(previous_total=None, previous_cores=None, include_cores
         return None, previous_total, (), previous_cores
 
 
-def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0):
-    parts = []
-    if cpu_percent is not None:
-        parts.append(f"CPU {cpu_percent:.0f}%")
-    if temp_c is not None:
-        parts.append(f"{temp_c:.0f}C")
-    if not parts:
+def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0, secondary_y=None):
+    if cpu_percent is None and temp_c is None:
         return
     # CPU/temperature lives in its own lower-band lane. Do not rely on a
     # historical magic x coordinate: the neighbouring CALL and ASR targets
     # have their own lanes and must remain visually distinct.
     x0, _y0, x1, _y1 = CPU_ANNUNCIATOR_BOX
+    if secondary_y is not None:
+        if cpu_percent is not None:
+            draw_text(text_cache, (x0 + x1) / 2, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
+        if temp_c is not None:
+            draw_text(text_cache, (x0 + x1) / 2, secondary_y, f"{temp_c:.0f}C", (149, 208, 214), max(16, size - 1), True, False, "cm", alpha, family="Cantarell")
+        return
+    parts = []
+    if cpu_percent is not None:
+        parts.append(f"CPU {cpu_percent:.0f}%")
+    if temp_c is not None:
+        parts.append(f"{temp_c:.0f}C")
     label = fit_station_text(text_cache, " ".join(parts), x1 - x0 - 12, size, True, False, family="Cantarell")
     draw_text(text_cache, (x0 + x1) / 2, y, label, (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
 
@@ -13116,7 +14536,10 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         # information lanes rather than a cluster of unrelated overlays.
         for divider_x in (CPU_ANNUNCIATOR_BOX[0] - 9, CALLSIGN_TOGGLE_BOX[0] - 8, ASR_TOGGLE_BOX[0] - 8):
             draw_logical_line(divider_x, y0 + 12, divider_x, y1 - 12, (69, 102, 110, int(105 * alpha)), 1)
-    draw_system_annunciator(text_cache, cpu_percent, temp_c, primary_y, size, alpha)
+    draw_system_annunciator(
+        text_cache, cpu_percent, temp_c, primary_y, size, alpha,
+        secondary_y if two_row else None,
+    )
     call_x0, _call_y0, call_x1, _call_y1 = CALLSIGN_TOGGLE_BOX
     if callsign_enabled:
         call_color = (102, 238, 163) if callsign_status != "ERROR" else (246, 164, 94)
@@ -13618,6 +15041,8 @@ def draw_ui(
     squelch_closed=False,
     settings_menu_open=False,
     digital_menu_open=False,
+    instrument_layout="expanded",
+    compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
     ruler_center_khz=None,
 ):
@@ -13634,19 +15059,25 @@ def draw_ui(
     # graduations remain readable even where the scope passes under the top
     # instrument strip.
     draw_logical_rect(68, 0, rf_canvas_width(), sdr_ui.TOP_H, (0, 0, 0, 144))
+    show_large_instruments = instrument_layout != "compact"
     frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
     if DESKTOP_1280_MODE:
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
-    main_vfo_size = 58
-    main_vfo_width = text_cache.font(main_vfo_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
-    main_vfo_scale = min(1.0, 330.0 / max(1, main_vfo_width))
-    draw_text_scaled_x(
-        text_cache, frequency_right_x(), 39, frequency_text, VFO_NEON_COLOR, main_vfo_size,
-        main_vfo_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
-    )
-    draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
+    if show_large_instruments:
+        main_vfo_size = 58
+        main_vfo_width = text_cache.font(main_vfo_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
+        main_vfo_scale = min(1.0, 330.0 / max(1, main_vfo_width))
+        if LCD_800_MODE:
+            draw_band_context_chip(
+                text_cache, main_band_context_box(text_cache, freq_khz), freq_khz, mode
+            )
+        draw_text_scaled_x(
+            text_cache, frequency_right_x(), 39, frequency_text, VFO_NEON_COLOR, main_vfo_size,
+            main_vfo_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+        )
+        draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
         text_cache,
@@ -13715,12 +15146,17 @@ def draw_ui(
         digital_open=digital_menu_open,
         low_cut=filter_low_hz,
         high_cut=filter_high_hz,
+        instrument_layout=instrument_layout,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
     if LCD_800_MODE:
-        draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
+        draw_lcd_mode_annunciators(
+            text_cache, mode, digital, freq_khz, smeter_dbm,
+            show_compact_readouts=not show_large_instruments,
+            compact_frequency_font_family=compact_frequency_font_family,
+        )
 
 
 def drain_queue(line_queue):
@@ -13881,6 +15317,535 @@ def stop_audio_player(player):
             pass
 
 
+RTL_LAB_PRESETS = (
+    ("FM BROADCAST", 100.1e6, "wbfm", 32000),
+    ("AIR AM", 118.0e6, "am", 12000),
+    ("2 m FM", 145.5e6, "fm", 12000),
+    ("WEATHER FM", 162.55e6, "fm", 12000),
+)
+RTL_IQ_SAMPLE_RATE = 2_400_000
+RTL_IQ_BLOCK_BYTES = 32_768
+# The waterfall texture stores 1,024 columns. Two FFT bins per texture
+# column keeps the local source sharp without resampling artefacts.
+RTL_IQ_FFT_SIZE = 2_048
+RTL_TUNING_MIN_KHZ = 24_000.0
+RTL_TUNING_MAX_KHZ = 1_766_000.0
+RTL_MIN_ZOOM = kiwi.span_to_zoom(RTL_IQ_SAMPLE_RATE / 1000.0)
+
+
+class RTLSDRLab:
+    """One local I/Q stream feeding both the rendered waterfall and USB audio."""
+
+    def __init__(self, args, state, line_queue):
+        self.args = args
+        self.state = state
+        self.line_queue = line_queue
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.player = None
+        self.present = False
+        self.device = "RTL-SDR NOT PROBED"
+        self.tuner = ""
+        self.status = "PROBE REQUIRED"
+        self.detail = "No local SDR source is active."
+        self.preset_index = 0
+        self.probing = False
+        self._library = None
+        self._restore_view = None
+        self.probe()
+
+    def snapshot(self):
+        with self.lock:
+            preset = RTL_LAB_PRESETS[self.preset_index]
+            return {
+                "present": self.present,
+                "device": self.device,
+                "tuner": self.tuner,
+                "status": self.status,
+                "detail": self.detail,
+                "preset": preset,
+                "running": bool(self.thread and self.thread.is_alive()),
+                "probing": self.probing,
+            }
+
+    def is_running(self):
+        with self.lock:
+            return bool(self.thread and self.thread.is_alive())
+
+    @staticmethod
+    def source_span_khz():
+        return RTL_IQ_SAMPLE_RATE / 1000.0
+
+    @staticmethod
+    def minimum_zoom():
+        return RTL_MIN_ZOOM
+
+    @staticmethod
+    def tuning_bounds():
+        return RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ
+
+    def probe(self):
+        with self.lock:
+            if self.probing or (self.thread and self.thread.is_alive()):
+                return False
+            self.probing = True
+            self.status = "PROBING"
+            self.detail = "Checking USB device and tuner."
+
+        def worker():
+            try:
+                result = subprocess.run(
+                    ["rtl_test", "-t"], capture_output=True, text=True,
+                    timeout=14, check=False,
+                )
+                output = (result.stdout or "") + "\n" + (result.stderr or "")
+                device_match = re.search(r"^\s*0:\s*(.+)$", output, re.MULTILINE)
+                tuner_match = re.search(r"Found\s+(.+?)\s+tuner", output, re.IGNORECASE)
+                present = "Found 1 device(s)" in output or device_match is not None
+                device = device_match.group(1).strip() if device_match else "RTL-SDR USB DEVICE"
+                tuner = tuner_match.group(1).strip() if tuner_match else ""
+                with self.lock:
+                    self.present = present
+                    self.device = device if present else "NO RTL-SDR DETECTED"
+                    self.tuner = tuner
+                    if present:
+                        self.status = "READY"
+                        self.detail = f"{tuner or 'RTL tuner'} · {len(RTL_LAB_PRESETS)} listening presets"
+                    else:
+                        self.status = "NOT FOUND"
+                        self.detail = "Connect an RTL-SDR and tap PROBE."
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                with self.lock:
+                    self.present = False
+                    self.status = "PROBE ERROR"
+                    self.detail = str(exc)[:64]
+            finally:
+                with self.lock:
+                    self.probing = False
+
+        threading.Thread(target=worker, name="rtl-sdr-probe", daemon=True).start()
+        return True
+
+    def cycle_preset(self):
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                return False
+            self.preset_index = (self.preset_index + 1) % len(RTL_LAB_PRESETS)
+            name, frequency_hz, _mode, _rate = RTL_LAB_PRESETS[self.preset_index]
+            self.detail = f"Selected {name} {frequency_hz / 1e6:.3f} MHz"
+        return True
+
+    def start(self, frequency_khz, zoom):
+        """Atomically hand the shared view to the local I/Q source.
+
+        Kiwi and an RTL dongle do not share a frequency range.  Park Kiwi's
+        workers *before* publishing an FM/VHF RTL frequency, then restore the
+        exact Kiwi view when this temporary lab source stops.
+        """
+        with self.lock:
+            if not self.present:
+                self.detail = "No RTL-SDR detected; tap PROBE."
+                return False
+            if np is None:
+                self.status = "ERROR"
+                self.detail = "NumPy is required for the local I/Q path."
+                return False
+            if self.thread and self.thread.is_alive():
+                return True
+            _server, prior_frequency, prior_zoom, _smeter, _generation, _server_generation = self.state.snapshot()
+            self._restore_view = (prior_frequency, prior_zoom)
+            target_frequency = clamp(float(frequency_khz), RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ)
+            target_zoom = int(clamp(max(self.minimum_zoom(), int(zoom)), self.minimum_zoom(), kiwi.DISPLAY_MAX_ZOOM))
+            # The flags are deliberately set before state.set_view(), so the
+            # normal Kiwi SND/W/F workers never receive e.g. 100.100 MHz.
+            self.state.set_external_waterfall(True)
+            self.state.set_external_audio(True)
+            self.state.set_view(freq_khz=target_frequency, zoom=target_zoom)
+            name, frequency_hz, mode, rate = RTL_LAB_PRESETS[self.preset_index]
+            self.stop_event.clear()
+            self.status = "STARTING"
+            self.detail = f"{name} {frequency_hz / 1e6:.3f} MHz · local I/Q"
+            self.thread = threading.Thread(
+                target=self._iq_worker,
+                args=(name, mode, rate),
+                name="rtl-sdr-lab-iq",
+                daemon=True,
+            )
+            self.thread.start()
+        return True
+
+    def _librtlsdr(self):
+        if self._library is not None:
+            return self._library
+        last_error = None
+        for name in ("librtlsdr.so.0", "librtlsdr.so"):
+            try:
+                library = ctypes.CDLL(name)
+                library.rtlsdr_open.argtypes = (ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint32)
+                library.rtlsdr_open.restype = ctypes.c_int
+                library.rtlsdr_close.argtypes = (ctypes.c_void_p,)
+                library.rtlsdr_close.restype = ctypes.c_int
+                library.rtlsdr_set_center_freq.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+                library.rtlsdr_set_center_freq.restype = ctypes.c_int
+                library.rtlsdr_set_sample_rate.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+                library.rtlsdr_set_sample_rate.restype = ctypes.c_int
+                library.rtlsdr_set_tuner_gain_mode.argtypes = (ctypes.c_void_p, ctypes.c_int)
+                library.rtlsdr_set_tuner_gain_mode.restype = ctypes.c_int
+                library.rtlsdr_reset_buffer.argtypes = (ctypes.c_void_p,)
+                library.rtlsdr_reset_buffer.restype = ctypes.c_int
+                library.rtlsdr_read_sync.argtypes = (
+                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                    ctypes.POINTER(ctypes.c_int),
+                )
+                library.rtlsdr_read_sync.restype = ctypes.c_int
+                self._library = library
+                return library
+            except OSError as exc:
+                last_error = exc
+        raise RuntimeError(f"librtlsdr unavailable: {last_error}")
+
+    @staticmethod
+    def _pcm_from_iq(samples, mode, output_rate, previous_sample):
+        if len(samples) < 4:
+            return b"", previous_sample
+        if mode == "am":
+            signal = np.abs(samples)
+            ratio = max(1, int(round(RTL_IQ_SAMPLE_RATE / output_rate)))
+            usable = len(signal) // ratio * ratio
+            if not usable:
+                return b"", samples[-1]
+            audio = signal[:usable].reshape(-1, ratio).mean(axis=1)
+            audio -= np.mean(audio)
+            audio *= 23500.0 / max(1e-4, float(np.percentile(np.abs(audio), 95)))
+        else:
+            prior = samples[0] if previous_sample is None else previous_sample
+            phase = np.angle(samples * np.conj(np.concatenate(([prior], samples[:-1]))))
+            ratio = max(1, int(round(RTL_IQ_SAMPLE_RATE / output_rate)))
+            usable = len(phase) // ratio * ratio
+            if not usable:
+                return b"", samples[-1]
+            audio = phase[:usable].reshape(-1, ratio).mean(axis=1)
+            # Broadcast FM needs less boost than narrow FM after averaging.
+            audio *= 17800.0 if mode == "wbfm" else 30500.0
+        return np.clip(audio, -32768, 32767).astype("<i2", copy=False).tobytes(), samples[-1]
+
+    def _publish_waterfall(self, samples, center_khz, lut, levels):
+        window = samples[-RTL_IQ_FFT_SIZE:]
+        if len(window) != RTL_IQ_FFT_SIZE:
+            return
+        power = 20.0 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(window))) + 1e-8)
+        # Keep a malformed or future non-divisible FFT frame from taking the
+        # entire local receiver down. The present 2048-point FFT maps 2:1.
+        bins_per_column = len(power) // WF_TEX_W
+        if bins_per_column < 1:
+            return
+        usable_bins = bins_per_column * WF_TEX_W
+        bins = power[:usable_bins].reshape(WF_TEX_W, bins_per_column).mean(axis=1)
+        noise = float(np.percentile(bins, 35))
+        top = max(noise + 26.0, float(np.percentile(bins, 99.4)))
+        if levels[0] is None:
+            levels[:] = [noise - 5.0, top]
+        else:
+            levels[0] = levels[0] * 0.92 + (noise - 5.0) * 0.08
+            levels[1] = levels[1] * 0.92 + top * 0.08
+            levels[1] = max(levels[0] + 24.0, levels[1])
+        normalized = np.clip((bins - levels[0]) / (levels[1] - levels[0]), 0.0, 1.0)
+        values = (normalized * 255.0).astype(np.uint8)
+        rgba_line = np.empty((WF_TEX_W, 4), dtype=np.uint8)
+        rgba_line[:, 0] = lut[0][values]
+        rgba_line[:, 1] = lut[1][values]
+        rgba_line[:, 2] = lut[2][values]
+        rgba_line[:, 3] = 255
+        # Feed raw RGBA directly to the OpenGL uploader. Creating a Pygame
+        # surface here makes its display-dependent color mask leak into the
+        # main render thread and can crash the KMS UI on local-audio start.
+        line = rgba_line.tobytes()
+        item = (line, center_khz, self.source_span_khz())
+        try:
+            self.line_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self.line_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.line_queue.put_nowait(item)
+            except queue.Full:
+                pass
+        if self.state.spectrum_enabled_snapshot():
+            self.state.update_spectrum_values(normalized)
+        # It is a useful relative S-meter estimate, not an RF calibrated dBm
+        # measurement. The UI retains its usual smooth attack/release.
+        self.state.set_smeter(-117.0 + (noise - levels[0]) * 1.8, source="snd")
+
+    def _iq_worker(self, name, mode, output_rate):
+        device = None
+        player = None
+        try:
+            library = self._librtlsdr()
+            device_ref = ctypes.c_void_p()
+            if library.rtlsdr_open(ctypes.byref(device_ref), 0) < 0:
+                raise RuntimeError("could not open RTL-SDR device 0")
+            device = device_ref
+            if library.rtlsdr_set_sample_rate(device, RTL_IQ_SAMPLE_RATE) < 0:
+                raise RuntimeError("could not set RTL-SDR sample rate")
+            library.rtlsdr_set_tuner_gain_mode(device, 0)
+            _server, freq_khz, _zoom, _smeter, view_generation, _server_generation = self.state.snapshot()
+            initial_hz = int(clamp(freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
+            if library.rtlsdr_set_center_freq(device, initial_hz) < 0:
+                raise RuntimeError("could not tune RTL-SDR")
+            library.rtlsdr_reset_buffer(device)
+            audio_args = argparse.Namespace(**vars(self.args))
+            audio_args.audio_rate = output_rate
+            player = BufferedAudioPlayer(audio_args, 1)
+            with self.lock:
+                self.player = player
+                self.status = "LIVE"
+                self.detail = f"{name} · I/Q waterfall + USB audio"
+            drain_queue(self.line_queue)
+            buffer = ctypes.create_string_buffer(RTL_IQ_BLOCK_BYTES)
+            received = ctypes.c_int()
+            previous_sample = None
+            seen_generation = view_generation
+            tuned_hz = initial_hz
+            last_tune_at = 0.0
+            next_waterfall_at = 0.0
+            lut = tuple(np.asarray(channel, dtype=np.uint8) for channel in waterfall_mapper("kiwi"))
+            levels = [None, None]
+            while not self.stop_event.is_set():
+                result = library.rtlsdr_read_sync(
+                    device, buffer, RTL_IQ_BLOCK_BYTES, ctypes.byref(received)
+                )
+                if result < 0 or received.value <= 0:
+                    raise RuntimeError(f"RTL-SDR I/Q read failed ({result})")
+                raw = np.frombuffer(buffer.raw[:received.value], dtype=np.uint8)
+                raw = raw[:len(raw) // 2 * 2]
+                if len(raw) < RTL_IQ_FFT_SIZE * 2:
+                    continue
+                samples = (raw[0::2].astype(np.float32) - 127.5) + 1j * (raw[1::2].astype(np.float32) - 127.5)
+                pcm, previous_sample = self._pcm_from_iq(samples, mode, output_rate, previous_sample)
+                if pcm:
+                    player.submit(pcm)
+                _server, next_freq_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
+                now = time.monotonic()
+                desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
+                if desired_hz != tuned_hz and next_generation != seen_generation and now - last_tune_at >= 0.025:
+                    if library.rtlsdr_set_center_freq(device, desired_hz) < 0:
+                        raise RuntimeError("RTL-SDR retune failed")
+                    library.rtlsdr_reset_buffer(device)
+                    tuned_hz = desired_hz
+                    seen_generation = next_generation
+                    last_tune_at = now
+                    previous_sample = None
+                    drain_queue(self.line_queue)
+                elif next_generation != seen_generation:
+                    seen_generation = next_generation
+                if now >= next_waterfall_at:
+                    self._publish_waterfall(samples, tuned_hz / 1000.0, lut, levels)
+                    next_waterfall_at = now + 0.055
+        except Exception as exc:
+            with self.lock:
+                if not self.stop_event.is_set():
+                    self.status = "ERROR"
+                    self.detail = str(exc)[:72]
+            print(f"gl RTL-SDR lab {exc}\n{traceback.format_exc()}", flush=True)
+        finally:
+            if player is not None:
+                player.close()
+            if device is not None:
+                try:
+                    self._librtlsdr().rtlsdr_close(device)
+                except Exception:
+                    pass
+            with self.lock:
+                restore_view, self._restore_view = self._restore_view, None
+            if restore_view is not None:
+                # Return Kiwi to its last genuine radio state before waking
+                # its transports. This avoids one invalid VHF tune on resume.
+                self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
+            self.state.set_external_audio(False)
+            self.state.set_external_waterfall(False)
+            with self.lock:
+                self.player = None
+                if self.stop_event.is_set():
+                    self.status = "READY" if self.present else "NOT FOUND"
+                    self.detail = "Local I/Q stopped; Kiwi audio and waterfall resumed."
+
+    def stop(self):
+        self.stop_event.set()
+        with self.lock:
+            thread = self.thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        if thread is None or not thread.is_alive():
+            self.state.set_external_audio(False)
+            self.state.set_external_waterfall(False)
+
+
+RC28_VENDOR_ID = "00000C26"
+RC28_PRODUCT_ID = "0000001E"
+
+
+class RC28Input:
+    """Small raw-HID driver for the Icom RC-28 tuning controller.
+
+    The RC-28 advertises a vendor-defined HID report rather than Linux input
+    events. It therefore needs a tiny userspace decoder, kept separate from
+    the UI thread so unplug/replug and malformed reports cannot affect render.
+    """
+
+    def __init__(self):
+        self.events = queue.Queue(maxsize=128)
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.dial_lock = threading.Lock()
+        self.pending_dial_delta = 0
+        self.status = "SEARCHING"
+        self.device_path = ""
+        self.last_button = None
+        self.last_button_at = 0.0
+        self.transmit_held = False
+        self.thread = threading.Thread(target=self._worker, name="icom-rc28", daemon=True)
+        self.thread.start()
+
+    @staticmethod
+    def _find_device():
+        for hidraw in Path("/sys/class/hidraw").glob("hidraw*"):
+            try:
+                uevent = (hidraw / "device" / "uevent").read_text(errors="ignore")
+            except OSError:
+                continue
+            if f"HID_ID=0003:{RC28_VENDOR_ID}:{RC28_PRODUCT_ID}" in uevent:
+                return Path("/dev") / hidraw.name
+        return None
+
+    def snapshot(self):
+        with self.lock:
+            return self.status, self.device_path
+
+    def drain(self, limit=32):
+        result = []
+        for _ in range(limit):
+            try:
+                result.append(self.events.get_nowait())
+            except queue.Empty:
+                break
+        # Wheel movement is intentionally coalesced. Raw HID reports can arrive
+        # faster than a display frame; replaying an old burst after the operator
+        # reverses direction makes a hardware dial feel stuck at a zoom limit.
+        with self.dial_lock:
+            pending = self.pending_dial_delta
+            self.pending_dial_delta = 0
+        if pending:
+            result.append(("dial", pending))
+        return result
+
+    def _emit(self, event):
+        try:
+            self.events.put_nowait(event)
+        except queue.Full:
+            # Keep the most recent tuning motion responsive instead of
+            # allowing an old wheel burst to execute late.
+            try:
+                self.events.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.events.put_nowait(event)
+            except queue.Full:
+                pass
+
+    def _clear_pending_dial(self):
+        with self.dial_lock:
+            self.pending_dial_delta = 0
+
+    def _accumulate_dial(self, delta):
+        """Keep only current wheel intent, never a delayed travel backlog."""
+        delta = int(delta)
+        if not delta:
+            return
+        with self.dial_lock:
+            pending = self.pending_dial_delta
+            if pending and (pending > 0) != (delta > 0):
+                # A direction reversal is more important than unfinished old
+                # travel, particularly at digital zoom 4x/8x boundaries.
+                self.pending_dial_delta = delta
+            else:
+                self.pending_dial_delta = clamp(pending + delta, -32, 32)
+
+    def _decode(self, report):
+        if len(report) < 6:
+            return
+        code = report[5]
+        if code in (0x06, 0x07):
+            # The RC-28 tags every wheel report while TRANSMIT is physically
+            # held with 0x06; a released wheel returns to 0x07. We use the
+            # press edge to cycle the UI's persistent dial mode.
+            now_held = code == 0x06
+            just_pressed = now_held and not self.transmit_held
+            self.transmit_held = now_held
+            if just_pressed:
+                self._clear_pending_dial()
+                self._emit(("button", "cycle_dial_mode"))
+                return
+            direction = {0x01: 1, 0x02: -1}.get(report[3])
+            detents = int(report[1])
+            if direction is not None and detents:
+                self._accumulate_dial(direction * min(detents, 64))
+            self.last_button = None
+            return
+        # RC-28 front panel: TRANSMIT selects Tune/Zoom. F1 enters symmetric
+        # passband-width editing and F2 makes the dial a direct main-volume
+        # control, so both work without opening a drawer.
+        button = {0x05: "toggle_passband_width", 0x03: "toggle_volume"}.get(code)
+        if button is None:
+            return
+        now = time.monotonic()
+        if button != self.last_button or now - self.last_button_at >= 0.30:
+            self._emit(("button", button))
+            self.last_button = button
+            self.last_button_at = now
+
+    def _worker(self):
+        while not self.stop_event.is_set():
+            path = self._find_device()
+            if path is None:
+                with self.lock:
+                    self.status = "SEARCHING"
+                    self.device_path = ""
+                self.stop_event.wait(1.0)
+                continue
+            fd = None
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                with self.lock:
+                    self.status = "CONNECTED"
+                    self.device_path = str(path)
+                print(f"gl RC-28 connected {path}", flush=True)
+                while not self.stop_event.is_set():
+                    readable, _writable, _errors = select.select([fd], [], [], 0.40)
+                    if not readable:
+                        continue
+                    report = os.read(fd, 64)
+                    if not report:
+                        raise OSError("RC-28 disconnected")
+                    self._decode(report)
+            except (OSError, ValueError) as exc:
+                with self.lock:
+                    self.status = "SEARCHING"
+                    self.device_path = ""
+                if not self.stop_event.is_set():
+                    print(f"gl RC-28 waiting: {exc}", flush=True)
+                    self.stop_event.wait(1.0)
+            finally:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
+
 UI_CONFIRMATION_TONE_HZ = 587.33
 UI_CONFIRMATION_TONE_SECONDS = 0.070
 UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS = 0.075
@@ -14024,6 +15989,9 @@ class BufferedAudioPlayer:
         self.output_was_comfort_noise = False
         self.last_underflow_log_at = 0.0
         self.last_clock_late_log_at = 0.0
+        # Keep a short event timeline in RAM. It is intentionally emitted only
+        # around a real underrun, so normal reception stays log- and CPU-light.
+        self.buffer_trace = deque(maxlen=320)
         self.comfort_noise_state = 0x6D2B79F5
         self.comfort_noise_packets = 0
         self.primed = False
@@ -14033,6 +16001,30 @@ class BufferedAudioPlayer:
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="sdr-audio-clock", daemon=True)
         self.thread.start()
+
+    def _trace_locked(self, event, arrival_gap=None, clock_late=None):
+        """Retain enough timing context to explain the next real underrun."""
+        self.buffer_trace.append((
+            time.monotonic(),
+            event,
+            len(self.packets),
+            self.target_packets,
+            None if arrival_gap is None else max(0.0, float(arrival_gap)),
+            None if clock_late is None else max(0.0, float(clock_late)),
+        ))
+
+    def _underflow_trace_locked(self):
+        """Compact FIFO/clock trace for journalctl after a buffer starvation."""
+        recent = tuple(self.buffer_trace)[-80:]
+        if not recent:
+            return "none"
+        origin = recent[0][0]
+        return " ".join(
+            f"{event}{now - origin:+.3f}s/q{depth}/t{target}"
+            + (f"/a{arrival * 1000:.0f}" if arrival is not None else "")
+            + (f"/l{late * 1000:.0f}" if late is not None else "")
+            for now, event, depth, target, arrival, late in recent
+        )
 
     def _publish_locked(self, arrival_gap=None, output_gap=False):
         if self.state is not None:
@@ -14105,6 +16097,7 @@ class BufferedAudioPlayer:
                 self.packets.append((packet, self.pending_silence))
             if not self.pending_audio:
                 self.pending_silence = None
+            self._trace_locked("A", arrival_gap=arrival_gap)
             self._publish_locked(arrival_gap)
             self.condition.notify_all()
 
@@ -14226,8 +16219,16 @@ class BufferedAudioPlayer:
             pass
 
     def _run(self):
+        configure_realtime_audio_path(self.player)
+        affinity_refresh_at = time.monotonic() + 2.0
         deadline = 0.0
         while not self.stop_event.is_set():
+            now = time.monotonic()
+            if now >= affinity_refresh_at:
+                # Decoder/caption workers may appear after the first PCM
+                # clock starts. Keep them from inheriting audio CPU 3.
+                configure_realtime_audio_path(self.player, announce=False)
+                affinity_refresh_at = now + 2.0
             with self.condition:
                 while not self.closed and (not self.packet_bytes or not self.primed):
                     if self.packet_bytes and len(self.packets) >= self.target_packets:
@@ -14246,6 +16247,7 @@ class BufferedAudioPlayer:
                         self.rebuffering = False
                         self.comfort_noise_packets = 0
                         audio, silence = self.packets.popleft()
+                        self._trace_locked("R")
                     else:
                         # A short bridge only: an unresponsive receiver must
                         # become quiet, not sound like it is still live.
@@ -14261,6 +16263,7 @@ class BufferedAudioPlayer:
                 elif self.packets:
                     self.comfort_noise_packets = 0
                     audio, silence = self.packets.popleft()
+                    self._trace_locked("O")
                 else:
                     previous_target = self.target_packets
                     self.target_packets = min(SDR_AUDIO_JITTER_MAX_PACKETS, self.target_packets + 1)
@@ -14270,6 +16273,10 @@ class BufferedAudioPlayer:
                     if self.target_packets != previous_target:
                         print(
                             f"gl audio jitter reserve {previous_target}->{self.target_packets} packets",
+                            flush=True,
+                        )
+                        print(
+                            "gl audio underrun trace " + self._underflow_trace_locked(),
                             flush=True,
                         )
                     elif time.monotonic() - self.last_underflow_log_at >= 5.0:
@@ -14297,10 +16304,15 @@ class BufferedAudioPlayer:
             delay = deadline - time.monotonic()
             if delay > 0.0:
                 self.stop_event.wait(delay)
-            elif delay < -period * 2:
+            elif delay < 0.0:
+                late_seconds = -delay
+                if late_seconds >= SDR_AUDIO_TRACE_LATE_SECONDS:
+                    with self.condition:
+                        self._trace_locked("L", clock_late=late_seconds)
+                if delay >= -period * 2:
+                    continue
                 # A delayed write must not accumulate a permanently stale
                 # schedule; realign and continue with the current packet.
-                late_seconds = -delay
                 if self.state is not None:
                     self.state.record_audio_clock_late(late_seconds)
                 if time.monotonic() - self.last_clock_late_log_at >= 5.0:
@@ -14318,6 +16330,979 @@ class BufferedAudioPlayer:
         self.thread.join(timeout=1.0)
         raw_player, self.player = self.player, None
         stop_audio_player(raw_player)
+
+
+DUAL_MATCH_SAMPLE_RATE = 12000
+DUAL_MATCH_HOP_SAMPLES = 1200
+DUAL_MATCH_FFT_SAMPLES = 512
+DUAL_MATCH_FEATURE_BANDS = 32
+DUAL_MATCH_WINDOW_FEATURES = 250
+DUAL_MATCH_STABLE_SECONDS = 2.0
+DUAL_MATCH_EARLY_SECONDS = 1.0
+DUAL_MATCH_MIN_OVERLAP_SECONDS = 1.0
+DUAL_MATCH_MAX_DELAY_SECONDS = 20.0
+# Never promote a shared broadband texture from the initial one-second
+# capture. A real programme has to leave several seconds of modulation behind.
+DUAL_MATCH_PROGRAMME_MIN_FEATURES = 50
+DUAL_MATCH_MOTION_SCORE = 0.26
+DUAL_MATCH_MOTION_STABLE = -0.12
+DUAL_MATCH_MOTION_AGREEMENT = 0.60
+DUAL_MATCH_MOTION_HITS_REQUIRED = 3
+DUAL_MATCH_MOTION_DELAY_TOLERANCE_SECONDS = 1.0
+# A spectral correlation means nothing until both paths contain some actual
+# programme-like modulation. This deliberately low threshold rejects a pair of
+# flat receiver-noise floors while keeping a weak, fading HF copy eligible.
+DUAL_MATCH_CONTENT_MIN = 0.18
+DUAL_MATCH_CONTENT_MIN_FEATURES = 25
+# Do not call it white noise after a brief, ambiguous capture. Both paths must
+# remain decisively below this content score for a full five seconds first.
+DUAL_MATCH_WHITE_NOISE_MAX = 0.15
+DUAL_MATCH_WHITE_NOISE_MIN_FEATURES = 50
+# A weak-but-real second receiver may not meet the old raw-spectrum gate. Once
+# three independent modulation windows agree on one delay, these lower gates
+# can promote it without accepting a coincidental noise texture.
+DUAL_MATCH_CORROBORATED_SCORE = 0.60
+DUAL_MATCH_CORROBORATED_STABLE = 0.42
+DUAL_MATCH_CORROBORATED_AGREEMENT = 0.70
+DUAL_MATCH_CORROBORATED_MARGIN = 0.070
+DUAL_MATCH_CORROBORATED_MOTION = 0.42
+# A different signature family follows programme amplitude rather than its
+# spectrum. It remains useful when one VFO has a co-channel interferer or a
+# distinctly different RF/audio filter.
+DUAL_MATCH_ENVELOPE_MIN_FEATURES = 30
+DUAL_MATCH_ENVELOPE_SCORE = 0.22
+DUAL_MATCH_ENVELOPE_STABLE = -0.05
+DUAL_MATCH_ENVELOPE_AGREEMENT = 0.55
+DUAL_MATCH_ENVELOPE_MARGIN = 0.025
+DUAL_MATCH_SHAPE_SCORE = 0.45
+DUAL_MATCH_SHAPE_STABLE = 0.20
+DUAL_MATCH_SHAPE_AGREEMENT = 0.50
+DUAL_MATCH_SHAPE_MARGIN = 0.020
+DUAL_MATCH_SIGNATURE_VOTES_REQUIRED = 2
+# A match should become visible as soon as it is strong and coherent. The
+# stricter values below are reserved for the terminal 100% judgement, which
+# must withstand unrelated programme/noise coincidences.
+DUAL_MATCH_DISPLAY_CONFIDENCE = 80
+DUAL_MATCH_DISPLAY_SCORE = 0.72
+DUAL_MATCH_DISPLAY_STABLE = 0.50
+DUAL_MATCH_DISPLAY_AGREEMENT = 0.70
+# `MATCH 100%` is intentionally hard to earn for two independent receivers:
+# strong whole-window similarity, stable blocks, and a clear timing peak.
+DUAL_MATCH_CERTAIN_SCORE = 0.76
+DUAL_MATCH_CERTAIN_STABLE = 0.56
+DUAL_MATCH_CERTAIN_AGREEMENT = 0.75
+DUAL_MATCH_CERTAIN_MARGIN = 0.060
+DUAL_MATCH_EVIDENCE_INTERVAL_SECONDS = 5.0
+DUAL_MATCH_EVIDENCE_HITS_REQUIRED = 3
+DUAL_QUALITY_WINDOW_FEATURES = 50
+DUAL_QUALITY_MIN_FEATURES = 20
+# BEST is an A/B ranking, not an alarm. Once both paths have enough live
+# structure it should name the clearer one; require a meaningful lead only
+# when changing an existing winner, preventing normal fading from flickering
+# the badge back and forth.
+DUAL_QUALITY_SWITCH_ADVANTAGE_RATIO = 1.08
+DUAL_QUALITY_CONFIRM_SECONDS = 2.0
+
+
+class DualVFOProgramMatcher:
+    """Bounded, feature-based same-programme detector for Dual VFO.
+
+    The SND workers submit raw mono PCM through a non-blocking queue. The
+    worker deliberately compares coarse log-mel structure, not waveforms, so
+    AGC, fading, receiver filters, and player delay do not dominate the score.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.active = False
+        self.comparable = False
+        self.same_receiver = False
+        self.confirmed = False
+        self.quality = {"A": 0.0, "B": 0.0}
+        self.best_source = None
+        self.best_candidate = None
+        self.best_candidate_since = 0.0
+        self.signature = None
+        self.status = "OFF"
+        self.queue = None
+        self.stop_event = None
+        self.thread = None
+        self._window = None
+        self._mel_filters = None
+
+    def start(self):
+        self.stop()
+        with self.lock:
+            self.active = True
+            self.comparable = False
+            self.same_receiver = False
+            self.confirmed = False
+            self.quality = {"A": 0.0, "B": 0.0}
+            self.best_source = None
+            self.best_candidate = None
+            self.best_candidate_since = 0.0
+            self.signature = None
+            self.status = "WAITING"
+            self.queue = queue.Queue(maxsize=160)
+            self.stop_event = threading.Event()
+            self.thread = threading.Thread(
+                target=self._worker, name="dual-vfo-program-match", daemon=True,
+            )
+            thread = self.thread
+        thread.start()
+
+    def stop(self):
+        with self.lock:
+            thread = self.thread
+            stop_event = self.stop_event
+            queue_ref = self.queue
+            self.active = False
+            self.comparable = False
+            self.same_receiver = False
+            self.confirmed = False
+            self.quality = {"A": 0.0, "B": 0.0}
+            self.best_source = None
+            self.best_candidate = None
+            self.best_candidate_since = 0.0
+            self.signature = None
+            self.status = "OFF"
+            self.thread = None
+            self.stop_event = None
+            self.queue = None
+        if stop_event is not None:
+            stop_event.set()
+        if queue_ref is not None:
+            try:
+                queue_ref.put_nowait(None)
+            except queue.Full:
+                pass
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.8)
+
+    @staticmethod
+    def _receiver_endpoint(source):
+        """Canonical endpoint identity; a shared Kiwi is conclusive evidence."""
+        parsed = urlparse(str((source or {}).get("server", "")))
+        if not parsed.hostname:
+            return None
+        default_port = 443 if parsed.scheme == "https" else 80
+        try:
+            port = parsed.port or default_port
+        except ValueError:
+            return None
+        return parsed.scheme.lower(), parsed.hostname.lower(), port
+
+    def configure(self, source_a, profile_a, source_b, profile_b):
+        """Arm only when both VFOs truly describe the same RF programme."""
+        try:
+            freq_a = round(float(profile_a.get("freq_khz")), 3)
+            freq_b = round(float(profile_b.get("freq_khz")), 3)
+        except (TypeError, ValueError):
+            freq_a = freq_b = None
+        mode_a = str(profile_a.get("mode", "")).upper()
+        mode_b = str(profile_b.get("mode", "")).upper()
+        signature = (
+            str(source_a.get("server", "")), freq_a, mode_a,
+            str(source_b.get("server", "")), freq_b, mode_b,
+        )
+        comparable = (
+            freq_a is not None and freq_b is not None
+            and abs(freq_a - freq_b) <= 0.010 and mode_a == mode_b
+        )
+        same_receiver = (
+            comparable
+            and self._receiver_endpoint(source_a) is not None
+            and self._receiver_endpoint(source_a) == self._receiver_endpoint(source_b)
+        )
+        with self.lock:
+            if not self.active:
+                return
+            changed = (
+                signature != self.signature
+                or comparable != self.comparable
+                or same_receiver != self.same_receiver
+            )
+            self.signature = signature
+            self.comparable = comparable
+            self.same_receiver = same_receiver
+            if changed:
+                self.status = "WAITING" if comparable else "SYNC B TO A"
+                self.confirmed = False
+                self.quality = {"A": 0.0, "B": 0.0}
+                self.best_source = None
+                self.best_candidate = None
+                self.best_candidate_since = 0.0
+                queue_ref = self.queue
+            else:
+                queue_ref = None
+        if queue_ref is not None:
+            try:
+                queue_ref.put_nowait(("reset", None, 0.0))
+            except queue.Full:
+                pass
+
+    def submit(self, source, audio, silence=False):
+        """Accept raw mono PCM without ever delaying a live Kiwi SND worker."""
+        if source not in ("A", "B") or not audio:
+            return
+        with self.lock:
+            if not self.active or not self.comparable:
+                return
+            queue_ref = self.queue
+        if queue_ref is None:
+            return
+        packet = bytes(audio)
+        try:
+            queue_ref.put_nowait((source, packet if not silence else b"", time.monotonic()))
+        except queue.Full:
+            # Analysis is observational. Discarding a stale feature is always
+            # safer than adding latency to audio, tuning, or the waterfall.
+            pass
+
+    def status_snapshot(self):
+        with self.lock:
+            return self.status
+
+    def quality_snapshot(self):
+        """Return the stable stronger source, never an instantaneous level."""
+        with self.lock:
+            return self.best_source, dict(self.quality)
+
+    def _set_status(self, status):
+        with self.lock:
+            if self.active:
+                self.status = status
+
+    def _confirmed_snapshot(self):
+        with self.lock:
+            return self.confirmed
+
+    def _clear_confirmation(self):
+        with self.lock:
+            self.confirmed = False
+
+    def _set_quality(self, quality_a, quality_b, feature_count):
+        """Publish a stable A/B reception-quality ranking.
+
+        The first winner is simply the stronger structured programme path.
+        Thereafter another source must gain an 8% advantage before it can
+        replace the displayed BEST source. This preserves a useful answer
+        while filtering the ordinary, short HF fade either path will see.
+        """
+        if feature_count < DUAL_QUALITY_MIN_FEATURES:
+            return
+        quality_a = max(0.0, float(quality_a))
+        quality_b = max(0.0, float(quality_b))
+        if quality_a <= 1e-6 or quality_b <= 1e-6:
+            best = None
+        else:
+            with self.lock:
+                current_best = self.best_source
+            if current_best == "A":
+                best = "B" if quality_b >= quality_a * DUAL_QUALITY_SWITCH_ADVANTAGE_RATIO else "A"
+            elif current_best == "B":
+                best = "A" if quality_a >= quality_b * DUAL_QUALITY_SWITCH_ADVANTAGE_RATIO else "B"
+            else:
+                best = "A" if quality_a >= quality_b else "B"
+        now = time.monotonic()
+        with self.lock:
+            if self.active:
+                self.quality = {"A": quality_a, "B": quality_b}
+                if best != self.best_candidate:
+                    self.best_candidate = best
+                    self.best_candidate_since = now
+                elif now - self.best_candidate_since >= DUAL_QUALITY_CONFIRM_SECONDS:
+                    self.best_source = best
+
+    def _confirm(self):
+        with self.lock:
+            if self.active:
+                self.confirmed = True
+                self.status = "MATCH 100%"
+
+    def _filters(self):
+        if self._window is not None and self._mel_filters is not None:
+            return self._window, self._mel_filters
+        if np is None:
+            return None, None
+        window = np.hanning(DUAL_MATCH_FFT_SAMPLES).astype(np.float32)
+        hz_to_mel = lambda hz: 2595.0 * np.log10(1.0 + hz / 700.0)
+        mel_to_hz = lambda mel: 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
+        mel_points = np.linspace(hz_to_mel(150.0), hz_to_mel(4300.0), DUAL_MATCH_FEATURE_BANDS + 2)
+        bins = np.clip(
+            np.floor((DUAL_MATCH_FFT_SAMPLES + 1) * mel_to_hz(mel_points) / DUAL_MATCH_SAMPLE_RATE).astype(int),
+            0, DUAL_MATCH_FFT_SAMPLES // 2,
+        )
+        filters = np.zeros((DUAL_MATCH_FEATURE_BANDS, DUAL_MATCH_FFT_SAMPLES // 2 + 1), dtype=np.float32)
+        for index in range(DUAL_MATCH_FEATURE_BANDS):
+            left, center, right = bins[index:index + 3]
+            if center > left:
+                filters[index, left:center] = np.linspace(0.0, 1.0, center - left, endpoint=False)
+            if right > center:
+                filters[index, center:right] = np.linspace(1.0, 0.0, right - center, endpoint=False)
+        self._window, self._mel_filters = window, filters
+        return window, filters
+
+    def _feature(self, pcm):
+        if np is None or len(pcm) < DUAL_MATCH_FFT_SAMPLES * 2:
+            return None
+        samples = np.frombuffer(pcm[:DUAL_MATCH_FFT_SAMPLES * 2], dtype="<i2").astype(np.float32)
+        samples -= float(samples.mean())
+        rms = float(np.sqrt(np.mean(samples * samples)))
+        if rms < 90.0:
+            return None
+        window, filters = self._filters()
+        if window is None:
+            return None
+        spectrum = np.abs(np.fft.rfft(samples * window))
+        frequency_bins = np.fft.rfftfreq(DUAL_MATCH_FFT_SAMPLES, 1.0 / DUAL_MATCH_SAMPLE_RATE)
+        audio_spectrum = spectrum[(frequency_bins >= 150.0) & (frequency_bins <= 4300.0)]
+        # Spectral flatness is a lightweight audio-quality clue: broadband
+        # static tends toward flat, while intelligible speech/music carries
+        # formants, harmonics and other non-flat structure. It is normalized,
+        # so a receiver's volume setting does not win the comparison.
+        if len(audio_spectrum):
+            flatness = float(
+                np.exp(np.mean(np.log(audio_spectrum + 1e-6))) /
+                max(1e-6, float(np.mean(audio_spectrum)))
+            )
+        else:
+            flatness = 1.0
+        # This tiny fixed-size reduction is faster than invoking a threaded
+        # BLAS matmul on the Pi and avoids its spurious floating-point status
+        # warnings when sparse mel rows contain leading/trailing zeroes.
+        mel = np.log1p(np.sum(filters * spectrum[None, :], axis=1))
+        # Extract structure above the local spectral floor. Broadband receiver
+        # noise is usually smooth across adjacent mel bands; voice formants,
+        # music tones, carrier-adjacent modulation and their motion are not.
+        # Keeping both the broad shape and this contrast signature lets a weak
+        # copy remain comparable to a clean one without matching their noise.
+        local_floor = np.convolve(mel, np.ones(7, dtype=np.float32) / 7.0, mode="same")
+        contrast = np.maximum(0.0, mel - local_floor)
+        # Retain a non-negative, sparse version for the motion comparison.
+        # A second station in only one VFO often changes the broad spectral
+        # profile, but it should not erase the narrow, shared programme
+        # structures which move together in both receivers.
+        sparse_feature = contrast.copy()
+        sparse_norm = float(np.linalg.norm(sparse_feature))
+        if sparse_norm > 1e-6:
+            sparse_feature /= sparse_norm
+        broad = mel - float(mel.mean())
+        broad_norm = float(np.linalg.norm(broad))
+        contrast -= float(contrast.mean())
+        contrast_norm = float(np.linalg.norm(contrast))
+        if broad_norm < 1e-6 and contrast_norm < 1e-6:
+            return None
+        if broad_norm > 1e-6:
+            broad /= broad_norm
+        if contrast_norm > 1e-6:
+            contrast /= contrast_norm
+        # Distinguish modulation from a flat receiver noise floor before any
+        # cross-path score is considered. Raw log-mel shapes can correlate
+        # strongly for two unrelated white-noise streams; those streams have
+        # near-maximal flatness and zero-crossing density, but no programme
+        # signature. The envelope term is intentionally modest: speech can
+        # remain almost steady over a single 42 ms frame.
+        zero_crossing_rate = float(np.mean(samples[:-1] * samples[1:] < 0.0))
+        subframe = samples[:512].reshape(4, 128)
+        subframe_rms = np.sqrt(np.mean(subframe * subframe, axis=1))
+        envelope_variation = float(np.std(subframe_rms) / max(1.0, float(np.mean(subframe_rms))))
+        spectral_structure = clamp((1.0 - flatness - 0.06) / 0.52, 0.0, 1.0)
+        crossing_structure = clamp((0.46 - zero_crossing_rate) / 0.26, 0.0, 1.0)
+        envelope_structure = clamp((envelope_variation - 0.025) / 0.18, 0.0, 1.0)
+        programme_content = (
+            0.52 * spectral_structure
+            + 0.33 * crossing_structure
+            + 0.15 * envelope_structure
+        )
+        # This quality proxy is gain-independent. It rewards stable spectral
+        # structure above the local noise floor, which is what makes a radio
+        # source easier to understand, rather than simply rewarding volume.
+        structure_quality = (
+            float(np.mean(np.maximum(0.0, mel - local_floor)))
+            + 0.35 * float(np.percentile(mel, 90) - np.percentile(mel, 50))
+        )
+        structure_quality *= 0.25 + 0.75 * clamp(1.0 - flatness, 0.0, 1.0)
+        feature = 0.45 * broad + 0.55 * contrast
+        norm = float(np.linalg.norm(feature))
+        return (
+            feature / norm,
+            structure_quality,
+            programme_content,
+            sparse_feature,
+            math.log(max(1.0, rms)),
+        ) if norm > 1e-6 else None
+
+    @staticmethod
+    def _compare(features_a, features_b, agreement_threshold=0.55):
+        """Return confidence and content delay from two rolling feature paths."""
+        count = min(len(features_a), len(features_b))
+        min_overlap = int(DUAL_MATCH_MIN_OVERLAP_SECONDS * 10)
+        if count < min_overlap:
+            return None
+        a = np.asarray(list(features_a)[-count:], dtype=np.float32)
+        b = np.asarray(list(features_b)[-count:], dtype=np.float32)
+        # A weak HF path may have speech-shaped content underneath a much
+        # stronger noise floor. Smooth across 500 ms before comparing frames:
+        # programme modulation survives, while packet-to-packet noise does not.
+        if count >= 5:
+            kernel = np.array((1.0, 2.0, 3.0, 2.0, 1.0), dtype=np.float32) / 9.0
+            def smooth(sequence):
+                padded = np.pad(sequence, ((2, 2), (0, 0)), mode="edge")
+                return sum(kernel[index] * padded[index:index + count] for index in range(5))
+            a, b = smooth(a), smooth(b)
+            a /= np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-6)
+            b /= np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-6)
+        max_offset = min(int(DUAL_MATCH_MAX_DELAY_SECONDS * 10), count - min_overlap)
+        candidates = []
+        for offset in range(-max_offset, max_offset + 1):
+            if offset >= 0:
+                left, right = a[:count - offset], b[offset:count]
+            else:
+                left, right = a[-offset:count], b[:count + offset]
+            correlations = np.sum(left * right, axis=1)
+            # A high correlation from one short edge overlap is not a radio
+            # signature. Reward long, repeatable comparisons so a shared
+            # 5-second programme interval wins over a lucky 1-second match.
+            overlap_weight = math.sqrt(len(correlations) / max(1, count))
+            score = float(np.mean(correlations)) * overlap_weight
+            # A true programme match is coherent across the whole recording,
+            # not one lucky burst of music or a similar noise spectrum.
+            blocks = np.array_split(correlations, max(1, len(correlations) // 10))
+            block_scores = [float(block.mean()) for block in blocks]
+            stable = float(min(block_scores)) if block_scores else -1.0
+            agreement = float(np.mean([score >= agreement_threshold for score in block_scores])) if block_scores else 0.0
+            candidates.append((score, stable, agreement, offset, correlations))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_stable, best_agreement, best_offset, _correlations = candidates[0]
+        alternatives = [
+            item[0] for item in candidates
+            if abs(item[3] - best_offset) > 2
+        ]
+        # With a one-second capture there is no shift range to compare. That
+        # is *not* a uniquely identified timing peak; treating it as one made
+        # the old code generate impossible 1.9-point margins and false 100%.
+        second_score = max(alternatives) if alternatives else best_score
+        margin = best_score - second_score
+        # A broadcast with speech/music can have a broad delay peak, so peak
+        # separation is valuable evidence for the terminal 100% judgement but
+        # must not suppress an otherwise overwhelmingly coherent live match.
+        # Map the strong-score gate directly onto the visible 80–99% range;
+        # stable/agreement gates below still decide whether MATCH is shown.
+        confidence = clamp(
+            DUAL_MATCH_DISPLAY_CONFIDENCE
+            + (best_score - DUAL_MATCH_DISPLAY_SCORE)
+            / max(1e-6, 0.98 - DUAL_MATCH_DISPLAY_SCORE) * 19.0,
+            0.0,
+            99.0,
+        )
+        # A clean, pervasive high score may have a naturally broad timing
+        # peak during music or long vowels. Accept that only when every
+        # second agrees; otherwise insist on a more distinct delay peak.
+        # Independent Kiwi receivers can differ substantially through AGC,
+        # fading and client-side timing. The original 0.72 gate rejected
+        # repeated, known-identical programme paths around 0.66. These values
+        # still require broad agreement and a clear alternate-delay margin.
+        # A live MATCH can appear before the timing peak becomes razor sharp:
+        # real broadcast content has broad correlation plateaus during speech
+        # and music. The dynamic, de-noised signature still has to be strong
+        # and coherent through most of the sampled seconds, so a merely
+        # similar noise texture cannot win.
+        matched = (
+            best_score >= DUAL_MATCH_DISPLAY_SCORE
+            and best_stable >= DUAL_MATCH_DISPLAY_STABLE
+            and best_agreement >= DUAL_MATCH_DISPLAY_AGREEMENT
+            and confidence >= DUAL_MATCH_DISPLAY_CONFIDENCE
+        )
+        return {
+            "matched": matched,
+            "confidence": int(round(confidence)),
+            "score": best_score,
+            "stable": best_stable,
+            "agreement": best_agreement,
+            "margin": margin,
+            "delay_seconds": best_offset / 10.0,
+        }
+
+    @staticmethod
+    def _compare_envelope(values_a, values_b):
+        """Cross-correlate detrended programme-envelope movement.
+
+        The short-window log RMS is mostly independent of VFO volume and is
+        much less sensitive to a narrow co-channel interferer than a complete
+        spectral frame. Independent receiver noise has no stable common
+        envelope after this detrending step.
+        """
+        count = min(len(values_a), len(values_b))
+        min_overlap = max(12, int(2.0 * 10))
+        if count < min_overlap:
+            return None
+        a = np.asarray(list(values_a)[-count:], dtype=np.float32)
+        b = np.asarray(list(values_b)[-count:], dtype=np.float32)
+
+        def normalize(values):
+            # Remove residual slow AGC drift before comparing programme rhythm.
+            kernel_size = min(21, max(5, (len(values) // 2) * 2 + 1))
+            kernel = np.ones(kernel_size, dtype=np.float32) / kernel_size
+            padded = np.pad(values, (kernel_size // 2, kernel_size // 2), mode="edge")
+            baseline = np.convolve(padded, kernel, mode="valid")[:len(values)]
+            values = values - baseline
+            scale = float(np.sqrt(np.mean(values * values)))
+            return values / scale if scale >= 0.004 else None
+
+        a, b = normalize(a), normalize(b)
+        if a is None or b is None:
+            return None
+        max_offset = min(int(DUAL_MATCH_MAX_DELAY_SECONDS * 10), count - min_overlap)
+        candidates = []
+        for offset in range(-max_offset, max_offset + 1):
+            if offset >= 0:
+                left, right = a[:count - offset], b[offset:count]
+            else:
+                left, right = a[-offset:count], b[:count + offset]
+            correlations = left * right
+            overlap_weight = math.sqrt(len(correlations) / max(1, count))
+            score = float(np.mean(correlations)) * overlap_weight
+            blocks = np.array_split(correlations, max(1, len(correlations) // 10))
+            block_scores = [float(block.mean()) for block in blocks]
+            stable = float(min(block_scores)) if block_scores else -1.0
+            agreement = float(np.mean([score >= 0.10 for score in block_scores])) if block_scores else 0.0
+            candidates.append((score, stable, agreement, offset))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_stable, best_agreement, best_offset = candidates[0]
+        alternatives = [item[0] for item in candidates if abs(item[3] - best_offset) > 2]
+        second_score = max(alternatives) if alternatives else best_score
+        return {
+            "score": best_score,
+            "stable": best_stable,
+            "agreement": best_agreement,
+            "margin": best_score - second_score,
+            "delay_seconds": best_offset / 10.0,
+        }
+
+    def _worker(self):
+        if np is None:
+            self._set_status("MATCH UNAVAILABLE")
+            return
+        pcm = {"A": bytearray(), "B": bytearray()}
+        features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+        motion_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+        envelope_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+        feature_baseline = {"A": None, "B": None}
+        envelope_baseline = {"A": None, "B": None}
+        previous_dynamic = {"A": None, "B": None}
+        qualities = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+        content = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+        first_live = {"A": None, "B": None}
+        last_live = {"A": 0.0, "B": 0.0}
+        capture_started = None
+        next_compare_at = None
+        last_decision = None
+        evidence_hits = 0
+        motion_hits = 0
+        motion_delay = None
+        next_evidence_at = None
+        next_quality_log_at = 0.0
+        while True:
+            with self.lock:
+                active = self.active
+                comparable = self.comparable
+                queue_ref = self.queue
+                stop_event = self.stop_event
+            if not active or stop_event is None or stop_event.is_set() or queue_ref is None:
+                return
+            try:
+                item = queue_ref.get(timeout=0.12)
+            except queue.Empty:
+                item = None
+            now = time.monotonic()
+            if item is None:
+                if any(last_live[key] and now - last_live[key] > 0.45 for key in ("A", "B")):
+                    capture_started = None
+                    next_compare_at = None
+                    last_decision = None
+                    evidence_hits = 0
+                    motion_hits = 0
+                    motion_delay = None
+                    next_evidence_at = None
+                    self._clear_confirmation()
+                    features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                    motion_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                    envelope_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                    feature_baseline = {"A": None, "B": None}
+                    envelope_baseline = {"A": None, "B": None}
+                    previous_dynamic = {"A": None, "B": None}
+                    qualities = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                    content = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                    pcm = {"A": bytearray(), "B": bytearray()}
+                    first_live = {"A": None, "B": None}
+                    self._set_status("WAITING")
+                continue
+            source, audio, timestamp = item
+            if source == "reset":
+                capture_started = None
+                next_compare_at = None
+                last_decision = None
+                evidence_hits = 0
+                motion_hits = 0
+                motion_delay = None
+                next_evidence_at = None
+                self._clear_confirmation()
+                features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                motion_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                envelope_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                feature_baseline = {"A": None, "B": None}
+                envelope_baseline = {"A": None, "B": None}
+                previous_dynamic = {"A": None, "B": None}
+                qualities = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                content = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                pcm = {"A": bytearray(), "B": bytearray()}
+                first_live = {"A": None, "B": None}
+                last_live = {"A": 0.0, "B": 0.0}
+                continue
+            if not comparable or not audio:
+                continue
+            if last_live[source] and timestamp - last_live[source] > 0.45:
+                pcm[source].clear()
+                features[source].clear()
+                motion_features[source].clear()
+                envelope_features[source].clear()
+                feature_baseline[source] = None
+                envelope_baseline[source] = None
+                previous_dynamic[source] = None
+                qualities[source].clear()
+                content[source].clear()
+                first_live[source] = timestamp
+                capture_started = None
+                next_compare_at = None
+                last_decision = None
+                evidence_hits = 0
+                motion_hits = 0
+                motion_delay = None
+                next_evidence_at = None
+                self._clear_confirmation()
+            if first_live[source] is None:
+                first_live[source] = timestamp
+            last_live[source] = timestamp
+            pcm[source].extend(audio)
+            while len(pcm[source]) >= DUAL_MATCH_HOP_SAMPLES * 2:
+                feature_result = self._feature(pcm[source])
+                del pcm[source][:DUAL_MATCH_HOP_SAMPLES * 2]
+                if feature_result is not None:
+                    feature, quality, programme_content, sparse_feature, log_rms = feature_result
+                    content[source].append(programme_content)
+                    envelope_ref = envelope_baseline[source]
+                    if envelope_ref is None:
+                        envelope_baseline[source] = log_rms
+                    else:
+                        envelope_baseline[source] = 0.96 * envelope_ref + 0.04 * log_rms
+                        envelope_features[source].append(log_rms - envelope_baseline[source])
+                    # Track the changing part separately for reception quality
+                    # but retain the complete normalized log-mel signature for
+                    # programme matching. Removing the static spectral profile
+                    # entirely proved too aggressive on AM/HF: it also removed
+                    # useful shared programme character and collapsed genuine
+                    # matches to 10–20%. Normalization already makes the raw
+                    # signature independent of volume/AGC gain.
+                    baseline = feature_baseline[source]
+                    if baseline is None:
+                        feature_baseline[source] = sparse_feature
+                        features[source].append(feature)
+                        continue
+                    baseline = 0.92 * baseline + 0.08 * sparse_feature
+                    feature_baseline[source] = baseline
+                    dynamic_feature = sparse_feature - baseline
+                    dynamic_norm = float(np.linalg.norm(dynamic_feature))
+                    if dynamic_norm >= 0.035:
+                        dynamic_feature /= dynamic_norm
+                        prior_dynamic = previous_dynamic[source]
+                        if prior_dynamic is None:
+                            temporal_coherence = 0.5
+                        else:
+                            temporal_coherence = clamp(
+                                (float(np.dot(dynamic_feature, prior_dynamic)) + 1.0) * 0.5,
+                                0.0,
+                                1.0,
+                            )
+                        previous_dynamic[source] = dynamic_feature
+                        # A clear programme has both spectral structure and
+                        # coherent movement from one 100 ms frame to the next.
+                        # Random HF/static noise has little repeatable motion.
+                        qualities[source].append(
+                            quality * (0.35 + 0.65 * temporal_coherence)
+                        )
+                        # This is the corroborating programme signature. It
+                        # keeps only changing narrow spectral structure, so a
+                        # one-sided interferer or two broadband noise floors
+                        # cannot dominate the shared programme movement.
+                        motion_features[source].append(dynamic_feature)
+                    # Use the full, gain-normalized spectrum for the actual
+                    # cross-receiver programme comparison. The strict
+                    # coherence/alternative-delay checks in _compare still
+                    # reject an accidental similar noise floor.
+                    features[source].append(feature)
+            if any(first_live[key] is None or timestamp - first_live[key] < DUAL_MATCH_STABLE_SECONDS for key in ("A", "B")):
+                self._set_status("WAITING AUDIO")
+                continue
+            if capture_started is None:
+                capture_started = timestamp
+                motion_hits = 0
+                motion_delay = None
+                features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                motion_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                envelope_features = {"A": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES), "B": deque(maxlen=DUAL_MATCH_WINDOW_FEATURES)}
+                feature_baseline = {"A": None, "B": None}
+                envelope_baseline = {"A": None, "B": None}
+                previous_dynamic = {"A": None, "B": None}
+                qualities = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                content = {"A": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES), "B": deque(maxlen=DUAL_QUALITY_WINDOW_FEATURES)}
+                pcm = {"A": bytearray(), "B": bytearray()}
+                next_compare_at = timestamp + DUAL_MATCH_EARLY_SECONDS
+                next_evidence_at = timestamp + DUAL_MATCH_EARLY_SECONDS
+                self._set_status("MATCHING 0/1")
+                continue
+            elapsed = timestamp - capture_started
+            if qualities["A"] and qualities["B"]:
+                quality_a = float(np.median(np.asarray(qualities["A"], dtype=np.float32)))
+                quality_b = float(np.median(np.asarray(qualities["B"], dtype=np.float32)))
+                self._set_quality(
+                    quality_a,
+                    quality_b,
+                    min(len(qualities["A"]), len(qualities["B"])),
+                )
+                if timestamp >= next_quality_log_at:
+                    best_source, _quality = self.quality_snapshot()
+                    print(
+                        f"gl dual quality A={quality_a:.3f} B={quality_b:.3f} "
+                        f"best={best_source or '-'}",
+                        flush=True,
+                    )
+                    next_quality_log_at = timestamp + 5.0
+            if next_compare_at is None or timestamp < next_compare_at:
+                if elapsed < DUAL_MATCH_EARLY_SECONDS:
+                    self._set_status(f"MATCHING {min(1, max(0, int(elapsed)))} / 1")
+                continue
+            # Compare a rolling 10 s maximum capture once per second. This is
+            # enough to follow programme changes while remaining negligible
+            # beside one 30 fps OpenGL frame or a WSPR decode.
+            next_compare_at = timestamp + 1.0
+            if elapsed < DUAL_MATCH_EARLY_SECONDS:
+                self._set_status(f"MATCHING {min(1, max(0, int(elapsed)))} / 1")
+                continue
+            result = self._compare(features["A"], features["B"])
+            content_count = min(len(content["A"]), len(content["B"]))
+            content_a = float(np.median(np.asarray(content["A"], dtype=np.float32))) if content["A"] else 0.0
+            content_b = float(np.median(np.asarray(content["B"], dtype=np.float32))) if content["B"] else 0.0
+            programme_present = bool(
+                content_count >= DUAL_MATCH_CONTENT_MIN_FEATURES
+                and min(content_a, content_b) >= DUAL_MATCH_CONTENT_MIN
+            )
+            motion_count = min(len(motion_features["A"]), len(motion_features["B"]))
+            motion_result = (
+                self._compare(
+                    motion_features["A"], motion_features["B"], agreement_threshold=0.12,
+                )
+                if motion_count >= DUAL_MATCH_PROGRAMME_MIN_FEATURES else None
+            )
+            envelope_count = min(len(envelope_features["A"]), len(envelope_features["B"]))
+            envelope_result = (
+                self._compare_envelope(envelope_features["A"], envelope_features["B"])
+                if envelope_count >= DUAL_MATCH_ENVELOPE_MIN_FEATURES else None
+            )
+
+            # Each view answers a different question. Broad shape survives a
+            # steady carrier, spectral motion finds changing narrow features,
+            # and the envelope follows programme rhythm through different
+            # filters. A co-channel signal may spoil one view, but should not
+            # make the other two forget their shared delay.
+            signature_candidates = []
+            if motion_result and (
+                motion_result["score"] >= DUAL_MATCH_MOTION_SCORE
+                and motion_result["stable"] >= DUAL_MATCH_MOTION_STABLE
+                and motion_result["agreement"] >= DUAL_MATCH_MOTION_AGREEMENT
+            ):
+                signature_candidates.append(("motion", motion_result))
+            if envelope_result and (
+                envelope_result["score"] >= DUAL_MATCH_ENVELOPE_SCORE
+                and envelope_result["stable"] >= DUAL_MATCH_ENVELOPE_STABLE
+                and envelope_result["agreement"] >= DUAL_MATCH_ENVELOPE_AGREEMENT
+                and envelope_result["margin"] >= DUAL_MATCH_ENVELOPE_MARGIN
+            ):
+                signature_candidates.append(("envelope", envelope_result))
+            if result and (
+                result["score"] >= DUAL_MATCH_SHAPE_SCORE
+                and result["stable"] >= DUAL_MATCH_SHAPE_STABLE
+                and result["agreement"] >= DUAL_MATCH_SHAPE_AGREEMENT
+                and result["margin"] >= DUAL_MATCH_SHAPE_MARGIN
+            ):
+                signature_candidates.append(("shape", result))
+
+            signature_group = []
+            for _name, candidate in signature_candidates:
+                group = [
+                    (name, other) for name, other in signature_candidates
+                    if abs(other["delay_seconds"] - candidate["delay_seconds"])
+                    <= DUAL_MATCH_MOTION_DELAY_TOLERANCE_SECONDS
+                ]
+                # Motion is mandatory: raw shape plus envelope alone can be
+                # similar for unrelated static. This preserves the white-noise
+                # protection while allowing motion+envelope when a co-channel
+                # signal has corrupted the broad spectral shape.
+                if (
+                    len(group) >= DUAL_MATCH_SIGNATURE_VOTES_REQUIRED
+                    and any(name == "motion" for name, _other in group)
+                    and len(group) > len(signature_group)
+                ):
+                    signature_group = group
+            signature_candidate = bool(signature_group)
+            if signature_candidate:
+                candidate_delay = float(np.median(np.asarray(
+                    [candidate["delay_seconds"] for _name, candidate in signature_group], dtype=np.float32,
+                )))
+                if (
+                    motion_delay is not None
+                    and abs(candidate_delay - motion_delay)
+                    <= DUAL_MATCH_MOTION_DELAY_TOLERANCE_SECONDS
+                ):
+                    motion_hits = min(DUAL_MATCH_MOTION_HITS_REQUIRED, motion_hits + 1)
+                else:
+                    motion_hits = 1
+                motion_delay = candidate_delay
+            else:
+                motion_hits = 0
+                motion_delay = None
+            # Multiple independent signatures must keep one delay for three
+            # adjacent windows. Independent noise may imitate one descriptor,
+            # but cannot repeatedly create this shared time structure.
+            programme_evidence = motion_hits >= DUAL_MATCH_MOTION_HITS_REQUIRED
+            with self.lock:
+                same_receiver = self.same_receiver
+                confirmed = self.confirmed
+            # Same endpoint + same RF/mode is not a probabilistic inference:
+            # it is the same Kiwi channel source. Still require a modest
+            # feature score so neither side can be a dead/noise-only stream.
+            conclusive_same_receiver = bool(
+                same_receiver and result and result["score"] >= 0.45 and programme_evidence
+            )
+            corroborated_match = bool(programme_evidence and signature_candidate)
+            if confirmed:
+                # Keep listening for observability, but do not make a brief
+                # fade revoke a conclusion that has already been established.
+                self._set_status("MATCH 100%")
+                continue
+            if result and not programme_present:
+                # This is the important negative case: never translate a
+                # 97% match between two flat noise floors into a user-facing
+                # confidence value. Use the explicit WHITE NOISE label only
+                # after a full five seconds of decisive evidence; a weak,
+                # fading, or otherwise ambiguous signal is just NO MATCH.
+                white_noise = bool(
+                    content_count >= DUAL_MATCH_WHITE_NOISE_MIN_FEATURES
+                    and max(content_a, content_b) <= DUAL_MATCH_WHITE_NOISE_MAX
+                )
+                detail = "WHITE NOISE" if white_noise else "NO MATCH"
+                self._set_status(detail)
+                decision = ("no-content", detail, round(content_a, 2), round(content_b, 2))
+                if decision != last_decision:
+                    print(
+                        f"gl dual programme {detail.lower().replace(' ', '-')} raw={result['score']:.3f} "
+                        f"content=A{content_a:.2f}/B{content_b:.2f}", flush=True,
+                    )
+                last_decision = decision
+                continue
+            if result and programme_evidence and (result["matched"] or conclusive_same_receiver or corroborated_match):
+                if next_evidence_at is not None and timestamp >= next_evidence_at:
+                    evidence_hits = min(DUAL_MATCH_EVIDENCE_HITS_REQUIRED, evidence_hits + 1)
+                    next_evidence_at = timestamp + DUAL_MATCH_EVIDENCE_INTERVAL_SECONDS
+                independently_certain = bool(
+                    result["score"] >= DUAL_MATCH_CERTAIN_SCORE
+                    and result["stable"] >= DUAL_MATCH_CERTAIN_STABLE
+                    and result["agreement"] >= DUAL_MATCH_CERTAIN_AGREEMENT
+                    and result["margin"] >= DUAL_MATCH_CERTAIN_MARGIN
+                )
+                certain = (
+                    conclusive_same_receiver
+                    or independently_certain
+                    or evidence_hits >= DUAL_MATCH_EVIDENCE_HITS_REQUIRED
+                )
+                # The motion result is the important part for this path. Map
+                # the corroborated gates into an honest visible confidence,
+                # never exposing the misleading raw-noise correlation alone.
+                corroborated_confidence = int(round(clamp(
+                    80.0
+                    + (result["score"] - DUAL_MATCH_CORROBORATED_SCORE) / 0.22 * 8.0
+                    + (motion_result["score"] - DUAL_MATCH_CORROBORATED_MOTION) / 0.30 * 8.0,
+                    80.0,
+                    96.0,
+                ))) if corroborated_match else result["confidence"]
+                confidence = 100 if certain else max(result["confidence"], corroborated_confidence)
+                if certain:
+                    self._confirm()
+                else:
+                    self._set_status(f"MATCH {confidence}%")
+                decision = ("match", confidence)
+                if decision != last_decision:
+                    print(
+                        f"gl dual programme match score={result['score']:.3f} "
+                        f"motion={motion_result['score']:.3f}/{motion_hits} stable={result['stable']:.3f} margin={result['margin']:.3f} "
+                        f"delay={result['delay_seconds']:+.1f}s"
+                        f"{' same-receiver' if conclusive_same_receiver else ''}"
+                        f"{' certain' if independently_certain else ''}",
+                        flush=True,
+                    )
+                last_decision = decision
+                continue
+            if result:
+                # The lower evidence path is for a clear signal against a
+                # weak/noisy copy. A repeatable best delay across three
+                # separated five-second observations is very unlikely to be
+                # coincidence, even when instantaneous scores stay near 50%.
+                supports_same_programme = bool(
+                    programme_evidence
+                    and result["score"] >= 0.50
+                    and result["margin"] >= 0.090
+                    and result["agreement"] >= 0.40
+                )
+                if next_evidence_at is not None and timestamp >= next_evidence_at:
+                    if supports_same_programme:
+                        evidence_hits = min(DUAL_MATCH_EVIDENCE_HITS_REQUIRED, evidence_hits + 1)
+                    else:
+                        evidence_hits = max(0, evidence_hits - 1)
+                    next_evidence_at = timestamp + DUAL_MATCH_EVIDENCE_INTERVAL_SECONDS
+                if evidence_hits >= DUAL_MATCH_EVIDENCE_HITS_REQUIRED:
+                    self._confirm()
+                    self._set_status("MATCH 100%")
+                    print(
+                        f"gl dual programme match score={result['score']:.3f} "
+                        f"motion={motion_result['score']:.3f}/{motion_hits} margin={result['margin']:.3f} evidence={evidence_hits}/"
+                        f"{DUAL_MATCH_EVIDENCE_HITS_REQUIRED} certain",
+                        flush=True,
+                    )
+                    continue
+                # The broad RF profile is intentionally not exposed as a
+                # user-facing percentage after modulation has rejected it:
+                # 92% spectrum similarity between Montana and Japan white
+                # noise is not 92% programme confidence. Continue listening
+                # silently, but communicate the honest state.
+                if motion_count >= DUAL_MATCH_PROGRAMME_MIN_FEATURES:
+                    detail = (
+                        f"VERIFY {motion_hits}/{DUAL_MATCH_MOTION_HITS_REQUIRED}"
+                        if motion_hits else "NO MATCH"
+                    )
+                else:
+                    detail = "ANALYSING"
+                self._set_status(detail)
+                decision = ("no-match", detail)
+                if decision != last_decision:
+                    print(
+                        f"gl dual programme no-match score={result['score']:.3f} "
+                        f"motion={(motion_result['score'] if motion_result else 0.0):.3f}/{motion_hits} "
+                        f"stable={result['stable']:.3f} agreement={result['agreement']:.2f} "
+                        f"margin={result['margin']:.3f}", flush=True,
+                    )
+                last_decision = decision
+                continue
+            self._set_status(f"MATCHING {min(10, max(5, int(elapsed)))} / 10")
 
 
 class DualVFOAudioMixer:
@@ -14465,8 +17450,16 @@ def set_pipewire_default_volume(volume):
 
 def snd_meter_worker(
     args, stop_event, state, transcript_queue=None, callsign_queue=None,
-    dual_mixer=None, dual_source=None, enable_listener_dsp=True,
+    dual_mixer=None, dual_source=None, dual_matcher=None, enable_listener_dsp=True,
 ):
+    # SND ingress is part of the audio path: a late WebSocket read leaves the
+    # PCM reserve empty even when the playback clock itself is perfectly on
+    # time. It yields to the output clock (RR 12) but not to rendering/WSPR.
+    configure_realtime_audio_path(
+        announce=True,
+        priority=AUDIO_INGRESS_RT_PRIORITY,
+        role="ingress",
+    )
     seen_view_generation = -1
     seen_radio_generation = -1
     seen_server_generation = -1
@@ -14478,6 +17471,8 @@ def snd_meter_worker(
     voice_clean_requested = None
     hf_enhancer = None
     hf_enhance_requested = None
+    tone_shaper = ListenerToneShaper()
+    tone_profile_requested = 0
     # Creating a 3.8 MB ONNX session can take hundreds of milliseconds on the
     # Pi. Never make the WebSocket receiver wait for it; warm models in the
     # background and retain them for instant subsequent ON/OFF changes.
@@ -14573,6 +17568,10 @@ def snd_meter_worker(
                     and rnnoise_voice_mode(radio_mode)
                 )
                 hf_enhance_level = int(audio_controls.get("hf_enhance_level", 0))
+                tone_profile = int(audio_controls.get("tone_profile", 0)) if enable_listener_dsp and desired_channels == 1 else 0
+                if tone_profile != tone_profile_requested:
+                    tone_shaper.set_profile(tone_profile)
+                    tone_profile_requested = tone_profile
                 hf_enhance_model = (
                     hf_enhance_model_for_level(hf_enhance_level)
                     if desired_channels == 1 and rnnoise_voice_mode(radio_mode)
@@ -14747,6 +17746,16 @@ def snd_meter_worker(
                     # phonetics. The recognizers always receive raw Kiwi PCM.
                     raw_audio = audio
                     listening_audio = raw_audio
+                    # The programme matcher observes the same two raw Kiwi
+                    # streams before any local enhancement or crossfade. It
+                    # receives a non-blocking copy and can never hold up SND.
+                    squelched = bool(flags & kiwi.SND_FLAG_SQUELCH_UI)
+                    if dual_matcher and dual_source:
+                        match_audio = (
+                            stereo_s16le_to_mono(raw_audio)
+                            if packet_is_stereo else raw_audio
+                        )
+                        dual_matcher.submit(dual_source, match_audio, silence=squelched)
                     denoise_level = int(audio_controls.get("denoise_level", 0))
                     if voice_cleaner is not None:
                         voice_level = int(clamp(audio_controls.get("voice_clean_level", 2), 0, len(VOICE_CLEAN_MIX) - 1))
@@ -14755,6 +17764,8 @@ def snd_meter_worker(
                         listening_audio = hf_enhancer.process_pcm(raw_audio)
                     elif denoise_level > 0:
                         listening_audio = apply_denoise_makeup_gain(raw_audio, denoise_makeup_gain_db(denoise_level))
+                    if tone_profile_requested and listening_audio:
+                        listening_audio = tone_shaper.process_pcm(listening_audio)
                     transcription_enabled, _engine, _lines, _partial, _status, _generation = state.transcription_snapshot()
                     if transcription_enabled and transcript_queue is not None:
                         # Captions must stay current. A congested recognizer is
@@ -14789,7 +17800,6 @@ def snd_meter_worker(
                     # The previous listener path decoded and wrote those
                     # frames anyway, bypassing the receiver's squelch even
                     # though the slider command had been accepted.
-                    squelched = bool(flags & kiwi.SND_FLAG_SQUELCH_UI)
                     state.set_squelch_closed(squelched)
                     if dual_mixer and dual_mixer.active_snapshot() and dual_source and listening_audio:
                         # The shared Dual VFO sink is mono even when either
@@ -14837,6 +17847,7 @@ def snd_meter_worker(
     for cached_hf in hf_enhancer_cache.values():
         cached_hf.close()
     stop_audio_player(player)
+    release_realtime_audio_thread()
 
 
 class GlobeAudioMixer:
@@ -15085,6 +18096,13 @@ def waterfall_worker(args, line_queue, stop_event, state):
     while not stop_event.is_set():
         ws = None
         try:
+            if state.external_waterfall_snapshot():
+                # The local RTL source publishes compatible rows into this
+                # same queue. Leave those rows intact while the Kiwi W/F
+                # socket is parked, then resume the remote receiver cleanly.
+                if stop_event.wait(0.10):
+                    break
+                continue
             if state.stream_paused_snapshot():
                 drain_queue(line_queue)
                 if stop_event.wait(0.10):
@@ -15125,6 +18143,8 @@ def waterfall_worker(args, line_queue, stop_event, state):
             next_view_send_at = 0.0
             while not stop_event.is_set():
                 server, freq_khz, zoom, _smeter_dbm, generation, server_generation = state.snapshot()
+                if state.external_waterfall_snapshot():
+                    break
                 if state.stream_paused_snapshot():
                     drain_queue(line_queue)
                     break
@@ -15269,6 +18289,7 @@ def main():
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--rtl-lab-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
@@ -15450,7 +18471,7 @@ def main():
                     "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
                     "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
                     "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
-                    "hf_enhance_level",
+                    "hf_enhance_level", "tone_profile",
                     "autonotch_enabled",
                 }
             }
@@ -15463,11 +18484,19 @@ def main():
             elif profile != 2 and restored_audio.get("voice_clean_level", 0):
                 restored_audio["voice_clean_level"] = 1
             state.set_audio_controls(**restored_audio)
+    instrument_layout = remembered_preferences.get("instrument_layout", "expanded")
+    if instrument_layout not in ("compact", "expanded"):
+        instrument_layout = "expanded"
+    # Kept outside the normal Kiwi transport on purpose. This only probes the
+    # locally attached USB SDR until the operator opens the separate Lab.
+    rtl_lab = RTLSDRLab(args, state, line_queue)
+    rc28_input = RC28Input()
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
     # VFO B is intentionally dormant until Dual opens. It has a complete
     # independent state/transport pair so it never reuses or retunes VFO A.
     dual_audio_mixer = DualVFOAudioMixer(args)
+    dual_program_matcher = DualVFOProgramMatcher()
     dual_b_state = SharedState(
         args.server, args.freq_khz, args.zoom, -95.0,
         args.wf_floor, args.wf_ceil, args.wf_speed, radio_mode.lower(), args.spectrum,
@@ -15484,7 +18513,11 @@ def main():
     snd_thread = threading.Thread(
         target=snd_meter_worker,
         args=(args, stop_event, state, transcript_queue, callsign_queue),
-        kwargs={"dual_mixer": dual_audio_mixer, "dual_source": "A"},
+        kwargs={
+            "dual_mixer": dual_audio_mixer,
+            "dual_source": "A",
+            "dual_matcher": dual_program_matcher,
+        },
         daemon=True,
     )
     caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
@@ -15539,6 +18572,17 @@ def main():
     anim_start = 0.0
     anim_duration = 0.20
     zoom_osd_until = 0.0
+    rc28_mode_osd_until = 0.0
+    frequency_identity_result_queue = queue.Queue(maxsize=1)
+    frequency_identity_pending_key = None
+    frequency_identity_last_lookup_key = None
+    frequency_identity_view_key = None
+    frequency_identity_server = ""
+    frequency_identity_mode = ""
+    frequency_identity_stable_at = 0.0
+    frequency_identity_candidates = ()
+    frequency_identity_frequency_khz = None
+    frequency_identity_osd_until = 0.0
     next_system_sample = 0.0
     next_smeter_readout_update = 0.0
     smeter_readout_dbm = -121.0
@@ -15602,6 +18646,7 @@ def main():
     search_open = False
     keyboard_mode = "lower"
     radio_setup_open = False
+    band_navigation_open = False
     radio_family_open = None
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
@@ -15671,10 +18716,17 @@ def main():
         return applied_volume
 
     tests_panel_open = False
+    font_lab_open = False
+    font_lab_page = 0
+    rtl_lab_open = bool(args.rtl_lab_preview)
     # Dual VFO begins as a visual interaction study. Keeping its state here
     # makes it independent from the one live KiWi client until the second
     # transport/audio path is implemented deliberately.
     dual_vfo_open = bool(args.dual_vfo_preview)
+    # Home closes B's transport to release the Kiwi slot, but it does not end
+    # the operator's Dual session. Keep B's receiver/tuning profile in RAM so
+    # re-entering Dual feels like returning to an instrument, not starting it.
+    dual_vfo_has_session = False
     dual_vfo_active = "A"
     dual_vfo_mix = 0.0
     dual_vfo_sources = {
@@ -15685,6 +18737,93 @@ def main():
         "A": {"freq_khz": args.freq_khz, "zoom": args.zoom, "mode": radio_mode, "squelch_level": 0},
         "B": {"freq_khz": args.freq_khz, "zoom": args.zoom, "mode": radio_mode, "squelch_level": 0},
     }
+
+    def persisted_dual_source(source, fallback):
+        """Return the small, durable portion of a Dual receiver entry."""
+        source = source if isinstance(source, dict) else {}
+        server = str(source.get("server") or fallback["server"])
+        parsed = urlparse(server)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            server = fallback["server"]
+        return {
+            "server": server,
+            "name": str(source.get("name") or fallback["name"]),
+            "location": str(source.get("location") or fallback["location"]),
+        }
+
+    def persisted_dual_profile(profile, fallback):
+        """Validate a saved Dual profile before it can start a Kiwi client."""
+        profile = profile if isinstance(profile, dict) else {}
+        restored = dict(fallback)
+        try:
+            frequency = float(profile.get("freq_khz", restored["freq_khz"]))
+            if 0.0 <= frequency <= TUNING_MAX_KHZ:
+                restored["freq_khz"] = frequency
+        except (TypeError, ValueError):
+            pass
+        try:
+            restored["zoom"] = int(clamp(int(profile.get("zoom", restored["zoom"])), 0, args.max_zoom))
+        except (TypeError, ValueError):
+            pass
+        mode = str(profile.get("mode", restored["mode"])).upper()
+        if mode in KIWI_RADIO_MODES:
+            restored["mode"] = mode
+        for edge in ("low_cut", "high_cut"):
+            try:
+                restored[edge] = int(profile[edge])
+            except (KeyError, TypeError, ValueError):
+                pass
+        try:
+            restored["squelch_level"] = int(clamp(int(profile.get("squelch_level", 0)), 0, 99))
+        except (TypeError, ValueError):
+            pass
+        controls = profile.get("audio_controls")
+        if isinstance(controls, dict):
+            # Keep only the names accepted by SharedState.set_audio_controls.
+            allowed = {
+                "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
+                "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
+                "nb_algo", "nr_algo", "denoise_level", "voice_clean_enabled", "voice_clean_level",
+                "hf_enhance_level", "tone_profile", "autonotch_enabled",
+            }
+            restored["audio_controls"] = {
+                name: value for name, value in controls.items()
+                if name in allowed and isinstance(value, (bool, int, float, str))
+            }
+        return restored
+
+    # B must survive more than a Home round-trip: service restarts used to
+    # rebuild it from A/current receiver, silently turning it into Local Kiwi.
+    saved_dual_vfo = remembered_preferences.get("dual_vfo", {})
+    if isinstance(saved_dual_vfo, dict):
+        default_sources = {name: dict(source) for name, source in dual_vfo_sources.items()}
+        default_profiles = {name: dict(profile) for name, profile in dual_vfo_profiles.items()}
+        saved_sources = saved_dual_vfo.get("sources", {})
+        saved_profiles = saved_dual_vfo.get("profiles", {})
+        saved_b_server = (
+            str(saved_sources.get("B", {}).get("server", "")).strip()
+            if isinstance(saved_sources, dict) and isinstance(saved_sources.get("B"), dict)
+            else ""
+        )
+        # A valid B endpoint is sufficient proof of a former Dual session.
+        # Older preference files may lack `has_session`; do not erase their B
+        # receiver just because that cosmetic flag was absent or stale.
+        has_saved_dual_session = bool(saved_dual_vfo.get("has_session") or saved_b_server)
+        if has_saved_dual_session and isinstance(saved_sources, dict) and isinstance(saved_profiles, dict):
+            dual_vfo_sources = {
+                name: persisted_dual_source(saved_sources.get(name), default_sources[name])
+                for name in ("A", "B")
+            }
+            dual_vfo_profiles = {
+                name: persisted_dual_profile(saved_profiles.get(name), default_profiles[name])
+                for name in ("A", "B")
+            }
+            dual_vfo_active = saved_dual_vfo.get("active") if saved_dual_vfo.get("active") in ("A", "B") else "A"
+            try:
+                dual_vfo_mix = clamp(float(saved_dual_vfo.get("mix", 0.0)), 0.0, 1.0)
+            except (TypeError, ValueError):
+                dual_vfo_mix = 0.0
+            dual_vfo_has_session = True
     dual_vfo_picker_open = False
     dual_vfo_picker_target = "A"
     dual_vfo_picker_page = 0
@@ -15729,13 +18868,19 @@ def main():
         dual_b_state.set_stream_paused(False)
         sync_dual_vfo_b_state()
         dual_audio_mixer.start(dual_vfo_mix)
+        dual_program_matcher.start()
         if dual_b_stop_event is not None and not dual_b_stop_event.is_set():
             return
         dual_b_stop_event = threading.Event()
         dual_b_snd_thread = threading.Thread(
             target=snd_meter_worker,
             args=(args, dual_b_stop_event, dual_b_state),
-            kwargs={"dual_mixer": dual_audio_mixer, "dual_source": "B", "enable_listener_dsp": False},
+            kwargs={
+                "dual_mixer": dual_audio_mixer,
+                "dual_source": "B",
+                "dual_matcher": dual_program_matcher,
+                "enable_listener_dsp": False,
+            },
             name="dual-vfo-b-snd",
             daemon=True,
         )
@@ -15753,6 +18898,7 @@ def main():
         """Hard-release B's Kiwi slots immediately when Dual is dismissed."""
         nonlocal dual_b_stop_event, dual_b_snd_thread, dual_b_wf_thread
         was_running = dual_b_stop_event is not None or dual_audio_mixer.active_snapshot()
+        dual_program_matcher.stop()
         dual_audio_mixer.stop()
         # Do not merely ask the threads to stop: close the live B transports
         # now, so the Kiwi server frees both listener slots before Home draws.
@@ -15774,7 +18920,8 @@ def main():
         """Return a compact status without pretending B is live before PCM."""
         _server, _freq, _zoom, _dbm, _view_generation, server_generation = dual_b_state.snapshot()
         if dual_b_state.audio_stream_ready_snapshot(server_generation):
-            return "LIVE"
+            match_status = dual_program_matcher.status_snapshot()
+            return match_status if match_status not in ("OFF", "WAITING") else "LIVE"
         return str(dual_b_state.connection_snapshot() or "CONNECTING").replace("_", " ").upper()
 
     wspr_preferences = remembered_preferences.get("wspr", {})
@@ -15857,7 +19004,7 @@ def main():
     wspr_decode_scheduler = WSPRDecodeScheduler()
     wspr_monitor = WSPRMonitorManager(
         args.user, decoder_settings=wspr_decoder_settings,
-        decode_scheduler=wspr_decode_scheduler,
+        decode_scheduler=wspr_decode_scheduler, log_file=args.wspr_log_file,
     )
     # Parsing historic JSONL happens once off the render thread. The active
     # graph thereafter receives precomputed dots directly from this cache.
@@ -15977,6 +19124,24 @@ def main():
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
     tune_step_hz = max(1, int(saved_tune_step_hz)) if isinstance(saved_tune_step_hz, (int, float)) else args.tune_step_hz
+    rc28_zoom_detents = 0
+    rc28_zoom_last_at = 0.0
+    rc28_dial_mode = "TUNE"
+    # The review pool is intentionally reset each launch, but the operator's
+    # marked candidates are durable preferences so good options accumulate.
+    compact_font_review_families = list(COMPACT_FONT_REVIEW_FAMILIES)
+    # The temporary font lab can still preview alternatives, but the live
+    # instrument always comes up in the unified Oxanium treatment.
+    compact_frequency_font_family = COMPACT_FREQUENCY_FONT_FAMILY
+    compact_frequency_font_index = compact_font_review_families.index(compact_frequency_font_family)
+    compact_font_review_open = False
+    saved_compact_font_likes = remembered_preferences.get("compact_font_likes", ())
+    if not isinstance(saved_compact_font_likes, (list, tuple)):
+        saved_compact_font_likes = ()
+    compact_font_review_liked = {
+        str(family) for family in saved_compact_font_likes
+        if str(family) in COMPACT_FONT_REVIEW_FAMILIES
+    }
     active = False
     raw_x = raw_y = None
     current_slot = 0
@@ -16042,6 +19207,7 @@ def main():
                 "voice_clean_enabled": audio_controls["voice_clean"],
                 "voice_clean_level": audio_controls["voice_clean_level"],
                 "hf_enhance_level": audio_controls["hf_enhance_level"],
+                "tone_profile": audio_controls["tone_profile"],
                 "voice_clean_profile": 3,
                 "autonotch_enabled": audio_controls["autonotch"],
             },
@@ -16079,6 +19245,9 @@ def main():
                 "grid_source": wspr_identity_grid_source,
             },
             "spectrum_enabled": bool(spectrum_enabled),
+            "instrument_layout": instrument_layout,
+            "compact_font_likes": sorted(compact_font_review_liked),
+            "compact_frequency_font_family": compact_frequency_font_family,
             "asr_engine": state.transcription_snapshot()[1],
             "caption_mode": state.caption_mode_snapshot(),
             "callsign_enabled": state.callsign_snapshot()[0],
@@ -16093,6 +19262,25 @@ def main():
                 "speed": int(speed),
                 "auto": bool(auto),
                 "palette": palette,
+            },
+            "dual_vfo": {
+                "has_session": bool(dual_vfo_has_session),
+                "active": dual_vfo_active if dual_vfo_active in ("A", "B") else "A",
+                "mix": round(float(dual_vfo_mix), 3),
+                "sources": {
+                    name: persisted_dual_source(
+                        dual_vfo_sources.get(name),
+                        {"server": args.server, "name": "CURRENT RECEIVER", "location": ""},
+                    )
+                    for name in ("A", "B")
+                },
+                "profiles": {
+                    name: persisted_dual_profile(
+                        dual_vfo_profiles.get(name),
+                        {"freq_khz": args.freq_khz, "zoom": args.zoom, "mode": radio_mode, "squelch_level": 0},
+                    )
+                    for name in ("A", "B")
+                },
             },
             "zoom": int(zoom),
         }
@@ -16295,7 +19483,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or band_navigation_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -16340,25 +19528,154 @@ def main():
         display_freq = anim_from_freq + (anim_to_freq - anim_from_freq) * e
         display_span = anim_from_span + (anim_to_span - anim_from_span) * e
 
-    def change_zoom(delta):
+    def active_tuning_bounds():
+        if state.external_waterfall_snapshot() or rtl_lab.is_running():
+            return rtl_lab.tuning_bounds()
+        return 0.0, TUNING_MAX_KHZ
+
+    def clamp_active_frequency(value):
+        low, high = active_tuning_bounds()
+        return clamp(float(value), low, high)
+
+    def active_waterfall_center(tuned_khz, span_khz):
+        if state.external_waterfall_snapshot() or rtl_lab.is_running():
+            return float(tuned_khz)
+        return waterfall_view_center_khz(tuned_khz, span_khz)
+
+    def active_source_span_khz(zoom_level):
+        if state.external_waterfall_snapshot() or rtl_lab.is_running():
+            return rtl_lab.source_span_khz()
+        return kiwi.zoom_source_span_khz(zoom_level)
+
+    def change_zoom(delta, animation_duration=0.22):
         nonlocal zoom_osd_until, auto_zoom_levels_used
         wake_controls()
         _server, freq_khz, zoom, _smeter, _gen, _server_gen = state.snapshot()
-        new_zoom = clamp(zoom + delta, 0, args.max_zoom)
+        minimum_zoom = rtl_lab.minimum_zoom() if (state.external_waterfall_snapshot() or rtl_lab.is_running()) else 0
+        new_zoom = clamp(zoom + delta, minimum_zoom, args.max_zoom)
         if new_zoom == zoom:
             zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
-            return
+            return False
         freq_khz, new_zoom, _gen = state.set_view(zoom=new_zoom)
         remember_current_view()
         auto_zoom_levels_used = 0
-        animate_to(freq_khz, kiwi.zoom_to_span_khz(new_zoom), 0.22)
+        animate_to(freq_khz, kiwi.zoom_to_span_khz(new_zoom), animation_duration)
         zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
+        return True
+
+    def apply_rc28_events():
+        """Apply RC-28 Tune/Zoom/Width/Volume editing on the render thread."""
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        nonlocal rc28_zoom_detents, rc28_zoom_last_at, rc28_dial_mode, rc28_mode_osd_until
+        for kind, value in rc28_input.drain():
+            if kind == "button":
+                if value == "cycle_dial_mode":
+                    # The push control is the simple operational pair: Tune
+                    # and Zoom. Function buttons own their temporary filter
+                    # edit modes, so a press from either returns here cleanly.
+                    rc28_dial_mode = "TUNE" if rc28_dial_mode == "ZOOM" else "ZOOM"
+                elif value == "toggle_passband_width":
+                    rc28_dial_mode = "TUNE" if rc28_dial_mode == "WIDTH" else "WIDTH"
+                elif value == "toggle_volume":
+                    rc28_dial_mode = "TUNE" if rc28_dial_mode == "VOLUME" else "VOLUME"
+                else:
+                    continue
+                rc28_zoom_detents = 0
+                rc28_mode_osd_until = time.monotonic() + 1.7
+                wake_controls()
+                print(f"gl RC-28 dial mode {rc28_dial_mode}", flush=True)
+                continue
+
+            if kind == "dial" and rc28_dial_mode == "TUNE":
+                _server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
+                step_hz = finger_tune_step_hz(zoom, tune_step_hz)
+                frequency = clamp_active_frequency(freq_khz + int(value) * step_hz / 1000.0)
+                if frequency == freq_khz:
+                    continue
+                state.set_view(freq_khz=frequency)
+                display_freq = frequency
+                candidate_freq = frequency
+                anim_start = 0.0
+                inertia_velocity_khz_s = 0.0
+                remember_current_view()
+                continue
+
+            if kind == "dial" and rc28_dial_mode == "VOLUME":
+                # Two percent per detent gives the 24-detent wheel a useful
+                # half-range sweep without forcing the operator to make
+                # tiny, fussy turns for normal listening adjustments.
+                current_volume = audio_volume if audio_volume is not None else 0.5
+                apply_main_volume(clamp(current_volume + int(value) * 0.02, 0.0, 1.0))
+                rc28_mode_osd_until = time.monotonic() + 1.7
+                wake_controls()
+                continue
+
+            if kind == "dial" and rc28_dial_mode in ("WIDTH", "SHIFT"):
+                _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+                current_width = max(FILTER_SNAP_HZ, high_cut - low_cut)
+                center = filter_center_hz(low_cut, high_cut)
+                detents = int(value)
+                if rc28_dial_mode == "WIDTH":
+                    # One 24-detent revolution changes a normal 2.4 kHz
+                    # voice passband by 2.4 kHz: quick enough to explore,
+                    # but still precise for CW.
+                    width = clamp(
+                        current_width + detents * FILTER_FINE_WIDTH_STEP_HZ,
+                        FILTER_SNAP_HZ,
+                        FILTER_LIMIT_HZ * 2,
+                    )
+                    half_width = width / 2.0
+                    center = clamp(center, -FILTER_LIMIT_HZ + half_width, FILTER_LIMIT_HZ - half_width)
+                    state.set_filter(low_cut=center - half_width, high_cut=center + half_width)
+                else:
+                    # Shift preserves the exact width and moves both edges
+                    # together.  The 50 Hz snap is deliberate for narrow
+                    # digital/CW filters and remains comfortable on SSB.
+                    half_width = current_width / 2.0
+                    center = clamp(
+                        center + detents * FILTER_SNAP_HZ,
+                        -FILTER_LIMIT_HZ + half_width,
+                        FILTER_LIMIT_HZ - half_width,
+                    )
+                    state.set_filter(low_cut=center - half_width, high_cut=center + half_width)
+                rc28_mode_osd_until = time.monotonic() + 1.7
+                wake_controls()
+                continue
+
+            if kind == "dial":
+                # Eight physical detents per zoom step, limited to 10 Hz,
+                # makes Zoom deliberate even when the wheel is spun quickly.
+                value = int(value)
+                if rc28_zoom_detents and value and (rc28_zoom_detents > 0) != (value > 0):
+                    # Do not make the operator unwind old travel before a
+                    # reverse turn takes effect.
+                    rc28_zoom_detents = value
+                else:
+                    rc28_zoom_detents = clamp(rc28_zoom_detents + value, -15, 15)
+                now_rc28 = time.monotonic()
+                if abs(rc28_zoom_detents) >= 8 and now_rc28 - rc28_zoom_last_at >= 0.10:
+                    zoom_delta = 1 if rc28_zoom_detents > 0 else -1
+                    _server, _freq_khz, current_zoom, _smeter, _generation, _server_generation = state.snapshot()
+                    minimum_zoom = rtl_lab.minimum_zoom() if (state.external_waterfall_snapshot() or rtl_lab.is_running()) else 0
+                    if (zoom_delta > 0 and current_zoom >= args.max_zoom) or (zoom_delta < 0 and current_zoom <= minimum_zoom):
+                        # At an endpoint there is no useful residual travel to
+                        # replay when the dial turns back the other way.
+                        rc28_zoom_detents = 0
+                    else:
+                        rc28_zoom_detents -= zoom_delta * 8
+                        change_zoom(zoom_delta, animation_duration=0.08)
+                    rc28_zoom_last_at = now_rc28
+                continue
+            if value == "f1_zoom_out":
+                change_zoom(-1)
+            elif value == "f2_zoom_in":
+                change_zoom(1)
 
     def set_test_frequency(freq_khz):
         """Publish a fresh desired tune; workers consume state, not a queue."""
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
-        frequency = clamp(freq_khz, 0.0, TUNING_MAX_KHZ)
+        frequency = clamp_active_frequency(freq_khz)
         state.set_view(freq_khz=frequency)
         display_freq = frequency
         candidate_freq = frequency
@@ -16476,7 +19793,7 @@ def main():
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_notice, network_next_refresh
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dual_vfo_open, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
         nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
@@ -16491,6 +19808,11 @@ def main():
         if dual_vfo_open and kind != "dual":
             stop_dual_vfo_clients()
         dual_vfo_open = False
+        if rtl_lab_open:
+            rtl_lab.stop()
+        rtl_lab_open = False
+        font_lab_open = False
+        compact_font_review_open = False
         wspr_panel_open = False
         wspr_identity_open = False
         wspr_add_open = False
@@ -16606,8 +19928,9 @@ def main():
             settings_menu_open = False
             digital_menu_open = False
             dual_vfo_open = True
-            dual_vfo_active = "A"
-            dual_vfo_mix = 0.0
+            if not dual_vfo_has_session:
+                dual_vfo_active = "A"
+                dual_vfo_mix = 0.0
             dual_vfo_picker_open = False
             dual_vfo_picker_target = "A"
             dual_vfo_picker_page = 0
@@ -16624,13 +19947,10 @@ def main():
                 live_name, live_location, _live_server, _live_used, _live_total = station_fields(live_station)
             else:
                 live_name, live_location = "CURRENT RECEIVER", ""
-            # A Dual entry must feel continuous: the operator's live VFO is
-            # copied exactly into A, then cloned into B as the ready-to-edit
-            # starting point for its independent Kiwi/audio path.
-            dual_vfo_sources = {
-                "A": {"server": live_server, "name": live_name, "location": live_location},
-                "B": {"server": live_server, "name": live_name, "location": live_location},
-            }
+            # The first Dual entry clones the live VFO into both panes. Later
+            # entries refresh only A from Home and retain B exactly as the
+            # operator left it, while its B transport is restarted below.
+            live_source = {"server": live_server, "name": live_name, "location": live_location}
             carried_profile = {
                 "freq_khz": live_freq,
                 "zoom": live_zoom,
@@ -16640,7 +19960,13 @@ def main():
                 "audio_controls": dict(live_controls),
                 "squelch_level": int(live_controls.get("squelch_level", 0) or 0),
             }
-            dual_vfo_profiles = {"A": dict(carried_profile), "B": dict(carried_profile)}
+            if not dual_vfo_has_session:
+                dual_vfo_sources = {"A": dict(live_source), "B": dict(live_source)}
+                dual_vfo_profiles = {"A": dict(carried_profile), "B": dict(carried_profile)}
+                dual_vfo_has_session = True
+            else:
+                dual_vfo_sources["A"] = dict(live_source)
+                dual_vfo_profiles["A"] = dict(carried_profile)
             start_dual_vfo_clients()
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -16840,8 +20166,7 @@ def main():
         )
         candidate_freq = clamp(
             candidate_freq + retune_delta_from_drag(dx, start_span, args.invert_tune, sensitivity),
-            0.0,
-            TUNING_MAX_KHZ,
+            *active_tuning_bounds(),
         )
         # A normal waterfall drag is a live, positional tuning control. The
         # active zoom supplies the travel range, while the radio step supplies
@@ -17259,7 +20584,7 @@ def main():
                                     not menu_open and not picker_open and not radio_setup_open
                                     and not display_setup_open and not filter_drawer_open and not audio_panel_open
                                     and not asr_panel_open and not deepgram_setup_open
-                                    and not tests_panel_open and not wspr_panel_open and not wspr_identity_open and not globe_open and not dj_tune_open
+                                    and not tests_panel_open and not rtl_lab_open and not wspr_panel_open and not wspr_identity_open and not globe_open and not dj_tune_open
                                     and not filter_panel_open and not frequency_entry_open
                                 )
                             ) else freq_khz
@@ -17271,12 +20596,21 @@ def main():
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
                             if waterfall_focus_progress() > 0.01 and not (
-                                globe_open
+                                font_lab_open
+                                or globe_open
+                                or rtl_lab_open
                                 or wspr_panel_open
                                 or wspr_add_open
                                 or (picker_open and picker_map_open)
                                 or (audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y))
                                 or (cpu_utilization_graph_open and cpu_graph_box and contains(cpu_graph_box, x, y))
+                                or (
+                                    frequency_identity_candidates
+                                    and time.monotonic() < frequency_identity_osd_until
+                                    and contains(
+                                        frequency_identity_schedule_touch_box(frequency_identity_candidates), x, y
+                                    )
+                                )
                             ):
                                 wake_controls()
                                 gesture = "wake"
@@ -17288,6 +20622,11 @@ def main():
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
                                 gesture = "deepgram_setup_outside"
+                            elif font_lab_open:
+                                # A full-canvas static comparison sheet owns
+                                # the display completely; do not let a test
+                                # tap retune the live receiver underneath.
+                                gesture = "font_lab"
                             elif network_password_open:
                                 gesture = "network_password"
                             elif network_panel_open:
@@ -17296,6 +20635,11 @@ def main():
                                 gesture = "asr_select"
                             elif asr_panel_open:
                                 gesture = "asr_outside"
+                            elif band_navigation_open:
+                                # The band sheet is intentionally modal while
+                                # visible: no tap through to the waterfall can
+                                # retune the receiver behind a preset button.
+                                gesture = "band_navigation"
                             # Dual VFO is a self-contained experimental
                             # workspace. It must claim its whole canvas before
                             # retained waterfall, rail, or Home controls see
@@ -17347,6 +20691,26 @@ def main():
                                 gesture = "wspr_cpu_detail"
                             elif wspr_panel_open:
                                 gesture = "wspr_workspace"
+                            elif compact_font_review_open and contains(HOME_BOX, x, y):
+                                gesture = "compact_font_review_exit"
+                            elif compact_font_review_open and contains(compact_frequency_touch_box(), x, y):
+                                gesture = "compact_font_review_toggle"
+                            elif compact_font_review_open:
+                                # The temporary review panel deliberately owns
+                                # the entire rail section it covers, so no
+                                # mode/volume action leaks through it.
+                                gesture = "compact_font_review"
+                            elif (
+                                LCD_800_MODE
+                                and (
+                                    (instrument_layout == "compact" and contains(compact_band_context_touch_box(), x, y))
+                                    or (
+                                        instrument_layout != "compact"
+                                        and contains(main_band_context_box(text_cache, display_freq), x, y)
+                                    )
+                                )
+                            ):
+                                gesture = "band_navigation_toggle"
                             # Operating controls always win over movable live
                             # captions, even when an ASR/HAM lane crosses the
                             # bottom of the waterfall.
@@ -17363,6 +20727,18 @@ def main():
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
+                            elif (
+                                not picker_open
+                                and not menu_open
+                                and not tests_panel_open
+                                and frequency_identity_candidates
+                                and frequency_identity_frequency_khz is not None
+                                and time.monotonic() < frequency_identity_osd_until
+                                and contains(
+                                    frequency_identity_schedule_touch_box(frequency_identity_candidates), x, y
+                                )
+                            ):
+                                gesture = "frequency_identity_tune"
                             elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
                             elif contains(favorite_waterfall_box(), x, y):
@@ -17390,6 +20766,11 @@ def main():
                                 # Protect readable text from accidental tuning,
                                 # but do not move the fixed caption window.
                                 gesture = "caption_readonly"
+                            elif (
+                                LCD_800_MODE and instrument_layout == "compact"
+                                and contains(compact_frequency_touch_box(), x, y)
+                            ):
+                                gesture = "compact_font_review_toggle"
                             elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
                                 gesture = "frequency_entry_open"
                             elif contains(CPU_ANNUNCIATOR_BOX, x, y):
@@ -17482,6 +20863,10 @@ def main():
                                 gesture = "wspr_workspace"
                             elif wspr_panel_open:
                                 gesture = "wspr_workspace_outside"
+                            elif rtl_lab_open and contains(RTL_LAB_PANEL_BOX, x, y):
+                                gesture = "rtl_lab"
+                            elif rtl_lab_open:
+                                gesture = "rtl_lab_outside"
                             elif tests_panel_open and contains(TEST_PANEL_BOX, x, y):
                                 gesture = "tests_panel"
                             elif tests_panel_open:
@@ -17548,11 +20933,17 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
-                            elif not picker_open and LCD_800_MODE and not settings_menu_open and not digital_menu_open and contains(lcd_home_bandwidth_box(), x, y):
+                            elif not picker_open and LCD_800_MODE and not settings_menu_open and not digital_menu_open and contains(
+                                lcd_home_bandwidth_box(instrument_layout == "compact"), x, y
+                            ):
                                 gesture = "home_passband"
-                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
+                            elif not picker_open and LCD_800_MODE and contains(
+                                lcd_home_volume_mute_box(instrument_layout == "compact"), x, y
+                            ):
                                 gesture = "home_volume_mute"
-                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
+                            elif not picker_open and LCD_800_MODE and contains(
+                                lcd_home_volume_box(instrument_layout == "compact"), x, y
+                            ):
                                 gesture = "home_volume"
                             elif not picker_open and not settings_menu_open and not digital_menu_open and (nav_items := lcd_nav_items(settings_menu_open, digital_menu_open)) and (nav_index := lcd_nav_item_at(x, y, nav_items)) is not None:
                                 # Network must be dependable even on touch
@@ -17645,7 +21036,10 @@ def main():
                             pass
                         elif gesture in ("audio_volume", "home_volume"):
                             desired_volume = volume_at_x(
-                                x, AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box()
+                                x,
+                                AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box(
+                                    instrument_layout == "compact"
+                                ),
                             )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
                                 apply_main_volume(desired_volume)
@@ -17939,8 +21333,13 @@ def main():
                                         profile = dict(dual_vfo_profiles.get("B", {}))
                                         profile.update({"freq_khz": next_freq, "zoom": next_zoom})
                                         dual_vfo_profiles["B"] = profile
+                                        dual_vfo_has_session = True
                                         drain_queue(dual_b_line_queue)
                                         dual_b_wf_texture.clear()
+                                        # This is the meaningful B choice. Persist it now,
+                                        # not on the later periodic preference poll, so a
+                                        # restart cannot turn B back into the local receiver.
+                                        write_remembered_view(force=True)
                                     dual_vfo_picker_open = False
                             wake_controls()
                         elif touch_started and gesture == "dual_vfo":
@@ -17951,7 +21350,14 @@ def main():
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
                                 elif action in ("A", "B"):
+                                    # A spectrum tap is an operator's source
+                                    # selection, not merely a cosmetic focus.
+                                    # Keep the shared mixer available for a
+                                    # deliberate blend, but route normal
+                                    # listening entirely to the tapped VFO.
                                     dual_vfo_active = action
+                                    dual_vfo_mix = 0.0 if action == "A" else 1.0
+                                    dual_audio_mixer.set_mix(dual_vfo_mix)
                                 elif action == "mix":
                                     mix_box = dual_vfo_layout()["mix_track"]
                                     dual_vfo_mix = clamp(
@@ -17992,6 +21398,33 @@ def main():
                                     dual_audio_mixer.set_mix(dual_vfo_mix)
                                     sync_dual_vfo_b_state()
                             wake_controls()
+                        elif touch_started and gesture == "band_navigation":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = band_navigation_action_at(x, y)
+                                if action == "close" or action is None:
+                                    band_navigation_open = False
+                                elif isinstance(action, int):
+                                    _label, target_khz, _kind = BAND_NAV_PRESETS[action]
+                                    target_khz = clamp_active_frequency(target_khz)
+                                    state.set_view(freq_khz=target_khz)
+                                    display_freq = target_khz
+                                    candidate_freq = target_khz
+                                    anim_start = 0.0
+                                    inertia_velocity_khz_s = 0.0
+                                    apply_band_default(target_khz)
+                                    remember_current_view()
+                                    band_navigation_open = False
+                                    print(f"gl band nav {_label} {target_khz:.3f} kHz", flush=True)
+                            wake_controls()
+                        elif touch_started and gesture == "band_navigation_toggle":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                band_navigation_open = True
+                                menu_open = picker_open = radio_setup_open = display_setup_open = False
+                                audio_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
+                                compact_font_review_open = False
+                            wake_controls()
                         elif touch_started and gesture == "frequency_entry":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -18009,7 +21442,10 @@ def main():
                                     frequency_entry_invalid = False
                                     frequency_entry_replace_on_digit = False
                                 elif action == "ENTER":
-                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value)
+                                    _minimum_frequency, maximum_frequency = active_tuning_bounds()
+                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value, maximum_frequency)
+                                    if entered_khz is not None and entered_khz < _minimum_frequency:
+                                        entered_khz = None
                                     if entered_khz is None:
                                         frequency_entry_invalid = True
                                     else:
@@ -18047,6 +21483,83 @@ def main():
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
                                 audio_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
                             wake_controls()
+                        elif touch_started and gesture == "frequency_identity_tune":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px and frequency_identity_candidates:
+                                scheduled_frequency_khz = float(
+                                    frequency_identity_candidates[0].get(
+                                        "frequency_khz", frequency_identity_frequency_khz
+                                    )
+                                )
+                                scheduled_frequency_khz = clamp_active_frequency(scheduled_frequency_khz)
+                                state.set_view(freq_khz=scheduled_frequency_khz)
+                                display_freq = scheduled_frequency_khz
+                                candidate_freq = scheduled_frequency_khz
+                                inertia_velocity_khz_s = 0.0
+                                animate_to(scheduled_frequency_khz, display_span, 0.12)
+                                remember_current_view()
+                                print(
+                                    f"gl frequency identity tune {scheduled_frequency_khz:.3f} kHz",
+                                    flush=True,
+                                )
+                            wake_controls()
+                        elif touch_started and gesture == "compact_font_review_toggle":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                compact_font_review_open = not compact_font_review_open
+                            wake_controls()
+                        elif touch_started and gesture == "compact_font_review_exit":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                compact_font_review_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "compact_font_review":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                action = compact_font_review_action_at(x, y)
+                                if action == "previous":
+                                    compact_frequency_font_index = (
+                                        compact_frequency_font_index - 1
+                                    ) % len(compact_font_review_families)
+                                elif action == "next":
+                                    compact_frequency_font_index = (
+                                        compact_frequency_font_index + 1
+                                    ) % len(compact_font_review_families)
+                                elif action == "like":
+                                    family = compact_font_review_families[compact_frequency_font_index]
+                                    if family in compact_font_review_liked:
+                                        compact_font_review_liked.remove(family)
+                                    else:
+                                        compact_font_review_liked.add(family)
+                                    # Likes are rare deliberate choices, so
+                                    # save immediately rather than risking a
+                                    # reboot before the normal preference tick.
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                elif action == "delete" and len(compact_font_review_families) > 1:
+                                    removed = compact_font_review_families.pop(compact_frequency_font_index)
+                                    compact_font_review_liked.discard(removed)
+                                    compact_frequency_font_index %= len(compact_font_review_families)
+                                    if compact_frequency_font_family == removed:
+                                        compact_frequency_font_family = compact_font_review_families[compact_frequency_font_index]
+                                        preferences_dirty = True
+                                        write_remembered_view(force=True)
+                                elif action == "use":
+                                    compact_frequency_font_family = compact_font_review_families[compact_frequency_font_index]
+                                    # This is the one deliberate selection action in
+                                    # Font Review. Save it immediately so a reboot
+                                    # cannot revert the instrument typeface.
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                elif action == "exit":
+                                    compact_font_review_open = False
+                                if action:
+                                    print(
+                                        "gl compact font review "
+                                        f"{action} {compact_font_review_families[compact_frequency_font_index]}",
+                                        flush=True,
+                                    )
+                            wake_controls()
                         elif touch_started and gesture == "radio_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -18069,7 +21582,7 @@ def main():
                             apply_main_volume(audio_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume":
-                            apply_main_volume(home_volume_at_x(x))
+                            apply_main_volume(home_volume_at_x(x, instrument_layout == "compact"))
                             wake_controls()
                         elif touch_started and gesture == "home_volume_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -18126,6 +21639,8 @@ def main():
                                     except ValueError:
                                         next_index = 0
                                     state.set_audio_controls(hf_enhance_level=available_levels[next_index], voice_clean_level=0)
+                                elif choice == "tone":
+                                    state.set_audio_controls(tone_profile=(int(controls.get("tone_profile", 0)) + 1) % len(TONE_PRESETS))
                                 elif choice == "agc":
                                     if not controls["agc"]:
                                         state.set_audio_controls(agc_enabled=True, agc_hang=False)
@@ -18422,6 +21937,17 @@ def main():
                                             preferences_dirty = True
                                             write_remembered_view(force=True)
                                             break
+                                    else:
+                                        # The large MRTG plots are the natural
+                                        # touch target for inspecting a
+                                        # different time span. Keep swipes for
+                                        # receiver-page navigation below.
+                                        if y >= 140:
+                                            wspr_expanded_graph_window = (
+                                                wspr_expanded_graph_window + 1
+                                            ) % len(WSPR_DISTANCE_WINDOWS)
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
                             elif abs(moved_y) >= max(28, args.tap_px * 2):
                                 page_count = max(1, math.ceil(len(wspr_tiles) / WSPR_EXPANDED_GRAPH_PER_PAGE))
                                 direction = 1 if moved_y < 0 else -1
@@ -18724,6 +22250,13 @@ def main():
                                 elif choice == "dj":
                                     tests_panel_open = False
                                     open_dj_tune()
+                                elif choice == "rtl":
+                                    tests_panel_open = False
+                                    rtl_lab_open = True
+                                elif choice == "font_lab":
+                                    tests_panel_open = False
+                                    font_lab_open = True
+                                    font_lab_page = 0
                                 elif choice == "pattern" and retune_sweep is None:
                                     retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
                                 elif choice == "run":
@@ -18736,6 +22269,56 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 tests_panel_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "font_lab":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                choice = font_lab_option_at(x, y)
+                                if choice == "back":
+                                    font_lab_open = False
+                                    tests_panel_open = True
+                                elif choice == "previous":
+                                    font_lab_page = (font_lab_page - 1) % len(FONT_LAB_PAGES)
+                                elif choice == "next":
+                                    font_lab_page = (font_lab_page + 1) % len(FONT_LAB_PAGES)
+                            wake_controls()
+                        elif touch_started and gesture == "rtl_lab":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                choice = rtl_lab_option_at(x, y)
+                                if choice == "probe":
+                                    rtl_lab.probe()
+                                elif choice == "preset":
+                                    rtl_lab.cycle_preset()
+                                elif choice == "run":
+                                    if rtl_lab.snapshot()["running"]:
+                                        rtl_lab.stop()
+                                    else:
+                                        _name, preset_hz, _mode, _rate = rtl_lab.snapshot()["preset"]
+                                        _server, _current_freq, current_zoom, _smeter, _generation, _server_generation = state.snapshot()
+                                        local_zoom = int(clamp(max(RTL_MIN_ZOOM, current_zoom), RTL_MIN_ZOOM, args.max_zoom))
+                                        local_frequency = preset_hz / 1000.0
+                                        if rtl_lab.start(local_frequency, local_zoom):
+                                            _server, active_frequency, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
+                                            display_freq = active_frequency
+                                            display_span = kiwi.zoom_to_span_khz(active_zoom)
+                                            candidate_freq = active_frequency
+                                            anim_start = 0.0
+                                            inertia_velocity_khz_s = 0.0
+                                            drain_queue(line_queue)
+                                            wf_texture.clear()
+                                            rtl_lab_open = False
+                                elif choice == "back":
+                                    rtl_lab.stop()
+                                    rtl_lab_open = False
+                                    tests_panel_open = True
+                            wake_controls()
+                        elif touch_started and gesture == "rtl_lab_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                rtl_lab.stop()
+                                rtl_lab_open = False
+                                tests_panel_open = True
                             wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -18862,6 +22445,13 @@ def main():
                                             auto = False
                                             palette = WATERFALL_DEFAULT_PALETTE
                                             state.set_spectrum_enabled(True)
+                                        elif kind == "instruments":
+                                            instrument_layout = (
+                                                "compact" if instrument_layout == "expanded" else "expanded"
+                                            )
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
+                                            print(f"gl instruments {instrument_layout}", flush=True)
                                         elif kind == "spectrum":
                                             state.set_spectrum_enabled(not state.spectrum_snapshot()[0])
                                         elif kind == "auto":
@@ -18876,13 +22466,14 @@ def main():
                                             speed = value
                                         else:
                                             palette = value
-                                        floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
-                                            floor=floor,
-                                            ceil=ceiling,
-                                            speed=speed,
-                                            auto=auto,
-                                            palette=palette,
-                                        )
+                                        if kind != "instruments":
+                                            floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
+                                                floor=floor,
+                                                ceil=ceiling,
+                                                speed=speed,
+                                                auto=auto,
+                                                palette=palette,
+                                            )
                                         if reset_display:
                                             # Palette changes otherwise leave the previous
                                             # texture visible until it has slowly scrolled
@@ -18971,10 +22562,14 @@ def main():
                         elif touch_started and gesture == "stream_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                paused = state.set_stream_paused(not state.stream_paused_snapshot())
+                                if rtl_lab.is_running():
+                                    rtl_lab.stop()
+                                    print("gl RTL-SDR local source stopped", flush=True)
+                                else:
+                                    paused = state.set_stream_paused(not state.stream_paused_snapshot())
+                                    print(f"gl stream {'paused' if paused else 'resumed'}", flush=True)
                                 drain_queue(line_queue)
                                 wf_texture.clear()
-                                print(f"gl stream {'paused' if paused else 'resumed'}", flush=True)
                             wake_controls()
                         elif touch_started and gesture == "favorite_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -19404,8 +22999,7 @@ def main():
                             live_step_hz = finger_tune_step_hz(zoom, tune_step_hz)
                             candidate_freq = clamp(
                                 snap_frequency_khz(candidate_freq, live_step_hz),
-                                0.0,
-                                TUNING_MAX_KHZ,
+                                *active_tuning_bounds(),
                             )
                             if args.swipe_inertia_strength > 0 and swipe_started and abs(swipe_velocity_px_s) >= args.swipe_inertia_min_px_s:
                                 sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args)
@@ -19535,13 +23129,14 @@ def main():
             if zoom_osd_requested.is_set():
                 zoom_osd_until = now + args.zoom_osd_seconds
                 zoom_osd_requested.clear()
+            apply_rc28_events()
             update_animation()
             advance_retune_sweep(now)
             inertia_active = False
             if not touch_started and abs(inertia_velocity_khz_s) > 0.01:
                 dt = min(0.05, max(0.0, now - inertia_last_t))
                 inertia_last_t = now
-                display_freq = clamp(display_freq + inertia_velocity_khz_s * dt, 0.0, TUNING_MAX_KHZ)
+                display_freq = clamp_active_frequency(display_freq + inertia_velocity_khz_s * dt)
                 candidate_freq = display_freq
                 inertia_velocity_khz_s *= math.exp(-dt / args.swipe_inertia_tau)
                 inertia_active = True
@@ -19552,6 +23147,73 @@ def main():
                     print(f"gl tuned {display_freq:.3f} kHz", flush=True)
                     inertia_active = False
             server, freq_khz, zoom, _smeter_dbm, _generation, _server_generation = state.snapshot()
+            identity_mode, _identity_low_cut, _identity_high_cut, _identity_radio_generation = state.radio_snapshot()
+            identity_key = round(float(freq_khz) * 2.0) / 2.0 if frequency_identity_eligible(freq_khz, identity_mode) else None
+            identity_view_key = (server, identity_key, identity_mode)
+            if identity_view_key != frequency_identity_view_key:
+                frequency_identity_view_key = identity_view_key
+                frequency_identity_server = server
+                frequency_identity_mode = identity_mode
+                frequency_identity_stable_at = now + FREQUENCY_ID_SETTLE_SECONDS
+                frequency_identity_pending_key = None
+                frequency_identity_last_lookup_key = None
+                # A swipe should step through known station titles with the
+                # waterfall, not wait for HTTP. Use any close pre-warmed
+                # schedule immediately; a fresh lookup still follows later.
+                cached_identity_candidates = (
+                    cached_frequency_identity_candidates(identity_key)
+                    if identity_key is not None else ()
+                )
+                if cached_identity_candidates:
+                    frequency_identity_candidates = tuple(cached_identity_candidates)
+                    frequency_identity_frequency_khz = identity_key
+                    frequency_identity_osd_until = now + FREQUENCY_ID_OSD_SECONDS
+                else:
+                    frequency_identity_candidates = ()
+                    frequency_identity_frequency_khz = None
+                    frequency_identity_osd_until = 0.0
+            # The lookup is intentionally post-tune and asynchronous. A long
+            # swipe sends dozens of live Kiwi commands, but only its settled
+            # destination may issue one small schedule request.
+            if (
+                identity_key is not None
+                and frequency_identity_pending_key is None
+                and identity_key != frequency_identity_last_lookup_key
+                and now >= frequency_identity_stable_at
+            ):
+                frequency_identity_pending_key = identity_key
+                frequency_identity_last_lookup_key = identity_key
+                threading.Thread(
+                    target=frequency_identity_worker,
+                    args=(frequency_identity_result_queue, identity_key),
+                    name="frequency-identity",
+                    daemon=True,
+                ).start()
+                print(f"gl frequency identity lookup {identity_key:.3f} kHz", flush=True)
+            while True:
+                try:
+                    result_key, result_candidates, result_error = frequency_identity_result_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if frequency_identity_pending_key == result_key:
+                    frequency_identity_pending_key = None
+                # Never allow a slow HTTP response from the prior tuning
+                # location to identify a newer signal on screen.
+                if identity_key != result_key:
+                    continue
+                if result_error:
+                    print(f"gl frequency identity unavailable: {result_error}", flush=True)
+                    continue
+                frequency_identity_candidates = tuple(result_candidates)
+                frequency_identity_frequency_khz = result_key
+                if frequency_identity_candidates:
+                    frequency_identity_osd_until = now + FREQUENCY_ID_OSD_SECONDS
+                    prefetch_frequency_identity_neighbours(result_key)
+                    print(
+                        f"gl frequency identity {result_key:.3f} kHz "
+                        f"{len(frequency_identity_candidates)} candidate(s)",
+                        flush=True,
+                    )
             station_connection_status = None
             if station_pending_server:
                 station_connection_status = state.connection_snapshot()
@@ -19891,7 +23553,9 @@ def main():
             bottom_ruler = False
             ruler_height = SPECTRUM_RULER_H
             ruler_y0 = spectrum_y1 if spectrum_enabled else sdr_ui.TOP_H
-            ruler_background_alpha = 126
+            # The frequency ruler sits on live waterfall content. Keep just
+            # enough wash for its labels, at half the previous darkening.
+            ruler_background_alpha = 63
             normal_waterfall_y0 = ruler_y0
             focus_waterfall_y0 = normal_waterfall_y0
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
@@ -19899,7 +23563,9 @@ def main():
             # waterfall itself must still occupy the full post-ruler region.
             normal_waterfall_y1 = LOGICAL_H
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
-            view_center_khz = waterfall_view_center_khz(display_freq, display_span)
+            local_iq_active = state.external_waterfall_snapshot() or rtl_lab.is_running()
+            view_center_khz = active_waterfall_center(display_freq, display_span)
+            source_span_khz = active_source_span_khz(zoom)
             # Anchor waterfall rows to the focus layout. Collapsing the
             # waterfall then covers rows under the ruler/status strip instead
             # of remapping the visible texture and making it appear to scroll up.
@@ -19929,7 +23595,6 @@ def main():
             )
             spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE
             if spectrum_enabled and not spectrum_foreground:
-                source_span_khz = kiwi.zoom_source_span_khz(zoom)
                 spectrum_layer.draw(
                     spectrum_values,
                     spectrum_peak_values,
@@ -19944,28 +23609,32 @@ def main():
                         visible_span_khz=display_span,
                     ),
                 )
-            overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
-            draw_filter_overlay(
-                display_span,
-                overlay_low_cut,
-                overlay_high_cut,
-                waterfall_y0,
-                waterfall_y1,
-                0.82,
-                tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
-            )
+            if not local_iq_active:
+                overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
+                draw_filter_overlay(
+                    display_span,
+                    overlay_low_cut,
+                    overlay_high_cut,
+                    waterfall_y0,
+                    waterfall_y1,
+                    0.82,
+                    tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
+                )
             radio_drawer_visible = LCD_800_MODE and LCD_RADIO_DRAWER_PROGRESS > 0.002
             # Mode, Audio, and Display are right-rail drawers, not modal
             # screens. Keep the waterfall's operating controls visible and
             # tappable behind them. Full-canvas tools still own the view.
-            control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or network_panel_open or tests_panel_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
-            selected_station_name = next(
-                (
-                    bottom_station_title(name, location)
-                    for name, location, candidate_server, *_capacity in all_stations
-                    if candidate_server == server
-                ),
-                "",
+            control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
+            selected_station_name = (
+                f"LOCAL RTL-SDR · {rtl_lab.snapshot()['preset'][0]}"
+                if local_iq_active else next(
+                    (
+                        bottom_station_title(name, location)
+                        for name, location, candidate_server, *_capacity in all_stations
+                        if candidate_server == server
+                    ),
+                    "",
+                )
             )
             # One compact HTTP status request every 20 seconds keeps the
             # `used/max USERS` annunciator factual without touching the audio
@@ -20005,7 +23674,7 @@ def main():
                 temp_c=temp_c,
                 station_name=selected_station_name,
                 station_capacity=selected_station_capacity,
-                connection_status=connection_status,
+                connection_status=None if local_iq_active else connection_status,
                 connection_timeout_seconds=connection_timeout_seconds,
                 connection_retry_seconds=connection_retry_seconds,
                 bandwidth_hz=high_cut - low_cut,
@@ -20026,9 +23695,26 @@ def main():
                 squelch_closed=squelch_closed,
                 settings_menu_open=settings_menu_open,
                 digital_menu_open=digital_menu_open,
+                instrument_layout=instrument_layout,
+                # Font Review is a live specimen: arrowing through candidates
+                # must visibly update the Home frequency readout. ``USE`` is
+                # still the only action that makes the preview persistent.
+                compact_frequency_font_family=(
+                    compact_font_review_families[compact_frequency_font_index]
+                    if compact_font_review_open else compact_frequency_font_family
+                ),
                 status_y0=LOGICAL_H - BOTTOM_STATUS_H,
                 ruler_center_khz=view_center_khz,
             )
+            if compact_font_review_open and instrument_layout == "compact":
+                draw_compact_font_review(
+                    text_cache,
+                    compact_font_review_families[compact_frequency_font_index],
+                    compact_frequency_font_index,
+                    compact_font_review_families,
+                    compact_font_review_liked,
+                    compact_frequency_font_family,
+                )
             if spectrum_foreground:
                 draw_spectrum(
                     spectrum_y0,
@@ -20037,7 +23723,7 @@ def main():
                     spectrum_peak_values,
                     text_cache,
                     foreground=True,
-                    source_span_khz=kiwi.zoom_source_span_khz(zoom),
+                    source_span_khz=source_span_khz,
                     visible_span_khz=display_span,
                 )
             if scope_adjust_active:
@@ -20072,20 +23758,20 @@ def main():
             stream_paused = state.stream_paused_snapshot()
             if not (
                 menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or tests_panel_open or globe_open or dj_tune_open
+                or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
             if audio_controls.get("mute", False) and not (
                 menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or tests_panel_open or globe_open or dj_tune_open
+                or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_muted_waterfall_badge(text_cache)
             if audio_transport_graph_open and not (
                 menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or tests_panel_open or globe_open or dj_tune_open
+                or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_audio_transport_graph(
@@ -20095,7 +23781,7 @@ def main():
                 )
             if cpu_utilization_graph_open and not (
                 menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or tests_panel_open or globe_open or dj_tune_open
+                or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_cpu_utilization_graph(
@@ -20110,6 +23796,8 @@ def main():
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
+            if band_navigation_open:
+                draw_band_navigation(text_cache, display_freq, radio_mode)
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
             if picker_open:
@@ -20145,6 +23833,7 @@ def main():
                     wf_auto,
                     wf_palette,
                     spectrum_enabled,
+                    instrument_layout,
                 )
             if filter_drawer_open and LCD_800_MODE:
                 draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
@@ -20181,6 +23870,10 @@ def main():
                 )
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
+            if font_lab_open:
+                draw_font_lab(text_cache, font_lab_page)
+            if rtl_lab_open:
+                draw_rtl_lab_panel(text_cache, rtl_lab)
             # WSPR's Home button hides its workspace only. Once a monitor has
             # been opened, continue draining its slow W/F rows in the
             # background so reopening shows a continuous, current history.
@@ -20294,6 +23987,17 @@ def main():
             if filter_panel_open:
                 draw_filter_setup_panel(text_cache, radio_mode, low_cut, high_cut, filter_custom_width)
             if dual_vfo_open:
+                dual_program_matcher.configure(
+                    dual_vfo_sources.get("A", {}), dual_vfo_profiles.get("A", {}),
+                    dual_vfo_sources.get("B", {}), dual_vfo_profiles.get("B", {}),
+                )
+                dual_best_vfo, _dual_quality = dual_program_matcher.quality_snapshot()
+                dual_match_status = dual_vfo_b_status()
+                # BEST describes the clearer copy of a confirmed programme,
+                # not a generic S-meter contest. Until the independent motion
+                # check has produced MATCH, suppress it completely.
+                if not dual_match_status.startswith("MATCH "):
+                    dual_best_vfo = None
                 dual_a_dbm, _dual_a_peak = state.smeter_snapshot()
                 dual_b_dbm, _dual_b_peak = dual_b_state.smeter_snapshot()
                 draw_dual_vfo_workspace(
@@ -20308,7 +24012,8 @@ def main():
                     {"A": dual_a_dbm, "B": dual_b_dbm},
                     dual_vfo_sources,
                     dual_vfo_profiles,
-                    dual_vfo_b_status(),
+                    dual_match_status,
+                    dual_best_vfo,
                 )
                 if dual_vfo_mode_open:
                     draw_dual_vfo_mode_picker(
@@ -20323,6 +24028,30 @@ def main():
                         all_stations,
                         dual_vfo_picker_page,
                     )
+            # The WSPR workspace already labels a running decode in its card.
+            # Everywhere else, keep an explicit OSD over the live RF view so
+            # an audible hiccup can be correlated with wsprd activity.
+            if not wspr_panel_open and not dual_vfo_open:
+                wspr_active_decodes = active_wspr_decode_tiles(wspr_tiles, wspr_monitor)
+                draw_wspr_decode_osd(text_cache, wspr_active_decodes, waterfall_y0 + 16)
+            frequency_identity_remaining = frequency_identity_osd_until - now
+            if (
+                frequency_identity_remaining > 0
+                and not wspr_panel_open and not dual_vfo_open
+                and not picker_open and not menu_open and not tests_panel_open
+                and frequency_identity_candidates and frequency_identity_frequency_khz is not None
+            ):
+                frequency_identity_alpha = 235
+                if frequency_identity_remaining < 0.55:
+                    frequency_identity_alpha = int(235 * frequency_identity_remaining / 0.55)
+                identity_receiver_coordinates = receiver_coordinates_for_frequency_identity(
+                    server, all_stations, receiver_home_profile
+                )
+                draw_frequency_identity_osd(
+                    text_cache, frequency_identity_frequency_khz,
+                    frequency_identity_candidates, identity_receiver_coordinates,
+                    frequency_identity_alpha,
+                )
             osd_remaining = zoom_osd_until - now
             if osd_remaining > 0 and not dual_vfo_open:
                 alpha = 220
@@ -20330,6 +24059,12 @@ def main():
                 if osd_remaining < fade:
                     alpha = int(220 * osd_remaining / fade)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
+            rc28_osd_remaining = rc28_mode_osd_until - now
+            if rc28_osd_remaining > 0 and not dual_vfo_open:
+                alpha = 232
+                if rc28_osd_remaining < 0.35:
+                    alpha = int(232 * rc28_osd_remaining / 0.35)
+                draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
             if screenshot_requested.is_set():
@@ -20360,6 +24095,7 @@ def main():
         write_remembered_view(save_current_frequency=True)
         globe_mixer.stop()
         scout_probe.stop()
+        rtl_lab.stop()
         stop_dual_vfo_clients()
         wspr_monitor.stop()
         for texture in wspr_mini_textures.values():
