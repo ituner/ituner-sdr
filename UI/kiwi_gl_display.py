@@ -258,6 +258,50 @@ _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
 SATELLITE_MAP_PATH = _RENDERER_DIR / "assets" / "nasa-blue-marble-2048.jpg"
 SATELLITE_MAP_HD_PATH = _RENDERER_DIR / "assets" / "nasa-blue-marble-4096.jpg"
+BROADCAST_IDENTIFICATION_POLICY_PATH = _RENDERER_DIR / "broadcast-identification-policy.json"
+
+# Keep broadcast identification policy visible and data-driven. It is not a
+# propagation engine: schedules remain database facts and receiver geography
+# is used only for operator context.
+BROADCAST_IDENTIFICATION_POLICY_DEFAULT = {
+    "version": 1,
+    "matching": {
+        "frequency_tolerance_khz": 1.0,
+        "ambiguity_guard_khz": 0.25,
+        "cache_seconds": 600,
+        "settle_seconds": 0.85,
+    },
+    "sources": {
+        "shortwave_db": {"schedule_timezone": "UTC", "active_schedule_required": False},
+        "shortwave_live": {"schedule_timezone": "UTC", "active_schedule_required": True},
+    },
+    "display": {"title": "SCHEDULED BROADCASTS", "show_receiver_context": True},
+}
+
+
+def load_broadcast_identification_policy():
+    """Load the small editable policy, retaining safe defaults per field."""
+    policy = json.loads(json.dumps(BROADCAST_IDENTIFICATION_POLICY_DEFAULT))
+    try:
+        supplied = json.loads(BROADCAST_IDENTIFICATION_POLICY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return policy
+    if not isinstance(supplied, dict):
+        return policy
+    for section in ("matching", "sources", "display"):
+        values = supplied.get(section)
+        if not isinstance(values, dict):
+            continue
+        if section == "sources":
+            for name, source_values in values.items():
+                if name in policy[section] and isinstance(source_values, dict):
+                    policy[section][name].update(source_values)
+        else:
+            policy[section].update(values)
+    return policy
+
+
+BROADCAST_IDENTIFICATION_POLICY = load_broadcast_identification_policy()
 _satellite_map_surfaces = {}
 
 
@@ -385,12 +429,19 @@ SMETER_RELEASE_SECONDS = 0.70
 SMETER_PEAK_HOLD_SECONDS = 2.0
 SMETER_PEAK_DECAY_DB_PER_SECOND = 9.0
 SMETER_READOUT_INTERVAL_SECONDS = 0.30
-# A 512-frame Kiwi packet lasts 42.7 ms at 12 kHz. Keep 10 packets of local
-# reserve plus the 3072-frame PipeWire buffer: about 0.68 s before transport
-# latency. This is enough for brief public-receiver jitter without making a
-# tuning gesture feel detached from its audio.
+# A 512-frame Kiwi packet lasts 42.7 ms at 12 kHz. Six packets of local
+# reserve plus the 3072-frame PipeWire buffer is about 0.51 s before network
+# transport latency. It stays responsive when tuning while retaining a useful
+# cushion for a normal public-receiver arrival wobble.
 PIPEWIRE_AUDIO_LATENCY = "3072"
-SDR_AUDIO_JITTER_TARGET_PACKETS = 10
+SDR_AUDIO_JITTER_TARGET_PACKETS = 6
+# Temporary A/B listener backend. The USB DAC exposes only 44.1/48 kHz stereo,
+# so the ALSA plug layer performs the unavoidable 12 kHz mono conversion while
+# PipeWire/WirePlumber is deliberately stopped for an isolated comparison.
+AUDIO_BACKENDS = ("pipewire", "alsa")
+ALSA_DIRECT_DEVICE = "plughw:2,0"
+ALSA_DIRECT_PERIOD_FRAMES = 512
+ALSA_DIRECT_BUFFER_FRAMES = 1536
 # The reserve may grow only after a real late-packet/underflow observation.
 # Twenty-four packets is a 1.02 s bounded recovery ceiling, not the normal
 # listening delay.
@@ -435,13 +486,15 @@ SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS = 3
 # away. Any touch on the radio counts as activity because drawers deliberately
 # leave the waterfall live behind them.
 LCD_DRAWER_IDLE_CLOSE_SECONDS = 5.0 * 60.0
-# KiwiSDR closes a remote SND client after its 60-second protocol keepalive
-# deadline. Send well inside that window without flooding public receivers.
-KIWI_SND_KEEPALIVE_SECONDS = 15.0
+# Match the Kiwi browser protocol cadence. A few public receivers close a
+# listener at roughly 10--12 seconds unless they receive this once-per-second
+# command; a coarser interval was not enough for their dual-VFO sessions.
+KIWI_SND_KEEPALIVE_SECONDS = 1.0
 # Touch may generate far more events than a public Kiwi receiver can use.
 # The stream workers coalesce those events and transmit only the current
-# position at this cadence, keeping a fast drag responsive without a backlog.
-LIVE_TUNE_MIN_INTERVAL_SECONDS = 0.020
+# position at this cadence. Twenty-five updates/sec is visually continuous at
+# the 24 fps display cadence while leaving time for the audio and W/F sockets.
+LIVE_TUNE_MIN_INTERVAL_SECONDS = 0.040
 # A centre frequency exactly at 30 MHz makes the requested W/F span exceed
 # the edge of the Kiwi passband on several receivers. Keep live tuning one
 # kHz inside their nominal 0--30 MHz coverage.
@@ -496,10 +549,18 @@ ASR_PANEL_HEIGHT = 118
 ASR_ENGINE_ROW_HEIGHT = 58
 ASR_MOON_LANGUAGE_PANEL_BOX = (244, 126, 716, 244)
 ASR_MOON_LANGUAGE_PANEL_HEIGHT = 118
-ASR_ENGINES = ("off", "vosk", "moonshine", "parakeet", "whisper", "deepgram", "deepgram_ham")
+# Allosaurus imports PyTorch into the display process. Keep it as an opt-in
+# diagnostic until it is moved into a CPU-bounded helper process: an on-air
+# phoneme experiment must never be able to stall normal radio operation.
+ALLOSAURUS_EXPERIMENT_ENABLED = os.environ.get("ITUNER_ENABLE_ALLOSAURUS_TEST") == "1"
+ASR_ENGINES = (
+    "off", "vosk", "moonshine", "parakeet",
+    *(("phoneme",) if ALLOSAURUS_EXPERIMENT_ENABLED else ()),
+    "whisper", "deepgram", "deepgram_ham",
+)
 ASR_ENGINE_LABELS = {
     "off": "OFF", "vosk": "VOSK", "moonshine": "MOON",
-    "parakeet": "PARA", "whisper": "WHISPER", "deepgram": "DEEP",
+    "parakeet": "PARA", "phoneme": "PHONE", "whisper": "WHISPER", "deepgram": "DEEP",
     "deepgram_ham": "D-HAM",
 }
 CAPTION_MODES = ("original", "english", "both")
@@ -838,6 +899,11 @@ def release_realtime_audio_thread():
 
 
 PARAKEET_MODEL_DIR = vendor_path("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
+# Allosaurus is deliberately a separate experimental lane. It is not a word
+# recognizer: its raw English-phone sequence lets us evaluate whether on-air
+# speech contains enough phonetic evidence before inventing another ham ASR.
+ALLOSAURUS_MODEL_DIR = Path.home() / ".local/share/ituner-sdr/allosaurus"
+ALLOSAURUS_WAV_PATH = Path("/dev/shm/ituner-allosaurus.wav") if Path("/dev/shm").is_dir() else Path(tempfile.gettempdir()) / "ituner-allosaurus.wav"
 HF_ENHANCE_MODEL = vendor_path("hf-enhance-tiny", "hf-enhance-tiny.onnx")
 WF_TEX_W = 960
 WF_TEX_H = 256
@@ -1200,6 +1266,7 @@ AUDIO_DEEMP_BOX = (268, 224, 482, 280)
 AUDIO_FILTER_BOX = (494, 224, 706, 280)
 AUDIO_RESET_BOX = (718, 224, 918, 280)
 AUDIO_TONE_BOX = (42, 294, 256, 350)
+AUDIO_BACKEND_BOX = (268, 294, 482, 350)
 # Six evenly spaced, discrete Denoise settings. The DSP presets themselves
 # remain intentionally useful at the strong end; only the touch scale is linear.
 DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
@@ -1630,7 +1697,7 @@ POPUP_LAYOUT_BASE = {
     "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
               AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
-              AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX),
+              AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX),
     "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
               TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX),
     "rtl_lab": (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
@@ -1660,7 +1727,7 @@ def configure_popup_layout():
     global AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
-    global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX
+    global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
     global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
@@ -1749,7 +1816,7 @@ def configure_popup_layout():
     (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
      AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX,
      AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
-     AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX) = (
+     AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["audio"]
     )
     if LCD_800_MODE:
@@ -1784,7 +1851,9 @@ def configure_popup_layout():
         AUDIO_DEEMP_BOX = (right_x0, rows[2], right_x1, rows[2] + tile_h)
         AUDIO_TONE_BOX = (left_x0, rows[3], left_x1, rows[3] + tile_h)
         AUDIO_FILTER_BOX = (right_x0, rows[3], right_x1, rows[3] + tile_h)
-        AUDIO_RESET_BOX = (audio_x0 + 10, rows[4], audio_x1 - 10, rows[4] + tile_h)
+        last_row_y0, last_row_y1 = rows[4], rows[4] + tile_h
+        AUDIO_RESET_BOX = (left_x0, last_row_y0, left_x1, last_row_y1)
+        AUDIO_BACKEND_BOX = (right_x0, last_row_y0, right_x1, last_row_y1)
 
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
@@ -2093,7 +2162,7 @@ def draw_dual_vfo_smeter(text_cache, box, smeter_dbm, accent=None, staged=False)
     draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 12, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 14, True, False, "rt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y0 + 47
     segment_w = (track_x1 - track_x0) / 36.0
@@ -2424,14 +2493,23 @@ SHORTWAVE_LIVE_SITE_COORDINATES = {
     "greenville, nc": (35.61, -77.37),
 }
 # Shortwave DB's own quick search returns a deliberately broad +/-2.5 kHz
-# set. The radio UI accepts a useful +/-1.0 kHz operator-tuning tolerance.
-# That is still well inside normal 5 kHz shortwave channel spacing. A separate
-# ambiguity guard below suppresses the OSD rather than guessing between two
-# distinctly scheduled frequencies that are virtually equally close.
-FREQUENCY_ID_TOLERANCE_KHZ = 1.0
-FREQUENCY_ID_AMBIGUITY_KHZ = 0.25
-FREQUENCY_ID_SETTLE_SECONDS = 0.85
-FREQUENCY_ID_CACHE_SECONDS = 600.0
+# set. The UI policy narrows that to an operator-tunable tolerance and keeps a
+# separate ambiguity guard rather than guessing between near-equal channels.
+_broadcast_matching_policy = BROADCAST_IDENTIFICATION_POLICY["matching"]
+
+
+def _broadcast_policy_number(key, fallback, minimum, maximum):
+    try:
+        value = float(_broadcast_matching_policy.get(key, fallback))
+    except (TypeError, ValueError):
+        value = float(fallback)
+    return max(minimum, min(maximum, value))
+
+
+FREQUENCY_ID_TOLERANCE_KHZ = _broadcast_policy_number("frequency_tolerance_khz", 1.0, 0.1, 2.5)
+FREQUENCY_ID_AMBIGUITY_KHZ = _broadcast_policy_number("ambiguity_guard_khz", 0.25, 0.01, FREQUENCY_ID_TOLERANCE_KHZ)
+FREQUENCY_ID_SETTLE_SECONDS = _broadcast_policy_number("settle_seconds", 0.85, 0.1, 4.0)
+FREQUENCY_ID_CACHE_SECONDS = _broadcast_policy_number("cache_seconds", 600.0, 30.0, 3600.0)
 FREQUENCY_ID_OSD_SECONDS = 10.0
 FREQUENCY_ID_CACHE = {}
 FREQUENCY_ID_CACHE_LOCK = threading.Lock()
@@ -2971,20 +3049,46 @@ def frequency_identity_eligible(frequency_khz, radio_mode):
     )
 
 
-def receiver_coordinates_for_frequency_identity(server, stations, fallback_profile):
-    """Prefer the selected Kiwi GPS point; use the saved listener home only as fallback."""
+def receiver_context_for_frequency_identity(server, stations, fallback_profile):
+    """Describe the actual listener used for a schedule-distance readout.
+
+    A remote receiver without GPS must stay unknown. Substituting the local
+    user's saved home point would create a plausible-looking but false distance.
+    The saved home point is only a valid fallback for the LAN Kiwi itself.
+    """
     normalized_server = str(server).rstrip("/")
     for station in stations:
         try:
-            if str(station[2]).rstrip("/") != normalized_server or len(station) < 7:
+            if str(station[2]).rstrip("/") != normalized_server:
                 continue
-            return float(station[5]), float(station[6])
+            name, location = str(station[0]), str(station[1])
+            label = bottom_station_title(name, location)
+            if location and location.casefold() not in label.casefold():
+                label = f"{label} · {location}"
+            coordinates = None
+            if len(station) >= 7:
+                coordinates = float(station[5]), float(station[6])
+            return {
+                "label": label or "SELECTED RECEIVER",
+                "coordinates": coordinates,
+                "source": "RECEIVER GPS" if coordinates else "RECEIVER GPS ?",
+            }
         except (IndexError, TypeError, ValueError):
             continue
-    try:
-        return float(fallback_profile["lat"]), float(fallback_profile["lon"])
-    except (KeyError, TypeError, ValueError):
-        return None
+
+    # The local Kiwi is physically colocated with the Pi. A saved home point is
+    # therefore useful context only for this one first-party LAN endpoint.
+    if normalized_server == LOCAL_KIWI_SERVER.rstrip("/"):
+        try:
+            coordinates = float(fallback_profile["lat"]), float(fallback_profile["lon"])
+            return {
+                "label": str(fallback_profile.get("name") or "LOCAL RECEIVER"),
+                "coordinates": coordinates,
+                "source": "SAVED HOME",
+            }
+        except (KeyError, TypeError, ValueError):
+            pass
+    return {"label": "SELECTED RECEIVER", "coordinates": None, "source": "RECEIVER GPS ?"}
 
 
 def frequency_identity_distance_km(candidate, receiver_coordinates):
@@ -3110,7 +3214,7 @@ def parse_listener_capacity(entry):
 
 
 def normalize_station(item):
-    """Make older three-field directory caches compatible with capacity rows."""
+    """Normalize directory rows without discarding optional GPS metadata."""
     if not isinstance(item, (list, tuple)) or len(item) < 3:
         return None
     name, location, server = item[:3]
@@ -3121,7 +3225,10 @@ def normalize_station(item):
             total = int(item[4]) if item[4] is not None else None
         except (TypeError, ValueError):
             pass
-    return name, location, server, used, total
+    # Globe/map rows append latitude and longitude after listener capacity.
+    # Preserve those opaque trailing fields so downstream tools (broadcast
+    # identity, distance and map focus) all receive the same receiver facts.
+    return (name, location, server, used, total, *tuple(item[5:]))
 
 
 def load_public_stations():
@@ -3706,8 +3813,13 @@ def favorite_waterfall_box():
 
 
 def audio_jitter_status_box():
-    """Touch target for the temporary BUFFER annunciator."""
-    return 360, LOGICAL_H - BOTTOM_STATUS_H, 660, LOGICAL_H
+    """Touch target for the left-lane ``BUFFER Q…/T…`` annunciator.
+
+    The label is rendered at x=18 in the second status row. Its former
+    middle-of-bar hitbox not only missed the visible text but overlapped the
+    CPU control, making the transport graph effectively unreachable.
+    """
+    return 0, LOGICAL_H - BOTTOM_STATUS_H, CPU_ANNUNCIATOR_BOX[0] - 14, LOGICAL_H
 
 
 def monitoring_graph_box(waterfall_y0, waterfall_y1, anchor):
@@ -4992,6 +5104,25 @@ def draw_logical_rect(x0, y0, x1, y1, color):
     GL.glBegin(GL.GL_QUADS)
     for x, y in points:
         GL.glVertex2f(x, y)
+    GL.glEnd()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+
+
+def draw_logical_square_points(points, radius, color):
+    """Draw compact graph marks in one GL call instead of one call per dot."""
+    if not points:
+        return
+    GL.glDisable(GL.GL_TEXTURE_2D)
+    GL.glColor4f(*rgba(color))
+    GL.glBegin(GL.GL_QUADS)
+    for cx, cy in points:
+        for x, y in (
+            logical_to_native(cx - radius, cy - radius),
+            logical_to_native(cx + radius, cy - radius),
+            logical_to_native(cx + radius, cy + radius),
+            logical_to_native(cx - radius, cy + radius),
+        ):
+            GL.glVertex2f(x, y)
     GL.glEnd()
     GL.glEnable(GL.GL_TEXTURE_2D)
 
@@ -8166,6 +8297,36 @@ def parakeet_recognizer():
     )
 
 
+def allosaurus_recognizer():
+    """Load the Allosaurus multilingual phone recognizer on demand.
+
+    Keep the import lazy: PyTorch is a substantial dependency and this
+    experimental phoneme lane must cost nothing until the operator selects it.
+    Its downloaded acoustic model lives outside the repository and is reused
+    across UI restarts.
+    """
+    try:
+        from allosaurus.app import read_recognizer
+    except Exception as exc:
+        raise RuntimeError("Allosaurus runtime unavailable") from exc
+    ALLOSAURUS_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    return read_recognizer("latest", ALLOSAURUS_MODEL_DIR)
+
+
+def allosaurus_phonemes(recognizer, pcm16):
+    """Decode a short RAM-backed 16 kHz PCM window to uncorrected phones."""
+    if not pcm16:
+        return ""
+    with wave.open(str(ALLOSAURUS_WAV_PATH), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(pcm16)
+    # ``eng`` selects English phone inventory but intentionally adds no word
+    # or callsign grammar. This is raw acoustic-model evidence.
+    return " ".join(str(recognizer.recognize(str(ALLOSAURUS_WAV_PATH), lang_id="eng", emit=1.0)).split())
+
+
 class MoonshineStreamingListener(
     moonshine_voice.TranscriptEventListener if moonshine_voice is not None else object
 ):
@@ -8829,7 +8990,7 @@ def callsign_worker(stop_event, state, audio_queue):
 
 def asr_caption_worker(stop_event, state, audio_queue):
     """One bounded ASR lane. Only the selected engine receives PCM or CPU."""
-    vosk_model = vosk_recognizer = moonshine = moonshine_streaming = parakeet = deepgram_stream = resampler = None
+    vosk_model = vosk_recognizer = moonshine = moonshine_streaming = parakeet = phoneme = deepgram_stream = resampler = None
     loaded_vosk_path = None
     active_engine = None
     seen_generation = -1
@@ -8847,6 +9008,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
             vosk_recognizer = None
             moonshine = None
             parakeet = None
+            phoneme = None
             close_moonshine_streaming(moonshine_streaming)
             moonshine_streaming = None
             if deepgram_stream is not None:
@@ -8869,6 +9031,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
                 vosk_recognizer = None
                 moonshine = None
                 parakeet = None
+                phoneme = None
                 close_moonshine_streaming(moonshine_streaming)
                 moonshine_streaming = None
                 if deepgram_stream is not None:
@@ -8905,6 +9068,9 @@ def asr_caption_worker(stop_event, state, audio_queue):
             elif engine_family == "parakeet" and parakeet is None:
                 parakeet = parakeet_recognizer()
                 print("gl Parakeet TDT-CTC 110M INT8 model ready", flush=True)
+            elif engine_family == "phoneme" and phoneme is None:
+                phoneme = allosaurus_recognizer()
+                print("gl Allosaurus raw English phoneme model ready", flush=True)
             elif engine_family in DEEPGRAM_ENGINES:
                 # Open only after the receiver supplies PCM below. Deepgram
                 # closes a pre-opened stream that sees no first audio packet.
@@ -8965,6 +9131,11 @@ def asr_caption_worker(stop_event, state, audio_queue):
                     # useful word context without making captions feel late.
                     target_seconds = 3.0
                     max_window_seconds = 4.0
+                elif engine_family == "phoneme":
+                    # Phones become noisy if presented in very tiny frames,
+                    # but 2.5 seconds remains a responsive diagnostic view.
+                    target_seconds = 2.5
+                    max_window_seconds = 3.0
                 else:
                     target_seconds = 3.6
                     max_window_seconds = 4.0
@@ -8995,6 +9166,8 @@ def asr_caption_worker(stop_event, state, audio_queue):
                         stream.accept_waveform(16000, samples)
                         parakeet.decode_stream(stream)
                         result_text = stream.result.text
+                    elif engine_family == "phoneme":
+                        result_text = allosaurus_phonemes(phoneme, window)
                     else:
                         if caption_mode == "english":
                             result_text = whisper_transcribe(window, translate=True)
@@ -9040,6 +9213,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
             vosk_recognizer = None
             moonshine = None
             parakeet = None
+            phoneme = None
             close_moonshine_streaming(moonshine_streaming)
             moonshine_streaming = None
             if deepgram_stream is not None:
@@ -9073,7 +9247,7 @@ def audio_option_at(x, y):
         ("agc", AUDIO_AGC_BOX), ("blanker", AUDIO_BLANKER_BOX),
         ("notch", AUDIO_NOTCH_BOX),
         ("deemphasis", AUDIO_DEEMP_BOX), ("tone", AUDIO_TONE_BOX), ("filter", AUDIO_FILTER_BOX),
-        ("reset", AUDIO_RESET_BOX),
+        ("reset", AUDIO_RESET_BOX), ("backend", AUDIO_BACKEND_BOX),
     ):
         if contains(box, x, y):
             return name
@@ -9189,7 +9363,7 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9, (229, 246, 246, 250))
 
 
-def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode):
+def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
     """Right-rail audio drawer; it never obscures the waterfall workspace."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
@@ -9238,12 +9412,17 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_lcd_audio_tile(text_cache, AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
     draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "FILTER", format_filter_width(high_cut - low_cut))
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
+    direct = audio_backend == "alsa"
+    draw_lcd_audio_tile(
+        text_cache, AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if direct else "PIPEWIRE",
+        direct, (255, 184, 83, 230), title_size=12, detail_size=11,
+    )
 
 
-def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode=None):
+def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode=None, audio_backend="pipewire"):
     """One readable Audio workspace, with the real Kiwi SND path behind it."""
     if LCD_800_MODE:
-        draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode)
+        draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend)
         return
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
@@ -9362,6 +9541,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     panel_button(AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
     panel_button(AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False)
     panel_button(AUDIO_RESET_BOX, "RESTORE", "KIWI DEFAULTS", False)
+    direct = audio_backend == "alsa"
+    panel_button(AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if direct else "PIPEWIRE", direct, (255, 184, 83, 230))
 
 
 def tests_option_at(x, y):
@@ -10091,6 +10272,77 @@ class WSPRDistanceHistoryCache:
             self.dirty = False
 
 
+class WSPRMiniDistanceGraphCache:
+    """Keep compact-card distance geometry out of the 30 fps paint loop.
+
+    A WSPR card has at most a few dozen new decoded spots every two minutes.
+    Re-resolving Maidenhead locators and rebuilding its scatter bins for every
+    frame made the mostly-static graph unnecessarily expensive.
+    """
+
+    def __init__(self):
+        self.entries = {}
+
+    @staticmethod
+    def _signature(spots, receiver_grid):
+        return (
+            str(receiver_grid or "").upper(),
+            tuple(
+                (
+                    str(spot.get("cycle_start", "")),
+                    str(spot.get("callsign", "")),
+                    str(spot.get("grid", "")),
+                    str(spot.get("snr_db", "")),
+                )
+                for spot in spots
+            ),
+        )
+
+    def model_for(self, tile_id, spots, receiver_grid):
+        signature = self._signature(spots, receiver_grid)
+        key = str(tile_id or "")
+        cached = self.entries.get(key)
+        if cached is not None and cached["signature"] == signature:
+            return cached
+
+        resolved = []
+        for index, spot in enumerate(reversed(spots)):
+            distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
+            if distance is None:
+                continue
+            cycle = float(spot.get("cycle_start", index * WSPR_DECODE_CYCLE_SECONDS))
+            resolved.append((cycle, distance))
+
+        if not resolved:
+            model = {"signature": signature, "count": 0, "distance_top": 1000, "dots": ()}
+            self.entries[key] = model
+            return model
+
+        distance_top = max(1000, int(math.ceil(max(distance for _cycle, distance in resolved) / 1000.0)) * 1000)
+        latest_cycle = max(cycle for cycle, _distance in resolved)
+        cycle_start = latest_cycle - (WSPR_MRTG_CYCLE_BINS - 1) * WSPR_DECODE_CYCLE_SECONDS
+        cycle_spots = {}
+        for cycle, distance in resolved:
+            slot = int(round((cycle - cycle_start) / WSPR_DECODE_CYCLE_SECONDS))
+            if 0 <= slot < WSPR_MRTG_CYCLE_BINS:
+                cycle_spots.setdefault(slot, []).append(distance)
+
+        dots = []
+        for slot, distances in cycle_spots.items():
+            count = len(distances)
+            for index, distance in enumerate(distances):
+                spread = 0.0 if count == 1 else index / (count - 1) - 0.5
+                dots.append((slot, spread, clamp(distance / distance_top, 0.0, 1.0)))
+        model = {
+            "signature": signature,
+            "count": len(resolved),
+            "distance_top": distance_top,
+            "dots": tuple(dots),
+        }
+        self.entries[key] = model
+        return model
+
+
 class WSPRDecodeRateTracker:
     """Track a rolling one-hour decode rate without making the UI parse logs.
 
@@ -10716,59 +10968,41 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     draw_text(text_cache, x0, LOGICAL_H - 18, footer, (113, 187, 182), 14, True, True, "lm", family="Liberation Sans")
 
 
-def draw_wspr_distance_history(text_cache, box, snapshot, receiver_grid):
+def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid, graph_cache):
     """Show a pure WSPR distance-versus-time scatter plot."""
     x0, y0, x1, y1 = box
     draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
     spots = tuple(snapshot.get("decoded_spots", ()))
-    resolved = []
-    for index, spot in enumerate(reversed(spots)):
-        distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
-        if distance is None:
-            continue
-        # Older runs did not persist cycle metadata. Keep their ordering
-        # useful until new decode cycles replace them.
-        cycle = float(spot.get("cycle_start", index * WSPR_DECODE_CYCLE_SECONDS))
-        resolved.append((cycle, distance, spot))
+    model = graph_cache.model_for(tile_id, spots, receiver_grid)
     draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", (203, 235, 234), 14, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 15, f"{len(resolved)} SPOTS", (108, 229, 179), 13, True, True, "rm", family="Liberation Sans")
-    if not resolved:
+    draw_text(text_cache, x1 - 12, y0 + 15, f"{model['count']} SPOTS", (108, 229, 179), 13, True, True, "rm", family="Liberation Sans")
+    if not model["count"]:
         message = "WAITING FOR DECODED SPOTS" if receiver_grid else "WAITING FOR RECEIVER GRID"
         draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, message, (127, 177, 181), 15, True, True, "cm", family="Liberation Sans")
         return
 
     plot_x0, plot_x1 = x0 + 42, x1 - 12
     plot_y0, plot_y1 = y0 + 28, y1 - 22
-    max_distance = max(distance for _cycle, distance, _spot in resolved)
     # Use a calm, round upper range so a 3,991 km path reads as four thousand,
     # not an unstable changing graph scale.
-    distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
+    distance_top = model["distance_top"]
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
         draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 78), 1)
         draw_text(text_cache, plot_x0 - 6, y - 1, f"{int(distance_top * fraction / 1000)}k", (123, 176, 180), 11, True, True, "rm", family="Liberation Mono")
 
-    latest_cycle = max(cycle for cycle, _distance, _spot in resolved)
-    cycle_start = latest_cycle - (WSPR_MRTG_CYCLE_BINS - 1) * WSPR_DECODE_CYCLE_SECONDS
-    cycle_index = {}
-    cycle_spots = {}
-    for cycle, _distance, _spot in resolved:
-        slot = int(round((cycle - cycle_start) / WSPR_DECODE_CYCLE_SECONDS))
-        if 0 <= slot < WSPR_MRTG_CYCLE_BINS:
-            cycle_index[cycle] = slot
-            cycle_spots.setdefault(cycle, []).append((_distance, _spot))
     step = (plot_x1 - plot_x0) / max(1, WSPR_MRTG_CYCLE_BINS - 1)
     # Spread simultaneous paths slightly within their two-minute bin. This
     # keeps a busy decode visually legible without implying false timestamps.
     dot_spread = min(10.0, step * 0.36)
-    for cycle, cycle_values in cycle_spots.items():
-        center_x = plot_x0 + cycle_index[cycle] * step
-        count = len(cycle_values)
-        for index, (distance, _spot) in enumerate(cycle_values):
-            fraction = 0.0 if count == 1 else index / (count - 1) - 0.5
-            x = center_x + fraction * 2.0 * dot_spread
-            y = plot_y1 - (plot_y1 - plot_y0) * clamp(distance / distance_top, 0.0, 1.0)
-            draw_logical_circle(x, y, 3.6, (186, 232, 229, 235), segments=12)
+    points = tuple(
+        (
+            plot_x0 + slot * step + spread * 2.0 * dot_spread,
+            plot_y1 - (plot_y1 - plot_y0) * distance_fraction,
+        )
+        for slot, spread, distance_fraction in model["dots"]
+    )
+    draw_logical_square_points(points, 3.4, (186, 232, 229, 235))
     draw_text(text_cache, plot_x0, y1 - 7, "1 HOUR · TWO-MINUTE BINS", (93, 184, 174), 10, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, plot_x1, y1 - 7, "DOTS = PATH km", (143, 190, 193), 10, True, True, "rm", family="Liberation Sans")
 
@@ -10926,7 +11160,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
 
 
 def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(None, None), receiver_grid=None,
-                           rate_info=None):
+                           rate_info=None, mini_distance_cache=None):
     x0, y0, x1, y1 = box
     snapshot = monitor.snapshot() if monitor is not None else {
         "status": "QUEUED", "logs": (), "history": (), "smeter_dbm": None,
@@ -10984,7 +11218,10 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
             wspr_card_settings_box(box), wspr_card_log_expand_box(box), rate_info,
         )
     else:
-        draw_wspr_distance_history(text_cache, wf_box, snapshot, card_receiver_grid)
+        draw_wspr_distance_history(
+            text_cache, wf_box, tile.get("id"), snapshot, card_receiver_grid,
+            mini_distance_cache or WSPRMiniDistanceGraphCache(),
+        )
         draw_wspr_distance_expand_button(text_cache, wspr_card_distance_expand_box(box))
         draw_wspr_settings_button(text_cache, wspr_card_settings_box(box))
     # A remote W/F row and a locally computed audio FFT can look similar at
@@ -11310,7 +11547,7 @@ def wspr_decoder_settings_action_at(x, y):
 
 
 def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, cpu_percent=None, receiver_grid=None,
-                        decode_rates=None):
+                        decode_rates=None, mini_distance_cache=None):
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 9, 14, 253))
     card_boxes = wspr_workspace_card_boxes(len(tiles), scroll_y)
     for index, box in enumerate(card_boxes):
@@ -11322,7 +11559,7 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
             draw_wspr_session_card(
                 text_cache, box, tile, monitor_manager.sessions.get(key), textures.get(key),
                 monitor_manager.capacity_snapshot(tile.get("server", "")), receiver_grid,
-                (decode_rates or {}).get(key),
+                (decode_rates or {}).get(key), mini_distance_cache,
             )
         else:
             draw_logical_rect(*box, (5, 14, 20, 142))
@@ -12362,7 +12599,7 @@ def filter_edit_limit(low_cut, high_cut):
     return int(clamp(math.ceil(outer_cut * 1.25 / 500) * 500, 1500, FILTER_LIMIT_HZ))
 
 
-def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0, tuned_offset_hz=0.0):
+def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1, alpha=1.0, tuned_offset_hz=0.0):
     if alpha <= 0.01:
         return
     canvas_w = rf_canvas_width()
@@ -12377,8 +12614,11 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0, tuned_of
     if right <= left:
         return
     # Cool cyan keeps the passband distinct without warming the waterfall.
-    fill = (154, 159, 163, int(42 * alpha))
-    edge = (221, 225, 227, int(184 * alpha))
+    # The earlier grey one-pixel edges became indistinguishable from strong
+    # waterfall detail, especially at high zoom where one or both bounds can
+    # be outside the visible RF slice.
+    fill = (100, 204, 215, int(34 * alpha))
+    edge = (134, 238, 244, int(226 * alpha))
     # Amber is deliberately reserved for the tuned RF center: it remains
     # legible over blue/cyan waterfall energy without resembling a signal.
     center_shadow = (2, 7, 11, int(128 * alpha))
@@ -12394,15 +12634,33 @@ def draw_filter_overlay(span_khz, low_cut, high_cut, y0, y1, alpha=1.0, tuned_of
         draw_logical_rect(left, y0, right, y1, fill)
         for edge_x, cap_direction in ((low_x, 1), (high_x, -1)):
             clipped_edge_x = clamp(edge_x, 0.0, float(canvas_w))
-            draw_logical_line(clipped_edge_x, y0, clipped_edge_x, y1, edge, 1)
+            draw_logical_line(clipped_edge_x, y0, clipped_edge_x, y1, edge, 2)
             draw_logical_line(
                 clipped_edge_x,
                 y0 + 5,
                 clipped_edge_x + cap_direction * 5,
                 y0 + 5,
                 edge,
-                1,
+                2,
             )
+    # At high zoom the whole visible slice may be inside a much wider filter.
+    # Rails at the display bounds explicitly communicate that state, rather
+    # than making the rectangle look static or missing because its true edges
+    # are beyond the current magnified view.
+    clipped = raw_left < 0.0 or raw_right > canvas_w
+    if raw_left < 0.0:
+        draw_logical_line(1, y0 + 9, 1, y1 - 9, edge, 2)
+    if raw_right > canvas_w:
+        draw_logical_line(canvas_w - 1, y0 + 9, canvas_w - 1, y1 - 9, edge, 2)
+    if clipped:
+        width_hz = abs(high_cut - low_cut)
+        label = f"BW {width_hz / 1000:.2f} kHz"
+        label_font = text_cache.font(13, bold=True, family="Cantarell")
+        label_w = label_font.size(label)[0]
+        label_x1 = canvas_w - 12
+        label_x0 = label_x1 - label_w - 14
+        draw_logical_rect(label_x0, y0 + 7, label_x1, y0 + 27, (4, 15, 20, int(172 * alpha)))
+        draw_text(text_cache, label_x1 - 7, y0 + 17, label, edge[:3], 13, True, False, "rm", alpha, family="Cantarell")
     if 0 <= center_x <= canvas_w:
         # A continuous marker masks a weak, perfectly tuned carrier. Use a
         # fine dashed guide instead, with a clear top reference tick.
@@ -12525,7 +12783,7 @@ def frequency_identity_osd_bounds(candidates):
     x0 = 28
     x1 = min(rf_canvas_width() - 18, 790)
     y0 = 452
-    return x0, y0, x1, y0 + 62 + max_rows * 56
+    return x0, y0, x1, y0 + 84 + max_rows * 56
 
 
 def frequency_identity_schedule_touch_box(candidates):
@@ -12534,8 +12792,8 @@ def frequency_identity_schedule_touch_box(candidates):
     return max(x0 + 430, x1 - 220), y0 + 2, x1 - 8, y0 + 44
 
 
-def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_coordinates, alpha):
-    """Small, cautious station-identification panel over the live waterfall."""
+def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_context, alpha):
+    """Show database schedule candidates with explicit UTC/receiver context."""
     alpha = int(clamp(alpha, 0, 255))
     if alpha <= 0 or not candidates:
         return
@@ -12545,13 +12803,29 @@ def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_
     draw_logical_rect(x0, y0, x1, y1, (5, 15, 25, int(alpha * 0.88)))
     draw_logical_line(x0, y0, x1, y0, (*cyan, int(alpha * 0.96)), 2)
     scheduled_frequency_khz = float(candidates[0].get("frequency_khz", frequency_khz))
-    draw_text(text_cache, x0 + 16, y0 + 23, "BROADCAST NOW", (224, 248, 253), 24, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 16, y0 + 23, f"SCHEDULE {scheduled_frequency_khz / 1000.0:.3f} MHz", (150, 232, 249), 20, True, False, "rm", family="Liberation Sans")
+    display_policy = BROADCAST_IDENTIFICATION_POLICY["display"]
+    title = str(display_policy.get("title") or "SCHEDULED BROADCASTS").upper()
     source_label = str(candidates[0].get("source", "Shortwave DB")).upper()
-    draw_text(text_cache, x0 + 16, y0 + 49, f"{source_label} · STATION / TX SITE / SCHEDULE", (150, 185, 196), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 16, y0 + 49, "DIST / PWR", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
+    source_key = "shortwave_live" if source_label == "SHORTWAVE.LIVE" else "shortwave_db"
+    source_policy = BROADCAST_IDENTIFICATION_POLICY["sources"].get(source_key, {})
+    schedule_label = "UTC ACTIVE" if source_policy.get("active_schedule_required") else "UTC SCHEDULE"
+    utc_label = time.strftime("%H:%M UTC", time.gmtime())
+    context = receiver_context or {}
+    receiver_label = str(context.get("label") or "SELECTED RECEIVER").upper()
+    receiver_source = str(context.get("source") or "RECEIVER GPS ?").upper()
+    receiver_coordinates = context.get("coordinates")
+    draw_text(text_cache, x0 + 16, y0 + 23, title, (224, 248, 253), 24, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 23, f"SCHEDULE {scheduled_frequency_khz / 1000.0:.3f} MHz", (150, 232, 249), 20, True, False, "rm", family="Liberation Sans")
+    receiver_detail = fit_station_text(
+        text_cache, f"RX {receiver_label}", x1 - x0 - 250, 15, False, False,
+        family="Liberation Sans",
+    )
+    draw_text(text_cache, x0 + 16, y0 + 49, receiver_detail, (166, 211, 220), 15, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 49, f"{receiver_source} · {utc_label}", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 16, y0 + 70, f"{source_label} · {schedule_label}", (116, 187, 202), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 70, "DIST / PWR", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
     for index, candidate in enumerate(candidates[:max_rows]):
-        row_y = y0 + 76 + index * 56
+        row_y = y0 + 98 + index * 56
         if index:
             draw_logical_line(x0 + 14, row_y - 24, x1 - 14, row_y - 24, (98, 151, 166, int(alpha * 0.35)), 1)
         distance = frequency_identity_distance_km(candidate, receiver_coordinates)
@@ -13312,7 +13586,7 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
     draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
     draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 12, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 14, True, False, "rt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y0 + 47
     segment_w = (track_x1 - track_x0) / 36.0
@@ -13667,7 +13941,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
         draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
         draw_text(text_cache, meter_x0 + 9, meter_y0 + 14, "S-METER", (165, 199, 207), 12, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 15, True, False, "rm", family="Liberation Sans")
+        draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 17, True, False, "rm", family="Liberation Sans")
         meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
         meter_track_y = meter_y0 + 32
         segment_w = (meter_track_x1 - meter_track_x0) / 36
@@ -14409,6 +14683,30 @@ def read_cpu_temp_c():
         return None
 
 
+def read_input_power_ok():
+    """Return the firmware's current 5 V input health, not core voltage.
+
+    Raspberry Pi firmware exposes a live undervoltage bit but no ADC-backed
+    numeric 5 V reading. This keeps the instrument honest: ``VIN OK`` means
+    the input rail is presently above the Pi's undervoltage threshold, while
+    ``VIN LOW`` is an immediate condition rather than a historical latch.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        result = subprocess.run(
+            ("vcgencmd", "get_throttled"),
+            capture_output=True,
+            text=True,
+            timeout=0.35,
+            check=False,
+        )
+        match = re.search(r"throttled=0x([0-9a-fA-F]+)", result.stdout)
+        return None if match is None else not bool(int(match.group(1), 16) & 0x1)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
 def read_cpu_percentages(previous_total=None, previous_cores=None, include_cores=True):
     """Return total plus per-core utilization from one /proc/stat snapshot."""
     try:
@@ -14448,8 +14746,8 @@ def read_cpu_percentages(previous_total=None, previous_cores=None, include_cores
         return None, previous_total, (), previous_cores
 
 
-def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0, secondary_y=None):
-    if cpu_percent is None and temp_c is None:
+def draw_system_annunciator(text_cache, cpu_percent, temp_c, input_power_ok, y, size, alpha=1.0, secondary_y=None):
+    if cpu_percent is None and temp_c is None and input_power_ok is None:
         return
     # CPU/temperature lives in its own lower-band lane. Do not rely on a
     # historical magic x coordinate: the neighbouring CALL and ASR targets
@@ -14457,7 +14755,14 @@ def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0,
     x0, _y0, x1, _y1 = CPU_ANNUNCIATOR_BOX
     if secondary_y is not None:
         if cpu_percent is not None:
-            draw_text(text_cache, (x0 + x1) / 2, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
+            if input_power_ok is None:
+                draw_text(text_cache, (x0 + x1) / 2, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
+            else:
+                draw_text(text_cache, x0 + 6, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), max(16, size - 3), True, False, "lm", alpha, family="Cantarell")
+        if input_power_ok is not None:
+            power_label = "VIN OK" if input_power_ok else "VIN LOW"
+            power_color = (119, 229, 175) if input_power_ok else (255, 105, 88)
+            draw_text(text_cache, x1 - 5, y, power_label, power_color, max(12, size - 6), True, False, "rm", alpha, family="Cantarell")
         if temp_c is not None:
             draw_text(text_cache, (x0 + x1) / 2, secondary_y, f"{temp_c:.0f}C", (149, 208, 214), max(16, size - 1), True, False, "cm", alpha, family="Cantarell")
         return
@@ -14466,6 +14771,8 @@ def draw_system_annunciator(text_cache, cpu_percent, temp_c, y, size, alpha=1.0,
         parts.append(f"CPU {cpu_percent:.0f}%")
     if temp_c is not None:
         parts.append(f"{temp_c:.0f}C")
+    if input_power_ok is not None:
+        parts.append("VIN OK" if input_power_ok else "VIN LOW")
     label = fit_station_text(text_cache, " ".join(parts), x1 - x0 - 12, size, True, False, family="Cantarell")
     draw_text(text_cache, (x0 + x1) / 2, y, label, (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
 
@@ -14480,6 +14787,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
                       callsign_value="", ham_message="", callsign_status="OFF",
                       caption_mode="original",
                       audio_jitter_target=SDR_AUDIO_JITTER_TARGET_PACKETS, audio_jitter_depth=0,
+                      input_power_ok=None,
                       alpha=1.0):
     if alpha <= 0.01:
         return
@@ -14537,7 +14845,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         for divider_x in (CPU_ANNUNCIATOR_BOX[0] - 9, CALLSIGN_TOGGLE_BOX[0] - 8, ASR_TOGGLE_BOX[0] - 8):
             draw_logical_line(divider_x, y0 + 12, divider_x, y1 - 12, (69, 102, 110, int(105 * alpha)), 1)
     draw_system_annunciator(
-        text_cache, cpu_percent, temp_c, primary_y, size, alpha,
+        text_cache, cpu_percent, temp_c, input_power_ok, primary_y, size, alpha,
         secondary_y if two_row else None,
     )
     call_x0, _call_y0, call_x1, _call_y1 = CALLSIGN_TOGGLE_BOX
@@ -14552,7 +14860,10 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     call_label = fit_station_text(text_cache, call_label, call_x1 - call_x0 - 12, size, True, False, family="Cantarell")
     draw_text(text_cache, (call_x0 + call_x1) / 2, status_mid_y, call_label, call_color, size, True, False, "cm", alpha, family="Cantarell")
     asr_color = (105, 226, 171) if transcription_enabled else (146, 165, 171)
-    asr_label = f"ASR {asr_engine_label(asr_engine, caption_mode)}" if transcription_enabled else "ASR OFF"
+    asr_label = (
+        "PHONE RAW" if transcription_enabled and asr_engine_family(asr_engine) == "phoneme"
+        else (f"ASR {asr_engine_label(asr_engine, caption_mode)}" if transcription_enabled else "ASR OFF")
+    )
     _asr_x0, _asr_y0, asr_x1, _asr_y1 = ASR_TOGGLE_BOX
     draw_text(text_cache, asr_x1 - 10, status_mid_y, asr_label, asr_color, size, False, False, "rm", alpha, family="Cantarell")
 
@@ -14581,8 +14892,17 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     family = caption_font_family()
     draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
     caption_mode = str(caption_mode).lower()
+    phoneme_mode = asr_engine_family(engine) == "phoneme"
     whisper_mode_control = asr_engine_family(engine) == "whisper"
     content_x1 = x1 - 274 if whisper_mode_control else x1 - 40
+    content_y0 = y0
+    if phoneme_mode:
+        # Explicitly identify this as acoustic-phone evidence. It must never
+        # look like a polished ham transcription or a callsign assertion.
+        draw_text(text_cache, x0 + 20, y0 + 17, "ALLOSAURUS · RAW PHONEMES · ENGLISH INVENTORY",
+                  (112, 221, 181), 14, True, False, "lm", family=family)
+        draw_logical_line(x0 + 18, y0 + 31, x1 - 18, y0 + 31, (60, 139, 121, 130), 1)
+        content_y0 = y0 + 18
     if whisper_mode_control:
         toggle_box = caption_translation_toggle_box((x0, y0, x1, y1))
         # It is intentionally translucent: the radio remains visible, but
@@ -14623,11 +14943,11 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
         text_cache, source, content_x1 - x0 - 20, 26, max_rows=4, max_characters=62, family=family
     )
     if not display:
-        draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
+        draw_text(text_cache, x0 + 20, (content_y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
         return
-    color = (166, 204, 213) if partial else (230, 241, 244)
+    color = (157, 218, 198) if phoneme_mode else ((166, 204, 213) if partial else (230, 241, 244))
     line_spacing = 30
-    first_y = (y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
+    first_y = (content_y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
     for index, caption in enumerate(display):
         draw_text(text_cache, x0 + 20, first_y + index * line_spacing, caption, color, 26, True, False, "lm", family=family)
 
@@ -15018,6 +15338,7 @@ def draw_ui(
     spectrum_enabled=False,
     cpu_percent=None,
     temp_c=None,
+    input_power_ok=None,
     station_name="",
     station_capacity=None,
     connection_status=None,
@@ -15111,6 +15432,7 @@ def draw_ui(
             callsign_status=callsign_status,
             audio_jitter_target=audio_jitter_target,
             audio_jitter_depth=audio_jitter_depth,
+            input_power_ok=input_power_ok,
             alpha=instrument_alpha,
         )
     else:
@@ -15132,6 +15454,7 @@ def draw_ui(
             callsign_status=callsign_status,
             audio_jitter_target=audio_jitter_target,
             audio_jitter_depth=audio_jitter_depth,
+            input_power_ok=input_power_ok,
             alpha=instrument_alpha,
         )
     draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
@@ -15205,14 +15528,20 @@ def filter_center_hz(low_cut, high_cut):
 
 
 def snd_carrier_khz(view_center_khz, low_cut, high_cut):
-    """Place the actual SND passband around the waterfall's selected RF center."""
-    return view_center_khz - filter_center_hz(low_cut, high_cut) / 1000.0
+    """Return the fixed VFO carrier used by the selected waterfall view.
+
+    ``low_cut`` and ``high_cut`` are deliberately not folded into the
+    carrier. Their centre is the operator's passband shift: keeping the VFO
+    fixed lets Shift move the actual receive window across the waterfall and
+    makes the overlay, audio and Kiwi command describe the same RF range.
+    """
+    del low_cut, high_cut
+    return view_center_khz
 
 
 def filter_view_offsets(low_cut, high_cut):
-    """Return passband edges relative to the selected waterfall center."""
-    center_hz = filter_center_hz(low_cut, high_cut)
-    return low_cut - center_hz, high_cut - center_hz
+    """Return the actual passband edges relative to the fixed VFO carrier."""
+    return low_cut, high_cut
 
 
 class DesktopAudioPlayer:
@@ -15256,40 +15585,89 @@ class DesktopAudioPlayer:
         return 0
 
 
-def start_audio_player(args, channels=1):
-    """Open the SDR's PCM stream on PipeWire's current default sink.
+def selected_audio_backend(args):
+    """Return the active listener backend, keeping desktop on CoreAudio."""
+    requested = str(getattr(args, "audio_backend", "pipewire")).lower()
+    if args.desktop or requested not in AUDIO_BACKENDS:
+        return "pipewire"
+    return requested
 
-    PipeWire/WirePlumber owns the output choice, so a USB sink selected as the
-    system default continues to receive this stream without pinning a volatile
-    numeric node id in the renderer configuration.
-    """
+
+def set_pipewire_listener_services(enabled):
+    """Release/reclaim the dedicated Pi audio daemon for the A/B backend test."""
+    if DESKTOP_MODE:
+        return True
+    units = (
+        ("start", "pipewire.socket", "pipewire.service", "wireplumber.service")
+        if enabled
+        else ("stop", "wireplumber.service", "pipewire.service", "pipewire.socket")
+    )
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", *units],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        if result.returncode:
+            print(f"gl audio backend PipeWire {'start' if enabled else 'stop'} failed", flush=True)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"gl audio backend PipeWire {exc}", flush=True)
+        return False
+
+
+def start_audio_player(args, channels=1):
+    """Open the selected live PCM backend for the SDR listener."""
     if not args.audio:
         return None
+    backend = selected_audio_backend(args)
     if args.desktop:
         try:
-            return DesktopAudioPlayer(args.audio_rate, channels)
+            player = DesktopAudioPlayer(args.audio_rate, channels)
+            player.ituner_backend = backend
+            return player
         except Exception as exc:
             print(f"gl desktop audio {exc}", flush=True)
             return None
     try:
-        return subprocess.Popen(
-            [
-                "pw-cat",
-                "--playback",
-                "--raw",
-                "--rate", str(args.audio_rate),
-                "--channels", str(channels),
-                "--format", "s16",
-                "--latency", PIPEWIRE_AUDIO_LATENCY,
-                "-",
-            ],
+        if backend == "alsa":
+            # ``plughw`` is still direct ALSA: its in-process plug converter
+            # adapts our 12 kHz mono stream to this USB DAC's 48 kHz/stereo
+            # hardware format without re-entering PipeWire.
+            set_pipewire_listener_services(False)
+            command = [
+                "aplay", "--quiet", "--device", ALSA_DIRECT_DEVICE,
+                "--format", "S16_LE", "--channels", str(channels),
+                "--rate", str(args.audio_rate), "--period-size", str(ALSA_DIRECT_PERIOD_FRAMES),
+                "--buffer-size", str(ALSA_DIRECT_BUFFER_FRAMES), "--file-type", "raw", "-",
+            ]
+        else:
+            set_pipewire_listener_services(True)
+            # Restore the listener level after direct ALSA released the DAC.
+            remembered_output = getattr(args, "output_volume", None)
+            if remembered_output is not None:
+                set_pipewire_default_volume(remembered_output)
+            command = [
+                "pw-cat", "--playback", "--raw", "--rate", str(args.audio_rate),
+                "--channels", str(channels), "--format", "s16",
+                "--latency", PIPEWIRE_AUDIO_LATENCY, "-",
+            ]
+        player = subprocess.Popen(
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            # Let a direct-device error reach the service journal for this
+            # temporary experiment instead of failing silently.
+            stderr=None if backend == "alsa" else subprocess.DEVNULL,
             bufsize=0,
         )
+        player.ituner_backend = backend
+        print(f"gl audio backend {backend} opened", flush=True)
+        return player
     except OSError as exc:
-        print(f"gl audio player {exc}", flush=True)
+        print(f"gl audio {backend} player {exc}", flush=True)
         return None
 
 
@@ -15974,6 +16352,7 @@ class BufferedAudioPlayer:
         self.rate = max(1, int(args.audio_rate))
         self.channels = max(1, int(channels))
         self.state = state
+        self.backend = selected_audio_backend(args)
         self.player = start_audio_player(args, self.channels)
         self.condition = threading.Condition()
         self.packets = deque()
@@ -16341,6 +16720,10 @@ DUAL_MATCH_STABLE_SECONDS = 2.0
 DUAL_MATCH_EARLY_SECONDS = 1.0
 DUAL_MATCH_MIN_OVERLAP_SECONDS = 1.0
 DUAL_MATCH_MAX_DELAY_SECONDS = 20.0
+# A Kiwi SND reconnect can leave a short gap between PCM packets while both
+# logical VFOs remain healthy. Do not discard an otherwise valid comparison
+# (or a confirmed result) for a normal short reconnect.
+DUAL_MATCH_STREAM_GAP_SECONDS = 2.5
 # Never promote a shared broadband texture from the initial one-second
 # capture. A real programme has to leave several seconds of modulation behind.
 DUAL_MATCH_PROGRAMME_MIN_FEATURES = 50
@@ -16917,7 +17300,10 @@ class DualVFOProgramMatcher:
                 item = None
             now = time.monotonic()
             if item is None:
-                if any(last_live[key] and now - last_live[key] > 0.45 for key in ("A", "B")):
+                if any(
+                    last_live[key] and now - last_live[key] > DUAL_MATCH_STREAM_GAP_SECONDS
+                    for key in ("A", "B")
+                ):
                     capture_started = None
                     next_compare_at = None
                     last_decision = None
@@ -16962,7 +17348,10 @@ class DualVFOProgramMatcher:
                 continue
             if not comparable or not audio:
                 continue
-            if last_live[source] and timestamp - last_live[source] > 0.45:
+            if (
+                last_live[source]
+                and timestamp - last_live[source] > DUAL_MATCH_STREAM_GAP_SECONDS
+            ):
                 pcm[source].clear()
                 features[source].clear()
                 motion_features[source].clear()
@@ -17043,6 +17432,19 @@ class DualVFOProgramMatcher:
                     features[source].append(feature)
             if any(first_live[key] is None or timestamp - first_live[key] < DUAL_MATCH_STABLE_SECONDS for key in ("A", "B")):
                 self._set_status("WAITING AUDIO")
+                continue
+            # This is deterministic rather than probabilistic: both VFOs
+            # name the same Kiwi endpoint, RF frequency, and demodulator.
+            # Keep the more demanding feature matcher for two *different*
+            # receivers, but do not make this known-identical case race three
+            # analysis windows against routine Kiwi reconnects.
+            with self.lock:
+                same_receiver = self.same_receiver
+                already_confirmed = self.confirmed
+            if same_receiver:
+                if not already_confirmed:
+                    print("gl dual programme same-receiver deterministic match", flush=True)
+                self._confirm()
                 continue
             if capture_started is None:
                 capture_started = timestamp
@@ -17402,7 +17804,9 @@ class DualVFOAudioMixer:
                 queue_b = self.packets["B"]
                 b_packet = queue_b.popleft() if queue_b else bytes(self.packet_bytes)
                 outputs.append(self._mix_pcm(packet, b_packet, self.mix))
-                if self.player is None:
+                if self.player is None or self.player.backend != selected_audio_backend(self.args):
+                    if self.player is not None:
+                        self.player.close()
                     self.player = BufferedAudioPlayer(self.args, 1)
                 player = self.player
         if player is not None:
@@ -17448,9 +17852,52 @@ def set_pipewire_default_volume(volume):
         return None
 
 
+def alsa_direct_volume():
+    """Read the USB speaker's hardware control used by the direct A/B path."""
+    try:
+        result = subprocess.run(
+            ["amixer", "-c", "2", "get", "Speaker"],
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+        match = re.search(r"\[([0-9]{1,3})%\]", result.stdout)
+        return clamp(int(match.group(1)) / 100.0, 0.0, 1.0) if match else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def set_alsa_direct_volume(volume):
+    """Set USB hardware gain while PipeWire is intentionally absent."""
+    volume = clamp(float(volume), 0.0, 1.0)
+    try:
+        result = subprocess.run(
+            ["amixer", "-q", "-c", "2", "sset", "Speaker", f"{round(volume * 100):.0f}%", "unmute"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=0.5,
+            check=False,
+        )
+        return volume if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def audio_output_volume(args):
+    return alsa_direct_volume() if selected_audio_backend(args) == "alsa" else pipewire_default_volume()
+
+
+def set_audio_output_volume(args, volume):
+    if selected_audio_backend(args) == "alsa":
+        return set_alsa_direct_volume(volume)
+    return set_pipewire_default_volume(volume)
+
+
 def snd_meter_worker(
     args, stop_event, state, transcript_queue=None, callsign_queue=None,
     dual_mixer=None, dual_source=None, dual_matcher=None, enable_listener_dsp=True,
+    listener_name=None,
 ):
     # SND ingress is part of the audio path: a late WebSocket read leaves the
     # PCM reserve empty even when the playback clock itself is perfectly on
@@ -17512,7 +17959,11 @@ def snd_meter_worker(
                 stop_audio_player(player)
                 player = None
                 player_channels = None
-            elif desired_channels != player_channels or (player is not None and player.poll() is not None):
+            elif (
+                desired_channels != player_channels
+                or (player is not None and player.backend != selected_audio_backend(args))
+                or (player is not None and player.poll() is not None)
+            ):
                 stop_audio_player(player)
                 player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
                 player_channels = desired_channels
@@ -17533,7 +17984,7 @@ def snd_meter_worker(
             if not state.register_transport_socket(server_generation, "audio", ws):
                 ws = None
                 continue
-            kiwi.send_kiwi_setup(ws, "kiwi", args.user)
+            kiwi.send_kiwi_setup(ws, "kiwi", listener_name or args.user)
             configured = False
             authenticated = False
             sample_rate_seen = False
@@ -17555,7 +18006,11 @@ def snd_meter_worker(
                     stop_audio_player(player)
                     player = None
                     player_channels = None
-                elif desired_channels != player_channels or (player is not None and player.poll() is not None):
+                elif (
+                    desired_channels != player_channels
+                    or (player is not None and player.backend != selected_audio_backend(args))
+                    or (player is not None and player.poll() is not None)
+                ):
                     stop_audio_player(player)
                     player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
                     player_channels = desired_channels
@@ -17645,10 +18100,6 @@ def snd_meter_worker(
                     seen_radio_generation = radio_generation
                     seen_audio_generation = audio_generation
                     next_view_send_at = now_monotonic + live_tune_interval
-                    print(
-                        f"gl snd mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
-                        flush=True,
-                    )
 
                 # Receiving PCM does not refresh Kiwi's *client* protocol
                 # keepalive. Its server closes a remote sound connection at
@@ -18089,7 +18540,7 @@ class ConstellationScoutProbe:
                 ws.send_close()
 
 
-def waterfall_worker(args, line_queue, stop_event, state):
+def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
     retry_failures = 0
     retry_outage_started_at = None
     retry_server_generation = None
@@ -18131,7 +18582,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
             if not state.register_transport_socket(seen_server_generation, "waterfall", ws):
                 ws = None
                 continue
-            kiwi.send_kiwi_setup(ws, "kiwi", args.user)
+            kiwi.send_kiwi_setup(ws, "kiwi", listener_name or args.user)
             sent_freq_khz = waterfall_view_center_khz(
                 freq_khz, kiwi.zoom_source_span_khz(zoom)
             )
@@ -18170,7 +18621,6 @@ def waterfall_worker(args, line_queue, stop_event, state):
                         sent_freq_khz = waterfall_center_khz
                         sent_kiwi_zoom = next_kiwi_zoom
                         next_view_send_at = now_monotonic + live_tune_interval
-                        print(f"gl wf retune: {waterfall_center_khz:.3f} kHz zoom {zoom}", flush=True)
                 if configured and wf_generation != seen_wf_generation:
                     seen_wf_generation = wf_generation
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
@@ -18332,8 +18782,9 @@ def main():
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
     parser.add_argument("--user", default="Codex OpenGL SDR display")
-    parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
-    parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
+    parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the selected local audio backend")
+    parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="pipewire", help=argparse.SUPPRESS)
+    parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
     remembered_radio_mode = None
     remembered_preferences = {}
@@ -18350,6 +18801,9 @@ def main():
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
                 flush=True,
             )
+    saved_audio_backend = remembered_preferences.get("audio_backend")
+    if saved_audio_backend in AUDIO_BACKENDS:
+        args.audio_backend = saved_audio_backend
     args.max_zoom = clamp(args.max_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
     args.station_zoom = clamp(args.station_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
     if args.swipe_sensitivity is not None:
@@ -18587,6 +19041,7 @@ def main():
     next_smeter_readout_update = 0.0
     smeter_readout_dbm = -121.0
     cpu_percent = None
+    input_power_ok = None
     cpu_sample = None
     cpu_core_percentages = ()
     cpu_core_samples = None
@@ -18689,12 +19144,15 @@ def main():
     callsign_box = VOSK_CAPTION_BOX
     buffer_graph_box = None
     cpu_graph_box = None
-    audio_volume = pipewire_default_volume()
+    audio_volume = audio_output_volume(args)
     saved_volume = remembered_preferences.get("audio_volume")
     if isinstance(saved_volume, (int, float)):
-        restored_volume = set_pipewire_default_volume(saved_volume)
+        restored_volume = set_audio_output_volume(args, saved_volume)
         if restored_volume is not None:
             audio_volume = restored_volume
+    if audio_volume is None:
+        audio_volume = float(saved_volume) if isinstance(saved_volume, (int, float)) else 0.5
+    args.output_volume = audio_volume
     audio_volume_last_apply = 0.0
 
     # The master slider owns the explicit MUTE state at zero. Raising it again
@@ -18706,9 +19164,10 @@ def main():
     def apply_main_volume(requested_volume):
         """Apply one master-level gesture and keep mute state in lockstep."""
         nonlocal audio_volume, audio_volume_last_apply
-        applied_volume = set_pipewire_default_volume(requested_volume)
+        applied_volume = set_audio_output_volume(args, requested_volume)
         if applied_volume is not None:
             audio_volume = applied_volume
+            args.output_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
             state.set_audio_controls(
                 audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
@@ -18880,6 +19339,10 @@ def main():
                 "dual_source": "B",
                 "dual_matcher": dual_program_matcher,
                 "enable_listener_dsp": False,
+                # A second listener must present a distinct Kiwi identity.
+                # Some receivers tear down a duplicate name even with a
+                # correctly unique SND/W/F session timestamp.
+                "listener_name": f"{args.user}-VFOB",
             },
             name="dual-vfo-b-snd",
             daemon=True,
@@ -18887,6 +19350,7 @@ def main():
         dual_b_wf_thread = threading.Thread(
             target=waterfall_worker,
             args=(args, dual_b_line_queue, dual_b_stop_event, dual_b_state),
+            kwargs={"listener_name": f"{args.user}-VFOB"},
             name="dual-vfo-b-waterfall",
             daemon=True,
         )
@@ -18917,10 +19381,16 @@ def main():
             print("gl dual VFO B client stopped", flush=True)
 
     def dual_vfo_b_status():
-        """Return a compact status without pretending B is live before PCM."""
+        """Return B's confirmed programme result through a brief reconnect."""
         _server, _freq, _zoom, _dbm, _view_generation, server_generation = dual_b_state.snapshot()
+        match_status = dual_program_matcher.status_snapshot()
+        # A conclusion applies to the unchanged A/B source signature, not to
+        # the incidental state of the latest WebSocket. Keep it visible while
+        # Kiwi reconnects one half of the pair; configure() clears it as soon
+        # as the operator changes receiver, frequency, or mode.
+        if match_status.startswith("MATCH "):
+            return match_status
         if dual_b_state.audio_stream_ready_snapshot(server_generation):
-            match_status = dual_program_matcher.status_snapshot()
             return match_status if match_status not in ("OFF", "WAITING") else "LIVE"
         return str(dual_b_state.connection_snapshot() or "CONNECTING").replace("_", " ").upper()
 
@@ -19010,6 +19480,7 @@ def main():
     # graph thereafter receives precomputed dots directly from this cache.
     wspr_distance_cache = WSPRDistanceHistoryCache(args.wspr_log_file)
     wspr_distance_cache.start()
+    wspr_mini_distance_cache = WSPRMiniDistanceGraphCache()
     # The decoder ranking is similarly hydrated off-thread. Its compact
     # sidecar retains personal best hourly decode rates across reboots.
     wspr_decode_rates = WSPRDecodeRateTracker(args.wspr_log_file)
@@ -19212,6 +19683,7 @@ def main():
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
+            "audio_backend": selected_audio_backend(args),
             "digital_mode": digital_mode,
             "filter": {"low_cut": low_cut, "high_cut": high_cut},
             "filter_custom_width": bool(filter_custom_width),
@@ -19914,7 +20386,10 @@ def main():
         elif kind == "audio":
             settings_menu_open = False
             digital_menu_open = False
-            audio_volume = pipewire_default_volume()
+            current_output_volume = audio_output_volume(args)
+            if current_output_volume is not None:
+                audio_volume = current_output_volume
+                args.output_volume = current_output_volume
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -20358,14 +20833,12 @@ def main():
         while not stop_event.is_set():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    # SDL/Cocoa can emit spurious QUIT events for this
-                    # borderless OpenGL development window. Desktop uses
-                    # Esc/Q as its deliberate close path; the Pi retains its
-                    # normal close behavior.
-                    if not args.desktop:
-                        stop_event.set()
-                    else:
-                        print("gl ignored desktop Cocoa QUIT", flush=True)
+                    # KMS/SDL can emit a synthetic QUIT while the DSI panel
+                    # finishes probing after boot (Cocoa can do the same for
+                    # the desktop window). This is a continuously supervised
+                    # appliance, so it has no valid in-app QUIT action: a
+                    # service manager or explicit system command owns exit.
+                    print("gl ignored synthetic SDL QUIT", flush=True)
                 elif (
                     args.desktop
                     and deepgram_setup_open
@@ -20604,6 +21077,12 @@ def main():
                                 or (picker_open and picker_map_open)
                                 or (audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y))
                                 or (cpu_utilization_graph_open and cpu_graph_box and contains(cpu_graph_box, x, y))
+                                # Bottom telemetry is an explicit instrument
+                                # control. It must work on the first touch,
+                                # even while the rest of the waterfall is in
+                                # its quiet, wake-on-touch presentation.
+                                or contains(CPU_ANNUNCIATOR_BOX, x, y)
+                                or contains(audio_jitter_status_box(), x, y)
                                 or (
                                     frequency_identity_candidates
                                     and time.monotonic() < frequency_identity_osd_until
@@ -20884,7 +21363,11 @@ def main():
                                     gesture = "lcd_filter_drawer"
                             elif filter_panel_open and contains(FILTER_EDIT_BOX, x, y):
                                 _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
-                                filter_drag_audio_center = filter_center_hz(low_cut, high_cut)
+                                # Filter edits are expressed directly in the VFO's
+                                # audio-coordinate system. Keeping this at zero is
+                                # what lets an asymmetric passband stay visibly
+                                # shifted instead of being silently re-centred.
+                                filter_drag_audio_center = 0.0
                                 filter_drag_center = 0.0
                                 view_low_cut, view_high_cut = filter_view_offsets(low_cut, high_cut)
                                 filter_drag_limit = filter_edit_limit(view_low_cut, view_high_cut)
@@ -21657,6 +22140,25 @@ def main():
                                 elif choice == "filter":
                                     audio_panel_open = False
                                     filter_panel_open = True
+                                elif choice == "backend":
+                                    previous_volume = audio_volume if audio_volume is not None else 0.5
+                                    args.audio_backend = (
+                                        "alsa" if selected_audio_backend(args) == "pipewire" else "pipewire"
+                                    )
+                                    args.output_volume = previous_volume
+                                    # Direct ALSA can take its volume now. The
+                                    # PipeWire half restores it when the new
+                                    # player is opened after this switch.
+                                    if selected_audio_backend(args) == "alsa":
+                                        applied_volume = set_audio_output_volume(args, previous_volume)
+                                        if applied_volume is not None:
+                                            audio_volume = applied_volume
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                    print(
+                                        f"gl audio backend selected {args.audio_backend}",
+                                        flush=True,
+                                    )
                                 elif choice == "reset":
                                     state.reset_audio_controls()
                             wake_controls()
@@ -23495,6 +23997,7 @@ def main():
                 if cpu_utilization_graph_open and cpu_core_percentages:
                     cpu_core_history.append((now, cpu_core_percentages))
                 temp_c = read_cpu_temp_c()
+                input_power_ok = read_input_power_ok()
 
             consumed = 0
             max_consume = 2 if line_queue.qsize() > 30 else 1
@@ -23612,6 +24115,7 @@ def main():
             if not local_iq_active:
                 overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
                 draw_filter_overlay(
+                    text_cache,
                     display_span,
                     overlay_low_cut,
                     overlay_high_cut,
@@ -23672,6 +24176,7 @@ def main():
                 spectrum_enabled=spectrum_enabled,
                 cpu_percent=cpu_percent,
                 temp_c=temp_c,
+                input_power_ok=input_power_ok,
                 station_name=selected_station_name,
                 station_capacity=selected_station_capacity,
                 connection_status=None if local_iq_active else connection_status,
@@ -23867,6 +24372,7 @@ def main():
                     audio_high_cut,
                     audio_volume is not None,
                     _audio_mode,
+                    selected_audio_backend(args),
                 )
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
@@ -23889,7 +24395,7 @@ def main():
                     text_cache, wspr_tiles, wspr_workspace_scroll,
                     wspr_monitor, wspr_mini_textures, cpu_percent,
                     wspr_log_identity(wspr_identity_values)["rx_grid"],
-                    wspr_rate_snapshot,
+                    wspr_rate_snapshot, wspr_mini_distance_cache,
                 )
                 if wspr_expanded_graph_open:
                     tile = next((item for item in wspr_tiles if str(item.get("id")) == wspr_expanded_graph_id), None)
@@ -24044,12 +24550,12 @@ def main():
                 frequency_identity_alpha = 235
                 if frequency_identity_remaining < 0.55:
                     frequency_identity_alpha = int(235 * frequency_identity_remaining / 0.55)
-                identity_receiver_coordinates = receiver_coordinates_for_frequency_identity(
+                identity_receiver_context = receiver_context_for_frequency_identity(
                     server, all_stations, receiver_home_profile
                 )
                 draw_frequency_identity_osd(
                     text_cache, frequency_identity_frequency_khz,
-                    frequency_identity_candidates, identity_receiver_coordinates,
+                    frequency_identity_candidates, identity_receiver_context,
                     frequency_identity_alpha,
                 )
             osd_remaining = zoom_osd_until - now

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "matching": {
+    "frequency_tolerance_khz": 1.0,
+    "ambiguity_guard_khz": 0.25,
+    "cache_seconds": 600,
+    "settle_seconds": 0.85
+  },
+  "sources": {
+    "shortwave_db": {
+      "schedule_timezone": "UTC",
+      "active_schedule_required": false
+    },
+    "shortwave_live": {
+      "schedule_timezone": "UTC",
+      "active_schedule_required": true
+    }
+  },
+  "display": {
+    "title": "SCHEDULED BROADCASTS",
+    "show_receiver_context": true
+  }
+}
