@@ -788,114 +788,49 @@ def whisper_guard_description():
 
 
 # Audio has a hard playback deadline whereas decoding and rendering merely
-# benefit from promptness. Reserve the highest available CPU for the PCM clock
-# and its pw-cat writer on Linux. The service grants only CAP_SYS_NICE and a
-# modest RR priority; no whole-process real-time policy is used.
+# benefit from promptness. Keep only a modest RR preference for the PCM clock;
+# do not reserve or partition any CPU core. This lets Linux balance audio,
+# rendering, decoder work, and USB interrupt handling across all CPUs.
 AUDIO_RT_ENABLED = os.environ.get("ITUNER_AUDIO_RT", "1") != "0"
 AUDIO_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_RT_PRIORITY", 12, 1, 20)
 AUDIO_PLAYER_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_PLAYER_RT_PRIORITY", 10, 1, 20)
 AUDIO_INGRESS_RT_PRIORITY = _bounded_env_int("ITUNER_AUDIO_INGRESS_RT_PRIORITY", 8, 1, 20)
-AUDIO_RT_CPU_OVERRIDE = os.environ.get("ITUNER_AUDIO_RT_CPU", "").strip()
-_AUDIO_RT_LOCK = threading.Lock()
-_AUDIO_RT_TIDS = set()
-try:
-    # Capture the service CPU set before any protected child thread inherits
-    # the audio-only affinity. Later calls from that child must still know the
-    # UI cores that make up the rest of the partition.
-    _AUDIO_RT_SERVICE_CPUS = tuple(sorted(os.sched_getaffinity(0)))
-except (AttributeError, OSError):
-    _AUDIO_RT_SERVICE_CPUS = tuple(range(max(1, os.cpu_count() or 1)))
-
-
-def audio_realtime_cpu_plan():
-    """Return the dedicated audio CPU and the remaining UI CPU set."""
-    if not AUDIO_RT_ENABLED or not sys.platform.startswith("linux"):
-        return None, set()
-    available = list(_AUDIO_RT_SERVICE_CPUS)
-    if len(available) < 2:
-        return None, set()
-    try:
-        requested = int(AUDIO_RT_CPU_OVERRIDE) if AUDIO_RT_CPU_OVERRIDE else available[-1]
-    except ValueError:
-        requested = available[-1]
-    audio_cpu = requested if requested in available else available[-1]
-    return audio_cpu, set(available) - {audio_cpu}
 
 
 def configure_realtime_audio_path(player=None, announce=True, priority=AUDIO_RT_PRIORITY, role="clock"):
-    """Give the PCM clock a CPU and a bounded, audio-only RR priority.
-
-    The clock runs in a Python thread, so PipeWire cannot protect it by itself.
-    Pinning all non-clock renderer threads away from this CPU prevents a burst
-    of waterfall parsing or WSPR bookkeeping from delaying a 512-frame write.
-    Failure to obtain RT permission remains a safe affinity-only fallback.
-    """
-    audio_cpu, ui_cpus = audio_realtime_cpu_plan()
-    if audio_cpu is None or not ui_cpus:
+    """Give the PCM clock a bounded RR priority without CPU pinning."""
+    if not AUDIO_RT_ENABLED or not sys.platform.startswith("linux"):
         return False
     try:
         audio_tid = threading.get_native_id()
     except AttributeError:
         return False
-    with _AUDIO_RT_LOCK:
+    clock_rt = False
+    try:
+        os.sched_setscheduler(audio_tid, os.SCHED_RR, os.sched_param(priority))
+        clock_rt = True
+    except (AttributeError, OSError, PermissionError) as exc:
+        if announce:
+            print(f"gl audio RT clock unavailable {exc}", flush=True)
+    if player is not None and getattr(player, "pid", None):
         try:
-            active_tids = set()
-            task_paths = tuple(Path("/proc/self/task").iterdir())
-            for task_path in task_paths:
-                try:
-                    active_tids.add(int(task_path.name))
-                except ValueError:
-                    continue
-            _AUDIO_RT_TIDS.intersection_update(active_tids)
-            _AUDIO_RT_TIDS.add(audio_tid)
-            for task_path in task_paths:
-                try:
-                    tid = int(task_path.name)
-                except ValueError:
-                    continue
-                if tid not in _AUDIO_RT_TIDS:
-                    os.sched_setaffinity(tid, ui_cpus)
-            for tid in _AUDIO_RT_TIDS:
-                os.sched_setaffinity(tid, {audio_cpu})
-            if player is not None and getattr(player, "pid", None):
-                os.sched_setaffinity(player.pid, {audio_cpu})
-        except OSError as exc:
-            if announce:
-                print(f"gl audio affinity unavailable {exc}", flush=True)
-            return False
-
-        clock_rt = False
-        try:
-            os.sched_setscheduler(audio_tid, os.SCHED_RR, os.sched_param(priority))
-            clock_rt = True
+            os.sched_setscheduler(
+                player.pid, os.SCHED_RR, os.sched_param(AUDIO_PLAYER_RT_PRIORITY)
+            )
         except (AttributeError, OSError, PermissionError) as exc:
             if announce:
-                print(f"gl audio RT clock unavailable {exc}", flush=True)
-        if player is not None and getattr(player, "pid", None):
-            try:
-                os.sched_setscheduler(
-                    player.pid, os.SCHED_RR, os.sched_param(AUDIO_PLAYER_RT_PRIORITY)
-                )
-            except (AttributeError, OSError, PermissionError) as exc:
-                if announce:
-                    print(f"gl audio RT player unavailable {exc}", flush=True)
-        if announce:
-            print(
-                f"gl audio priority cpu={audio_cpu} ui={','.join(map(str, sorted(ui_cpus)))} "
-                f"{role}={'RR' if clock_rt else 'TS'} p={priority}",
-                flush=True,
-            )
-        return clock_rt
+                print(f"gl audio RT player unavailable {exc}", flush=True)
+    if announce:
+        print(
+            f"gl audio priority cpu=unbound {role}={'RR' if clock_rt else 'TS'} p={priority}",
+            flush=True,
+        )
+    return clock_rt
 
 
 def release_realtime_audio_thread():
-    """Forget a terminating audio-path thread before its TID can be reused."""
-    try:
-        tid = threading.get_native_id()
-    except AttributeError:
-        return
-    with _AUDIO_RT_LOCK:
-        _AUDIO_RT_TIDS.discard(tid)
+    """Compatibility no-op: the audio path no longer owns a CPU affinity."""
+    return
 
 
 PARAKEET_MODEL_DIR = vendor_path("sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8")
@@ -6036,10 +5971,9 @@ def wsprd_background_command(command):
         cpu_ids = []
     taskset = "/usr/bin/taskset"
     if len(cpu_ids) > 1 and Path(taskset).is_file():
-        # The highest core belongs to the real-time PCM path. Keep decoding
-        # one core away from it; nice +15 remains the primary yielding rule.
-        audio_cpu, _ui_cpus = audio_realtime_cpu_plan()
-        decode_cpu = next((cpu for cpu in reversed(cpu_ids) if cpu != audio_cpu), cpu_ids[0])
+        # Keep wsprd single-core and nice'd, but do not reserve a CPU for
+        # audio. Linux may schedule the PCM path on any available core.
+        decode_cpu = cpu_ids[-1]
         wrapped = [taskset, "-c", str(decode_cpu), *wrapped]
     nice = "/usr/bin/nice"
     if Path(nice).is_file():
@@ -16599,15 +16533,9 @@ class BufferedAudioPlayer:
 
     def _run(self):
         configure_realtime_audio_path(self.player)
-        affinity_refresh_at = time.monotonic() + 2.0
         deadline = 0.0
         while not self.stop_event.is_set():
             now = time.monotonic()
-            if now >= affinity_refresh_at:
-                # Decoder/caption workers may appear after the first PCM
-                # clock starts. Keep them from inheriting audio CPU 3.
-                configure_realtime_audio_path(self.player, announce=False)
-                affinity_refresh_at = now + 2.0
             with self.condition:
                 while not self.closed and (not self.packet_bytes or not self.primed):
                     if self.packet_bytes and len(self.packets) >= self.target_packets:
