@@ -5,6 +5,44 @@ import math
 import time
 
 
+def globe_native_matrix(
+    yaw, pitch, center_x, center_y, radius, desktop, orientation,
+    native_height, active_height,
+):
+    """Column-major fixed-function matrix matching the CPU globe projection."""
+    sin_yaw, cos_yaw = math.sin(yaw), math.cos(yaw)
+    sin_pitch, cos_pitch = math.sin(pitch), math.cos(pitch)
+    camera_x = (cos_yaw, 0.0, -sin_yaw)
+    camera_y = (
+        -sin_pitch * sin_yaw,
+        cos_pitch,
+        -sin_pitch * cos_yaw,
+    )
+    camera_z = (
+        cos_pitch * sin_yaw,
+        sin_pitch,
+        cos_pitch * cos_yaw,
+    )
+    if desktop:
+        row_x = tuple(radius * value for value in camera_x)
+        row_y = tuple(-radius * value for value in camera_y)
+        translate_x, translate_y = center_x, center_y
+    elif orientation == "normal":
+        row_x = tuple(radius * value for value in camera_y)
+        row_y = tuple(radius * value for value in camera_x)
+        translate_x, translate_y = active_height - center_y, center_x
+    else:
+        row_x = tuple(-radius * value for value in camera_y)
+        row_y = tuple(-radius * value for value in camera_x)
+        translate_x, translate_y = center_y, native_height - center_x
+    return (
+        row_x[0], row_y[0], camera_z[0], 0.0,
+        row_x[1], row_y[1], camera_z[1], 0.0,
+        row_x[2], row_y[2], camera_z[2], 0.0,
+        translate_x, translate_y, 0.0, 1.0,
+    )
+
+
 def health_prioritized_stations(stations, station_health, sort_mode):
     """Keep the configured station order inside stable availability groups."""
     now = time.time()
@@ -245,11 +283,21 @@ class PickerFrameProfiler:
             self.samples[view][phase].append(float(seconds) * 1000.0)
         if self.frames[view] % self.report_every:
             return None
+        return self.report(view)
+
+    def percentile(self, view, phase, percentile=0.95):
+        values = sorted(self.samples[view][phase])
+        if not values:
+            return None
+        index = min(len(values) - 1, math.ceil(len(values) * percentile) - 1)
+        return values[max(0, index)]
+
+    def report(self, view):
         fields = []
         for phase in sorted(self.samples[view]):
             values = sorted(self.samples[view][phase])
             if not values:
                 continue
-            p95 = values[min(len(values) - 1, math.ceil(len(values) * 0.95) - 1)]
+            p95 = self.percentile(view, phase)
             fields.append(f"{phase}=p50:{values[len(values) // 2]:.2f}/p95:{p95:.2f}/max:{values[-1]:.2f}ms")
         return f"picker perf {view} " + " ".join(fields)

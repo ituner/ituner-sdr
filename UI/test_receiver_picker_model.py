@@ -1,3 +1,4 @@
+import math
 import time
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from receiver_picker_model import (
     StationOrderCache,
     choose_nearby_receivers,
     closest_strong_spectrum_frequency,
+    globe_native_matrix,
     receiver_server_index,
     visible_station_range,
 )
@@ -38,6 +40,79 @@ class StationOrderCacheTests(unittest.TestCase):
 
 
 class ReceiverProjectionSnapshotTests(unittest.TestCase):
+    def test_gpu_globe_matrix_matches_cpu_projection_across_orientations(self):
+        yaw, pitch = math.radians(37.0), math.radians(-23.0)
+        radius = 317.0
+        configurations = (
+            (True, "flipped", 800.0, 800.0),
+            (False, "flipped", 1280.0, 800.0),
+            (False, "normal", 1280.0, 800.0),
+        )
+        for desktop, orientation, native_height, active_height in configurations:
+            matrix = globe_native_matrix(
+                yaw, pitch, 640.0, 400.0, radius, desktop, orientation,
+                native_height, active_height,
+            )
+            for latitude, longitude in ((0.0, 0.0), (52.0, 13.0), (-34.0, 151.0), (68.0, -149.0)):
+                lat = math.radians(latitude)
+                lon = math.radians(longitude)
+                xyz = (math.cos(lat) * math.sin(lon), math.sin(lat), math.cos(lat) * math.cos(lon))
+                native = (
+                    matrix[0] * xyz[0] + matrix[4] * xyz[1] + matrix[8] * xyz[2] + matrix[12],
+                    matrix[1] * xyz[0] + matrix[5] * xyz[1] + matrix[9] * xyz[2] + matrix[13],
+                    matrix[2] * xyz[0] + matrix[6] * xyz[1] + matrix[10] * xyz[2] + matrix[14],
+                )
+                lon_delta = lon - yaw
+                depth = math.sin(pitch) * math.sin(lat) + math.cos(pitch) * math.cos(lat) * math.cos(lon_delta)
+                logical_x = 640.0 + math.cos(lat) * math.sin(lon_delta) * radius
+                logical_y = 400.0 - (
+                    math.cos(pitch) * math.sin(lat)
+                    - math.sin(pitch) * math.cos(lat) * math.cos(lon_delta)
+                ) * radius
+                if desktop:
+                    expected = (logical_x, logical_y, depth)
+                elif orientation == "normal":
+                    expected = (active_height - logical_y, logical_x, depth)
+                else:
+                    expected = (logical_y, native_height - logical_x, depth)
+                for actual, wanted in zip(native, expected):
+                    self.assertAlmostEqual(actual, wanted, places=5)
+
+    def test_gpu_globe_matrix_matches_desktop_orthographic_projection(self):
+        matrix = globe_native_matrix(
+            yaw=0.0, pitch=0.0, center_x=640.0, center_y=400.0,
+            radius=300.0, desktop=True, orientation="flipped",
+            native_height=800.0, active_height=800.0,
+        )
+
+        def transform(x, y, z):
+            return (
+                matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+                matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+                matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14],
+            )
+
+        self.assertEqual(transform(0.0, 0.0, 1.0), (640.0, 400.0, 1.0))
+        self.assertEqual(transform(1.0, 0.0, 0.0), (940.0, 400.0, 0.0))
+        self.assertEqual(transform(0.0, 1.0, 0.0), (640.0, 100.0, 0.0))
+
+    def test_gpu_globe_matrix_applies_flipped_pi_orientation(self):
+        matrix = globe_native_matrix(
+            yaw=0.0, pitch=0.0, center_x=640.0, center_y=400.0,
+            radius=300.0, desktop=False, orientation="flipped",
+            native_height=1280.0, active_height=800.0,
+        )
+
+        def transform(x, y, z):
+            return (
+                matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+                matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+            )
+
+        self.assertEqual(transform(0.0, 0.0, 1.0), (400.0, 640.0))
+        self.assertEqual(transform(1.0, 0.0, 0.0), (400.0, 340.0))
+        self.assertEqual(transform(0.0, 1.0, 0.0), (100.0, 640.0))
+
     def test_reuses_projection_for_lookup_and_spatial_hit_testing(self):
         receivers = [
             {"server": "left", "x": 10.0, "y": 20.0},
@@ -92,6 +167,7 @@ class PickerFrameProfilerTests(unittest.TestCase):
         report = profiler.record("map", {"frame": 0.020})
         self.assertIn("picker perf map", report)
         self.assertIn("p95:20.00", report)
+        self.assertEqual(profiler.percentile("map", "frame"), 20.0)
 
 
 class NearbyReceiverTests(unittest.TestCase):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from array import array
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
@@ -92,6 +93,7 @@ from receiver_picker_model import (
     StationOrderCache,
     choose_nearby_receivers,
     closest_strong_spectrum_frequency,
+    globe_native_matrix,
     receiver_server_index,
     visible_station_range,
 )
@@ -3432,6 +3434,7 @@ def setup_gl(desktop=False):
     # initialization remains lazy in the text cache.
     pygame.display.init()
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
+    pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 16)
     # macOS should remain a normal desktop citizen with its title bar, traffic
     # lights and native window dragging. The Pi keeps its dedicated fullscreen.
     flags = pygame.OPENGL if desktop else pygame.OPENGL | pygame.FULLSCREEN
@@ -6672,11 +6675,327 @@ def satellite_light_color(latitude, longitude, sun_lon, sun_lat):
     )
 
 
+class GlobeGpuRenderer:
+    """Static GPU geometry for the globe's motion-critical drawing paths."""
+
+    SOLAR_UPDATE_SECONDS = 60.0
+
+    def __init__(self):
+        self.available = all(hasattr(GL, name) for name in (
+            "glGenBuffers", "glBindBuffer", "glBufferData", "glDrawElements",
+        ))
+        self.sphere_steps = (120, 60) if DESKTOP_MODE else (56, 28)
+        self.sphere_position_buffer = 0
+        self.sphere_texcoord_buffer = 0
+        self.sphere_color_buffer = 0
+        self.sphere_index_buffer = 0
+        self.sphere_index_count = 0
+        self.sphere_lat_lon = ()
+        self.solar_updated_at = 0.0
+        self.receiver_position_buffer = 0
+        self.receiver_color_buffer = 0
+        self.receiver_count = 0
+        self.receiver_source = None
+        self.receiver_color_key = None
+        self.coastline_position_buffer = 0
+        self.coastline_vertex_count = 0
+        if self.available:
+            try:
+                self._build_sphere()
+                self._build_coastlines()
+            except Exception as exc:
+                self.available = False
+                print(f"gl globe GPU fallback: {exc}", flush=True)
+
+    @staticmethod
+    def _upload(values, target=GL.GL_ARRAY_BUFFER, usage=GL.GL_STATIC_DRAW):
+        buffer_id = GL.glGenBuffers(1)
+        GL.glBindBuffer(target, buffer_id)
+        payload = values.tobytes()
+        GL.glBufferData(target, len(payload), payload, usage)
+        GL.glBindBuffer(target, 0)
+        return buffer_id
+
+    @staticmethod
+    def _unit_xyz(latitude, longitude):
+        latitude = math.radians(latitude)
+        longitude = math.radians(longitude)
+        cos_latitude = math.cos(latitude)
+        return (
+            cos_latitude * math.sin(longitude),
+            math.sin(latitude),
+            cos_latitude * math.cos(longitude),
+        )
+
+    def _build_sphere(self):
+        lon_steps, lat_steps = self.sphere_steps
+        positions = array("f")
+        texcoords = array("f")
+        lat_lon = []
+        for lat_index in range(lat_steps + 1):
+            latitude = -90.0 + 180.0 * lat_index / lat_steps
+            v = (90.0 - latitude) / 180.0
+            for lon_index in range(lon_steps + 1):
+                longitude = -180.0 + 360.0 * lon_index / lon_steps
+                positions.extend(self._unit_xyz(latitude, longitude))
+                texcoords.extend((longitude / 360.0 + 0.5, v))
+                lat_lon.append((latitude, longitude))
+        indices = array("H")
+        row = lon_steps + 1
+        for lat_index in range(lat_steps):
+            for lon_index in range(lon_steps):
+                top_left = lat_index * row + lon_index
+                top_right = top_left + 1
+                bottom_left = top_left + row
+                bottom_right = bottom_left + 1
+                indices.extend((top_left, bottom_left, bottom_right))
+                indices.extend((top_left, bottom_right, top_right))
+        self.sphere_position_buffer = self._upload(positions)
+        self.sphere_texcoord_buffer = self._upload(texcoords)
+        self.sphere_color_buffer = self._upload(
+            array("f", (1.0 for _ in range(len(lat_lon) * 4))),
+            usage=GL.GL_DYNAMIC_DRAW,
+        )
+        self.sphere_index_buffer = self._upload(indices, GL.GL_ELEMENT_ARRAY_BUFFER)
+        self.sphere_index_count = len(indices)
+        self.sphere_lat_lon = tuple(lat_lon)
+
+    def _build_coastlines(self):
+        positions = array("f")
+        for coastline in GLOBE_COASTLINES_OVERVIEW:
+            for start, end in zip(coastline, coastline[1:]):
+                positions.extend(self._unit_xyz(start[0], start[1]))
+                positions.extend(self._unit_xyz(end[0], end[1]))
+        self.coastline_position_buffer = self._upload(positions)
+        self.coastline_vertex_count = len(positions) // 3
+
+    @staticmethod
+    def _matrix(center_lon, center_lat, box, scale):
+        center_x = (box[0] + box[2]) / 2
+        center_y = (box[1] + box[3]) / 2
+        return globe_native_matrix(
+            center_lon, center_lat, center_x, center_y,
+            radiogarden_radius(box, scale), DESKTOP_MODE, DISPLAY_ORIENTATION,
+            NATIVE_H, ACTIVE_H,
+        )
+
+    @staticmethod
+    def _begin_matrix(matrix):
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glPushMatrix()
+        GL.glLoadMatrixf(matrix)
+
+    @staticmethod
+    def _end_matrix():
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GL.glPopMatrix()
+
+    @staticmethod
+    def _enable_front_clip():
+        # Define z >= 0 in eye space while the ordinary UI modelview is the
+        # identity. The globe camera matrix is loaded only after this plane is
+        # established, so points and lines behind the limb are clipped cleanly.
+        GL.glClipPlane(GL.GL_CLIP_PLANE0, (0.0, 0.0, 1.0, 0.0))
+        GL.glEnable(GL.GL_CLIP_PLANE0)
+
+    def _update_solar_colors(self):
+        now = time.monotonic()
+        if now - self.solar_updated_at < self.SOLAR_UPDATE_SECONDS:
+            return
+        sun_lon, sun_lat = solar_subpoint()
+        colors = array("f")
+        for latitude, longitude in self.sphere_lat_lon:
+            colors.extend((*satellite_light_color(latitude, longitude, sun_lon, sun_lat), 1.0))
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_color_buffer)
+        payload = colors.tobytes()
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, len(payload), payload, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        self.solar_updated_at = now
+
+    def _draw_sphere_geometry(self, matrix, texture=None, colors=False):
+        self._begin_matrix(matrix)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_position_buffer)
+        GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+        GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        if texture is not None:
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_texcoord_buffer)
+            GL.glEnableClientState(GL.GL_TEXTURE_COORD_ARRAY)
+            GL.glTexCoordPointer(2, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        if colors:
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_color_buffer)
+            GL.glEnableClientState(GL.GL_COLOR_ARRAY)
+            GL.glColorPointer(4, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.sphere_index_buffer)
+        GL.glDrawElements(
+            GL.GL_TRIANGLES, self.sphere_index_count, GL.GL_UNSIGNED_SHORT,
+            ctypes.c_void_p(0),
+        )
+        if colors:
+            GL.glDisableClientState(GL.GL_COLOR_ARRAY)
+        if texture is not None:
+            GL.glDisableClientState(GL.GL_TEXTURE_COORD_ARRAY)
+        GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+        self._end_matrix()
+
+    def draw_satellite(self, texture, center_lon, center_lat, box, scale):
+        if not self.available:
+            return False
+        try:
+            self._update_solar_colors()
+            GL.glClear(GL.GL_DEPTH_BUFFER_BIT)
+            GL.glEnable(GL.GL_DEPTH_TEST)
+            GL.glDepthFunc(GL.GL_LEQUAL)
+            GL.glDepthMask(GL.GL_TRUE)
+            self._draw_sphere_geometry(
+                self._matrix(center_lon, center_lat, box, scale), texture, True,
+            )
+            GL.glDisable(GL.GL_DEPTH_TEST)
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_DEPTH_TEST)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+    def _ensure_receiver_buffers(self, receivers):
+        if receivers is self.receiver_source:
+            return
+        positions = array("f")
+        for receiver in receivers:
+            positions.extend(self._unit_xyz(receiver["lat"], receiver["lon"]))
+        if self.receiver_position_buffer:
+            GL.glDeleteBuffers(1, [self.receiver_position_buffer])
+        if self.receiver_color_buffer:
+            GL.glDeleteBuffers(1, [self.receiver_color_buffer])
+        self.receiver_position_buffer = self._upload(positions)
+        self.receiver_color_buffer = self._upload(
+            array("f", (1.0 for _ in range(len(receivers) * 4))),
+            usage=GL.GL_DYNAMIC_DRAW,
+        )
+        self.receiver_count = len(receivers)
+        self.receiver_source = receivers
+        self.receiver_color_key = None
+
+    def _update_receiver_colors(
+        self, receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers,
+    ):
+        nearby_servers = frozenset(receiver.get("server") for receiver in nearby_receivers)
+        color_key = (
+            id(station_health), selected_server, pending_server, hover_server,
+            nearby_servers,
+        )
+        if color_key == self.receiver_color_key:
+            return
+        now = time.time()
+        colors = array("f")
+        for receiver in receivers:
+            server = receiver.get("server")
+            entry = station_health.get(server, {})
+            ready = (
+                now - entry.get("checked", 0) <= 86400
+                and entry.get("audio") is True
+                and entry.get("waterfall") is True
+            )
+            color = (
+                (39, 255, 105, 255) if server in nearby_servers else
+                ((94, 236, 183, 255) if server == pending_server else
+                 ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+            )
+            colors.extend(rgba(color))
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_color_buffer)
+        payload = colors.tobytes()
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, len(payload), payload, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        self.receiver_color_key = color_key
+
+    def draw_receivers(
+        self, receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers, center_lon, center_lat, box, scale,
+    ):
+        if not self.available or not receivers:
+            return False
+        try:
+            self._ensure_receiver_buffers(receivers)
+            self._update_receiver_colors(
+                receivers, station_health, selected_server, pending_server,
+                hover_server, nearby_receivers,
+            )
+            self._enable_front_clip()
+            self._begin_matrix(self._matrix(center_lon, center_lat, box, scale))
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glEnable(GL.GL_POINT_SMOOTH)
+            GL.glPointSize(6.0)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_position_buffer)
+            GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_color_buffer)
+            GL.glEnableClientState(GL.GL_COLOR_ARRAY)
+            GL.glColorPointer(4, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glDrawArrays(GL.GL_POINTS, 0, self.receiver_count)
+            GL.glDisableClientState(GL.GL_COLOR_ARRAY)
+            GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glPointSize(1.0)
+            GL.glDisable(GL.GL_POINT_SMOOTH)
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            self._end_matrix()
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+    def draw_coastlines(self, center_lon, center_lat, box, scale, color):
+        if not self.available or not self.coastline_vertex_count:
+            return False
+        try:
+            matrix = self._matrix(center_lon, center_lat, box, scale)
+            self._enable_front_clip()
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glColor4f(*rgba(color))
+            self._begin_matrix(matrix)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coastline_position_buffer)
+            GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glDrawArrays(GL.GL_LINES, 0, self.coastline_vertex_count)
+            GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+            self._end_matrix()
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+
+_globe_gpu_renderer = None
+
+
+def globe_gpu_renderer():
+    global _globe_gpu_renderer
+    if _globe_gpu_renderer is None:
+        _globe_gpu_renderer = GlobeGpuRenderer()
+    return _globe_gpu_renderer
+
+
 def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, interactive=False):
     """Map Blue Marble imagery onto the globe with a live solar terminator."""
     texture = satellite_map_texture(text_cache)
     if texture is None:
         return False
+    renderer = globe_gpu_renderer()
+    if renderer.draw_satellite(texture, center_lon, center_lat, box, scale):
+        return True
     # Immediate-mode vertices are submitted by Python on this renderer.
     # 120x60 (28,800 submissions per frame) makes a Pi 5 globe stutter during
     # drag. The panel's 800-pixel physical width is smooth at 56x28, while the
@@ -6812,6 +7131,7 @@ def draw_receiver_map(
         draw_receiver_map_graticule(center_lon, center_lat, box, scale)
     # Full-detail coastlines are projected on the sphere, split cleanly at
     # the limb. This stays smooth when a region fills the display.
+    gpu_coastlines_drawn = False
     if not satellite_drawn:
         # The 50 m layer has ~10× as many vertices as the whole-world layer.
         # It is attractive on the desktop but leaves the Pi's Python OpenGL
@@ -6822,24 +7142,21 @@ def draw_receiver_map(
             else GLOBE_COASTLINES_OVERVIEW if interactive or scale < 0.85
             else GLOBE_COASTLINES
         )
-        for coastline in coastlines:
-            segment = []
-            for lat, lon in coastline:
-                point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
-                if point is None:
-                    draw_logical_polyline(
-                        segment,
-                        (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                        1,
-                    )
-                    segment = []
-                else:
-                    segment.append((point[0], point[1]))
-            draw_logical_polyline(
-                segment,
-                (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                1,
-            )
+        coastline_color = (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182)
+        gpu_coastlines_drawn = interactive and globe_gpu_renderer().draw_coastlines(
+            center_lon, center_lat, box, scale, coastline_color,
+        )
+        if not gpu_coastlines_drawn:
+            for coastline in coastlines:
+                segment = []
+                for lat, lon in coastline:
+                    point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
+                    if point is None:
+                        draw_logical_polyline(segment, coastline_color, 1)
+                        segment = []
+                    else:
+                        segment.append((point[0], point[1]))
+                draw_logical_polyline(segment, coastline_color, 1)
     # At broad view, a few substantial political boundaries are enough. Once
     # the user zooms toward a region, change to complete country exteriors.
     # The source boundary-line dataset is segmented, and those loose segments
@@ -6885,61 +7202,66 @@ def draw_receiver_map(
     if timings is not None:
         timings["terrain"] = time.perf_counter() - started_at
     projection_started_at = time.perf_counter()
-    if projection is None or not projection.matches(
+    gpu_markers_drawn = interactive and (satellite_drawn or gpu_coastlines_drawn) and globe_gpu_renderer().draw_receivers(
+        receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers, center_lon, center_lat, box, scale,
+    )
+    if not gpu_markers_drawn and (projection is None or not projection.matches(
         receivers, center_lon, center_lat, box, scale,
-    ):
+    )):
         projection = ReceiverProjectionSnapshot(
             receivers, center_lon, center_lat, box, scale, radiogarden_project,
         )
     if timings is not None:
         timings["projection"] = time.perf_counter() - projection_started_at
     markers_started_at = time.perf_counter()
-    now = time.time()
-    nearby_servers = {receiver.get("server") for receiver in nearby_receivers}
-    receiver_point_groups = defaultdict(list)
-    for receiver, point in projection.visible:
-        entry = station_health.get(receiver["server"], {})
-        ready = (
-            now - entry.get("checked", 0) <= 86400
-            and entry.get("audio") is True
-            and entry.get("waterfall") is True
-        )
-        is_selected = receiver["server"] == selected_server
-        is_pending = receiver["server"] == pending_server
-        is_hovered = receiver["server"] == hover_server
-        is_nearby = receiver["server"] in nearby_servers
-        color = (
-            (39, 255, 105, 255) if is_nearby else
-            ((94, 236, 183, 255) if is_pending else ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
-        )
-        # The panel is viewed at arm's length. Make both the luminous station
-        # core and its halo substantially easier to acquire with a finger.
-        dot_radius = 7.4 if is_nearby else (7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.25 if ready else 2.45)))
-        if interactive:
-            # A moving globe only needs an acquisition cue. One hardware point
-            # per receiver replaces the two 10-triangle discs (plus special
-            # marker rings), then full marker detail returns when motion stops.
-            receiver_point_groups[(color, max(3.0, dot_radius * 2.0))].append(point)
-        elif is_nearby or is_pending or is_hovered or is_selected:
-            pulse = 4.5 + (math.sin(time.monotonic() * 9.0) + 1.0) * 4.5 if is_pending else 5.5
-            draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 238 if is_nearby else 225), 24, True)
-            if is_pending:
-                draw_logical_circle(point[0], point[1], dot_radius + pulse + 10.0, (*color[:3], 108), 24, True)
-            draw_logical_circle(point[0], point[1], dot_radius, color, 20)
-            if is_hovered or is_selected:
-                draw_logical_circle(point[0], point[1], dot_radius + 13, (175, 255, 219, 235), 28, True)
-        else:
-            receiver_point_groups[(color, dot_radius)].append(point)
-    for (color, marker_size), points in receiver_point_groups.items():
-        if interactive:
-            draw_logical_points(points, color, marker_size)
-        else:
-            draw_logical_disc_points(points, (*color[:3], min(94, color[3])), marker_size * 3.5)
-            draw_logical_disc_points(points, color, marker_size * 1.15)
+    if not gpu_markers_drawn:
+        now = time.time()
+        nearby_servers = {receiver.get("server") for receiver in nearby_receivers}
+        receiver_point_groups = defaultdict(list)
+        for receiver, point in projection.visible:
+            entry = station_health.get(receiver["server"], {})
+            ready = (
+                now - entry.get("checked", 0) <= 86400
+                and entry.get("audio") is True
+                and entry.get("waterfall") is True
+            )
+            is_selected = receiver["server"] == selected_server
+            is_pending = receiver["server"] == pending_server
+            is_hovered = receiver["server"] == hover_server
+            is_nearby = receiver["server"] in nearby_servers
+            color = (
+                (39, 255, 105, 255) if is_nearby else
+                ((94, 236, 183, 255) if is_pending else ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+            )
+            # The panel is viewed at arm's length. Make both the luminous station
+            # core and its halo substantially easier to acquire with a finger.
+            dot_radius = 7.4 if is_nearby else (7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.25 if ready else 2.45)))
+            if interactive:
+                receiver_point_groups[(color, max(3.0, dot_radius * 2.0))].append(point)
+            elif is_nearby or is_pending or is_hovered or is_selected:
+                pulse = 4.5 + (math.sin(time.monotonic() * 9.0) + 1.0) * 4.5 if is_pending else 5.5
+                draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 238 if is_nearby else 225), 24, True)
+                if is_pending:
+                    draw_logical_circle(point[0], point[1], dot_radius + pulse + 10.0, (*color[:3], 108), 24, True)
+                draw_logical_circle(point[0], point[1], dot_radius, color, 20)
+                if is_hovered or is_selected:
+                    draw_logical_circle(point[0], point[1], dot_radius + 13, (175, 255, 219, 235), 28, True)
+            else:
+                receiver_point_groups[(color, dot_radius)].append(point)
+        for (color, marker_size), points in receiver_point_groups.items():
+            if interactive:
+                draw_logical_points(points, color, marker_size)
+            else:
+                draw_logical_disc_points(points, (*color[:3], min(94, color[3])), marker_size * 3.5)
+                draw_logical_disc_points(points, color, marker_size * 1.15)
     if timings is not None:
         timings["markers"] = time.perf_counter() - markers_started_at
     chrome_started_at = time.perf_counter()
-    selected = projection.receiver(selected_server)
+    selected = (
+        projection.receiver(selected_server) if projection is not None
+        else next((receiver for receiver in receivers if receiver.get("server") == selected_server), None)
+    )
     state_label = {
         "connecting": "CONNECTING",
         "retrying": "RETRYING",
@@ -6966,10 +7288,10 @@ def draw_receiver_map(
     draw_logical_line(cx + 24, cy, cx + 70, cy, reticle, 2)
     draw_logical_line(cx, cy - 70, cx, cy - 24, reticle, 2)
     draw_logical_line(cx, cy + 24, cx, cy + 70, reticle, 2)
-    hovered = projection.receiver(hover_server)
+    hovered = projection.receiver(hover_server) if projection is not None else None
     if hovered:
         hover_detail = bottom_station_title(hovered["name"], hovered["location"])
-        hover_point = projection.point(hover_server)
+        hover_point = projection.point(hover_server) if projection is not None else None
         if hover_point:
             # Keep the readable two-line callout well clear of the station
             # itself: the user's finger is normally covering that point.
@@ -10785,6 +11107,8 @@ def main():
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
     parser.add_argument("--desktop", action="store_true", help="run the LCD 1280x800 landscape UI locally with mouse input")
     parser.add_argument("--picker-perf", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--picker-perf-scenario", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--picker-perf-map-view", choices=MAP_VIEWS, default="satellite_only", help=argparse.SUPPRESS)
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
@@ -10831,6 +11155,10 @@ def main():
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
     args = parser.parse_args()
+    if args.picker_perf_scenario:
+        args.picker_perf = True
+        if args.duration <= 0:
+            args.duration = 12.0
     remembered_radio_mode = None
     remembered_preferences = {}
     if args.remember_receiver:
@@ -11007,6 +11335,14 @@ def main():
             "title bar moves, wheel zooms",
             flush=True,
         )
+    elif args.picker_perf_scenario:
+        # The deterministic renderer gate must also run on a bench Pi whose
+        # touch ribbon is disconnected. Keep a harmless input pipe open while
+        # the synthetic camera path drives the globe.
+        event_read_fd, desktop_event_writer = os.pipe()
+        os.set_blocking(event_read_fd, False)
+        ev = os.fdopen(event_read_fd, "rb", buffering=0)
+        print("gl picker perf synthetic input", flush=True)
     else:
         event_path = args.event or kiwi.find_touch_event()
         ev = event_path.open("rb", buffering=0)
@@ -11066,7 +11402,7 @@ def main():
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
     picker_map_garden_mode = True
-    picker_map_view = "satellite_only"
+    picker_map_view = args.picker_perf_map_view if args.picker_perf_scenario else "satellite_only"
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -11087,6 +11423,9 @@ def main():
     picker_map_nearby_receivers = ()
     picker_map_candidate_index = -1
     picker_map_auto_tune_pending = False
+    if args.picker_perf_scenario:
+        picker_open = True
+        picker_map_open = True
     # Entering RadioGarden is a destination transition, not a reset to an
     # arbitrary part of the world. Keep a pending server while the live map
     # feed is loading, then fly the globe to the receiver the SDR is tuned to.
@@ -12050,6 +12389,8 @@ def main():
         if picker_map_open:
             map_smeter_dbm, _map_smeter_peak_dbm = state.smeter_snapshot()
             interactive = (
+                args.picker_perf_scenario
+                or
                 (touch_started and gesture == "picker_map")
                 or desktop_map_dragged
                 or picker_map_lock_target is not None
@@ -13768,6 +14109,14 @@ def main():
                     flush=True,
                 )
             if picker_open and picker_map_open:
+                if args.picker_perf_scenario:
+                    picker_input_at = time.perf_counter()
+                    scenario_elapsed = now - start
+                    picker_map_yaw = math.radians(-18) + 1.7 * math.sin(scenario_elapsed * 0.91)
+                    picker_map_pitch = math.radians(38) * math.sin(scenario_elapsed * 0.67)
+                    picker_map_scale = 0.78 + 2.35 * (
+                        0.5 + 0.5 * math.sin(scenario_elapsed * 0.49 - math.pi / 2)
+                    )
                 map_dt = min(0.05, max(0.0, now - picker_map_motion_at))
                 picker_map_motion_at = now
                 if picker_map_lock_target is not None:
@@ -14476,6 +14825,21 @@ def main():
         caption_thread.join(timeout=1.5)
         callsign_thread.join(timeout=1.5)
         elapsed = max(0.001, time.monotonic() - start)
+        if args.picker_perf_scenario:
+            final_report = picker_profiler.report("map")
+            frame_p95 = picker_profiler.percentile("map", "frame")
+            input_p95 = picker_profiler.percentile("map", "input_to_present")
+            gate_passed = (
+                frame_p95 is not None and frame_p95 <= 41.7
+                and input_p95 is not None and input_p95 < 80.0
+            )
+            print(final_report, flush=True)
+            print(
+                f"picker perf gate {'PASS' if gate_passed else 'FAIL'} "
+                f"frame_p95={frame_p95 if frame_p95 is not None else float('nan'):.2f}ms "
+                f"input_p95={input_p95 if input_p95 is not None else float('nan'):.2f}ms",
+                flush=True,
+            )
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()
 
