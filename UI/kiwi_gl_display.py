@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from array import array
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
@@ -86,6 +87,16 @@ from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
 import render_sdr_frontend_mockup as sdr_ui
+from receiver_picker_model import (
+    PickerFrameProfiler,
+    ReceiverProjectionSnapshot,
+    StationOrderCache,
+    choose_nearby_receivers,
+    closest_strong_spectrum_frequency,
+    globe_native_matrix,
+    receiver_server_index,
+    visible_station_range,
+)
 
 
 LCD_NATIVE_W = 800
@@ -2110,32 +2121,6 @@ def bottom_station_title(name, location):
     return f"{identifier}  ·  {location}"
 
 
-def health_prioritized_stations(stations, station_health, sort_mode):
-    now = time.time()
-    def health_group(station):
-        _name, _location, server = station[:3]
-        entry = station_health.get(server, {})
-        fresh = now - entry.get("checked", 0) <= 86400
-        if not fresh:
-            return 2
-        # A green-ready receiver means the actual paired experience works:
-        # waterfall plus audio. Audio-only and waterfall-only stations remain
-        # useful and selectable, but are not promoted as fully healthy.
-        audio_active = entry.get("audio") is True
-        waterfall_active = entry.get("waterfall") is True
-        if audio_active and waterfall_active:
-            return 0
-        if waterfall_active:
-            return 1
-        if audio_active:
-            return 2
-        return 3
-
-    # `stations` has already been ordered by the chosen Location/Name sort.
-    # Keep that exact, predictable order inside each availability group.
-    return [station for _index, station in sorted(enumerate(stations), key=lambda item: (health_group(item[1]), item[0]))]
-
-
 def keyboard_rows(mode):
     if mode == "numeric":
         return SEARCH_NUMERIC_KEY_ROWS
@@ -3387,6 +3372,7 @@ class TextCache:
     def __init__(self):
         pygame.font.init()
         self.cache = {}
+        self.fit_cache = {}
 
     def font(self, size, bold=False, mono=False, family=None):
         key = ("font", size, bold, mono, family)
@@ -3448,7 +3434,10 @@ def setup_gl(desktop=False):
     # initialization remains lazy in the text cache.
     pygame.display.init()
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-    flags = pygame.OPENGL | pygame.NOFRAME if desktop else pygame.OPENGL | pygame.FULLSCREEN
+    pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 16)
+    # macOS should remain a normal desktop citizen with its title bar, traffic
+    # lights and native window dragging. The Pi keeps its dedicated fullscreen.
+    flags = pygame.OPENGL if desktop else pygame.OPENGL | pygame.FULLSCREEN
     screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), flags)
     GL.glViewport(0, 0, NATIVE_W, NATIVE_H)
     GL.glMatrixMode(GL.GL_PROJECTION)
@@ -6542,19 +6531,20 @@ def radiogarden_project(receiver, center_lon, center_lat, box, scale):
     return cx + globe_x * radius, cy - globe_y * radius, depth
 
 
-def receiver_map_station_at(x, y, receivers, center_lon, center_lat, box, scale, garden_mode=True):
+def receiver_map_station_at(
+    x, y, receivers, center_lon, center_lat, box, scale, garden_mode=True,
+    projection=None,
+):
     """Resolve a forgiving RadioGarden dot target to the nearest front-side RX."""
-    candidates = []
-    for receiver in receivers:
-        point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
-        if point:
-            candidates.append((math.hypot(point[0] - x, point[1] - y), receiver))
-    if not candidates:
-        return None
-    distance, receiver = min(candidates, key=lambda item: item[0])
+    if projection is None or not projection.matches(
+        receivers, center_lon, center_lat, box, scale,
+    ):
+        projection = ReceiverProjectionSnapshot(
+            receivers, center_lon, center_lat, box, scale, radiogarden_project,
+        )
     # The target is intentionally much larger than its luminous core. At a
     # regional closeup the spatial separation resolves the closest receiver.
-    return receiver if distance <= 42.0 else None
+    return projection.nearest(x, y, 42.0)
 
 
 def receiver_map_center_candidate(receivers, center_lon, center_lat):
@@ -6685,11 +6675,327 @@ def satellite_light_color(latitude, longitude, sun_lon, sun_lat):
     )
 
 
+class GlobeGpuRenderer:
+    """Static GPU geometry for the globe's motion-critical drawing paths."""
+
+    SOLAR_UPDATE_SECONDS = 60.0
+
+    def __init__(self):
+        self.available = all(hasattr(GL, name) for name in (
+            "glGenBuffers", "glBindBuffer", "glBufferData", "glDrawElements",
+        ))
+        self.sphere_steps = (120, 60) if DESKTOP_MODE else (56, 28)
+        self.sphere_position_buffer = 0
+        self.sphere_texcoord_buffer = 0
+        self.sphere_color_buffer = 0
+        self.sphere_index_buffer = 0
+        self.sphere_index_count = 0
+        self.sphere_lat_lon = ()
+        self.solar_updated_at = 0.0
+        self.receiver_position_buffer = 0
+        self.receiver_color_buffer = 0
+        self.receiver_count = 0
+        self.receiver_source = None
+        self.receiver_color_key = None
+        self.coastline_position_buffer = 0
+        self.coastline_vertex_count = 0
+        if self.available:
+            try:
+                self._build_sphere()
+                self._build_coastlines()
+            except Exception as exc:
+                self.available = False
+                print(f"gl globe GPU fallback: {exc}", flush=True)
+
+    @staticmethod
+    def _upload(values, target=GL.GL_ARRAY_BUFFER, usage=GL.GL_STATIC_DRAW):
+        buffer_id = GL.glGenBuffers(1)
+        GL.glBindBuffer(target, buffer_id)
+        payload = values.tobytes()
+        GL.glBufferData(target, len(payload), payload, usage)
+        GL.glBindBuffer(target, 0)
+        return buffer_id
+
+    @staticmethod
+    def _unit_xyz(latitude, longitude):
+        latitude = math.radians(latitude)
+        longitude = math.radians(longitude)
+        cos_latitude = math.cos(latitude)
+        return (
+            cos_latitude * math.sin(longitude),
+            math.sin(latitude),
+            cos_latitude * math.cos(longitude),
+        )
+
+    def _build_sphere(self):
+        lon_steps, lat_steps = self.sphere_steps
+        positions = array("f")
+        texcoords = array("f")
+        lat_lon = []
+        for lat_index in range(lat_steps + 1):
+            latitude = -90.0 + 180.0 * lat_index / lat_steps
+            v = (90.0 - latitude) / 180.0
+            for lon_index in range(lon_steps + 1):
+                longitude = -180.0 + 360.0 * lon_index / lon_steps
+                positions.extend(self._unit_xyz(latitude, longitude))
+                texcoords.extend((longitude / 360.0 + 0.5, v))
+                lat_lon.append((latitude, longitude))
+        indices = array("H")
+        row = lon_steps + 1
+        for lat_index in range(lat_steps):
+            for lon_index in range(lon_steps):
+                top_left = lat_index * row + lon_index
+                top_right = top_left + 1
+                bottom_left = top_left + row
+                bottom_right = bottom_left + 1
+                indices.extend((top_left, bottom_left, bottom_right))
+                indices.extend((top_left, bottom_right, top_right))
+        self.sphere_position_buffer = self._upload(positions)
+        self.sphere_texcoord_buffer = self._upload(texcoords)
+        self.sphere_color_buffer = self._upload(
+            array("f", (1.0 for _ in range(len(lat_lon) * 4))),
+            usage=GL.GL_DYNAMIC_DRAW,
+        )
+        self.sphere_index_buffer = self._upload(indices, GL.GL_ELEMENT_ARRAY_BUFFER)
+        self.sphere_index_count = len(indices)
+        self.sphere_lat_lon = tuple(lat_lon)
+
+    def _build_coastlines(self):
+        positions = array("f")
+        for coastline in GLOBE_COASTLINES_OVERVIEW:
+            for start, end in zip(coastline, coastline[1:]):
+                positions.extend(self._unit_xyz(start[0], start[1]))
+                positions.extend(self._unit_xyz(end[0], end[1]))
+        self.coastline_position_buffer = self._upload(positions)
+        self.coastline_vertex_count = len(positions) // 3
+
+    @staticmethod
+    def _matrix(center_lon, center_lat, box, scale):
+        center_x = (box[0] + box[2]) / 2
+        center_y = (box[1] + box[3]) / 2
+        return globe_native_matrix(
+            center_lon, center_lat, center_x, center_y,
+            radiogarden_radius(box, scale), DESKTOP_MODE, DISPLAY_ORIENTATION,
+            NATIVE_H, ACTIVE_H,
+        )
+
+    @staticmethod
+    def _begin_matrix(matrix):
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glPushMatrix()
+        GL.glLoadMatrixf(matrix)
+
+    @staticmethod
+    def _end_matrix():
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GL.glPopMatrix()
+
+    @staticmethod
+    def _enable_front_clip():
+        # Define z >= 0 in eye space while the ordinary UI modelview is the
+        # identity. The globe camera matrix is loaded only after this plane is
+        # established, so points and lines behind the limb are clipped cleanly.
+        GL.glClipPlane(GL.GL_CLIP_PLANE0, (0.0, 0.0, 1.0, 0.0))
+        GL.glEnable(GL.GL_CLIP_PLANE0)
+
+    def _update_solar_colors(self):
+        now = time.monotonic()
+        if now - self.solar_updated_at < self.SOLAR_UPDATE_SECONDS:
+            return
+        sun_lon, sun_lat = solar_subpoint()
+        colors = array("f")
+        for latitude, longitude in self.sphere_lat_lon:
+            colors.extend((*satellite_light_color(latitude, longitude, sun_lon, sun_lat), 1.0))
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_color_buffer)
+        payload = colors.tobytes()
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, len(payload), payload, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        self.solar_updated_at = now
+
+    def _draw_sphere_geometry(self, matrix, texture=None, colors=False):
+        self._begin_matrix(matrix)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_position_buffer)
+        GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+        GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        if texture is not None:
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_texcoord_buffer)
+            GL.glEnableClientState(GL.GL_TEXTURE_COORD_ARRAY)
+            GL.glTexCoordPointer(2, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        if colors:
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.sphere_color_buffer)
+            GL.glEnableClientState(GL.GL_COLOR_ARRAY)
+            GL.glColorPointer(4, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.sphere_index_buffer)
+        GL.glDrawElements(
+            GL.GL_TRIANGLES, self.sphere_index_count, GL.GL_UNSIGNED_SHORT,
+            ctypes.c_void_p(0),
+        )
+        if colors:
+            GL.glDisableClientState(GL.GL_COLOR_ARRAY)
+        if texture is not None:
+            GL.glDisableClientState(GL.GL_TEXTURE_COORD_ARRAY)
+        GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+        self._end_matrix()
+
+    def draw_satellite(self, texture, center_lon, center_lat, box, scale):
+        if not self.available:
+            return False
+        try:
+            self._update_solar_colors()
+            GL.glClear(GL.GL_DEPTH_BUFFER_BIT)
+            GL.glEnable(GL.GL_DEPTH_TEST)
+            GL.glDepthFunc(GL.GL_LEQUAL)
+            GL.glDepthMask(GL.GL_TRUE)
+            self._draw_sphere_geometry(
+                self._matrix(center_lon, center_lat, box, scale), texture, True,
+            )
+            GL.glDisable(GL.GL_DEPTH_TEST)
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_DEPTH_TEST)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+    def _ensure_receiver_buffers(self, receivers):
+        if receivers is self.receiver_source:
+            return
+        positions = array("f")
+        for receiver in receivers:
+            positions.extend(self._unit_xyz(receiver["lat"], receiver["lon"]))
+        if self.receiver_position_buffer:
+            GL.glDeleteBuffers(1, [self.receiver_position_buffer])
+        if self.receiver_color_buffer:
+            GL.glDeleteBuffers(1, [self.receiver_color_buffer])
+        self.receiver_position_buffer = self._upload(positions)
+        self.receiver_color_buffer = self._upload(
+            array("f", (1.0 for _ in range(len(receivers) * 4))),
+            usage=GL.GL_DYNAMIC_DRAW,
+        )
+        self.receiver_count = len(receivers)
+        self.receiver_source = receivers
+        self.receiver_color_key = None
+
+    def _update_receiver_colors(
+        self, receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers,
+    ):
+        nearby_servers = frozenset(receiver.get("server") for receiver in nearby_receivers)
+        color_key = (
+            id(station_health), selected_server, pending_server, hover_server,
+            nearby_servers,
+        )
+        if color_key == self.receiver_color_key:
+            return
+        now = time.time()
+        colors = array("f")
+        for receiver in receivers:
+            server = receiver.get("server")
+            entry = station_health.get(server, {})
+            ready = (
+                now - entry.get("checked", 0) <= 86400
+                and entry.get("audio") is True
+                and entry.get("waterfall") is True
+            )
+            color = (
+                (39, 255, 105, 255) if server in nearby_servers else
+                ((94, 236, 183, 255) if server == pending_server else
+                 ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+            )
+            colors.extend(rgba(color))
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_color_buffer)
+        payload = colors.tobytes()
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, len(payload), payload, GL.GL_DYNAMIC_DRAW)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        self.receiver_color_key = color_key
+
+    def draw_receivers(
+        self, receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers, center_lon, center_lat, box, scale,
+    ):
+        if not self.available or not receivers:
+            return False
+        try:
+            self._ensure_receiver_buffers(receivers)
+            self._update_receiver_colors(
+                receivers, station_health, selected_server, pending_server,
+                hover_server, nearby_receivers,
+            )
+            self._enable_front_clip()
+            self._begin_matrix(self._matrix(center_lon, center_lat, box, scale))
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glEnable(GL.GL_POINT_SMOOTH)
+            GL.glPointSize(6.0)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_position_buffer)
+            GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_color_buffer)
+            GL.glEnableClientState(GL.GL_COLOR_ARRAY)
+            GL.glColorPointer(4, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glDrawArrays(GL.GL_POINTS, 0, self.receiver_count)
+            GL.glDisableClientState(GL.GL_COLOR_ARRAY)
+            GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glPointSize(1.0)
+            GL.glDisable(GL.GL_POINT_SMOOTH)
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            self._end_matrix()
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+    def draw_coastlines(self, center_lon, center_lat, box, scale, color):
+        if not self.available or not self.coastline_vertex_count:
+            return False
+        try:
+            matrix = self._matrix(center_lon, center_lat, box, scale)
+            self._enable_front_clip()
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glColor4f(*rgba(color))
+            self._begin_matrix(matrix)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.coastline_position_buffer)
+            GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glDrawArrays(GL.GL_LINES, 0, self.coastline_vertex_count)
+            GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+            self._end_matrix()
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            return True
+        except Exception as exc:
+            self.available = False
+            GL.glDisable(GL.GL_CLIP_PLANE0)
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            print(f"gl globe GPU fallback: {exc}", flush=True)
+            return False
+
+
+_globe_gpu_renderer = None
+
+
+def globe_gpu_renderer():
+    global _globe_gpu_renderer
+    if _globe_gpu_renderer is None:
+        _globe_gpu_renderer = GlobeGpuRenderer()
+    return _globe_gpu_renderer
+
+
 def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, interactive=False):
     """Map Blue Marble imagery onto the globe with a live solar terminator."""
     texture = satellite_map_texture(text_cache)
     if texture is None:
         return False
+    renderer = globe_gpu_renderer()
+    if renderer.draw_satellite(texture, center_lon, center_lat, box, scale):
+        return True
     # Immediate-mode vertices are submitted by Python on this renderer.
     # 120x60 (28,800 submissions per frame) makes a Pi 5 globe stutter during
     # drag. The panel's 800-pixel physical width is smooth at 56x28, while the
@@ -6730,12 +7036,76 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     return True
 
 
+def map_receiver_health_label(receiver, station_health, now=None):
+    """Compact live-readiness label for the map's three smart candidates."""
+    now = time.time() if now is None else now
+    entry = station_health.get(receiver.get("server"), {})
+    fresh = now - entry.get("checked", 0) <= 86400
+    if fresh and entry.get("audio") is True and entry.get("waterfall") is True:
+        return "AUDIO + W/F READY"
+    if fresh and entry.get("audio") is True:
+        return "AUDIO READY"
+    if fresh and entry.get("waterfall") is True:
+        return "W/F READY"
+    if fresh:
+        return "UNAVAILABLE"
+    return "UNTESTED"
+
+
+def draw_map_nearby_receivers(
+    text_cache, receivers, station_health, selected_server, connection_status,
+    smeter_dbm, box,
+):
+    """Show the health-ranked local trio selected by a map tap."""
+    if not receivers:
+        return
+    panel_x1 = box[2] - 16
+    panel_x0 = max(box[0] + 620, panel_x1 - 382)
+    panel_y0 = box[1] + 16
+    row_h = 43
+    panel_y1 = panel_y0 + 30 + row_h * len(receivers) + 8
+    draw_logical_rect(panel_x0, panel_y0, panel_x1, panel_y1, (3, 18, 20, 224))
+    draw_logical_line(panel_x0, panel_y0, panel_x1, panel_y0, (57, 255, 125, 235), 2)
+    draw_text(
+        text_cache, panel_x0 + 13, panel_y0 + 17,
+        "3 NEARBY  ·  SMART AUDIO",
+        (96, 255, 151), 15, True, False, "lm", family="Cantarell",
+    )
+    now = time.time()
+    for index, receiver in enumerate(receivers):
+        row_y0 = panel_y0 + 30 + index * row_h
+        server = receiver.get("server")
+        selected = server == selected_server
+        fill = (16, 73, 43, 232) if selected else (8, 39, 29, 216)
+        draw_logical_rect(panel_x0 + 5, row_y0 + 2, panel_x1 - 5, row_y0 + row_h - 2, fill)
+        dot_x, dot_y = panel_x0 + 18, row_y0 + row_h / 2
+        draw_logical_circle(dot_x, dot_y, 6.0 if selected else 4.5, (39, 255, 105, 255), 18)
+        title = bottom_station_title(receiver.get("name", "Receiver"), receiver.get("location", ""))
+        title = fit_station_text(text_cache, title, panel_x1 - panel_x0 - 142, 14, True, family="Cantarell")
+        draw_text(text_cache, panel_x0 + 31, row_y0 + 13, f"{index + 1}  {title}", (224, 255, 235), 14, True, False, "lm", family="Cantarell")
+        health_label = map_receiver_health_label(receiver, station_health, now)
+        if selected:
+            if connection_status in ("connecting", "retrying", "waterfall_audio_retry"):
+                health_label = "CONNECTING"
+            elif connection_status == "failed":
+                health_label = "TRYING NEXT"
+            elif isinstance(smeter_dbm, (int, float)):
+                health_label = f"LIVE  {smeter_dbm:.0f} dBm"
+        draw_text(
+            text_cache, panel_x1 - 14, row_y0 + 29, health_label,
+            (94, 255, 151) if selected else (145, 219, 177),
+            13, selected, False, "rm", family="Cantarell",
+        )
+
+
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False,
+    map_view="borders", interactive=False, timings=None, projection=None,
+    nearby_receivers=(), smeter_dbm=None,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
+    started_at = time.perf_counter()
     box = PICKER_MAP_BOX
     if DESKTOP_1280_MODE:
         draw_native_rect(DESKTOP_1280_MAIN_W, 0, NATIVE_W, NATIVE_H, (5, 6, 8, 255))
@@ -6761,6 +7131,7 @@ def draw_receiver_map(
         draw_receiver_map_graticule(center_lon, center_lat, box, scale)
     # Full-detail coastlines are projected on the sphere, split cleanly at
     # the limb. This stays smooth when a region fills the display.
+    gpu_coastlines_drawn = False
     if not satellite_drawn:
         # The 50 m layer has ~10× as many vertices as the whole-world layer.
         # It is attractive on the desktop but leaves the Pi's Python OpenGL
@@ -6771,24 +7142,21 @@ def draw_receiver_map(
             else GLOBE_COASTLINES_OVERVIEW if interactive or scale < 0.85
             else GLOBE_COASTLINES
         )
-        for coastline in coastlines:
-            segment = []
-            for lat, lon in coastline:
-                point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
-                if point is None:
-                    draw_logical_polyline(
-                        segment,
-                        (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                        1,
-                    )
-                    segment = []
-                else:
-                    segment.append((point[0], point[1]))
-            draw_logical_polyline(
-                segment,
-                (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                1,
-            )
+        coastline_color = (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182)
+        gpu_coastlines_drawn = interactive and globe_gpu_renderer().draw_coastlines(
+            center_lon, center_lat, box, scale, coastline_color,
+        )
+        if not gpu_coastlines_drawn:
+            for coastline in coastlines:
+                segment = []
+                for lat, lon in coastline:
+                    point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
+                    if point is None:
+                        draw_logical_polyline(segment, coastline_color, 1)
+                        segment = []
+                    else:
+                        segment.append((point[0], point[1]))
+                draw_logical_polyline(segment, coastline_color, 1)
     # At broad view, a few substantial political boundaries are enough. Once
     # the user zooms toward a region, change to complete country exteriors.
     # The source boundary-line dataset is segmented, and those loose segments
@@ -6831,44 +7199,69 @@ def draw_receiver_map(
                         continue
                     draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
                     draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
-    center_candidate = receiver_map_center_candidate(receivers, math.degrees(center_lon), math.degrees(center_lat))
-    now = time.time()
-    receiver_point_groups = defaultdict(list)
-    for receiver in receivers:
-        entry = station_health.get(receiver["server"], {})
-        ready = (
-            now - entry.get("checked", 0) <= 86400
-            and entry.get("audio") is True
-            and entry.get("waterfall") is True
+    if timings is not None:
+        timings["terrain"] = time.perf_counter() - started_at
+    projection_started_at = time.perf_counter()
+    gpu_markers_drawn = interactive and (satellite_drawn or gpu_coastlines_drawn) and globe_gpu_renderer().draw_receivers(
+        receivers, station_health, selected_server, pending_server,
+        hover_server, nearby_receivers, center_lon, center_lat, box, scale,
+    )
+    if not gpu_markers_drawn and (projection is None or not projection.matches(
+        receivers, center_lon, center_lat, box, scale,
+    )):
+        projection = ReceiverProjectionSnapshot(
+            receivers, center_lon, center_lat, box, scale, radiogarden_project,
         )
-        point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
-        if not point:
-            continue
-        is_selected = receiver["server"] == selected_server
-        is_pending = receiver["server"] == pending_server
-        is_failed = is_pending and connection_status == "failed"
-        is_hovered = receiver["server"] == hover_server
-        color = (
-            (255, 81, 96, 255) if is_failed else
-            ((94, 236, 183, 255) if is_pending else ((83, 229, 176, 232) if ready else (132, 189, 198, 165)))
-        )
-        # The panel is viewed at arm's length. Make both the luminous station
-        # core and its halo substantially easier to acquire with a finger.
-        dot_radius = 7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.25 if ready else 2.45))
-        if is_pending or is_hovered or is_selected:
-            pulse = 4.5 + (math.sin(time.monotonic() * 9.0) + 1.0) * 4.5 if is_pending else 5.5
-            draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 225), 24, True)
-            if is_pending:
-                draw_logical_circle(point[0], point[1], dot_radius + pulse + 10.0, (*color[:3], 108), 24, True)
-            draw_logical_circle(point[0], point[1], dot_radius, color, 20)
-            if is_hovered or is_selected:
-                draw_logical_circle(point[0], point[1], dot_radius + 13, (175, 255, 219, 235), 28, True)
-        else:
-            receiver_point_groups[(color, dot_radius)].append(point)
-    for (color, dot_radius), points in receiver_point_groups.items():
-        draw_logical_disc_points(points, (*color[:3], min(94, color[3])), dot_radius * 3.5)
-        draw_logical_disc_points(points, color, dot_radius * 1.15)
-    selected = next((receiver for receiver in receivers if receiver["server"] == selected_server), None)
+    if timings is not None:
+        timings["projection"] = time.perf_counter() - projection_started_at
+    markers_started_at = time.perf_counter()
+    if not gpu_markers_drawn:
+        now = time.time()
+        nearby_servers = {receiver.get("server") for receiver in nearby_receivers}
+        receiver_point_groups = defaultdict(list)
+        for receiver, point in projection.visible:
+            entry = station_health.get(receiver["server"], {})
+            ready = (
+                now - entry.get("checked", 0) <= 86400
+                and entry.get("audio") is True
+                and entry.get("waterfall") is True
+            )
+            is_selected = receiver["server"] == selected_server
+            is_pending = receiver["server"] == pending_server
+            is_hovered = receiver["server"] == hover_server
+            is_nearby = receiver["server"] in nearby_servers
+            color = (
+                (39, 255, 105, 255) if is_nearby else
+                ((94, 236, 183, 255) if is_pending else ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+            )
+            # The panel is viewed at arm's length. Make both the luminous station
+            # core and its halo substantially easier to acquire with a finger.
+            dot_radius = 7.4 if is_nearby else (7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.25 if ready else 2.45)))
+            if interactive:
+                receiver_point_groups[(color, max(3.0, dot_radius * 2.0))].append(point)
+            elif is_nearby or is_pending or is_hovered or is_selected:
+                pulse = 4.5 + (math.sin(time.monotonic() * 9.0) + 1.0) * 4.5 if is_pending else 5.5
+                draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 238 if is_nearby else 225), 24, True)
+                if is_pending:
+                    draw_logical_circle(point[0], point[1], dot_radius + pulse + 10.0, (*color[:3], 108), 24, True)
+                draw_logical_circle(point[0], point[1], dot_radius, color, 20)
+                if is_hovered or is_selected:
+                    draw_logical_circle(point[0], point[1], dot_radius + 13, (175, 255, 219, 235), 28, True)
+            else:
+                receiver_point_groups[(color, dot_radius)].append(point)
+        for (color, marker_size), points in receiver_point_groups.items():
+            if interactive:
+                draw_logical_points(points, color, marker_size)
+            else:
+                draw_logical_disc_points(points, (*color[:3], min(94, color[3])), marker_size * 3.5)
+                draw_logical_disc_points(points, color, marker_size * 1.15)
+    if timings is not None:
+        timings["markers"] = time.perf_counter() - markers_started_at
+    chrome_started_at = time.perf_counter()
+    selected = (
+        projection.receiver(selected_server) if projection is not None
+        else next((receiver for receiver in receivers if receiver.get("server") == selected_server), None)
+    )
     state_label = {
         "connecting": "CONNECTING",
         "retrying": "RETRYING",
@@ -6880,6 +7273,10 @@ def draw_receiver_map(
     draw_logical_rect(box[0] + 14, box[1] + 14, min(box[2] - 14, box[0] + 604), box[1] + 66, (3, 13, 19, 202))
     draw_text(text_cache, box[0] + 28, box[1] + 32, state_label, (108, 250, 191) if selected else (180, 213, 219), 17, True, False, "lm", family="Cantarell")
     draw_text(text_cache, box[0] + 28, box[1] + 52, fit_station_text(text_cache, detail, 554, 18, True, False, family="Cantarell"), (229, 242, 244), 18, True, False, "lm", family="Cantarell")
+    draw_map_nearby_receivers(
+        text_cache, nearby_receivers, station_health, selected_server,
+        connection_status, smeter_dbm, box,
+    )
     # A larger, double-ring sight reads clearly over both dark map and Blue
     # Marble imagery while leaving the exact selection point unobscured.
     reticle = (224, 255, 248, 238)
@@ -6891,10 +7288,10 @@ def draw_receiver_map(
     draw_logical_line(cx + 24, cy, cx + 70, cy, reticle, 2)
     draw_logical_line(cx, cy - 70, cx, cy - 24, reticle, 2)
     draw_logical_line(cx, cy + 24, cx, cy + 70, reticle, 2)
-    hovered = next((receiver for receiver in receivers if receiver["server"] == hover_server), None)
+    hovered = projection.receiver(hover_server) if projection is not None else None
     if hovered:
         hover_detail = bottom_station_title(hovered["name"], hovered["location"])
-        hover_point = radiogarden_project(hovered, center_lon, center_lat, box, scale)
+        hover_point = projection.point(hover_server) if projection is not None else None
         if hover_point:
             # Keep the readable two-line callout well clear of the station
             # itself: the user's finger is normally covering that point.
@@ -6944,6 +7341,9 @@ def draw_receiver_map(
         tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
+    if timings is not None:
+        timings["chrome"] = time.perf_counter() - chrome_started_at
+    return projection
 
 
 def scout_rf_strength(smeter_dbm):
@@ -7532,7 +7932,7 @@ def station_tile(index, scroll):
 
 
 def station_at(x, y, stations, scroll):
-    for idx, _station in enumerate(stations):
+    for idx in visible_station_range(len(stations), scroll, PICKER_COLS, PICKER_ROWS):
         box = station_tile(idx, scroll)
         if box and contains(box, x, y):
             return idx
@@ -8452,12 +8852,25 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
 
 def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, family=None):
     """Ellipsize a row label to its measured slot, not an arbitrary count."""
+    key = (text, max_width, size, bold, mono, family)
+    cached = text_cache.fit_cache.get(key)
+    if cached is not None:
+        return cached
     if text_cache.texture(text, size, (255, 255, 255), bold=bold, mono=mono, family=family)[1] <= max_width:
+        text_cache.fit_cache[key] = text
         return text
     ellipsis = "…"
-    while text and text_cache.texture(text + ellipsis, size, (255, 255, 255), bold=bold, mono=mono, family=family)[1] > max_width:
-        text = text[:-1]
-    return text + ellipsis if text else ellipsis
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = text[:middle] + ellipsis
+        if text_cache.texture(candidate, size, (255, 255, 255), bold=bold, mono=mono, family=family)[1] <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+    fitted = text[:low] + ellipsis if low else ellipsis
+    text_cache.fit_cache[key] = fitted
+    return fitted
 
 
 def caption_font_family():
@@ -8594,7 +9007,8 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
     draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if LCD_800_MODE else 20)
 
-    for idx, station in enumerate(stations):
+    for idx in visible_station_range(len(stations), scroll, PICKER_COLS, PICKER_ROWS):
+        station = stations[idx]
         name, location, server, listener_used, listener_total = station_fields(station)
         box = station_tile(idx, scroll)
         if not box:
@@ -10692,6 +11106,9 @@ def main():
     parser.add_argument("--fps", type=float, default=24.0, help="render target; 24 fps is the balanced Raspberry Pi LCD default")
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
     parser.add_argument("--desktop", action="store_true", help="run the LCD 1280x800 landscape UI locally with mouse input")
+    parser.add_argument("--picker-perf", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--picker-perf-scenario", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--picker-perf-map-view", choices=MAP_VIEWS, default="satellite_only", help=argparse.SUPPRESS)
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
     parser.add_argument("--event", type=Path, help="input event device, defaults to auto-detected Goodix")
@@ -10738,6 +11155,10 @@ def main():
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
     args = parser.parse_args()
+    if args.picker_perf_scenario:
+        args.picker_perf = True
+        if args.duration <= 0:
+            args.duration = 12.0
     remembered_radio_mode = None
     remembered_preferences = {}
     if args.remember_receiver:
@@ -10902,11 +11323,7 @@ def main():
     callsign_thread.start()
 
     desktop_event_writer = None
-    desktop_window = None
     if args.desktop:
-        from pygame._sdl2.video import Window
-
-        desktop_window = Window.from_display_module()
         event_read_fd, desktop_event_writer = os.pipe()
         # The Pygame loop creates the synthetic touch events for this pipe.
         # It must therefore never wait here for an event that it has not yet
@@ -10915,9 +11332,17 @@ def main():
         ev = os.fdopen(event_read_fd, "rb", buffering=0)
         print(
             f"gl desktop window {NATIVE_W}x{NATIVE_H}; mouse drag tunes, "
-            "Command-drag moves, wheel zooms",
+            "title bar moves, wheel zooms",
             flush=True,
         )
+    elif args.picker_perf_scenario:
+        # The deterministic renderer gate must also run on a bench Pi whose
+        # touch ribbon is disconnected. Keep a harmless input pipe open while
+        # the synthetic camera path drives the globe.
+        event_read_fd, desktop_event_writer = os.pipe()
+        os.set_blocking(event_read_fd, False)
+        ev = os.fdopen(event_read_fd, "rb", buffering=0)
+        print("gl picker perf synthetic input", flush=True)
     else:
         event_path = args.event or kiwi.find_touch_event()
         ev = event_path.open("rb", buffering=0)
@@ -10961,6 +11386,9 @@ def main():
     if receiver_home_locating:
         threading.Thread(target=detect_receiver_home, args=(receiver_home_result_queue,), daemon=True).start()
     station_health = {}
+    station_order_cache = StationOrderCache()
+    picker_profiler = PickerFrameProfiler(enabled=args.picker_perf)
+    picker_input_at = None
     station_pending_server = None
     station_pending_started_at = 0.0
     station_connected_at = 0.0
@@ -10974,7 +11402,7 @@ def main():
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
     picker_map_garden_mode = True
-    picker_map_view = "satellite_only"
+    picker_map_view = args.picker_perf_map_view if args.picker_perf_scenario else "satellite_only"
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -10991,6 +11419,13 @@ def main():
     picker_map_drag_velocity_yaw = 0.0
     picker_map_drag_velocity_pitch = 0.0
     picker_map_drag_motion_at = picker_map_motion_at
+    picker_map_projection = None
+    picker_map_nearby_receivers = ()
+    picker_map_candidate_index = -1
+    picker_map_auto_tune_pending = False
+    if args.picker_perf_scenario:
+        picker_open = True
+        picker_map_open = True
     # Entering RadioGarden is a destination transition, not a reset to an
     # arbitrary part of the world. Keep a pending server while the live map
     # feed is loading, then fly the globe to the receiver the SDR is tuned to.
@@ -11765,7 +12200,6 @@ def main():
         active_swipe_boost = 1.0 + repeat_swipe_count * args.swipe_repeat_boost
 
     desktop_pointer_down = False
-    desktop_window_drag_button = None
     desktop_map_press = None
     desktop_map_last = None
     desktop_map_dragged = False
@@ -11830,24 +12264,61 @@ def main():
     def update_receiver_map_hover(position):
         """Preview the nearest RadioGarden dot under a desktop pointer."""
         nonlocal picker_map_hover_server
-        if not (picker_open and picker_map_open and picker_map_garden_mode and globe_receivers):
+        if not (
+            picker_open and picker_map_open and picker_map_garden_mode and globe_receivers
+            and desktop_map_press is None and picker_map_projection is not None
+            and picker_map_projection.matches(
+                globe_receivers, picker_map_yaw, picker_map_pitch,
+                PICKER_MAP_BOX, picker_map_scale,
+            )
+        ):
             picker_map_hover_server = None
             return
         x, y = desktop_logical_point(position)
         if not contains(PICKER_MAP_BOX, x, y):
             picker_map_hover_server = None
             return
-        receiver = receiver_map_station_at(
-            x, y, globe_receivers, picker_map_yaw,
-            picker_map_pitch, PICKER_MAP_BOX, picker_map_scale, True,
-        )
+        receiver = picker_map_projection.nearest(x, y, 42.0)
         picker_map_hover_server = receiver["server"] if receiver else None
 
-    def select_receiver_from_map(x, y):
-        """Start the normal Kiwi path and smoothly lock the globe to its RX."""
-        nonlocal picker_map_selected_server, picker_map_hover_server, picker_map_lock_target, picker_map_zoom_target
+    def activate_map_receiver(selected, notice_prefix="LOCKING"):
+        """Connect one smart-map candidate through the normal audio/W/F path."""
+        nonlocal picker_map_selected_server, picker_map_hover_server
+        nonlocal picker_map_lock_target, picker_map_zoom_target
         nonlocal station_pending_server, station_pending_started_at, station_connected_at
-        nonlocal picker_map_notice, picker_map_notice_until, picker_map_inertia_yaw, picker_map_inertia_pitch
+        nonlocal picker_map_notice, picker_map_notice_until
+        nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch
+        nonlocal picker_map_auto_tune_pending
+        picker_map_selected_server = selected["server"]
+        picker_map_hover_server = selected["server"]
+        picker_map_lock_target = (math.radians(selected["lon"]), math.radians(selected["lat"]))
+        picker_map_zoom_target = clamp(
+            picker_map_scale * 1.15,
+            RADIOGARDEN_ZOOM_MIN,
+            RADIOGARDEN_ZOOM_MAX,
+        )
+        picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
+        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(selected["server"])
+        # A receiver selection is an explicit operator decision. Persist it
+        # immediately so a reboot during setup retains the chosen endpoint.
+        write_remembered_view(save_current_frequency=True, force=True)
+        drain_queue(line_queue)
+        wf_texture.clear()
+        animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+        station_pending_server = selected["server"]
+        station_pending_started_at = time.monotonic()
+        station_connected_at = 0.0
+        picker_map_auto_tune_pending = True
+        picker_map_notice = f"{notice_prefix}  {bottom_station_title(selected['name'], selected['location'])}"
+        picker_map_notice_until = time.monotonic() + 4.0
+        print(f"gl map smart select {selected['name']}: {selected['server']}", flush=True)
+        return True
+
+    def select_receiver_from_map(x, y):
+        """Connect a highlighted receiver exactly, or build a healthy local trio."""
+        nonlocal picker_map_notice, picker_map_notice_until
+        nonlocal picker_map_nearby_receivers, picker_map_candidate_index
+        nonlocal picker_map_auto_tune_pending
         center_x = (PICKER_MAP_BOX[0] + PICKER_MAP_BOX[2]) / 2
         center_y = (PICKER_MAP_BOX[1] + PICKER_MAP_BOX[3]) / 2
         if math.hypot(x - center_x, y - center_y) <= 50:
@@ -11858,38 +12329,30 @@ def main():
             selected = receiver_map_station_at(
                 x, y, globe_receivers, picker_map_yaw, picker_map_pitch,
                 PICKER_MAP_BOX, picker_map_scale,
+                projection=picker_map_projection,
             )
         if selected is None:
             picker_map_notice = "DRAG A REGION UNDER CENTER, THEN TAP THE RETICLE"
             picker_map_notice_until = time.monotonic() + 3.0
             return False
-        picker_map_selected_server = selected["server"]
-        picker_map_hover_server = selected["server"]
-        picker_map_lock_target = (math.radians(selected["lon"]), math.radians(selected["lat"]))
-        # Selecting a receiver should feel like giving it attention, not like
-        # an abrupt navigation change. The gentle zoom is cancelled by the
-        # next direct map gesture.
-        picker_map_zoom_target = clamp(
-            picker_map_scale * 1.15,
-            RADIOGARDEN_ZOOM_MIN,
-            RADIOGARDEN_ZOOM_MAX,
+        highlighted_index = receiver_server_index(selected, picker_map_nearby_receivers)
+        if highlighted_index is not None:
+            picker_map_candidate_index = highlighted_index
+            return activate_map_receiver(
+                picker_map_nearby_receivers[highlighted_index],
+                f"SMART RX {highlighted_index + 1}/{len(picker_map_nearby_receivers)}",
+            )
+        picker_map_nearby_receivers = choose_nearby_receivers(
+            selected, globe_receivers, station_health, globe_haversine_km,
+            limit=3, pool_size=24,
         )
-        picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
-        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(selected["server"])
-        # A receiver selection is an explicit operator decision. Persist it
-        # immediately so a reboot during its connection attempt never falls
-        # back to the bundled/default public endpoint.
-        write_remembered_view(save_current_frequency=True, force=True)
-        drain_queue(line_queue)
-        wf_texture.clear()
-        animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
-        station_pending_server = selected["server"]
-        station_pending_started_at = time.monotonic()
-        station_connected_at = 0.0
-        picker_map_notice = f"LOCKING  {bottom_station_title(selected['name'], selected['location'])}"
-        picker_map_notice_until = time.monotonic() + 4.0
-        print(f"gl map select {selected['name']}: {selected['server']}", flush=True)
-        return True
+        if not picker_map_nearby_receivers:
+            picker_map_nearby_receivers = (selected,)
+        picker_map_candidate_index = 0
+        return activate_map_receiver(
+            picker_map_nearby_receivers[0],
+            f"SMART RX 1/{len(picker_map_nearby_receivers)}",
+        )
 
     def focus_receiver_map_on_server(server):
         """Smoothly frame the active RX when RadioGarden is entered."""
@@ -11897,6 +12360,7 @@ def main():
         nonlocal picker_map_lock_target, picker_map_zoom_target
         nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch, picker_map_motion_at
         nonlocal picker_map_notice, picker_map_notice_until
+        nonlocal picker_map_nearby_receivers, picker_map_candidate_index
         receiver = receiver_map_receiver_for_server(globe_receivers, server)
         if receiver is None:
             return False
@@ -11911,21 +12375,89 @@ def main():
         picker_map_motion_at = time.monotonic()
         picker_map_notice = f"FLYING TO  {bottom_station_title(receiver['name'], receiver['location'])}"
         picker_map_notice_until = picker_map_motion_at + 2.8
+        picker_map_nearby_receivers = ()
+        picker_map_candidate_index = -1
+        picker_map_auto_tune_pending = False
         return True
+
+
+    def draw_active_receiver_picker():
+        """Draw the opaque receiver workspace without the hidden SDR layers."""
+        nonlocal picker_map_projection
+        timings = {}
+        frame_started_at = time.perf_counter()
+        if picker_map_open:
+            map_smeter_dbm, _map_smeter_peak_dbm = state.smeter_snapshot()
+            interactive = (
+                args.picker_perf_scenario
+                or
+                (touch_started and gesture == "picker_map")
+                or desktop_map_dragged
+                or picker_map_lock_target is not None
+                or picker_map_zoom_target is not None
+                or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002
+            )
+            picker_map_projection = draw_receiver_map(
+                text_cache, globe_receivers, picker_map_yaw, picker_map_pitch,
+                picker_map_scale, picker_map_selected_server or server,
+                station_pending_server, station_connection_status, station_health,
+                picker_map_notice if time.monotonic() < picker_map_notice_until else "",
+                picker_map_garden_mode, picker_map_hover_server, picker_map_view,
+                interactive, timings, picker_map_projection,
+                picker_map_nearby_receivers, map_smeter_dbm,
+            )
+            view = "map"
+        elif search_open:
+            draw_started_at = time.perf_counter()
+            draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
+            timings["draw"] = time.perf_counter() - draw_started_at
+            view = "search"
+        else:
+            ordering_started_at = time.perf_counter()
+            visible_stations = station_order_cache.get(stations, station_health, station_sort)
+            timings["ordering"] = time.perf_counter() - ordering_started_at
+            draw_started_at = time.perf_counter()
+            draw_station_picker(
+                text_cache, visible_stations, station_scroll, server, station_query,
+                station_sort, station_health, station_pending_server, station_connection_status,
+                station_route_filter, receiver_home_profile,
+            )
+            timings["draw"] = time.perf_counter() - draw_started_at
+            view = "stations"
+        timings["render"] = time.perf_counter() - frame_started_at
+        return view, timings, frame_started_at
+
+
+    def present_frame():
+        """Present either the normal SDR frame or the opaque receiver workspace."""
+        if screenshot_requested.is_set():
+            pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
+            pygame.image.save(screenshot, str(args.screenshot_path))
+            screenshot_requested.clear()
+            print(f"gl screenshot: {args.screenshot_path}", flush=True)
+        if Path("/tmp/kiwi-gl-screenshot").exists():
+            pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            frame = pygame.image.frombuffer(pixels, (NATIVE_W, NATIVE_H), "RGBA")
+            pygame.image.save(pygame.transform.flip(frame, False, True), "/tmp/kiwi-gl-screenshot.png")
+            Path("/tmp/kiwi-gl-screenshot").unlink(missing_ok=True)
+        # macOS's SDL OpenGL path can leave the composited window black even
+        # when glReadPixels sees the backbuffer. Flush before Cocoa's swap.
+        if DESKTOP_MODE:
+            GL.glFlush()
+        pygame.display.flip()
 
 
     try:
         while not stop_event.is_set():
             for event in pygame.event.get():
+                if picker_open and event.type in (
+                    pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+                    pygame.MOUSEMOTION, pygame.MOUSEWHEEL,
+                ):
+                    picker_input_at = time.perf_counter()
                 if event.type == pygame.QUIT:
-                    # SDL/Cocoa can emit spurious QUIT events for this
-                    # borderless OpenGL development window. Desktop uses
-                    # Esc/Q as its deliberate close path; the Pi retains its
-                    # normal close behavior.
-                    if not args.desktop:
-                        stop_event.set()
-                    else:
-                        print("gl ignored desktop Cocoa QUIT", flush=True)
+                    stop_event.set()
                 elif (
                     args.desktop
                     and deepgram_setup_open
@@ -11939,15 +12471,7 @@ def main():
                     wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
-                elif (
-                    args.desktop
-                    and event.type == pygame.MOUSEBUTTONDOWN
-                    and event.button == 1
-                    and pygame.key.get_mods() & pygame.KMOD_GUI
-                ):
-                    desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    desktop_window_drag_button = None
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
                         activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
@@ -11972,12 +12496,6 @@ def main():
                         else:
                             desktop_pointer_down = True
                             emit_desktop_touch(event.pos, "down")
-                elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_window_drag_button is not None:
-                    if event.buttons[0]:
-                        window_x, window_y = desktop_window.position
-                        desktop_window.position = (window_x + event.rel[0], window_y + event.rel[1])
-                    else:
-                        desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEMOTION and desktop_map_press is not None:
                     map_x, map_y = desktop_logical_point(event.pos)
                     previous_x, previous_y = desktop_map_last
@@ -11998,12 +12516,6 @@ def main():
                     emit_desktop_touch(event.pos, "move")
                 elif args.desktop and event.type == pygame.MOUSEMOTION:
                     update_receiver_map_hover(event.pos)
-                elif (
-                    args.desktop
-                    and event.type == pygame.MOUSEBUTTONUP
-                    and event.button == desktop_window_drag_button
-                ):
-                    desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if desktop_map_press is not None:
                         map_x, map_y = desktop_logical_point(event.pos)
@@ -12075,6 +12587,8 @@ def main():
                 elif event_type == kiwi.EV_SYN and code == kiwi.SYN_REPORT:
                     points = kiwi.touch_points(mt_slots, raw_x, raw_y, active, args)
                     is_active = bool(points)
+                    if is_active and picker_open:
+                        picker_input_at = time.perf_counter()
                     if not is_active:
                         if raw_x is None or raw_y is None:
                             x = start_x if start_x is not None else 0
@@ -12084,12 +12598,18 @@ def main():
                     else:
                         x, y = points[0] if len(points) == 1 else kiwi.midpoint(points[:2])
 
-                    if is_active and picker_open and picker_map_open and picker_map_garden_mode and globe_receivers:
-                        hovered_receiver = receiver_map_station_at(
-                            x, y, globe_receivers, picker_map_yaw,
-                            picker_map_pitch, PICKER_MAP_BOX, picker_map_scale, True,
+                    if (
+                        is_active and picker_open and picker_map_open and picker_map_garden_mode
+                        and picker_map_projection is not None
+                        and picker_map_projection.matches(
+                            globe_receivers, picker_map_yaw, picker_map_pitch,
+                            PICKER_MAP_BOX, picker_map_scale,
                         )
+                    ):
+                        hovered_receiver = picker_map_projection.nearest(x, y, 42.0)
                         picker_map_hover_server = hovered_receiver["server"] if hovered_receiver else None
+                    elif is_active and picker_open and picker_map_open:
+                        picker_map_hover_server = None
 
                     if is_active:
                         if not touch_started:
@@ -13482,7 +14002,7 @@ def main():
                                 # sequence currently rendered. Using `stations` here
                                 # selected a different endpoint whenever active rows
                                 # had been promoted ahead of their base sort position.
-                                visible_stations = health_prioritized_stations(stations, station_health, station_sort)
+                                visible_stations = station_order_cache.get(stations, station_health, station_sort)
                                 idx = station_at(x, y, visible_stations, station_scroll)
                                 if idx is not None:
                                     wake_controls()
@@ -13589,6 +14109,14 @@ def main():
                     flush=True,
                 )
             if picker_open and picker_map_open:
+                if args.picker_perf_scenario:
+                    picker_input_at = time.perf_counter()
+                    scenario_elapsed = now - start
+                    picker_map_yaw = math.radians(-18) + 1.7 * math.sin(scenario_elapsed * 0.91)
+                    picker_map_pitch = math.radians(38) * math.sin(scenario_elapsed * 0.67)
+                    picker_map_scale = 0.78 + 2.35 * (
+                        0.5 + 0.5 * math.sin(scenario_elapsed * 0.49 - math.pi / 2)
+                    )
                 map_dt = min(0.05, max(0.0, now - picker_map_motion_at))
                 picker_map_motion_at = now
                 if picker_map_lock_target is not None:
@@ -13648,36 +14176,79 @@ def main():
                     if station_connected_at <= 0.0:
                         station_connected_at = now
                     elif now - station_connected_at >= 0.45:
-                        if picker_map_open:
+                        map_connection_ready_to_finalize = True
+                        auto_tuned_khz = None
+                        if picker_map_open and picker_map_auto_tune_pending:
+                            _spectrum_enabled, map_spectrum_values, _map_spectrum_peaks = state.spectrum_snapshot()
+                            auto_tuned_khz = closest_strong_spectrum_frequency(
+                                map_spectrum_values,
+                                freq_khz,
+                                kiwi.zoom_source_span_khz(zoom),
+                            )
+                            if auto_tuned_khz is None and now - station_connected_at < 2.0:
+                                map_connection_ready_to_finalize = False
+                            else:
+                                picker_map_auto_tune_pending = False
+                                if auto_tuned_khz is not None:
+                                    auto_tuned_khz = snap_frequency_khz(auto_tuned_khz, tune_step_hz)
+                                    state.set_view(freq_khz=auto_tuned_khz)
+                                    display_freq = candidate_freq = auto_tuned_khz
+                                    apply_band_default(auto_tuned_khz)
+                                    animate_to(auto_tuned_khz, kiwi.zoom_to_span_khz(zoom), 0.16)
+                                    remember_current_view()
+                                    print(f"gl map auto peak {auto_tuned_khz:.3f} kHz", flush=True)
+                        if map_connection_ready_to_finalize and picker_map_open:
                             # A map selection is intentionally persistent: the
                             # square stays marked after a successful connect.
-                            selected_map_receiver = next(
+                            selected_map_receiver = (
+                                picker_map_projection.receiver(station_pending_server)
+                                if picker_map_projection is not None else None
+                            ) or next(
                                 (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
                                 None,
                             )
                             if selected_map_receiver:
+                                tuned_suffix = f"  ·  PEAK {auto_tuned_khz:.3f} kHz" if auto_tuned_khz is not None else ""
                                 picker_map_notice = (
-                                    f"CONNECTED  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
+                                    f"CONNECTED  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}{tuned_suffix}"
                                 )
                                 picker_map_notice_until = now + 2.75
                             station_pending_server = None
-                        else:
+                        elif map_connection_ready_to_finalize:
                             picker_open = False
                             station_scroll = 0
                             station_pending_server = None
-                        station_connected_at = 0.0
+                        if map_connection_ready_to_finalize:
+                            station_connected_at = 0.0
                 elif station_connection_status == "failed":
-                    # Keep the chosen row visible and marked unavailable so
-                    # the operator can immediately choose another receiver.
                     station_connected_at = 0.0
-                    if picker_map_open:
-                        selected_map_receiver = next(
+                    has_map_fallback = (
+                        picker_map_open
+                        and station_pending_server is not None
+                        and 0 <= picker_map_candidate_index < len(picker_map_nearby_receivers) - 1
+                        and picker_map_nearby_receivers[picker_map_candidate_index].get("server") == station_pending_server
+                    )
+                    if has_map_fallback:
+                        picker_map_candidate_index += 1
+                        activate_map_receiver(
+                            picker_map_nearby_receivers[picker_map_candidate_index],
+                            f"FALLBACK {picker_map_candidate_index + 1}/{len(picker_map_nearby_receivers)}",
+                        )
+                        station_connection_status = "connecting"
+                    elif picker_map_open:
+                        # All three local candidates failed. Keep the trio visible
+                        # so the operator can see the cached health evidence.
+                        picker_map_auto_tune_pending = False
+                        selected_map_receiver = (
+                            picker_map_projection.receiver(station_pending_server)
+                            if picker_map_projection is not None else None
+                        ) or next(
                             (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
                             None,
                         )
                         if selected_map_receiver and not picker_map_notice.startswith("UNAVAILABLE"):
                             picker_map_notice = (
-                                f"UNAVAILABLE  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
+                                f"LOCAL RX UNAVAILABLE  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
                             )
                             picker_map_notice_until = now + 4.0
             smeter_dbm, smeter_peak_dbm = state.smeter_snapshot()
@@ -13688,9 +14259,11 @@ def main():
                 next_smeter_readout_update = now + SMETER_READOUT_INTERVAL_SECONDS
             if now >= next_health_reload:
                 try:
-                    station_health = json.loads(STATION_HEALTH_CACHE.read_text()).get("stations", {})
+                    refreshed_station_health = json.loads(STATION_HEALTH_CACHE.read_text()).get("stations", {})
                 except (OSError, ValueError, TypeError):
-                    station_health = {}
+                    refreshed_station_health = {}
+                if refreshed_station_health != station_health:
+                    station_health = refreshed_station_health
                 next_health_reload = now + 3.0
             while True:
                 try:
@@ -13928,6 +14501,23 @@ def main():
 
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+            if picker_open:
+                picker_view, picker_timings, picker_frame_started_at = draw_active_receiver_picker()
+                present_started_at = time.perf_counter()
+                present_frame()
+                picker_timings["present"] = time.perf_counter() - present_started_at
+                picker_timings["frame"] = time.perf_counter() - picker_frame_started_at
+                if picker_input_at is not None:
+                    picker_timings["input_to_present"] = time.perf_counter() - picker_input_at
+                    picker_input_at = None
+                performance_report = picker_profiler.record(picker_view, picker_timings)
+                if performance_report:
+                    print(performance_report, flush=True)
+                frames += 1
+                if args.duration and time.monotonic() - start >= args.duration:
+                    break
+                clock.tick(args.fps)
+                continue
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
@@ -14153,26 +14743,6 @@ def main():
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
-            if picker_open:
-                if picker_map_open:
-                    draw_receiver_map(
-                        text_cache, globe_receivers, picker_map_yaw, picker_map_pitch,
-                        picker_map_scale, picker_map_selected_server or server,
-                        station_pending_server, station_connection_status, station_health,
-                        picker_map_notice if time.monotonic() < picker_map_notice_until else "",
-                        picker_map_garden_mode, picker_map_hover_server, picker_map_view,
-                        (touch_started and gesture == "picker_map")
-                        or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
-                    )
-                elif search_open:
-                    draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
-                else:
-                    visible_stations = health_prioritized_stations(stations, station_health, station_sort)
-                    draw_station_picker(
-                        text_cache, visible_stations, station_scroll, server, station_query,
-                        station_sort, station_health, station_pending_server, station_connection_status,
-                        station_route_filter, receiver_home_profile,
-                    )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(text_cache, radio_mode, digital_mode, tune_step_hz, radio_family_open)
             if display_setup_open:
@@ -14235,23 +14805,7 @@ def main():
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
             if not picker_open:
                 draw_desktop_1280_navigation(text_cache)
-            if screenshot_requested.is_set():
-                pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-                screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
-                pygame.image.save(screenshot, str(args.screenshot_path))
-                screenshot_requested.clear()
-                print(f"gl screenshot: {args.screenshot_path}", flush=True)
-            if Path("/tmp/kiwi-gl-screenshot").exists():
-                pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-                frame = pygame.image.frombuffer(pixels, (NATIVE_W, NATIVE_H), "RGBA")
-                pygame.image.save(pygame.transform.flip(frame, False, True), "/tmp/kiwi-gl-screenshot.png")
-                Path("/tmp/kiwi-gl-screenshot").unlink(missing_ok=True)
-            # macOS's SDL OpenGL path can leave the composited window black
-            # even though glReadPixels sees a complete backbuffer. Explicitly
-            # flush before the swap so the drawable is presented to Cocoa.
-            if DESKTOP_MODE:
-                GL.glFlush()
-            pygame.display.flip()
+            present_frame()
             frames += 1
             if args.duration and time.monotonic() - start >= args.duration:
                 break
@@ -14271,6 +14825,21 @@ def main():
         caption_thread.join(timeout=1.5)
         callsign_thread.join(timeout=1.5)
         elapsed = max(0.001, time.monotonic() - start)
+        if args.picker_perf_scenario:
+            final_report = picker_profiler.report("map")
+            frame_p95 = picker_profiler.percentile("map", "frame")
+            input_p95 = picker_profiler.percentile("map", "input_to_present")
+            gate_passed = (
+                frame_p95 is not None and frame_p95 <= 41.7
+                and input_p95 is not None and input_p95 < 80.0
+            )
+            print(final_report, flush=True)
+            print(
+                f"picker perf gate {'PASS' if gate_passed else 'FAIL'} "
+                f"frame_p95={frame_p95 if frame_p95 is not None else float('nan'):.2f}ms "
+                f"input_p95={input_p95 if input_p95 is not None else float('nan'):.2f}ms",
+                flush=True,
+            )
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()
 
