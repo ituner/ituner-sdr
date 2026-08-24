@@ -86,6 +86,7 @@ import pygame
 from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
+import fmdx
 import render_sdr_frontend_mockup as sdr_ui
 from receiver_picker_model import (
     PickerFrameProfiler,
@@ -1172,7 +1173,7 @@ def configure_popup_layout():
     global CALLSIGN_TOGGLE_BOX, ASR_TOGGLE_BOX, ASR_PANEL_BOX, ASR_MOON_LANGUAGE_PANEL_BOX, VOSK_CAPTION_BOX
     global PICKER_BOX, PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H, PICKER_MAP_BOX, PICKER_MAP_MODE_BOX
     global PICKER_SEARCH_BOX, PICKER_SORT_BOX, PICKER_ROUTE_ALL_BOX, PICKER_ROUTE_DIRECT_BOX
-    global PICKER_ROUTE_PROXY_BOX, PICKER_ROUTE_FAVORITES_BOX, PICKER_EXIT_BOX
+    global PICKER_ROUTE_PROXY_BOX, PICKER_ROUTE_FMDX_BOX, PICKER_ROUTE_FAVORITES_BOX, PICKER_EXIT_BOX
     global RADIOGARDEN_LIST_BOX, RADIOGARDEN_EXIT_BOX, RADIOGARDEN_VIEW_BOX
 
     def offset(kind):
@@ -1325,17 +1326,18 @@ def configure_popup_layout():
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 8)
-        PICKER_SEARCH_BOX = lcd_nav_box(1, 8)
-        # Directory uses the full 2×4 rail: one sort tile, then separate
-        # route filters. A route must never require cycling through unrelated
-        # choices just to reach Direct or Proxy.
-        PICKER_SORT_BOX = lcd_nav_box(2, 8)
-        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3, 8)
-        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 8)
-        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 8)
-        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6, 8)
-        PICKER_EXIT_BOX = lcd_nav_box(7, 8)
+        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 9)
+        PICKER_SEARCH_BOX = lcd_nav_box(1, 9)
+        # Directory uses a five-row rail: one sort tile, then separate route
+        # filters. A route must never require cycling through unrelated
+        # choices just to reach Direct, Proxy, or FM-DX receivers.
+        PICKER_SORT_BOX = lcd_nav_box(2, 9)
+        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3, 9)
+        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 9)
+        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 9)
+        PICKER_ROUTE_FMDX_BOX = lcd_nav_box(6, 9)
+        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(7, 9)
+        PICKER_EXIT_BOX = lcd_nav_box(8, 9)
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
         RADIOGARDEN_EXIT_BOX = (1031, 372, 1273, 490)
@@ -1349,6 +1351,7 @@ def configure_popup_layout():
         PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_DIRECT_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
+        PICKER_ROUTE_FMDX_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_FAVORITES_BOX = (0, 0, 0, 0)
         PICKER_EXIT_BOX = (806, 254, 948, 320)
         RADIOGARDEN_LIST_BOX = (0, 0, 0, 0)
@@ -1394,6 +1397,7 @@ PICKER_SORT_BOX = (806, 98, 948, 164)
 PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
 PICKER_ROUTE_DIRECT_BOX = (0, 0, 0, 0)
 PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
+PICKER_ROUTE_FMDX_BOX = (0, 0, 0, 0)
 PICKER_ROUTE_FAVORITES_BOX = (0, 0, 0, 0)
 PICKER_EXIT_BOX = (806, 254, 948, 320)
 RADIOGARDEN_LIST_BOX = (0, 0, 0, 0)
@@ -1434,6 +1438,8 @@ PUBLIC_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.js
 STATION_HEALTH_CACHE = Path.home() / ".local/state/kiwi-gl-station-health.json"
 GLOBE_DIRECTORY_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
 GLOBE_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-globe-receivers.json"
+FMDX_DIRECTORY_CACHE = Path.home() / ".local/state/ituner-fmdx-directory.json"
+FMDX_STATION_CACHE = Path.home() / ".local/state/ituner-fmdx-stations.json"
 RECEIVER_HOME_PROFILE = Path.home() / ".local/state/kiwi-gl-receiver-home.json"
 FAVORITES_CACHE = Path.home() / ".local/state/kiwi-gl-favorites.json"
 FAN_CURVE_CONFIG = Path.home() / ".local/state/ituner-fan-curve.json"
@@ -1513,6 +1519,8 @@ def receiver_limit_label(entry):
 
 def receiver_route_label(server):
     """Classify the directory route without hiding its actual receiver host."""
+    if fmdx.is_fmdx_server(server):
+        return "FMDX"
     parsed = urlparse(server if "://" in server else "http://" + server)
     host = (parsed.hostname or "").casefold()
     # Kiwi's public relay endpoints identify themselves with a proxy host
@@ -1706,9 +1714,11 @@ def station_health_summary(entry, fresh):
     return f"AUDIO: {audio} · WATERFALL: {waterfall} · TESTED: {age}"
 
 
-def station_stream_pill(text_cache, x, y, stream, entry, fresh, pending=False):
+def station_stream_pill(text_cache, x, y, stream, entry, fresh, pending=False, unavailable=False):
     """Draw one compact framed Audio/Waterfall health annunciator."""
-    if pending:
+    if unavailable:
+        state, fill, edge, ink = "N/A", (36, 42, 47, 225), (120, 133, 141, 210), (185, 196, 201)
+    elif pending:
         state, fill, edge, ink = "WAIT", (31, 72, 68, 235), (111, 224, 189, 245), (213, 255, 233)
     elif not fresh:
         state, fill, edge, ink = "UNTESTED", (36, 42, 47, 225), (120, 133, 141, 210), (185, 196, 201)
@@ -1840,7 +1850,28 @@ def load_public_stations():
     return cached if cached else kiwi.STATIONS
 
 
-STATIONS = load_public_stations()
+FMDX_RECEIVERS = fmdx.load_directory(FMDX_DIRECTORY_CACHE)
+FMDX_LEARNED_STATIONS = fmdx.load_station_cache(FMDX_STATION_CACHE)
+FMDX_STATION_CACHE_LOCK = threading.Lock()
+STATIONS = tuple(load_public_stations()) + tuple(fmdx.stations_from_receivers(FMDX_RECEIVERS))
+
+
+def remember_fmdx_station(server, station):
+    """Persist a new RDS name once, grouped under its receiver endpoint."""
+    server = fmdx.normalize_server_url(server)
+    if not server or not station:
+        return False
+    with FMDX_STATION_CACHE_LOCK:
+        previous = tuple(FMDX_LEARNED_STATIONS.get(server, ()))
+        updated = fmdx.merge_station_presets(previous, (station,))
+        if updated == previous:
+            return False
+        FMDX_LEARNED_STATIONS[server] = updated
+        try:
+            fmdx.save_station_cache(FMDX_STATION_CACHE, FMDX_LEARNED_STATIONS)
+        except OSError as exc:
+            print(f"gl FM-DX station cache save failed: {exc}", flush=True)
+        return True
 
 
 def parse_globe_directory(script):
@@ -1874,7 +1905,11 @@ def parse_globe_directory(script):
             total = int(field("users_max", "0"))
         except ValueError:
             used = total = 0
-        receivers.append({"name": name, "location": location, "server": server, "lat": lat, "lon": lon, "used": used, "total": total})
+        receivers.append({
+            "name": name, "location": location, "server": server,
+            "lat": lat, "lon": lon, "used": used, "total": total,
+            "receiver_type": "kiwi",
+        })
     return receivers
 
 
@@ -1929,7 +1964,10 @@ def stations_from_globe_receivers(receivers):
             lat, lon = float(receiver["lat"]), float(receiver["lon"])
         except (KeyError, TypeError, ValueError):
             lat = lon = None
-        stations.append((name, location, server, used, total, lat, lon))
+        stations.append((
+            name, location, server, used, total, lat, lon,
+            str(receiver.get("receiver_type") or "kiwi"),
+        ))
     return stations
 
 
@@ -2176,14 +2214,29 @@ def frequency_entry_action_at(x, y):
     return None
 
 
-def parse_frequency_entry_mhz(value):
+def tuning_bounds_khz(server):
+    """Return live tuning limits for the selected receiver protocol."""
+    return fmdx.receiver_bounds(server) or (0.0, TUNING_MAX_KHZ)
+
+
+def clamp_tuning_frequency(server, frequency_khz):
+    low, high = tuning_bounds_khz(server)
+    return clamp(float(frequency_khz), low, high)
+
+
+def parse_frequency_entry_mhz(value, server=None):
     """Accept MHz primarily, while tolerating a pasted kHz value."""
     try:
         numeric = float(value.strip())
     except (TypeError, ValueError):
         return None
-    frequency_khz = numeric * 1000.0 if numeric <= 30.0 else numeric
-    return frequency_khz if 0.0 <= frequency_khz <= TUNING_MAX_KHZ else None
+    low, high = tuning_bounds_khz(server)
+    # Prefer a human-entered MHz value, then accept an explicit pasted kHz
+    # value. This remains unambiguous for both HF Kiwi and VHF FM-DX bands.
+    for frequency_khz in (numeric * 1000.0, numeric):
+        if low <= frequency_khz <= high:
+            return frequency_khz
+    return None
 
 
 ZOOM_OSD_SECONDS = 1.4
@@ -2322,6 +2375,12 @@ def favorite_waterfall_box():
     """A matching one-tap favorite target immediately left of Play/Pause."""
     x0, y0, _x1, y1 = stream_waterfall_box()
     return x0 - 82, y0, x0 - 10, y1
+
+
+def stations_waterfall_box():
+    """Always-visible FM-DX station picker beside Favorite and Play/Pause."""
+    x0, y0, _x1, y1 = favorite_waterfall_box()
+    return x0 - 150, y0, x0 - 10, y1
 
 
 def audio_jitter_status_box():
@@ -2565,9 +2624,25 @@ def load_remembered_view(path):
         server = saved.get("server")
         parsed = urlparse(server)
         if parsed.scheme in ("http", "https") and parsed.hostname:
-            view = {"server": server}
+            receiver_type = str(saved.get("receiver_type") or "").casefold()
+            saved_frequency = saved.get("freq_khz")
+            # Migrate state written by the earlier registry-dependent saver:
+            # this UI cannot tune a Kiwi above 30 MHz, so a VHF remembered
+            # frequency is definitive FM-DX evidence even if it was labelled
+            # "kiwi" while the directory cache was unavailable.
+            if isinstance(saved_frequency, (int, float)) and saved_frequency > TUNING_MAX_KHZ:
+                receiver_type = "fmdx"
+            elif receiver_type not in ("kiwi", "fmdx"):
+                receiver_type = (
+                    "fmdx"
+                    if fmdx.is_fmdx_server(server)
+                    else "kiwi"
+                )
+            fmdx.ensure_receiver(server, receiver_type)
+            view = {"server": server, "receiver_type": receiver_type}
             freq_khz = saved.get("freq_khz")
-            if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= TUNING_MAX_KHZ:
+            low_khz, high_khz = tuning_bounds_khz(server)
+            if isinstance(freq_khz, (int, float)) and low_khz <= freq_khz <= high_khz:
                 view["freq_khz"] = float(freq_khz)
             zoom = saved.get("zoom")
             if isinstance(zoom, int) and 0 <= zoom <= kiwi.DISPLAY_MAX_ZOOM:
@@ -2584,17 +2659,24 @@ def load_remembered_view(path):
     return None
 
 
-def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False, preferences=None):
+def save_remembered_view(
+    path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False,
+    preferences=None, receiver_type=None,
+):
     parsed = urlparse(server)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
+        receiver_type = str(receiver_type or "").casefold()
+        if receiver_type not in ("kiwi", "fmdx"):
+            receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
         saved = {
             "version": 2,
             "freq_khz": round(float(freq_khz), 3),
             "server": server,
+            "receiver_type": receiver_type,
             "zoom": clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM),
         }
         if manual_radio_mode and isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
@@ -2622,7 +2704,16 @@ class SharedState:
     ):
         self.lock = threading.Lock()
         self.server = server
-        self.freq_khz = freq_khz
+        self.receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
+        self.freq_khz = fmdx.receiver_frequency(server, freq_khz) if self.receiver_type == "fmdx" else freq_khz
+        self.fmdx_status = {}
+        self.fmdx_audio_scope = ()
+        self.fmdx_tune_generation = 0
+        self.fmdx_tune_changed_at = 0.0
+        self.fmdx_discovery = {"active": False, "index": 0, "total": 0, "frequency_khz": None}
+        with FMDX_STATION_CACHE_LOCK:
+            self.fmdx_stations = tuple(FMDX_LEARNED_STATIONS.get(fmdx.normalize_server_url(server), ()))
+        self.fmdx_auto_station_pending = False
         self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
         self.smeter_dbm = smeter_dbm
         self.smeter_peak_dbm = smeter_dbm
@@ -2723,6 +2814,84 @@ class SharedState:
         with self.lock:
             return self.server, self.freq_khz, self.zoom, self.smeter_dbm, self.view_generation, self.server_generation
 
+    def receiver_type_snapshot(self, generation=None):
+        with self.lock:
+            if generation is not None and generation != self.server_generation:
+                return None
+            return self.receiver_type
+
+    def update_fmdx_status(self, payload, generation):
+        if not isinstance(payload, dict):
+            return
+        with self.lock:
+            if generation != self.server_generation or self.receiver_type != "fmdx":
+                return
+            self.fmdx_status = {
+                key: payload.get(key)
+                for key in ("freq", "pi", "ps", "pty", "rt0", "rt1", "st", "bw", "ant")
+                if payload.get(key) not in (None, "")
+            }
+            learned = fmdx.station_from_status(payload, self.freq_khz)
+            if learned:
+                self.fmdx_stations = fmdx.merge_station_presets(self.fmdx_stations, (learned,))
+                self.fmdx_auto_station_pending = False
+            return learned
+
+    def fmdx_status_snapshot(self):
+        with self.lock:
+            return dict(self.fmdx_status)
+
+    def update_fmdx_stations(self, stations, generation):
+        with self.lock:
+            if generation == self.server_generation and self.receiver_type == "fmdx":
+                self.fmdx_stations = fmdx.merge_station_presets(stations, self.fmdx_stations)
+                if self.fmdx_auto_station_pending:
+                    target = fmdx.nearest_station_frequency(self.fmdx_stations, self.freq_khz)
+                    if target is not None:
+                        self.freq_khz = fmdx.clamp_receiver_frequency(self.server, target)
+                        self.view_generation += 1
+                        self.fmdx_auto_station_pending = False
+                        return self.freq_khz
+        return None
+
+    def fmdx_stations_snapshot(self):
+        with self.lock:
+            return tuple(dict(station) for station in self.fmdx_stations)
+
+    def set_fmdx_discovery(self, active, index=0, total=0, frequency_khz=None, generation=None):
+        with self.lock:
+            if generation is not None and generation != self.server_generation:
+                return False
+            self.fmdx_discovery = {
+                "active": bool(active),
+                "index": max(0, int(index)),
+                "total": max(0, int(total)),
+                "frequency_khz": None if frequency_khz is None else float(frequency_khz),
+            }
+            return True
+
+    def fmdx_discovery_snapshot(self):
+        with self.lock:
+            return dict(self.fmdx_discovery)
+
+    def update_fmdx_audio_scope(self, mono_pcm, generation):
+        values = fmdx.audio_scope_samples(mono_pcm)
+        if not values:
+            return
+        with self.lock:
+            if generation == self.server_generation and self.receiver_type == "fmdx":
+                self.fmdx_audio_scope = values
+
+    def fmdx_audio_scope_snapshot(self):
+        with self.lock:
+            return self.fmdx_audio_scope
+
+    def fmdx_tune_snapshot(self, generation=None):
+        with self.lock:
+            if generation is not None and generation != self.server_generation:
+                return None, None
+            return self.fmdx_tune_generation, self.fmdx_tune_changed_at
+
     def kiwi_session_timestamp_snapshot(self, generation):
         with self.lock:
             if generation != self.server_generation:
@@ -2732,7 +2901,19 @@ class SharedState:
     def set_view(self, freq_khz=None, zoom=None):
         with self.lock:
             if freq_khz is not None:
-                self.freq_khz = freq_khz
+                next_frequency = (
+                    fmdx.clamp_receiver_frequency(self.server, freq_khz)
+                    if self.receiver_type == "fmdx" else freq_khz
+                )
+                if self.receiver_type == "fmdx" and abs(next_frequency - self.freq_khz) > 0.0005:
+                    self.fmdx_status = {
+                        "tuning": True,
+                        "freq": next_frequency / 1000.0,
+                    }
+                    self.fmdx_audio_scope = ()
+                    self.fmdx_tune_generation += 1
+                    self.fmdx_tune_changed_at = time.monotonic()
+                self.freq_khz = next_frequency
             if zoom is not None:
                 self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
             self.spectrum_peak_values = ()
@@ -2760,6 +2941,22 @@ class SharedState:
         """
         with self.lock:
             self.server = server
+            self.receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
+            self.fmdx_status = {}
+            self.fmdx_audio_scope = ()
+            self.fmdx_tune_generation += 1
+            self.fmdx_tune_changed_at = time.monotonic()
+            self.fmdx_discovery = {"active": False, "index": 0, "total": 0, "frequency_khz": None}
+            with FMDX_STATION_CACHE_LOCK:
+                self.fmdx_stations = tuple(FMDX_LEARNED_STATIONS.get(fmdx.normalize_server_url(server), ()))
+            if self.receiver_type == "fmdx":
+                self.freq_khz = fmdx.receiver_frequency(server, self.freq_khz)
+                target = fmdx.nearest_station_frequency(self.fmdx_stations, self.freq_khz)
+                if target is not None:
+                    self.freq_khz = fmdx.clamp_receiver_frequency(server, target)
+                self.fmdx_auto_station_pending = target is None
+            else:
+                self.fmdx_auto_station_pending = False
             # Selecting another receiver is an intentional request to listen
             # to it, even if the previous one had been paused.
             self.stream_paused = False
@@ -4041,11 +4238,11 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
-def draw_filter_toggle_button(text_cache, alpha=1.0):
+def draw_filter_toggle_button(text_cache, alpha=1.0, station_mode=False):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = FILTER_TOGGLE_BOX
-    key = "filter_toggle_v3"
+    key = f"filter_toggle_v4_{int(station_mode)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -4069,7 +4266,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         pygame.draw.line(hi, color, (p(left + icon_w * 0.26), p(baseline - icon_h * 1.3)), (p(left + icon_w * 0.26), p(baseline)), p(max(2.0, h * 0.028)))
         pygame.draw.line(hi, color, (p(left + icon_w * 0.74), p(baseline - icon_h * 1.3)), (p(left + icon_w * 0.74), p(baseline)), p(max(2.0, h * 0.028)))
         pygame.draw.line(hi, (221, 245, 246, 122), (p(w / 2), p(baseline - icon_h * 1.45)), (p(w / 2), p(baseline + 2)), p(max(1.1, h * 0.016)))
-        label = text_cache.font(label_size * scale, bold=True, mono=True).render("FILTER", True, color[:3])
+        label_text = "STATIONS" if station_mode else "FILTER"
+        label = text_cache.font(label_size * scale, bold=True, mono=True).render(label_text, True, color[:3])
         hi.blit(label, ((hi.get_width() - label.get_width()) // 2, p(h - label_size - 5)))
         surface = pygame.transform.smoothscale(hi, (w, h))
         cached = text_cache.surface_texture(key, surface)
@@ -4077,7 +4275,7 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
-def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
+def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, fmdx_receiver=False):
     """Draw the controls that must remain above movable text overlays."""
     zoom_separator_left = ZOOM_MINUS_BOX[2] - ZOOM_GROUP_BOX[0] + 10
     zoom_separator_right = ZOOM_PLUS_BOX[0] - ZOOM_GROUP_BOX[0] - 10
@@ -4101,7 +4299,7 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
     else:
         view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
         draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
-        draw_filter_toggle_button(text_cache, alpha)
+        draw_filter_toggle_button(text_cache, alpha, station_mode=fmdx_receiver)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, alpha)
 
 
@@ -4166,6 +4364,21 @@ def draw_favorite_waterfall_button(favorited):
     if favorited:
         for radius in (15, 9, 4):
             draw_logical_circle(cx, cy, radius, (248, 207, 104, 145), 18, True)
+
+
+def draw_stations_waterfall_button(text_cache, station_count):
+    """A labelled FM-DX shortcut that stays visible on the live waterfall."""
+    x0, y0, x1, y1 = stations_waterfall_box()
+    edge = (255, 154, 61, 235)
+    draw_logical_rect(x0, y0, x1, y1, (38, 20, 8, 178))
+    for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
+        draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
+    for index, width in enumerate((25, 34, 20)):
+        yy = y0 + 17 + index * 11
+        draw_logical_circle(x0 + 16, yy, 2.3, edge, 10)
+        draw_logical_line(x0 + 24, yy, x0 + 24 + width, yy, edge, 2)
+    draw_text(text_cache, x1 - 10, y0 + 22, "STATIONS", (255, 222, 190), 15, True, True, "rm")
+    draw_text(text_cache, x1 - 10, y1 - 13, f"{station_count} PRESETS", (214, 157, 105), 11, False, True, "rm")
 
 
 def draw_audio_transport_graph(text_cache, history, box):
@@ -6138,18 +6351,31 @@ def lcd_audio_drawer_close_box():
 
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
-                        title_size=None, detail_size=None):
+                        title_size=None, detail_size=None, disabled=False):
     """Compact two-line control tile for the LCD audio drawer."""
     x0, y0, x1, y1 = box
-    fill = (28, 78, 67, 230) if active else (18, 29, 38, 216)
-    edge = accent if active else (115, 140, 151, 92)
+    fill = (25, 28, 31, 205) if disabled else ((28, 78, 67, 230) if active else (18, 29, 38, 216))
+    edge = (88, 94, 98, 70) if disabled else (accent if active else (115, 140, 151, 92))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
     title_size = title_size or (15 if len(title) <= 8 else 13)
     detail_size = detail_size or (13 if len(detail) <= 10 else 11)
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, (230, 246, 247), title_size, True, False, "cm", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), detail_size, True, False, "cm", family="Liberation Sans")
+    title_color = (119, 126, 130) if disabled else (230, 246, 247)
+    detail_color = (105, 111, 115) if disabled else ((112, 223, 169) if active else (153, 185, 191))
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, title_color, title_size, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, detail_color, detail_size, True, False, "cm", family="Liberation Sans")
+
+
+def draw_disabled_control_overlay(text_cache, box, label="N/A FOR FM-DX"):
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, (12, 15, 18, 205))
+    draw_logical_line(x0, y0, x1, y1, (83, 89, 93, 105), 1)
+    draw_logical_line(x1, y0, x0, y1, (83, 89, 93, 105), 1)
+    draw_text(
+        text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label,
+        (112, 119, 123), 11, True, False, "cm", family="Liberation Sans",
+    )
 
 
 def draw_lcd_drawer_heading(text_cache, x, y, title):
@@ -6241,7 +6467,8 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9, (229, 246, 246, 250))
 
 
-def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode):
+def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available,
+                          radio_mode, fmdx_receiver=False, station_count=0):
     """Right-rail audio drawer; it never obscures the waterfall workspace."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
@@ -6286,14 +6513,29 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     )
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
-    draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "FILTER", format_filter_width(high_cut - low_cut))
+    draw_lcd_audio_tile(
+        text_cache, AUDIO_FILTER_BOX,
+        "STATIONS" if fmdx_receiver else "FILTER",
+        f"{station_count} PRESETS" if fmdx_receiver else format_filter_width(high_cut - low_cut),
+    )
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
+    if fmdx_receiver:
+        for box in (
+            AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX, AUDIO_SQUELCH_BOX,
+            AUDIO_AGC_BOX, AUDIO_BLANKER_BOX, AUDIO_DENOISE_BOX,
+            AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX, AUDIO_RESET_BOX,
+        ):
+            draw_disabled_control_overlay(text_cache, box)
 
 
-def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode=None):
+def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available,
+                     radio_mode=None, fmdx_receiver=False, station_count=0):
     """One readable Audio workspace, with the real Kiwi SND path behind it."""
     if LCD_800_MODE:
-        draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode)
+        draw_lcd_audio_drawer(
+            text_cache, volume, controls, low_cut, high_cut, output_available,
+            radio_mode, fmdx_receiver, station_count,
+        )
         return
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
@@ -6408,8 +6650,20 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     panel_button(AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
-    panel_button(AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False)
+    panel_button(
+        AUDIO_FILTER_BOX,
+        "STATIONS" if fmdx_receiver else "PASSBAND",
+        f"{station_count} PRESETS" if fmdx_receiver else format_filter_width(high_cut - low_cut),
+        False,
+    )
     panel_button(AUDIO_RESET_BOX, "RESTORE", "KIWI DEFAULTS", False)
+    if fmdx_receiver:
+        for box in (
+            AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX, AUDIO_SQUELCH_BOX,
+            AUDIO_AGC_BOX, AUDIO_BLANKER_BOX, AUDIO_DENOISE_BOX,
+            AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX, AUDIO_RESET_BOX,
+        ):
+            draw_disabled_control_overlay(text_cache, box)
 
 
 def tests_option_at(x, y):
@@ -6896,16 +7150,24 @@ class GlobeGpuRenderer:
         for receiver in receivers:
             server = receiver.get("server")
             entry = station_health.get(server, {})
+            receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
             ready = (
                 now - entry.get("checked", 0) <= 86400
                 and entry.get("audio") is True
-                and entry.get("waterfall") is True
+                and (receiver_type == "fmdx" or entry.get("waterfall") is True)
             )
-            color = (
-                (39, 255, 105, 255) if server in nearby_servers else
-                ((94, 236, 183, 255) if server == pending_server else
-                 ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
-            )
+            if receiver_type == "fmdx":
+                color = (
+                    (255, 214, 91, 255) if server in nearby_servers else
+                    ((255, 180, 76, 255) if server == pending_server else
+                     (fmdx.FMDX_MARKER_COLOR if ready else (190, 111, 60, 178)))
+                )
+            else:
+                color = (
+                    (39, 255, 105, 255) if server in nearby_servers else
+                    ((94, 236, 183, 255) if server == pending_server else
+                     ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+                )
             colors.extend(rgba(color))
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.receiver_color_buffer)
         payload = colors.tobytes()
@@ -7104,7 +7366,7 @@ def draw_receiver_map(
     map_view="borders", interactive=False, timings=None, projection=None,
     nearby_receivers=(), smeter_dbm=None,
 ):
-    """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
+    """RadioGarden-style globe with distinct Kiwi and FM-DX receiver dots."""
     started_at = time.perf_counter()
     box = PICKER_MAP_BOX
     if DESKTOP_1280_MODE:
@@ -7221,40 +7483,37 @@ def draw_receiver_map(
         receiver_point_groups = defaultdict(list)
         for receiver, point in projection.visible:
             entry = station_health.get(receiver["server"], {})
+            receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
             ready = (
                 now - entry.get("checked", 0) <= 86400
                 and entry.get("audio") is True
-                and entry.get("waterfall") is True
+                and (receiver_type == "fmdx" or entry.get("waterfall") is True)
             )
             is_selected = receiver["server"] == selected_server
             is_pending = receiver["server"] == pending_server
             is_hovered = receiver["server"] == hover_server
             is_nearby = receiver["server"] in nearby_servers
-            color = (
-                (39, 255, 105, 255) if is_nearby else
-                ((94, 236, 183, 255) if is_pending else ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
-            )
-            # The panel is viewed at arm's length. Make both the luminous station
-            # core and its halo substantially easier to acquire with a finger.
-            dot_radius = 7.4 if is_nearby else (7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.25 if ready else 2.45)))
-            if interactive:
-                receiver_point_groups[(color, max(3.0, dot_radius * 2.0))].append(point)
-            elif is_nearby or is_pending or is_hovered or is_selected:
-                pulse = 4.5 + (math.sin(time.monotonic() * 9.0) + 1.0) * 4.5 if is_pending else 5.5
-                draw_logical_circle(point[0], point[1], dot_radius + pulse, (*color[:3], 238 if is_nearby else 225), 24, True)
-                if is_pending:
-                    draw_logical_circle(point[0], point[1], dot_radius + pulse + 10.0, (*color[:3], 108), 24, True)
-                draw_logical_circle(point[0], point[1], dot_radius, color, 20)
-                if is_hovered or is_selected:
-                    draw_logical_circle(point[0], point[1], dot_radius + 13, (175, 255, 219, 235), 28, True)
+            if receiver_type == "fmdx":
+                color = (
+                    (255, 214, 91, 255) if is_nearby else
+                    ((255, 180, 76, 255) if is_pending else
+                     (fmdx.FMDX_MARKER_COLOR if ready else (190, 111, 60, 178)))
+                )
             else:
-                receiver_point_groups[(color, dot_radius)].append(point)
-        for (color, marker_size), points in receiver_point_groups.items():
+                color = (
+                    (39, 255, 105, 255) if is_nearby else
+                    ((94, 236, 183, 255) if is_pending else
+                     ((84, 174, 166, 190) if ready else (132, 189, 198, 145)))
+                )
+            # Idle and moving globe paths intentionally use the same compact
+            # marker geometry. Selection is expressed through color only;
+            # halos and pulses add visual noise and make dots appear to resize.
+            receiver_point_groups[color].append(point)
+        for color, points in receiver_point_groups.items():
             if interactive:
-                draw_logical_points(points, color, marker_size)
+                draw_logical_points(points, color, 6.0)
             else:
-                draw_logical_disc_points(points, (*color[:3], min(94, color[3])), marker_size * 3.5)
-                draw_logical_disc_points(points, color, marker_size * 1.15)
+                draw_logical_disc_points(points, color, 3.0)
     if timings is not None:
         timings["markers"] = time.perf_counter() - markers_started_at
     chrome_started_at = time.perf_counter()
@@ -7277,6 +7536,17 @@ def draw_receiver_map(
         text_cache, nearby_receivers, station_health, selected_server,
         connection_status, smeter_dbm, box,
     )
+    # Keep the key away from the top-left receiver card; the previous legend
+    # was correctly drawn and then immediately covered by that card.
+    legend_x, legend_y = box[0] + 28, box[3] - 60
+    draw_logical_rect(box[0] + 14, box[3] - 78, box[0] + 190, box[3] - 14, (3, 13, 19, 214))
+    for index, (label, color) in enumerate((
+        ("CYAN · KIWI SDR", (84, 174, 166, 230)),
+        ("ORANGE · FM-DX", fmdx.FMDX_MARKER_COLOR),
+    )):
+        y = legend_y + index * 25
+        draw_logical_circle(legend_x, y, 4, color, 14)
+        draw_text(text_cache, legend_x + 13, y, label, color[:3], 12, True, False, "lm", family="Liberation Sans")
     # A larger, double-ring sight reads clearly over both dark map and Blue
     # Marble imagery while leaving the exact selection point unobscured.
     reticle = (224, 255, 248, 238)
@@ -8331,9 +8601,16 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
 
 
-def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASSBAND"):
+def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASSBAND", unavailable=False):
     """Draw a 10 kHz ICOM-inspired, but more informative, passband meter."""
     x0, y0, x1, y1 = box or lcd_home_bandwidth_box()
+    if unavailable:
+        draw_logical_rect(x0, y0, x1, y1, (16, 19, 22, 220))
+        draw_logical_line(x0, y0, x1, y0, (78, 84, 88, 100), 1)
+        draw_logical_line(x0, y1, x1, y1, (48, 53, 57, 130), 1)
+        draw_text(text_cache, x0 + 11, y0 + 17, title, (108, 115, 119), 13, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 8, "N/A · DECODED FM AUDIO", (104, 111, 115), 14, True, False, "cm", family="Liberation Sans")
+        return
     low_cut = float(low_cut if low_cut is not None else -1200.0)
     high_cut = float(high_cut if high_cut is not None else 1200.0)
     if high_cut < low_cut:
@@ -8545,8 +8822,109 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
         )
 
 
+def fmdx_station_panel_layout(station_count):
+    """Return one touch layout for the desktop overlay or LCD rail drawer."""
+    if LCD_800_MODE:
+        panel = lcd_filter_drawer_boxes()["panel"]
+        close = lcd_filter_drawer_boxes()["close"]
+        columns, start_y, gap, row_h = 1, 116, 8, 57
+        x0, x1 = panel[0] + 10, panel[2] - 10
+        available_bottom = close[1] - 12
+    else:
+        panel = (FILTER_PANEL_BOX[0], FILTER_PANEL_BOX[1], FILTER_PANEL_BOX[2], LOGICAL_H - 48)
+        close = None
+        columns, start_y, gap, row_h = 2, panel[1] + 58, 10, 66
+        x0, x1 = panel[0] + 22, panel[2] - 22
+        available_bottom = panel[3] - 18
+    column_w = (x1 - x0 - gap * (columns - 1)) / columns
+    rows = []
+    for index in range(max(0, int(station_count))):
+        row, column = divmod(index, columns)
+        top = start_y + row * (row_h + gap)
+        if top + row_h > available_bottom:
+            break
+        left = x0 + column * (column_w + gap)
+        rows.append((left, top, left + column_w, top + row_h))
+    return {"panel": panel, "close": close, "rows": tuple(rows)}
+
+
+def fmdx_station_scroll_max(station_count):
+    capacity = len(fmdx_station_panel_layout(station_count)["rows"])
+    return max(0, int(station_count) - capacity)
+
+
+def fmdx_station_at(x, y, stations, scroll=0):
+    for index, box in enumerate(fmdx_station_panel_layout(len(stations))["rows"]):
+        if contains(box, x, y):
+            station_index = int(scroll) + index
+            return station_index if station_index < len(stations) else None
+    return None
+
+
+def draw_fmdx_station_panel(text_cache, stations, current_frequency_khz, discovery=None, scroll=0):
+    layout = fmdx_station_panel_layout(len(stations))
+    scroll = int(clamp(int(scroll), 0, fmdx_station_scroll_max(len(stations))))
+    x0, y0, x1, y1 = layout["panel"]
+    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 252 if LCD_800_MODE else 232))
+    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
+    draw_logical_line(x0, y1, x1, y1, (72, 91, 99, 150), 1)
+    if layout["close"]:
+        draw_radio_close_button(text_cache, layout["close"])
+    draw_text(
+        text_cache, x0 + 14, y0 + 24, "FM-DX STATIONS",
+        (220, 244, 244), 20 if LCD_800_MODE else 24, True, False, "lm",
+        family="Liberation Sans",
+    )
+    if discovery and discovery.get("active"):
+        draw_text(
+            text_cache, x0 + 14 if LCD_800_MODE else x1 - 14,
+            y0 + 50 if LCD_800_MODE else y0 + 24,
+            f"DISCOVERING RDS {discovery.get('index', 0)}/{discovery.get('total', 0)}",
+            (255, 176, 92), 12, True, True,
+            "lm" if LCD_800_MODE else "rm", family="Liberation Sans",
+        )
+    elif len(stations) > len(layout["rows"]):
+        last_visible = min(len(stations), scroll + len(layout["rows"]))
+        draw_text(
+            text_cache, x0 + 14 if LCD_800_MODE else x1 - 14,
+            y0 + 50 if LCD_800_MODE else y0 + 24,
+            f"{scroll + 1}–{last_visible} / {len(stations)}  ·  DRAG TO SCROLL",
+            (132, 181, 191), 11, True, True,
+            "lm" if LCD_800_MODE else "rm", family="Liberation Sans",
+        )
+    if not stations:
+        draw_text(
+            text_cache, (x0 + x1) / 2, y0 + 92,
+            "NO SERVER PRESETS YET",
+            (135, 157, 163), 14, True, False, "cm", family="Liberation Sans",
+        )
+        draw_text(
+            text_cache, (x0 + x1) / 2, y0 + 116,
+            "RDS NAMES APPEAR AS YOU TUNE",
+            (112, 137, 144), 12, False, False, "cm", family="Liberation Sans",
+        )
+        return
+    visible_stations = stations[scroll:scroll + len(layout["rows"])]
+    for station, box in zip(visible_stations, layout["rows"]):
+        bx0, by0, bx1, by1 = box
+        frequency_khz = float(station["frequency_khz"])
+        active = abs(frequency_khz - current_frequency_khz) < 25.0
+        fill = (36, 82, 68, 235) if active else (17, 29, 37, 232)
+        edge = (104, 234, 180, 220) if active else (100, 125, 135, 105)
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
+        for line in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
+            draw_logical_line(*line, edge, 1)
+        frequency = f"{frequency_khz / 1000.0:.1f} MHz"
+        name = str(station.get("name") or f"Preset {frequency}")
+        name = fit_station_text(text_cache, name, bx1 - bx0 - 24, 16, True, False, family="Liberation Sans")
+        pi = str(station.get("pi") or "")
+        draw_text(text_cache, bx0 + 12, by0 + 20, name, (223, 242, 243), 16, True, False, "lm", family="Liberation Sans")
+        if pi:
+            draw_text(text_cache, bx1 - 10, by1 - 13, f"PI {pi}", (139, 170, 177), 12, True, False, "rm", family="Liberation Sans")
+
+
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
-                        low_cut=None, high_cut=None):
+                        low_cut=None, high_cut=None, passband_available=True):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -8557,7 +8935,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     items = lcd_nav_items(settings_open)
     if not settings_open:
-        draw_lcd_home_bandwidth(text_cache, low_cut, high_cut)
+        draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, unavailable=not passband_available)
         draw_lcd_home_volume_slider(text_cache, volume, muted)
     for index, (kind, label) in enumerate(items):
         bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
@@ -8668,6 +9046,18 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         active = index + 0.5 <= meter_level / 2
         color = (92, 221, 231, 238) if index < 14 else (244, 104, 90, 238)
         draw_logical_rect(sx0, meter_track_y - 7, sx1, meter_track_y + 7, color if active else (31, 52, 61, 208))
+
+    if exact_mode == fmdx.MODE_LABEL:
+        mode_x0, mode_y0, mode_x1, mode_y1 = x0 + 6, y0 + 130, x1 - 6, y1 - 6
+        draw_logical_rect(mode_x0, mode_y0, mode_x1, mode_y1, (12, 41, 46, 244))
+        draw_logical_line(mode_x0, mode_y0, mode_x1, mode_y0, (91, 225, 213, 220), 1)
+        draw_logical_line(mode_x0, mode_y1, mode_x1, mode_y1, (30, 100, 106, 230), 1)
+        draw_text(
+            text_cache, (mode_x0 + mode_x1) / 2, (mode_y0 + mode_y1) / 2,
+            fmdx.MODE_LABEL, (220, 255, 248), 22, True, False, "cm",
+            family="Liberation Sans",
+        )
+        return
 
     cell_w = (x1 - x0 - 12 - 3 * 5) / 4
     cell_h = (y1 - 6 - 130 - 5) / 2
@@ -9004,6 +9394,7 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_ROUTE_ALL_BOX, "ALL", 19, route_filter == "all")
         draw_picker_button(text_cache, PICKER_ROUTE_DIRECT_BOX, "DIRECT", 17, route_filter == "direct")
         draw_picker_button(text_cache, PICKER_ROUTE_PROXY_BOX, "PROXY", 18, route_filter == "proxy")
+        draw_picker_button(text_cache, PICKER_ROUTE_FMDX_BOX, "FMDX", 18, route_filter == "fmdx")
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
     draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if LCD_800_MODE else 20)
 
@@ -9018,7 +9409,10 @@ def draw_station_picker(
         entry_health = station_health.get(server, {})
         checked = entry_health.get("checked", 0)
         health_fresh = time.time() - checked <= 86400
-        active = health_fresh and entry_health.get("audio") is True and entry_health.get("waterfall") is True
+        fmdx_receiver = fmdx.is_fmdx_server(server)
+        active = health_fresh and entry_health.get("audio") is True and (
+            fmdx_receiver or entry_health.get("waterfall") is True
+        )
         if pending:
             # Retain the selected tile while the two Kiwi streams establish.
             # The inset/bright outline reads as a real pressed touch state.
@@ -9079,7 +9473,8 @@ def draw_station_picker(
         audio_pill_w = station_stream_pill(text_cache, title_x, pill_y, "audio", entry_health, health_fresh, pending)
         waterfall_pill_x = title_x + audio_pill_w + 8
         waterfall_pill_w = station_stream_pill(
-            text_cache, waterfall_pill_x, pill_y, "waterfall", entry_health, health_fresh, pending
+            text_cache, waterfall_pill_x, pill_y, "waterfall", entry_health,
+            health_fresh, pending and not fmdx_receiver, unavailable=fmdx_receiver,
         )
         status_x = waterfall_pill_x + waterfall_pill_w + 14
         status_label = " · ".join(
@@ -9622,6 +10017,40 @@ def draw_ruler(
         hz += major_step_hz
 
 
+def draw_fmdx_audio_ruler(text_cache, y0, height, center_khz, span_khz,
+                          alpha=1.0, background_alpha=185):
+    """Label the audio-derived spectrogram around the tuned FM carrier."""
+    if alpha <= 0.01:
+        return
+    canvas_w = rf_canvas_width()
+    draw_logical_rect(0, y0, canvas_w, y0 + height, (10, 15, 21, int(background_alpha * alpha)))
+    draw_logical_line(0, y0 + height - 3, canvas_w, y0 + height - 3, (189, 211, 220, int(145 * alpha)), 1)
+    for tick in range(-10, 11):
+        offset_khz = tick * span_khz / 20.0
+        x = (tick + 10) * canvas_w / 20.0
+        major = tick % 5 == 0
+        tick_h = 22 if major else 9
+        draw_logical_line(
+            x, y0 + height - 4, x, y0 + height - 4 - tick_h,
+            (202, 218, 224, int((220 if major else 145) * alpha)), 2 if major else 1,
+        )
+        if major:
+            label = f"{(center_khz + offset_khz) / 1000.0:.3f}"
+            if offset_khz == 0:
+                label += " MHz"
+            anchor = "lm" if tick == -10 else ("rm" if tick == 10 else "cm")
+            draw_text(
+                text_cache, x + (8 if tick == -10 else (-8 if tick == 10 else 0)), y0 + 14,
+                label, (180, 210, 216), 18, True, False, anchor, alpha,
+                family="Liberation Sans",
+            )
+    draw_text(
+        text_cache, canvas_w / 2, y0 + height - 14,
+        f"AUDIO-DERIVED · ±{span_khz / 2.0:.2f} kHz",
+        (114, 181, 191), 11, True, False, "cm", alpha, family="Liberation Sans",
+    )
+
+
 def zoomed_spectrum_values(values, source_span_khz, visible_span_khz):
     """Resample the central source span for the local 4x display zoom."""
     if not values or source_span_khz <= visible_span_khz:
@@ -9706,6 +10135,66 @@ def draw_spectrum(
     ]
     draw_logical_area(points, bottom, (161, 184, 196, 154))
     draw_logical_polyline(points, (204, 219, 224, 208), 1.25)
+
+
+def draw_fmdx_audio_scope(y0, y1, values, text_cache, foreground=False):
+    """Draw the decoded FM programme audio as a truthful time-domain scope."""
+    canvas_w = rf_canvas_width()
+    field_alpha = 156 if foreground else 236
+    draw_logical_rect(0, y0, canvas_w, y1, (2, 7, 12, field_alpha))
+    center_y = (y0 + y1) / 2
+    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = y0 + (y1 - y0) * fraction
+        draw_logical_line(0, y, canvas_w, y, (75, 133, 151, 52), 1)
+        x = canvas_w * fraction
+        draw_logical_line(x, y0, x, y1, (75, 133, 151, 38), 1)
+    draw_logical_line(0, center_y, canvas_w, center_y, (105, 174, 189, 108), 1)
+    draw_text(
+        text_cache, 14, y0 + 16, "FM AUDIO SCOPE", (164, 218, 224),
+        13, True, False, "lm", family="Liberation Sans",
+    )
+    draw_text(text_cache, canvas_w - 14, y0 + 16, "+1", (132, 176, 185), 11, True, False, "rm")
+    draw_text(text_cache, canvas_w - 14, center_y, "0", (132, 176, 185), 11, True, False, "rm")
+    draw_text(text_cache, canvas_w - 14, y1 - 12, "-1", (132, 176, 185), 11, True, False, "rm")
+    if not values:
+        draw_text(
+            text_cache, canvas_w / 2, center_y, "WAITING FOR FM AUDIO",
+            (132, 164, 171), 14, True, False, "cm", family="Liberation Sans",
+        )
+        return
+    amplitude = max(1.0, (y1 - y0) / 2 - 8)
+    points = [
+        (
+            index * (canvas_w - 1) / max(1, len(values) - 1),
+            center_y - clamp(value, -1.0, 1.0) * amplitude,
+        )
+        for index, value in enumerate(values)
+    ]
+    draw_logical_polyline(points, (107, 236, 224, 235), 1.5)
+
+
+def draw_fmdx_waterfall_drag_feedback(
+    text_cache, origin_x, pointer_x, start_frequency_khz, target_frequency_khz,
+    waterfall_y0, waterfall_y1,
+):
+    """Show FM-DX tuning travel even though every decoded row is re-centred."""
+    origin_x = clamp(float(origin_x), 0.0, float(rf_canvas_width()))
+    pointer_x = clamp(float(pointer_x), 0.0, float(rf_canvas_width()))
+    left, right = sorted((origin_x, pointer_x))
+    if right - left > 1.0:
+        draw_logical_rect(left, waterfall_y0, right, waterfall_y1, (255, 154, 61, 34))
+    draw_logical_line(origin_x, waterfall_y0, origin_x, waterfall_y1, (180, 213, 219, 125), 1)
+    draw_logical_line(pointer_x, waterfall_y0, pointer_x, waterfall_y1, (255, 176, 92, 245), 3)
+    arrow_y = waterfall_y0 + 42
+    draw_logical_line(origin_x, arrow_y, pointer_x, arrow_y, (255, 176, 92, 235), 3)
+    direction = 1.0 if pointer_x >= origin_x else -1.0
+    draw_logical_line(pointer_x, arrow_y, pointer_x - direction * 12, arrow_y - 8, (255, 176, 92, 235), 3)
+    draw_logical_line(pointer_x, arrow_y, pointer_x - direction * 12, arrow_y + 8, (255, 176, 92, 235), 3)
+    delta_khz = float(target_frequency_khz) - float(start_frequency_khz)
+    label = f"TUNE {target_frequency_khz / 1000.0:.3f} MHz  ·  {delta_khz:+.1f} kHz"
+    label_x = clamp(pointer_x, 190.0, float(rf_canvas_width()) - 190.0)
+    draw_logical_rect(label_x - 184, waterfall_y0 + 55, label_x + 184, waterfall_y0 + 91, (29, 17, 8, 230))
+    draw_text(text_cache, label_x, waterfall_y0 + 73, label, (255, 218, 181), 16, True, True, "cm")
 
 
 def draw_connection_annunciator(text_cache, status, timeout_seconds=None):
@@ -9796,6 +10285,7 @@ def draw_ui(
     audio_muted=False,
     settings_menu_open=False,
     status_y0=None,
+    audio_waterfall=False,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -9824,16 +10314,22 @@ def draw_ui(
     )
     draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
-    draw_ruler(
-        text_cache,
-        freq_khz,
-        span_khz,
-        instrument_alpha,
-        y0=ruler_y0,
-        height=ruler_height,
-        background_alpha=ruler_background_alpha,
-        subdued=bottom_ruler,
-    )
+    if audio_waterfall:
+        draw_fmdx_audio_ruler(
+            text_cache, ruler_y0, ruler_height, freq_khz, span_khz,
+            instrument_alpha, ruler_background_alpha,
+        )
+    else:
+        draw_ruler(
+            text_cache,
+            freq_khz,
+            span_khz,
+            instrument_alpha,
+            y0=ruler_y0,
+            height=ruler_height,
+            background_alpha=ruler_background_alpha,
+            subdued=bottom_ruler,
+        )
     status_y0 = (
         ruler_y0 + ruler_height if bottom_ruler else WATERFALL_Y1
     ) if status_y0 is None else status_y0
@@ -9877,7 +10373,9 @@ def draw_ui(
             audio_jitter_depth=audio_jitter_depth,
             alpha=instrument_alpha,
         )
-    draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
+    draw_waterfall_operating_controls(
+        text_cache, spectrum_enabled, controls_alpha, fmdx_receiver=audio_waterfall,
+    )
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds)
     draw_lcd_navigation(
         text_cache,
@@ -9887,6 +10385,7 @@ def draw_ui(
         settings_open=settings_menu_open,
         low_cut=filter_low_hz,
         high_cut=filter_high_hz,
+        passband_available=not audio_waterfall,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
@@ -10403,7 +10902,314 @@ def set_pipewire_default_volume(volume):
         return None
 
 
-def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_queue=None):
+def put_latest_audio(target_queue, audio):
+    """Keep recognition lanes live without ever delaying receiver audio."""
+    if target_queue is None or not audio:
+        return
+    try:
+        target_queue.put_nowait(audio)
+    except queue.Full:
+        try:
+            target_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            target_queue.put_nowait(audio)
+        except queue.Full:
+            pass
+
+
+class FmdxMp3Decoder:
+    """Decode FM-DX's MP3 fallback stream into the existing PCM clock."""
+
+    def __init__(self, rate, on_pcm):
+        self.on_pcm = on_pcm
+        self.process = subprocess.Popen(
+            [
+                "ffmpeg", "-loglevel", "error", "-fflags", "nobuffer",
+                "-flags", "low_delay", "-probesize", "32",
+                "-analyzeduration", "0", "-f", "mp3", "-i", "pipe:0",
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ar", str(max(1, int(rate))), "-ac", "2", "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        self.closed = False
+        self.reader = threading.Thread(target=self._read, name="fmdx-mp3-decode", daemon=True)
+        self.reader.start()
+
+    def feed(self, data):
+        if self.closed or not data or not self.process.stdin:
+            return
+        try:
+            self.process.stdin.write(data)
+        except (BrokenPipeError, OSError):
+            pass
+
+    def _read(self):
+        while not self.closed and self.process.stdout:
+            try:
+                pcm = self.process.stdout.read(8192)
+            except OSError:
+                break
+            if not pcm:
+                break
+            self.on_pcm(pcm)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            if self.process.stdin:
+                self.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                self.process.kill()
+            except OSError:
+                pass
+        self.reader.join(timeout=1.0)
+
+
+def fmdx_audio_session(
+    args, stop_event, state, server, server_generation,
+    transcript_queue=None, callsign_queue=None, line_queue=None,
+    persistence_request_queue=None,
+):
+    """Run one FM-DX control/audio session until its receiver generation ends."""
+    control = audio = decoder = None
+    fmdx_audio_args = argparse.Namespace(**vars(args))
+    fmdx_audio_args.audio_rate = fmdx.AUDIO_SAMPLE_RATE
+    player = BufferedAudioPlayer(fmdx_audio_args, 2, state)
+    waterfall = fmdx.AudioWaterfallAnalyzer(bins=SPECTRUM_BINS)
+    waterfall_palette = None
+    waterfall_mapper_lut = None
+    waterfall_tune_generation = None
+    ready = threading.Event()
+    preset_queue = queue.Queue(maxsize=1)
+
+    def load_presets():
+        try:
+            presets = fmdx.fetch_station_presets(server)
+        except (OSError, ValueError, TypeError):
+            presets = ()
+        try:
+            preset_queue.put_nowait(presets)
+        except queue.Full:
+            pass
+
+    def on_pcm(pcm):
+        nonlocal waterfall_palette, waterfall_mapper_lut, waterfall_tune_generation
+        if state.receiver_type_snapshot(server_generation) != "fmdx":
+            return
+        if not ready.is_set():
+            ready.set()
+            if state.connection_ready(server_generation, "audio"):
+                persist_live_station_health(server, "audio", True)
+        audio_controls, _generation = state.audio_controls_snapshot()
+        muted = bool(
+            audio_controls.get("mute", False)
+            or state.fmdx_discovery_snapshot().get("active")
+        )
+        if player:
+            player.submit(bytes(len(pcm)) if muted else pcm, silence=muted)
+        raw_mono = stereo_s16le_to_mono(pcm)
+        tune_generation, tune_changed_at = state.fmdx_tune_snapshot(server_generation)
+        if tune_generation != waterfall_tune_generation:
+            waterfall.reset()
+            waterfall_tune_generation = tune_generation
+        waterfall_rebuilding = (
+            tune_changed_at is not None
+            and time.monotonic() - tune_changed_at < 0.35
+        )
+        if not waterfall_rebuilding:
+            state.update_fmdx_audio_scope(raw_mono, server_generation)
+        if line_queue is not None and not waterfall_rebuilding:
+            _floor, _ceiling, _speed, _auto, palette, _generation = state.waterfall_snapshot()
+            if palette != waterfall_palette:
+                waterfall_palette = palette
+                waterfall_mapper_lut = waterfall_mapper(palette)
+            for spectral_row in waterfall.feed(raw_mono):
+                line = kiwi.waterfall_line(
+                    spectral_row, waterfall_mapper_lut, 0, 255, width=WF_TEX_W,
+                )
+                try:
+                    line_queue.put_nowait((line, 0.0, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0))
+                except queue.Full:
+                    try:
+                        line_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    line_queue.put_nowait((line, 0.0, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0))
+        analysis_mono = fmdx.resample_mono_s16le(
+            raw_mono, fmdx.AUDIO_SAMPLE_RATE, args.audio_rate,
+        )
+        if state.transcription_snapshot()[0]:
+            put_latest_audio(transcript_queue, analysis_mono)
+        if state.callsign_snapshot()[0]:
+            put_latest_audio(callsign_queue, analysis_mono)
+
+    try:
+        state.connection_attempt(server_generation, "audio")
+        control = fmdx.WebSocket.connect(fmdx.websocket_url(server, "text"))
+        audio = fmdx.WebSocket.connect(fmdx.websocket_url(server, "audio"))
+        audio.send_text(json.dumps({"type": "fallback", "data": "mp3"}, separators=(",", ":")))
+        decoder = FmdxMp3Decoder(fmdx.AUDIO_SAMPLE_RATE, on_pcm)
+        threading.Thread(target=load_presets, name="fmdx-presets", daemon=True).start()
+        _server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+        if generation != server_generation:
+            return
+        control.send_text(fmdx.tune_command(freq_khz))
+        seen_view_generation = view_generation
+        next_tune_at = time.monotonic() + fmdx.TUNE_INTERVAL_SECONDS
+        discovery_frequencies = ()
+        discovery_index = 0
+        discovery_origin_khz = freq_khz
+        discovery_frequency_khz = None
+        discovery_started_at = 0.0
+        discovery_deadline = 0.0
+        discovery_view_generation = None
+
+        def finish_discovery():
+            nonlocal discovery_frequencies, discovery_index, discovery_frequency_khz
+            nonlocal discovery_started_at, discovery_deadline, discovery_view_generation
+            nonlocal seen_view_generation, next_tune_at
+            target = fmdx.nearest_station_frequency(
+                state.fmdx_stations_snapshot(), discovery_origin_khz,
+            )
+            if target is None:
+                target = discovery_origin_khz
+            tuned_frequency, _zoom, tuned_generation = state.set_view(freq_khz=target)
+            control.send_text(fmdx.tune_command(tuned_frequency))
+            seen_view_generation = tuned_generation
+            next_tune_at = time.monotonic() + fmdx.TUNE_INTERVAL_SECONDS
+            state.set_fmdx_discovery(False, generation=server_generation)
+            if persistence_request_queue is not None:
+                try:
+                    persistence_request_queue.put_nowait("fmdx_station")
+                except queue.Full:
+                    pass
+            discovery_frequencies = ()
+            discovery_index = 0
+            discovery_frequency_khz = None
+            discovery_started_at = discovery_deadline = 0.0
+            discovery_view_generation = None
+
+        def advance_discovery():
+            nonlocal discovery_index, discovery_frequency_khz
+            nonlocal discovery_started_at, discovery_deadline, discovery_view_generation
+            nonlocal seen_view_generation, next_tune_at
+            if discovery_index >= len(discovery_frequencies):
+                finish_discovery()
+                return
+            discovery_frequency_khz = discovery_frequencies[discovery_index]
+            discovery_index += 1
+            tuned_frequency, _zoom, tuned_generation = state.set_view(
+                freq_khz=discovery_frequency_khz,
+            )
+            discovery_frequency_khz = tuned_frequency
+            control.send_text(fmdx.tune_command(tuned_frequency))
+            seen_view_generation = tuned_generation
+            discovery_view_generation = tuned_generation
+            discovery_started_at = time.monotonic()
+            discovery_deadline = discovery_started_at + fmdx.RDS_DISCOVERY_DWELL_SECONDS
+            next_tune_at = discovery_started_at + fmdx.TUNE_INTERVAL_SECONDS
+            state.set_fmdx_discovery(
+                True, discovery_index, len(discovery_frequencies), tuned_frequency,
+                server_generation,
+            )
+
+        while not stop_event.is_set():
+            if state.stream_paused_snapshot() or state.external_audio_snapshot():
+                break
+            current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+            if generation != server_generation or current_server != server:
+                break
+            try:
+                presets = preset_queue.get_nowait()
+            except queue.Empty:
+                presets = None
+            if presets is not None:
+                discovery_origin_khz = freq_khz
+                state.update_fmdx_stations(presets, server_generation)
+                discovery_frequencies = fmdx.rds_discovery_frequencies(
+                    state.fmdx_stations_snapshot(), discovery_origin_khz,
+                )
+                discovery_index = 0
+                if discovery_frequencies:
+                    advance_discovery()
+                    current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+                else:
+                    state.set_fmdx_discovery(False, generation=server_generation)
+            if (
+                discovery_frequency_khz is not None
+                and discovery_view_generation is not None
+                and view_generation != discovery_view_generation
+            ):
+                # Any user tune, station tap, or frequency entry owns the
+                # receiver immediately and cancels the automatic pass.
+                state.set_fmdx_discovery(False, generation=server_generation)
+                discovery_frequencies = ()
+                discovery_frequency_khz = None
+                discovery_view_generation = None
+            if view_generation != seen_view_generation and time.monotonic() >= next_tune_at:
+                control.send_text(fmdx.tune_command(freq_khz))
+                seen_view_generation = view_generation
+                next_tune_at = time.monotonic() + fmdx.TUNE_INTERVAL_SECONDS
+            readable, _writable, _errors = select.select(
+                [control.sock, audio.sock], [], [], KIWI_IO_POLL_SECONDS
+            )
+            for source in readable:
+                if source is control.sock:
+                    payload = fmdx.parse_text_message(control.recv())
+                    status_matches_scan = (
+                        discovery_frequency_khz is None
+                        or (
+                            fmdx.status_matches_frequency(payload, discovery_frequency_khz)
+                            and time.monotonic() - discovery_started_at
+                            >= fmdx.RDS_DISCOVERY_MIN_LOCK_SECONDS
+                        )
+                    )
+                    learned_station = (
+                        state.update_fmdx_status(payload, server_generation)
+                        if status_matches_scan else None
+                    )
+                    if learned_station:
+                        remember_fmdx_station(server, learned_station)
+                        if discovery_frequency_khz is not None:
+                            advance_discovery()
+                    signal_dbm = fmdx.signal_dbm(payload)
+                    if signal_dbm is not None:
+                        state.set_smeter(signal_dbm, source="fmdx")
+                else:
+                    packet = audio.recv()
+                    if packet and not packet.startswith(b"{"):
+                        decoder.feed(packet)
+            if discovery_frequency_khz is not None and time.monotonic() >= discovery_deadline:
+                advance_discovery()
+    finally:
+        state.set_fmdx_discovery(False, generation=server_generation)
+        if decoder:
+            decoder.close()
+        if control:
+            control.close()
+        if audio:
+            audio.close()
+        stop_audio_player(player)
+
+
+def snd_meter_worker(
+    args, stop_event, state, transcript_queue=None, callsign_queue=None,
+    line_queue=None, persistence_request_queue=None,
+):
     seen_view_generation = -1
     seen_radio_generation = -1
     seen_server_generation = -1
@@ -10439,6 +11245,17 @@ def snd_meter_worker(args, stop_event, state, transcript_queue=None, callsign_qu
                 stop_event.wait(0.10)
                 continue
             server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+            if state.receiver_type_snapshot(server_generation) == "fmdx":
+                stop_audio_player(player)
+                player = None
+                player_channels = None
+                player_server_generation = None
+                fmdx_audio_session(
+                    args, stop_event, state, server, server_generation,
+                    transcript_queue, callsign_queue, line_queue,
+                    persistence_request_queue,
+                )
+                continue
             state.connection_attempt(server_generation, "audio")
             radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
             desired_channels = kiwi_audio_channels(radio_mode)
@@ -10970,6 +11787,12 @@ def waterfall_worker(args, line_queue, stop_event, state):
                     break
                 continue
             server, freq_khz, zoom, _smeter_dbm, seen_generation, seen_server_generation = state.snapshot()
+            if state.receiver_type_snapshot(seen_server_generation) == "fmdx":
+                # The FM-DX audio worker owns this queue while it publishes
+                # the decoded, carrier-centred ±10 kHz programme-audio spectrogram.
+                if stop_event.wait(0.10):
+                    break
+                continue
             # A paired Kiwi W/F stream must join an *active* SND stream, not
             # merely a TCP-connected one. This is also the point at which the
             # web client has received its first real audio packet.
@@ -11091,7 +11914,7 @@ def waterfall_worker(args, line_queue, stop_event, state):
 
 def main():
     global LCD_RADIO_DRAWER_PROGRESS
-    parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
+    parser = argparse.ArgumentParser(description="OpenGL KiwiSDR and FM-DX receiver display.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
     parser.add_argument("--receiver-state-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-receiver.json")
     parser.add_argument("--remember-receiver", action=argparse.BooleanOptionalAction, default=True)
@@ -11152,8 +11975,8 @@ def main():
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
     parser.add_argument("--user", default="Codex OpenGL SDR display")
-    parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the PipeWire default sink")
-    parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local PipeWire stream")
+    parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play receiver audio through the PipeWire default sink")
+    parser.add_argument("--audio-rate", type=int, default=12000, help="local decoded PCM rate for PipeWire and speech recognition")
     args = parser.parse_args()
     if args.picker_perf_scenario:
         args.picker_perf = True
@@ -11176,6 +11999,8 @@ def main():
             )
     args.max_zoom = clamp(args.max_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
     args.station_zoom = clamp(args.station_zoom, 0, kiwi.DISPLAY_MAX_ZOOM)
+    if fmdx.is_fmdx_server(args.server):
+        args.freq_khz = fmdx.receiver_frequency(args.server, args.freq_khz)
     if args.swipe_sensitivity is not None:
         args.swipe_slow_sensitivity = args.swipe_sensitivity
     args.swipe_slow_sensitivity = max(0.1, args.swipe_slow_sensitivity)
@@ -11222,6 +12047,7 @@ def main():
     line_queue = queue.Queue(maxsize=96)
     transcript_queue = queue.Queue(maxsize=24)
     callsign_queue = queue.Queue(maxsize=24)
+    persistence_request_queue = queue.Queue(maxsize=1)
     stop_event = threading.Event()
     screenshot_requested = threading.Event()
     zoom_osd_requested = threading.Event()
@@ -11311,7 +12137,14 @@ def main():
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
     wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
-    snd_thread = threading.Thread(target=snd_meter_worker, args=(args, stop_event, state, transcript_queue, callsign_queue), daemon=True)
+    snd_thread = threading.Thread(
+        target=snd_meter_worker,
+        args=(
+            args, stop_event, state, transcript_queue, callsign_queue,
+            line_queue, persistence_request_queue,
+        ),
+        daemon=True,
+    )
     caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
     callsign_thread = threading.Thread(target=callsign_worker, args=(stop_event, state, callsign_queue), daemon=True)
     snd_thread.start()
@@ -11375,8 +12208,20 @@ def main():
     controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
     all_stations = STATIONS
     station_query = ""
-    station_sort = "location"
-    station_route_filter = "all"
+    picker_preferences = remembered_preferences.get("receiver_picker", {})
+    if not isinstance(picker_preferences, dict):
+        picker_preferences = {}
+    station_sort = (
+        picker_preferences.get("sort")
+        if picker_preferences.get("sort") in ("location", "name")
+        else "location"
+    )
+    default_receiver_route = "fmdx" if fmdx.is_fmdx_server(args.server) else "all"
+    station_route_filter = (
+        picker_preferences.get("route")
+        if picker_preferences.get("route") in ("all", "direct", "proxy", "fmdx", "favorites")
+        else default_receiver_route
+    )
     favorite_servers = load_favorite_servers()
     stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
     receiver_home_profile, receiver_home_saved = load_receiver_home_profile()
@@ -11401,8 +12246,13 @@ def main():
     picker_map_yaw = math.radians(-18)
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
-    picker_map_garden_mode = True
-    picker_map_view = args.picker_perf_map_view if args.picker_perf_scenario else "satellite_only"
+    picker_map_garden_mode = bool(picker_preferences.get("garden_mode", True))
+    saved_map_view = picker_preferences.get("map_view")
+    picker_map_view = (
+        args.picker_perf_map_view
+        if args.picker_perf_scenario
+        else saved_map_view if saved_map_view in MAP_VIEWS else "satellite_only"
+    )
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -11493,7 +12343,17 @@ def main():
 
     tests_panel_open = False
     globe_open = False
-    globe_receivers = load_globe_receivers()
+    remembered_receiver_metadata = (
+        fmdx.receiver_metadata(args.server)
+        if fmdx.is_fmdx_server(args.server) else None
+    )
+    remembered_receiver_entries = (
+        (dict(remembered_receiver_metadata),)
+        if remembered_receiver_metadata else ()
+    )
+    globe_receivers = fmdx.merge_receivers(
+        load_globe_receivers(), FMDX_RECEIVERS, remembered_receiver_entries,
+    )
     if globe_receivers:
         # The map feed is the current worldwide directory. Use its cached
         # entries immediately instead of limiting the station browser to the
@@ -11549,6 +12409,7 @@ def main():
     frequency_entry_invalid = False
     frequency_entry_replace_on_digit = False
     station_scroll = 0
+    fmdx_station_scroll = 0
     saved_digital_mode = remembered_preferences.get("digital_mode")
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
@@ -11563,6 +12424,7 @@ def main():
     start_x = start_freq = None
     start_y = 0
     start_scroll = 0
+    start_fmdx_station_scroll = 0
     picker_dragged = False
     start_menu_scroll = 0.0
     start_time = 0.0
@@ -11581,12 +12443,14 @@ def main():
     inertia_last_t = time.monotonic()
     start_span = display_span
     candidate_freq = display_freq
+    fmdx_drag_pointer_x = None
     last_x = None
 
     # Receiver, tuning, waterfall, and listener preferences live in one tiny
     # JSON file. A single timer batches any changed state into one atomic write
     # every 30 seconds, preventing live tuning from becoming flash churn.
     persisted_frequency_khz = args.freq_khz
+    persisted_server = args.server
     observed_frequency_khz = args.freq_khz
     next_preferences_poll = 0.0
     preferences_due_at = 0.0
@@ -11634,6 +12498,12 @@ def main():
             "buffer_graph_anchor": buffer_graph_anchor,
             "cpu_graph_anchor": cpu_graph_anchor,
             "tune_step_hz": int(tune_step_hz),
+            "receiver_picker": {
+                "sort": station_sort,
+                "route": station_route_filter,
+                "map_view": picker_map_view,
+                "garden_mode": bool(picker_map_garden_mode),
+            },
             "waterfall": {
                 "floor": round(float(floor), 1),
                 "ceil": round(float(ceiling), 1),
@@ -11654,17 +12524,20 @@ def main():
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def write_remembered_view(save_current_frequency=False, force=False):
-        nonlocal persisted_frequency_khz, preferences_dirty, preferences_due_at, saved_preferences_signature
+        nonlocal persisted_frequency_khz, persisted_server
+        nonlocal preferences_dirty, preferences_due_at, saved_preferences_signature
         if not args.remember_receiver:
             return False
         server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
         preferences = current_preferences()
         signature = preferences_signature(preferences)
+        server_changed = server != persisted_server
         frequency_changed = abs(persisted_frequency_khz - freq_khz) > 0.0005
-        if not force and not preferences_dirty and signature == saved_preferences_signature and not (save_current_frequency and frequency_changed):
+        if not force and not server_changed and not preferences_dirty and signature == saved_preferences_signature and not (save_current_frequency and frequency_changed):
             return False
-        if save_current_frequency:
+        if save_current_frequency or server_changed:
             persisted_frequency_khz = freq_khz
+        persisted_server = server
         save_remembered_view(
             args.receiver_state_file,
             server,
@@ -11673,6 +12546,7 @@ def main():
             radio_mode,
             manual_radio_mode,
             preferences,
+            receiver_type=state.receiver_type_snapshot(_server_generation),
         )
         saved_preferences_signature = signature
         preferences_dirty = False
@@ -11707,7 +12581,10 @@ def main():
     saved_preferences_signature = observed_preferences_signature
 
     def remember_current_view():
-        observe_preferences(time.monotonic())
+        if state.snapshot()[0] != persisted_server:
+            write_remembered_view(save_current_frequency=True, force=True)
+        else:
+            observe_preferences(time.monotonic())
 
     def occupied_overlay_lanes(exclude=None):
         """Return the lanes currently used by visible movable overlays.
@@ -11853,7 +12730,8 @@ def main():
     def set_test_frequency(freq_khz):
         """Publish a fresh desired tune; workers consume state, not a queue."""
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
-        frequency = clamp(freq_khz, 0.0, TUNING_MAX_KHZ)
+        server, _current_freq, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        frequency = clamp_tuning_frequency(server, freq_khz)
         state.set_view(freq_khz=frequency)
         display_freq = frequency
         candidate_freq = frequency
@@ -11922,12 +12800,9 @@ def main():
             tests_panel_open = dj_tune_open = filter_panel_open = False
             station_scroll = 0
             station_query = ""
-            station_sort = "location"
-            station_route_filter = "all"
             stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
             search_open = False
             picker_map_open = False
-            picker_map_garden_mode = True
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "display":
@@ -12085,6 +12960,7 @@ def main():
         nonlocal candidate_freq, display_freq, last_move_x, last_move_t, swipe_velocity_px_s
         nonlocal start_span, zoom_osd_until, fast_sweep_zoom_applied, auto_zoom_levels_used
         nonlocal repeat_zoom_applied, repeat_zoom_changed
+        nonlocal fmdx_drag_pointer_x
         now_move = time.monotonic()
         dt = max(0.006, now_move - last_move_t)
         dx = x - last_move_x
@@ -12163,21 +13039,22 @@ def main():
             if args.finger_tune_positional
             else swipe_effective_sensitivity(swipe_velocity_px_s, args) * live_swipe_boost
         )
-        candidate_freq = clamp(
+        server, _live_freq, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
+        candidate_freq = clamp_tuning_frequency(
+            server,
             candidate_freq + retune_delta_from_drag(dx, start_span, args.invert_tune, sensitivity),
-            0.0,
-            TUNING_MAX_KHZ,
         )
         # A normal waterfall drag is a live, positional tuning control. The
         # active zoom supplies the travel range, while the radio step supplies
         # tactile detents. Publishing state here lets the two Kiwi streams
         # follow the finger; their workers coalesce to the newest request.
-        _server, _live_freq, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
         live_step_hz = finger_tune_step_hz(active_zoom, tune_step_hz)
         live_candidate_freq = snap_frequency_khz(candidate_freq, live_step_hz)
         last_move_x = x
         last_move_t = now_move
         display_freq = live_candidate_freq
+        if fmdx.is_fmdx_server(server):
+            fmdx_drag_pointer_x = x
         _server, live_freq, _zoom, _smeter, _generation, _server_generation = state.snapshot()
         if live_freq != live_candidate_freq:
             state.set_view(freq_khz=live_candidate_freq)
@@ -12185,8 +13062,9 @@ def main():
     def begin_swipe(x):
         nonlocal swipe_started, last_swipe_direction, last_swipe_time, repeat_swipe_count, active_swipe_boost, repeat_zoom_applied, repeat_zoom_changed
         nonlocal auto_zoom_levels_used
-        nonlocal start_span, zoom_osd_until
+        nonlocal start_span, zoom_osd_until, fmdx_drag_pointer_x
         swipe_started = True
+        fmdx_drag_pointer_x = x
         direction = 1 if x > start_x else -1
         now_swipe = time.monotonic()
         if direction == last_swipe_direction and now_swipe - last_swipe_time <= args.swipe_repeat_window_s:
@@ -12631,6 +13509,7 @@ def main():
                             start_x = x
                             start_y = y
                             start_scroll = station_scroll
+                            start_fmdx_station_scroll = fmdx_station_scroll
                             picker_dragged = False
                             start_menu_scroll = menu_scroll
                             start_time = time.monotonic()
@@ -12640,6 +13519,10 @@ def main():
                             swipe_started = False
                             fast_sweep_zoom_applied = False
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
+                            active_touch_is_fmdx = fmdx.is_fmdx_server(_server)
+                            fmdx_drag_pointer_x = None
+                            if active_touch_is_fmdx:
+                                start_span = fmdx.audio_waterfall_span_khz(_zoom)
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
                                 and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open)
@@ -12662,7 +13545,10 @@ def main():
                                     and not filter_panel_open and not frequency_entry_open
                                 )
                             ) else freq_khz
-                            start_span = display_span
+                            start_span = (
+                                fmdx.audio_waterfall_span_khz(_zoom)
+                                if active_touch_is_fmdx else display_span
+                            )
                             candidate_freq = start_freq
                             # The waterfall's control fade must never swallow
                             # the first drag after entering either globe view.
@@ -12702,6 +13588,8 @@ def main():
                                 gesture = "filter_toggle"
                             elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
+                            elif active_touch_is_fmdx and contains(stations_waterfall_box(), x, y):
+                                gesture = "filter_toggle"
                             elif contains(favorite_waterfall_box(), x, y):
                                 gesture = "favorite_toggle"
                             elif contains(stream_waterfall_box(), x, y):
@@ -12719,6 +13607,17 @@ def main():
                                 # Scope were claimed above, so they remain
                                 # immediately tappable as well.
                                 gesture = "waterfall"
+                            elif active_touch_is_fmdx and (filter_panel_open or (filter_drawer_open and LCD_800_MODE)):
+                                # The open Stations drawer owns the complete
+                                # rail before covered Home/Mode controls are
+                                # considered. Those controls previously stole
+                                # taps from the first two station rows.
+                                station_layout = fmdx_station_panel_layout(len(state.fmdx_stations_snapshot()))
+                                gesture = (
+                                    "fmdx_station_panel"
+                                    if contains(station_layout["panel"], x, y)
+                                    else "fmdx_station_outside"
+                                )
                             elif caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
                                 gesture = "caption_translation_toggle"
                             elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
@@ -12893,6 +13792,8 @@ def main():
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
+                            elif not picker_open and active_touch_is_fmdx and contains(stations_waterfall_box(), x, y):
+                                gesture = "filter_toggle"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_LIST_BOX, x, y):
                                 gesture = "picker_map_list"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_EXIT_BOX, x, y):
@@ -12926,6 +13827,8 @@ def main():
                                 gesture = "picker_route_direct"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_PROXY_BOX, x, y):
                                 gesture = "picker_route_proxy"
+                            elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_FMDX_BOX, x, y):
+                                gesture = "picker_route_fmdx"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_FAVORITES_BOX, x, y):
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
@@ -12946,6 +13849,16 @@ def main():
                                 picker_dragged = True
                             row_delta = (start_y - y) / scroll_stride
                             station_scroll = clamp(start_scroll + row_delta * PICKER_COLS, 0, station_page_max(stations))
+                        elif gesture == "fmdx_station_panel":
+                            station_rows = state.fmdx_stations_snapshot()
+                            columns = 1 if LCD_800_MODE else 2
+                            row_stride = 65 if LCD_800_MODE else 76
+                            row_delta = round((start_y - y) / row_stride) * columns
+                            fmdx_station_scroll = int(clamp(
+                                start_fmdx_station_scroll + row_delta,
+                                0,
+                                fmdx_station_scroll_max(len(station_rows)),
+                            ))
                         elif gesture == "menu":
                             # The Home screen is a fixed two-row grid; keep a
                             # finger within its original tile until release.
@@ -13114,7 +14027,8 @@ def main():
                                     frequency_entry_invalid = False
                                     frequency_entry_replace_on_digit = False
                                 elif action == "ENTER":
-                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value)
+                                    current_server, _freq, _zoom, _smeter, _view_gen, _server_gen = state.snapshot()
+                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value, current_server)
                                     if entered_khz is None:
                                         frequency_entry_invalid = True
                                     else:
@@ -13156,7 +14070,11 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 wake_controls()
-                                radio_setup_open = not radio_setup_open
+                                active_server, _freq, _zoom, _smeter, _view_gen, _server_gen = state.snapshot()
+                                # FM-DX supplies already-demodulated programme
+                                # audio. Kiwi demodulator choices do not apply,
+                                # so its protocol-owned mode is informational.
+                                radio_setup_open = False if fmdx.is_fmdx_server(active_server) else not radio_setup_open
                                 radio_family_open = None
                                 menu_open = False
                                 picker_open = False
@@ -13183,19 +14101,21 @@ def main():
                                 state.set_audio_controls(audio_mute=not controls["mute"])
                             wake_controls()
                         elif touch_started and gesture == "audio_squelch_level":
-                            current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
-                            state.set_audio_controls(
-                                squelch_level=audio_squelch_at_x(x, squelch_maximum(current_radio_mode))
-                            )
+                            if not fmdx.is_fmdx_server(state.snapshot()[0]):
+                                current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
+                                state.set_audio_controls(
+                                    squelch_level=audio_squelch_at_x(x, squelch_maximum(current_radio_mode))
+                                )
                             wake_controls()
                         elif touch_started and gesture == "audio_denoise_level":
-                            state.set_audio_controls(
-                                nr_algo=1,
-                                denoise_level=audio_denoise_level_at_x(x),
-                                voice_clean_enabled=False,
-                                voice_clean_level=0,
-                                hf_enhance_level=0,
-                            )
+                            if not fmdx.is_fmdx_server(state.snapshot()[0]):
+                                state.set_audio_controls(
+                                    nr_algo=1,
+                                    denoise_level=audio_denoise_level_at_x(x),
+                                    voice_clean_enabled=False,
+                                    voice_clean_level=0,
+                                    hf_enhance_level=0,
+                                )
                             wake_controls()
                         elif touch_started and gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
@@ -13216,10 +14136,13 @@ def main():
                             if moved <= args.tap_px:
                                 choice = audio_option_at(x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
+                                fmdx_audio = fmdx.is_fmdx_server(state.snapshot()[0])
                                 if choice in (None, "close"):
                                     audio_panel_open = False
                                 elif choice == "mute":
                                     state.set_audio_controls(audio_mute=not controls["mute"])
+                                elif fmdx_audio and choice != "filter":
+                                    pass
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
                                     state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
@@ -13246,7 +14169,11 @@ def main():
                                     state.set_audio_controls(deemphasis=(int(controls["deemphasis"]) + 1) % 3)
                                 elif choice == "filter":
                                     audio_panel_open = False
-                                    filter_panel_open = True
+                                    current_server = state.snapshot()[0]
+                                    if fmdx.is_fmdx_server(current_server) and LCD_800_MODE:
+                                        open_lcd_filter_drawer()
+                                    else:
+                                        filter_panel_open = True
                                 elif choice == "reset":
                                     state.reset_audio_controls()
                             wake_controls()
@@ -13460,8 +14387,37 @@ def main():
                         elif touch_started and gesture == "home_passband":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                open_lcd_filter_drawer()
-                                menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
+                                current_server = state.snapshot()[0]
+                                if not fmdx.is_fmdx_server(current_server):
+                                    open_lcd_filter_drawer()
+                                    menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "fmdx_station_panel":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                station_rows = state.fmdx_stations_snapshot()
+                                station_layout = fmdx_station_panel_layout(len(station_rows))
+                                if station_layout["close"] and contains(station_layout["close"], x, y):
+                                    filter_drawer_open = filter_panel_open = False
+                                else:
+                                    station_index = fmdx_station_at(
+                                        x, y, station_rows, fmdx_station_scroll,
+                                    )
+                                    if station_index is not None:
+                                        target_khz = float(station_rows[station_index]["frequency_khz"])
+                                        state.set_view(freq_khz=target_khz)
+                                        drain_queue(line_queue)
+                                        wf_texture.clear()
+                                        display_freq = candidate_freq = target_khz
+                                        animate_to(target_khz, fmdx.audio_waterfall_span_khz(state.snapshot()[2]), 0.16)
+                                        write_remembered_view(
+                                            save_current_frequency=True, force=True,
+                                        )
+                            wake_controls()
+                        elif touch_started and gesture == "fmdx_station_outside":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                filter_drawer_open = filter_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "lcd_filter_shift":
                             # Drag updates continuously above; apply the final
@@ -13895,12 +14851,6 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 picker_map_open = True
-                                picker_map_garden_mode = True
-                                # Every entry begins in the pure satellite
-                                # presentation, then performs a visible fly-in
-                                # to the active receiver rather than reusing a
-                                # stale close-up from a previous visit.
-                                picker_map_view = "satellite_only"
                                 picker_map_scale = 0.72
                                 picker_map_focus_server = state.snapshot()[0]
                                 if focus_receiver_map_on_server(picker_map_focus_server):
@@ -13926,6 +14876,8 @@ def main():
                                 picker_map_view = MAP_VIEWS[(current_view_index + 1) % len(MAP_VIEWS)]
                                 picker_map_notice = f"MAP VIEW  {MAP_VIEW_LABELS[picker_map_view]}"
                                 picker_map_notice_until = time.monotonic() + 1.75
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "picker_map_zoom":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -13948,6 +14900,8 @@ def main():
                                 picker_map_garden_mode = True
                                 picker_map_notice = "RADIOGARDEN  DRAG GLOBE OR TAP A GLOWING RECEIVER"
                                 picker_map_notice_until = time.monotonic() + 2.5
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "picker_map":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -13983,12 +14937,19 @@ def main():
                                 station_sort = "name" if station_sort == "location" else "location"
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
                                 station_scroll = 0
-                        elif touch_started and gesture in ("picker_route_all", "picker_route_direct", "picker_route_proxy", "picker_route_favorites"):
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
+                        elif touch_started and gesture in (
+                            "picker_route_all", "picker_route_direct", "picker_route_proxy",
+                            "picker_route_fmdx", "picker_route_favorites",
+                        ):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 station_route_filter = gesture.removeprefix("picker_route_")
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
                                 station_scroll = 0
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                                 wake_controls()
                         elif touch_started and gesture == "picker":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14025,17 +14986,16 @@ def main():
                         elif touch_started and gesture == "waterfall":
                             wake_controls()
                             moved = abs((last_x if last_x is not None else x) - start_x)
-                            _server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
+                            current_server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
                             if not swipe_started:
                                 # Tuning is drag-only. A tap now just wakes
                                 # the controls, preventing a thumb near an
                                 # overlay from jumping the receiver.
                                 candidate_freq = start_freq
                             live_step_hz = finger_tune_step_hz(zoom, tune_step_hz)
-                            candidate_freq = clamp(
+                            candidate_freq = clamp_tuning_frequency(
+                                current_server,
                                 snap_frequency_khz(candidate_freq, live_step_hz),
-                                0.0,
-                                TUNING_MAX_KHZ,
                             )
                             if args.swipe_inertia_strength > 0 and swipe_started and abs(swipe_velocity_px_s) >= args.swipe_inertia_min_px_s:
                                 sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args)
@@ -14058,6 +15018,7 @@ def main():
                         picker_map_pinch_active = False
                         globe_pinch_active = False
                         swipe_started = False
+                        fmdx_drag_pointer_x = None
                         filter_drag_edge = None
                         filter_drag_center = 0.0
                         filter_drag_audio_center = 0.0
@@ -14096,6 +15057,15 @@ def main():
                 LCD_RADIO_DRAWER_PROGRESS = min(drawer_target, LCD_RADIO_DRAWER_PROGRESS + drawer_rate)
             elif drawer_target < LCD_RADIO_DRAWER_PROGRESS:
                 LCD_RADIO_DRAWER_PROGRESS = max(drawer_target, LCD_RADIO_DRAWER_PROGRESS - drawer_rate)
+            try:
+                persistence_request = persistence_request_queue.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                if persistence_request == "fmdx_station":
+                    drain_queue(line_queue)
+                    wf_texture.clear()
+                write_remembered_view(save_current_frequency=True, force=True)
             observe_preferences(now)
             while True:
                 try:
@@ -14158,7 +15128,10 @@ def main():
             if not touch_started and abs(inertia_velocity_khz_s) > 0.01:
                 dt = min(0.05, max(0.0, now - inertia_last_t))
                 inertia_last_t = now
-                display_freq = clamp(display_freq + inertia_velocity_khz_s * dt, 0.0, TUNING_MAX_KHZ)
+                current_server, _freq, _zoom, _smeter, _view_gen, _server_gen = state.snapshot()
+                display_freq = clamp_tuning_frequency(
+                    current_server, display_freq + inertia_velocity_khz_s * dt
+                )
                 candidate_freq = display_freq
                 inertia_velocity_khz_s *= math.exp(-dt / args.swipe_inertia_tau)
                 inertia_active = True
@@ -14271,7 +15244,9 @@ def main():
                 except queue.Empty:
                     break
                 if globe_result == "ready":
-                    globe_receivers = globe_payload
+                    globe_receivers = fmdx.merge_receivers(
+                        globe_payload, FMDX_RECEIVERS, remembered_receiver_entries,
+                    )
                     all_stations = stations_from_globe_receivers(globe_receivers)
                     stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
                     station_scroll = clamp(station_scroll, 0, station_page_max(stations))
@@ -14521,6 +15496,10 @@ def main():
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
+            receiver_is_fmdx = fmdx.is_fmdx_server(server)
+            rendered_span = fmdx.audio_waterfall_span_khz(zoom) if receiver_is_fmdx else display_span
+            display_radio_mode = fmdx.receiver_mode(server, radio_mode)
+            fmdx_scope_values = state.fmdx_audio_scope_snapshot() if receiver_is_fmdx else ()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
             spectrum_h = (
                 LCD_SPECTRUM_H
@@ -14564,41 +15543,117 @@ def main():
             )
             buffer_graph_box = monitoring_graph_box(waterfall_y0, waterfall_y1, buffer_graph_anchor)
             cpu_graph_box = monitoring_graph_box(waterfall_y0, waterfall_y1, cpu_graph_anchor)
-            wf_texture.draw(
-                0,
-                waterfall_y0,
-                rf_canvas_width(),
-                waterfall_y1,
-                center_khz=display_freq,
-                span_khz=display_span,
-                row_offset=row_offset,
-            )
+            if receiver_is_fmdx:
+                drag_center_khz = (
+                    fmdx.audio_waterfall_drag_center_khz(
+                        start_freq, display_freq, rendered_span,
+                    )
+                    if swipe_started and start_freq is not None and fmdx_drag_pointer_x is not None
+                    else 0.0
+                )
+                wf_texture.draw(
+                    0, waterfall_y0, rf_canvas_width(), waterfall_y1,
+                    center_khz=drag_center_khz, span_khz=rendered_span, row_offset=row_offset,
+                )
+            else:
+                wf_texture.draw(
+                    0,
+                    waterfall_y0,
+                    rf_canvas_width(),
+                    waterfall_y1,
+                    center_khz=display_freq,
+                    span_khz=display_span,
+                    row_offset=row_offset,
+                )
+            if receiver_is_fmdx:
+                notice_y = waterfall_y0 + (waterfall_y1 - waterfall_y0) * 0.46
+                notice_w = min(610, rf_canvas_width() - 80)
+                notice_x = (rf_canvas_width() - notice_w) / 2
+                fmdx_status = state.fmdx_status_snapshot()
+                fmdx_discovery = state.fmdx_discovery_snapshot()
+                fmdx_tuning = bool(fmdx_status.get("tuning"))
+                program_service = (
+                    f"DISCOVERING RDS {fmdx_discovery.get('index', 0)}/{fmdx_discovery.get('total', 0)}"
+                    if fmdx_discovery.get("active")
+                    else f"TUNING {display_freq / 1000.0:.3f} MHz"
+                    if fmdx_tuning
+                    else str(fmdx_status.get("ps") or "FM-DX LIVE AUDIO + SIGNAL").strip()
+                )
+                pi_code = str(fmdx_status.get("pi") or "").strip()
+                radio_text = (
+                    "CLEARING OLD WATERFALL · WAITING FOR NEW AUDIO/RDS"
+                    if fmdx_tuning
+                    else " ".join(
+                        str(fmdx_status.get(key) or "").strip() for key in ("rt0", "rt1")
+                    ).strip()
+                )
+                program_service = fit_station_text(text_cache, program_service, notice_w - 60, 24, True)
+                radio_text = fit_station_text(text_cache, radio_text, notice_w - 50, 15, False)
+                draw_logical_rect(
+                    notice_x, notice_y - 55, notice_x + notice_w, notice_y + 55,
+                    (4, 12, 18, 218),
+                )
+                draw_logical_line(
+                    notice_x, notice_y - 55, notice_x + notice_w, notice_y - 55,
+                    (101, 192, 204, 170), 1,
+                )
+                draw_text(
+                    text_cache, rf_canvas_width() / 2, notice_y - 29,
+                    program_service, (255, 184, 105) if fmdx_tuning else (205, 242, 244),
+                    24, True, False, "cm",
+                )
+                if pi_code:
+                    draw_text(
+                        text_cache, notice_x + notice_w - 20, notice_y - 29,
+                        f"PI {pi_code}", (129, 196, 204), 13, True, True, "rm",
+                    )
+                if radio_text:
+                    draw_text(
+                        text_cache, rf_canvas_width() / 2, notice_y + 2,
+                        radio_text, (190, 214, 217), 15, False, False, "cm",
+                    )
+                draw_text(
+                    text_cache, rf_canvas_width() / 2, notice_y + 34,
+                    f"±{rendered_span / 2.0:.2f} kHz CARRIER-CENTRED WATERFALL · AUDIO-DERIVED",
+                    (139, 175, 181), 14, False, True, "cm",
+                )
+                if swipe_started and start_freq is not None and fmdx_drag_pointer_x is not None:
+                    draw_fmdx_waterfall_drag_feedback(
+                        text_cache, start_x, fmdx_drag_pointer_x,
+                        start_freq, display_freq, waterfall_y0, waterfall_y1,
+                    )
             spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE
             if spectrum_enabled and not spectrum_foreground:
-                source_span_khz = kiwi.zoom_source_span_khz(zoom)
-                spectrum_layer.draw(
-                    spectrum_values,
-                    spectrum_peak_values,
-                    (spectrum_y0, spectrum_y1, source_span_khz, display_span),
-                    lambda: draw_spectrum(
-                        spectrum_y0,
-                        spectrum_y1,
+                if receiver_is_fmdx:
+                    draw_fmdx_audio_scope(
+                        spectrum_y0, spectrum_y1, fmdx_scope_values, text_cache,
+                    )
+                else:
+                    source_span_khz = kiwi.zoom_source_span_khz(zoom)
+                    spectrum_layer.draw(
                         spectrum_values,
                         spectrum_peak_values,
-                        text_cache,
-                        source_span_khz=source_span_khz,
-                        visible_span_khz=display_span,
-                    ),
-                )
+                        (spectrum_y0, spectrum_y1, source_span_khz, display_span),
+                        lambda: draw_spectrum(
+                            spectrum_y0,
+                            spectrum_y1,
+                            spectrum_values,
+                            spectrum_peak_values,
+                            text_cache,
+                            source_span_khz=source_span_khz,
+                            visible_span_khz=display_span,
+                        ),
+                    )
             overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
-            draw_filter_overlay(
-                display_span,
-                overlay_low_cut,
-                overlay_high_cut,
-                waterfall_y0,
-                waterfall_y1,
-                0.82,
-            )
+            if not receiver_is_fmdx:
+                draw_filter_overlay(
+                    display_span,
+                    overlay_low_cut,
+                    overlay_high_cut,
+                    waterfall_y0,
+                    waterfall_y1,
+                    0.82,
+                )
             radio_drawer_visible = LCD_800_MODE and LCD_RADIO_DRAWER_PROGRESS > 0.002
             # Mode, Audio, and Display are right-rail drawers, not modal
             # screens. Keep the waterfall's operating controls visible and
@@ -14625,11 +15680,11 @@ def main():
             draw_ui(
                 text_cache,
                 display_freq,
-                display_span,
+                rendered_span,
                 smeter_dbm,
                 smeter_peak_dbm,
                 smeter_readout_dbm,
-                radio_mode,
+                display_radio_mode,
                 digital_mode,
                 finger_tune_step_hz(zoom, tune_step_hz),
                 controls_alpha=control_alpha,
@@ -14661,18 +15716,24 @@ def main():
                 audio_muted=live_audio_controls["mute"],
                 settings_menu_open=settings_menu_open,
                 status_y0=LOGICAL_H - BOTTOM_STATUS_H,
+                audio_waterfall=receiver_is_fmdx,
             )
             if spectrum_foreground:
-                draw_spectrum(
-                    spectrum_y0,
-                    spectrum_y1,
-                    spectrum_values,
-                    spectrum_peak_values,
-                    text_cache,
-                    foreground=True,
-                    source_span_khz=kiwi.zoom_source_span_khz(zoom),
-                    visible_span_khz=display_span,
-                )
+                if receiver_is_fmdx:
+                    draw_fmdx_audio_scope(
+                        spectrum_y0, spectrum_y1, fmdx_scope_values, text_cache, foreground=True,
+                    )
+                else:
+                    draw_spectrum(
+                        spectrum_y0,
+                        spectrum_y1,
+                        spectrum_values,
+                        spectrum_peak_values,
+                        text_cache,
+                        foreground=True,
+                        source_span_khz=kiwi.zoom_source_span_khz(zoom),
+                        visible_span_khz=display_span,
+                    )
             if transcription_enabled:
                 draw_vosk_captions(
                     text_cache,
@@ -14698,7 +15759,9 @@ def main():
             # labels remain visible and their touch regions match what users
             # can see.
             if transcription_enabled or callsign_enabled:
-                draw_waterfall_operating_controls(text_cache, spectrum_enabled, control_alpha)
+                draw_waterfall_operating_controls(
+                    text_cache, spectrum_enabled, control_alpha, fmdx_receiver=receiver_is_fmdx,
+                )
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
             if not (
@@ -14706,6 +15769,10 @@ def main():
                 or tests_panel_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
+                if receiver_is_fmdx:
+                    draw_stations_waterfall_button(
+                        text_cache, len(state.fmdx_stations_snapshot()),
+                    )
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
             if audio_controls.get("mute", False) and not (
@@ -14758,7 +15825,13 @@ def main():
                     spectrum_enabled,
                 )
             if filter_drawer_open and LCD_800_MODE:
-                draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
+                if receiver_is_fmdx:
+                    draw_fmdx_station_panel(
+                        text_cache, state.fmdx_stations_snapshot(), display_freq,
+                        state.fmdx_discovery_snapshot(), fmdx_station_scroll,
+                    )
+                else:
+                    draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
             if receiver_home_panel_open and LCD_800_MODE:
                 draw_receiver_home_drawer(text_cache, receiver_home_profile, receiver_home_locating, fan_curve)
             if fan_curve_panel_open and LCD_800_MODE:
@@ -14774,6 +15847,8 @@ def main():
                     audio_high_cut,
                     audio_volume is not None,
                     _audio_mode,
+                    receiver_is_fmdx,
+                    len(state.fmdx_stations_snapshot()) if receiver_is_fmdx else 0,
                 )
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
@@ -14795,14 +15870,24 @@ def main():
                     state.tune_rate_snapshot(),
                 )
             if filter_panel_open:
-                draw_filter_setup_panel(text_cache, radio_mode, low_cut, high_cut, filter_custom_width)
+                if receiver_is_fmdx:
+                    draw_fmdx_station_panel(
+                        text_cache, state.fmdx_stations_snapshot(), display_freq,
+                        state.fmdx_discovery_snapshot(), fmdx_station_scroll,
+                    )
+                else:
+                    draw_filter_setup_panel(text_cache, radio_mode, low_cut, high_cut, filter_custom_width)
             osd_remaining = zoom_osd_until - now
             if osd_remaining > 0:
                 alpha = 220
                 fade = min(0.45, args.zoom_osd_seconds * 0.33)
                 if osd_remaining < fade:
                     alpha = int(220 * osd_remaining / fade)
-                draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
+                draw_zoom_osd(
+                    text_cache, zoom,
+                    fmdx.audio_waterfall_span_khz(zoom) if receiver_is_fmdx else kiwi.zoom_to_span_khz(zoom),
+                    alpha,
+                )
             if not picker_open:
                 draw_desktop_1280_navigation(text_cache)
             present_frame()

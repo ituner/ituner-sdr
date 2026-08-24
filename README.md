@@ -12,7 +12,7 @@ The native framebuffer is **800x1280** portrait. The panel is physically mounted
 
 ```text
 Waveshare DSI ── vc4-kms-dsi-waveshare-panel-v2 overlay ── DRM framebuffer (800x1280)
-               └─ Goodix input event ── rotated OpenGL UI (1280x800) ── KiwiSDR + PipeWire audio
+               └─ Goodix input event ── rotated OpenGL UI (1280x800) ── KiwiSDR/FM-DX + PipeWire audio
 ```
 
 `UI/` contains two UI implementations:
@@ -70,6 +70,10 @@ source UI/.venv/bin/activate
 python -m pip install pygame PyOpenGL sounddevice Pillow
 ```
 
+FM-DX audio additionally requires `ffmpeg` on the developer machine
+(`brew install ffmpeg` on macOS). The Raspberry Pi installer installs it
+automatically.
+
 On macOS where Anaconda shadows the desired interpreter, use the system Python explicitly:
 
 ```bash
@@ -96,7 +100,34 @@ Desktop controls:
 
 Because desktop windows are borderless, use `Esc` or `q` instead of a macOS close button.
 
-The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
+The receiver is a live public KiwiSDR or FM-DX Webserver connection. KiwiSDR
+receivers provide audio and RF waterfall bins. FM-DX receivers provide tuned
+FM audio, RDS/status metadata, and signal strength; the app derives a clearly
+labelled carrier-centred ±10 kHz programme-audio waterfall from that decoded stream because
+the core protocol has no continuous RF waterfall. Choose receivers from the
+`RECEIVERS` tile and use the `FMDX` route filter for FM-DX-only results. Desktop
+mode is a development/runtime option only; it leaves the Pi's rotated
+framebuffer output untouched.
+
+On FM-DX receivers, Zoom locally magnifies the 20 kHz audio-derived waterfall.
+The always-visible Stations control beside Favorite and Play/Pause loads the
+server owner's `/static_data` presets and adds RDS PS/PI names learned while
+listening. When an FM-DX session loads, unnamed presets are visited nearest-first for a
+short, locally-muted RDS discovery pass; results appear in Stations immediately,
+are cached per receiver, and a manual tune cancels the pass. Selecting an FM-DX
+receiver forces FM-FMDX mode and finishes on the nearest discovered RDS channel,
+falling back to the nearest server preset. During waterfall tuning, an orange travel marker
+and target-frequency readout make the carrier-centred audio view's drag visible.
+Station taps tune immediately while leaving the Stations drawer open. Receiver
+route, sorting, and map-view selectors are remembered, including the FM-DX-only
+route. The active FM-DX endpoint and final discovered or tapped frequency are
+committed immediately so an app or device restart resumes the same station.
+Changing an FM-DX station clears the prior waterfall and partial FFT audio,
+shows a brief tuning state, then rebuilds the waterfall from the new programme.
+Passband and Kiwi-only audio DSP controls are disabled because the FM-DX
+protocol supplies already-decoded programme audio. FM-DX receivers use constant-
+size orange globe dots; KiwiSDR receivers use constant-size cyan dots, with an
+on-map color legend and no idle marker halos.
 
 ## Boot services and status
 

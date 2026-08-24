@@ -23,7 +23,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   python3-pygame python3-opengl python3-pil python3-pip python3-venv \
   libportaudio2 libspeexdsp1 pipewire pipewire-audio wireplumber rtkit \
-  build-essential cmake autoconf automake libtool pkg-config git curl unzip xz-utils ca-certificates
+  ffmpeg build-essential cmake autoconf automake libtool pkg-config git curl unzip xz-utils ca-certificates
 
 install -d -m 0755 /opt/ituner-sdr/UI /opt/ituner-sdr/vendor/python /usr/local/lib/ituner-sdr "${state_dir}"
 
