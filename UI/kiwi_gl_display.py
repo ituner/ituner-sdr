@@ -1287,6 +1287,14 @@ def configure_popup_layout():
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_PATTERN_BOX,
      TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+    if LCD_800_MODE:
+        test_x0, test_x1 = LCD_NAV_X0, LOGICAL_W
+        TEST_PANEL_BOX = (test_x0, LCD_DRAWER_HEADER_H, test_x1, lcd_rail_bottom())
+        inner_x0, inner_x1 = test_x0 + 10, test_x1 - 10
+        TEST_GLOBE_BOX = (inner_x0, 116, inner_x1, 202)
+        TEST_DJ_BOX = (inner_x0, 218, inner_x1, 304)
+        TEST_PATTERN_BOX = (inner_x0, 320, inner_x1, 406)
+        TEST_RUN_BOX = (inner_x0, 422, inner_x1, 508)
 
     dy = offset("dj")
     (DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX,
@@ -1307,6 +1315,9 @@ def configure_popup_layout():
         asr_x0 + ASR_PANEL_WIDTH,
         asr_y1,
     )
+    if LCD_800_MODE:
+        ASR_PANEL_BOX = (LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom())
+        ASR_MOON_LANGUAGE_PANEL_BOX = ASR_PANEL_BOX
     # Captions belong at the lower edge of the live waterfall, above the
     # frequency ruler. Recompute this after the desktop/Pi geometry is known.
     VOSK_CAPTION_BOX = (
@@ -1337,10 +1348,10 @@ def configure_popup_layout():
         PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 9)
         PICKER_ROUTE_FMDX_BOX = lcd_nav_box(6, 9)
         PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(7, 9)
-        PICKER_EXIT_BOX = lcd_nav_box(8, 9)
+        PICKER_EXIT_BOX = lcd_drawer_back_box()
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
-        RADIOGARDEN_EXIT_BOX = (1031, 372, 1273, 490)
+        RADIOGARDEN_EXIT_BOX = lcd_drawer_back_box()
     else:
         PICKER_BOX = (0, 0, 790, LOGICAL_H)
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -1372,7 +1383,7 @@ MENU_ROWS = 2
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DIGI"),
+    ("digital", "MODES"),
     ("settings", "SETTINGS"),
 )
 SETTINGS_MENU_ITEMS = (
@@ -1382,7 +1393,7 @@ SETTINGS_MENU_ITEMS = (
     ("stats", "STATS"),
     ("tests", "TESTS"),
     ("system", "SYSTEM"),
-    ("settings_back", "HOME"),
+    ("settings_back", "BACK"),
 )
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
@@ -4741,7 +4752,7 @@ def draw_radio_option(text_cache, box, label, active):
 
 
 def draw_radio_close_button(text_cache, box):
-    """A deliberately distinct, icon-led drawer return control."""
+    """Draw the one shared bottom-right sidebar Back control."""
     x0, y0, x1, y1 = box
     draw_logical_rect(x0, y0, x1, y1, (22, 54, 68, 238))
     for ax0, ay0, ax1, ay1 in (
@@ -4750,10 +4761,11 @@ def draw_radio_close_button(text_cache, box):
     ):
         draw_logical_line(ax0, ay0, ax1, ay1, (105, 222, 237, 230), 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    # A familiar, text-free back glyph: arrow head plus a generous stem.
-    draw_logical_line(cx + 11, cy, cx - 9, cy, (232, 253, 255, 250), 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy - 8, (232, 253, 255, 250), 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy + 8, (232, 253, 255, 250), 2)
+    arrow_x = cx - 34
+    draw_logical_line(arrow_x + 11, cy, arrow_x - 9, cy, (232, 253, 255, 250), 2)
+    draw_logical_line(arrow_x - 9, cy, arrow_x - 1, cy - 8, (232, 253, 255, 250), 2)
+    draw_logical_line(arrow_x - 9, cy, arrow_x - 1, cy + 8, (232, 253, 255, 250), 2)
+    draw_text(text_cache, cx + 15, cy, "BACK", (232, 253, 255), 15, True, False, "cm", family="Liberation Sans")
 
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
@@ -4901,8 +4913,7 @@ def display_option_at(x, y):
 
 
 def lcd_display_drawer_close_box():
-    x0, _y0, x1, y1 = DISPLAY_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_display_control(text_cache, box, label, active=False):
@@ -6346,8 +6357,7 @@ def audio_option_at(x, y):
 
 
 def lcd_audio_drawer_close_box():
-    x0, _y0, x1, y1 = AUDIO_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
@@ -6390,7 +6400,7 @@ def receiver_home_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "fan": (x0 + 10, 258, x1 - 10, 326),
         "locate": (x0 + 10, 346, x1 - 10, 414),
         "fallback": (x0 + 10, 426, x1 - 10, 494),
@@ -6422,7 +6432,7 @@ def fan_curve_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "start": (x0 + 10, 248, x1 - 10, 318),
         "full": (x0 + 10, 346, x1 - 10, 416),
         "minimum": (x0 + 10, 444, x1 - 10, 514),
@@ -6667,6 +6677,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
 
 def tests_option_at(x, y):
+    if LCD_800_MODE and contains(lcd_drawer_back_box(), x, y):
+        return "close"
     if contains(TEST_GLOBE_BOX, x, y):
         return "globe"
     if contains(TEST_DJ_BOX, x, y):
@@ -6696,11 +6708,24 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
     x0, y0, x1, y1 = TEST_PANEL_BOX
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
     _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    if not LCD_800_MODE:
+        draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
-    draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_text(text_cache, x0 + 12, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    if LCD_800_MODE:
+        draw_lcd_audio_tile(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "LIVE RF MAP", True)
+        draw_lcd_audio_tile(text_cache, TEST_DJ_BOX, "DJ TUNE", "FINGER DIAL")
+        draw_lcd_audio_tile(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES")
+        draw_lcd_audio_tile(
+            text_cache, TEST_RUN_BOX,
+            "RUN TEST" if sweep is None else "STOP",
+            "KIWI WATERFALL" if sweep is None else f"{sweep.index}/{sweep.command_count}",
+            sweep is not None,
+        )
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+        return
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
@@ -7600,7 +7625,6 @@ def draw_receiver_map(
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
         (RADIOGARDEN_VIEW_BOX, "display", MAP_VIEW_LABELS.get(map_view, "BORDERS")),
-        (RADIOGARDEN_EXIT_BOX, "home", "EXIT"),
     ):
         bx0, by0, bx1, by1 = command_box
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 232))
@@ -7610,6 +7634,7 @@ def draw_receiver_map(
         draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 190), 1)
         tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
+    draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
     if timings is not None:
         timings["chrome"] = time.perf_counter() - chrome_started_at
@@ -7769,7 +7794,12 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     draw_logical_line(x0, y0, x1, y0, (116, 170, 183, 100), 1)
     draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
     draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
-    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
+    if LCD_800_MODE:
+        draw_logical_rect(LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 246))
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "CONSTELLATION")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+    else:
+        draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
     map_box = GLOBE_MAP_BOX
     draw_logical_rect(*map_box, (10, 35, 55, 245))
     draw_logical_line(map_box[0], map_box[1], map_box[2], map_box[1], (86, 173, 195, 150), 1)
@@ -7902,6 +7932,10 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
     draw_dj_control(text_cache, DJ_RANGE_BOX, "RANGE", f"+/-{range_khz:.1f} kHz")
     draw_dj_control(text_cache, DJ_RATE_BOX, "LINK RATE", f"{link_rate_hz} Hz", link_rate_hz != 50)
     draw_dj_control(text_cache, DJ_RETURN_BOX, "RETURN", sdr_ui.format_freq(origin_khz))
+    if LCD_800_MODE:
+        draw_logical_rect(LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 246))
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "DJ TUNE")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
 def draw_filter_width_control(text_cache, box, label):
@@ -8444,11 +8478,13 @@ def lcd_rail_bottom():
     return LOGICAL_H
 
 
+def lcd_drawer_back_box():
+    """One physical Back target shared by every right-sidebar route."""
+    return LCD_NAV_X0 + 10, lcd_rail_bottom() - 78, LOGICAL_W - 10, lcd_rail_bottom() - 10
+
+
 def lcd_radio_drawer_close_box():
-    x0, _y0, x1, y1 = radio_panel_box()
-    # The mode choices are top-justified. A broad, isolated bottom return is
-    # easy to find and cannot be confused with a mode-family control.
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def lcd_radio_drawer_reveal_y():
@@ -8507,6 +8543,8 @@ def lcd_home_bandwidth_box():
 
 def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
+    if item_count == len(SETTINGS_MENU_ITEMS) and index == len(SETTINGS_MENU_ITEMS) - 1:
+        return lcd_drawer_back_box()
     col = index % 2
     row = index // 2
     x0 = LCD_NAV_X0 + 7 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
@@ -8690,7 +8728,7 @@ def lcd_filter_drawer_boxes():
         preset_boxes.append((name, width_hz, (left, top, left + preset_w, top + preset_h)))
     return {
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
-        "close": (inner_x0, lcd_rail_bottom() - 78, inner_x1, lcd_rail_bottom() - 10),
+        "close": lcd_drawer_back_box(),
         "visual": (inner_x0, 108, inner_x1, 211),
         "shift": (inner_x0, 217, inner_x1, 329),
         "width": (inner_x0, 341, inner_x1, 441),
@@ -8827,7 +8865,9 @@ def fmdx_station_panel_layout(station_count):
     if LCD_800_MODE:
         panel = lcd_filter_drawer_boxes()["panel"]
         close = lcd_filter_drawer_boxes()["close"]
-        columns, start_y, gap, row_h = 1, 116, 8, 57
+        # Leave a calm status lane below the heading/discovery text before the
+        # first selectable station row.
+        columns, start_y, gap, row_h = 1, 140, 8, 57
         x0, x1 = panel[0] + 10, panel[2] - 10
         available_bottom = close[1] - 12
     else:
@@ -8939,6 +8979,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         draw_lcd_home_volume_slider(text_cache, volume, muted)
     for index, (kind, label) in enumerate(items):
         bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
+        if kind == "settings_back":
+            draw_radio_close_button(text_cache, (bx0, by0, bx1, by1))
+            continue
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
         draw_logical_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
         draw_logical_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
@@ -8948,6 +8991,29 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
+
+
+def lcd_mode_annunciator_cells():
+    """Yield the exact eight Home mode cells used by drawing and hit-testing."""
+    x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
+    gap = 5
+    grid_y0 = y0 + 130
+    grid_y1 = y1 - 6
+    cell_w = (x1 - x0 - 12 - 3 * gap) / 4
+    cell_h = (grid_y1 - grid_y0 - gap) / 2
+    for index, mode in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+        col, row = index % 4, index // 4
+        bx0 = x0 + 6 + col * (cell_w + gap)
+        by0 = grid_y0 + row * (cell_h + gap)
+        yield mode, (bx0, by0, bx0 + cell_w, by0 + cell_h)
+
+
+def lcd_mode_annunciator_at(x, y):
+    """Return the Kiwi mode whose visible Home annunciator cell was tapped."""
+    for mode, box in lcd_mode_annunciator_cells():
+        if contains(box, x, y):
+            return mode
+    return None
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None):
@@ -8975,20 +9041,16 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
 
         surface.fill((3, 6, 9, 232))
         rounded(3, 3, width - 3, 56, (10, 13, 16, 246), (54, 60, 65, 232), 8)
-        grid_y0, grid_y1, gap = 130, height - 6, 5
-        cell_w = (width - 12 - 3 * gap) / 4
-        cell_h = (grid_y1 - grid_y0 - gap) / 2
-        for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
-            col, row = index % 4, index // 4
-            left = 6 + col * (cell_w + gap)
-            top = grid_y0 + row * (cell_h + gap)
+        for label, (cell_x0, cell_y0, cell_x1, cell_y1) in lcd_mode_annunciator_cells():
+            left, top = cell_x0 - x0, cell_y0 - y0
+            right, bottom = cell_x1 - x0, cell_y1 - y0
             # Keep the grid cells neutral. The active state is drawn later as
             # a compact pill tight to the mode label, not a full blue tile.
             rounded(
                 left,
                 top,
-                left + cell_w,
-                top + cell_h,
+                right,
+                bottom,
                 (7, 10, 13, 238),
                 (62, 67, 73, 228),
                 6,
@@ -9059,14 +9121,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         )
         return
 
-    cell_w = (x1 - x0 - 12 - 3 * 5) / 4
-    cell_h = (y1 - 6 - 130 - 5) / 2
-    for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
-        col, row = index % 4, index // 4
-        bx0 = x0 + 6 + col * (cell_w + 5)
-        bx1 = bx0 + cell_w
-        by0 = y0 + 130 + row * (cell_h + 5)
-        by1 = by0 + cell_h
+    for label, (bx0, by0, bx1, by1) in lcd_mode_annunciator_cells():
         active = label == active_mode or (label == "IQ" and digital.upper() == "IQ")
         if active:
             label_w, label_h = text_cache.font(16, bold=True, family="Liberation Sans").size(label)
@@ -9129,6 +9184,10 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
     """A full-size, touch-safe secret-entry sheet above the live waterfall."""
     x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
+    if LCD_800_MODE:
+        draw_logical_rect(LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 246))
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "DEEPGRAM KEY")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
     draw_logical_line(x0, y0, x1, y0, (103, 215, 210, 188), 1)
     draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", (224, 241, 243), 20, True, False, "lm", family="Cantarell")
@@ -9169,8 +9228,12 @@ def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mod
     draw_text(text_cache, 34, 36, query or "Country, city, call sign, or station name", (240, 242, 244) if query else (166, 171, 175), 23, False, False, "lm")
     draw_picker_button(text_cache, SEARCH_CASE_BOX, "aA", 16, keyboard_mode != "numeric")
     draw_picker_button(text_cache, SEARCH_MODE_BOX, "123" if keyboard_mode != "numeric" else "ABC", 14, keyboard_mode == "numeric")
-    draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
-    draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
+    if LCD_800_MODE:
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "RECEIVER SEARCH")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+    else:
+        draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
+        draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
     for keys, x0, y0, key_w in keyboard_rows(keyboard_mode):
         for index, key in enumerate(keys):
             box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
@@ -9185,6 +9248,9 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         return
     panel, entry, commands, keys = layout
     x0, y0, x1, y1 = panel
+    draw_logical_rect(LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 246))
+    draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "FREQUENCY")
+    draw_radio_close_button(text_cache, lcd_drawer_back_box())
     draw_logical_rect(x0, y0, x1, y1, (6, 17, 24, 235))
     draw_logical_line(x0 + 12, y0, x1 - 12, y0, (132, 166, 175, 112), 1)
     draw_logical_line(x0, y0 + 1, x0, y1, (52, 82, 91, 135), 1)
@@ -9396,7 +9462,10 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_ROUTE_PROXY_BOX, "PROXY", 18, route_filter == "proxy")
         draw_picker_button(text_cache, PICKER_ROUTE_FMDX_BOX, "FMDX", 18, route_filter == "fmdx")
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
-    draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if LCD_800_MODE else 20)
+    if LCD_800_MODE:
+        draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
+    else:
+        draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 20)
 
     for idx in visible_station_range(len(stations), scroll, PICKER_COLS, PICKER_ROWS):
         station = stations[idx]
@@ -9857,7 +9926,36 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
         draw_text(text_cache, field_x0 + 13, (row_y0 + row_y1) / 2, label, color, size, True, False, "lm", family="Cantarell")
 
 
+def lcd_asr_option_boxes(moon_language_menu=False):
+    """Lay ASR choices into the shared right sidebar above Back."""
+    x0, _y0, x1, _y1 = ASR_PANEL_BOX
+    inner_x0, inner_x1 = x0 + 10, x1 - 10
+    if moon_language_menu:
+        cell_w = (inner_x1 - inner_x0 - 7) / 2
+        for index, (language, _label) in enumerate(MOONSHINE_LANGUAGE_OPTIONS):
+            col, row = index % 2, index // 2
+            left = inner_x0 + col * (cell_w + 7)
+            top = 118 + row * 66
+            yield "engine", f"moonshine:{language}", (left, top, left + cell_w, top + 58)
+        return
+    for index, candidate in enumerate(ASR_ENGINES):
+        top = 112 + index * 56
+        yield "engine", candidate, (inner_x0, top, inner_x1, top + 48)
+    mode_top = 520
+    mode_w = (inner_x1 - inner_x0 - 14) / 3
+    for index, mode in enumerate(CAPTION_MODES):
+        left = inner_x0 + index * (mode_w + 7)
+        yield "caption_mode", mode, (left, mode_top, left + mode_w, mode_top + 68)
+
+
 def asr_option_at(x, y, moon_language_menu=False):
+    if LCD_800_MODE:
+        if contains(lcd_drawer_back_box(), x, y):
+            return "close", None
+        for kind, value, box in lcd_asr_option_boxes(moon_language_menu):
+            if contains(box, x, y):
+                return kind, value
+        return None
     box = ASR_MOON_LANGUAGE_PANEL_BOX if moon_language_menu else ASR_PANEL_BOX
     x0, y0, x1, y1 = box
     if not contains(box, x, y):
@@ -9878,6 +9976,25 @@ def asr_option_at(x, y, moon_language_menu=False):
 
 def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
+    if LCD_800_MODE:
+        x0, y0, x1, y1 = ASR_PANEL_BOX
+        draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 246))
+        draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "ASR / CAPTIONS")
+        active_language = moonshine_language(engine) or "en"
+        for kind, value, box in lcd_asr_option_boxes(moon_language_menu):
+            if kind == "engine" and moon_language_menu:
+                language = value.split(":", 1)[1]
+                label = next(label for candidate, label in MOONSHINE_LANGUAGE_OPTIONS if candidate == language)
+                active = language == active_language
+            elif kind == "engine":
+                label = ASR_ENGINE_LABELS[value]
+                active = value == asr_engine_family(engine)
+            else:
+                label = CAPTION_MODE_LABELS[value]
+                active = value == caption_mode
+            draw_lcd_audio_tile(text_cache, box, label, "SELECTED" if active else "", active, title_size=13)
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+        return
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
         draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 232))
@@ -13525,7 +13642,11 @@ def main():
                                 start_span = fmdx.audio_waterfall_span_khz(_zoom)
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
-                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open)
+                                and (
+                                    radio_setup_open or audio_panel_open or display_setup_open
+                                    or filter_drawer_open or receiver_home_panel_open
+                                    or fan_curve_panel_open or tests_panel_open or asr_panel_open
+                                )
                                 # Drawers occupy only the right rail. Route
                                 # every remaining point in the left waterfall
                                 # band to live tuning; explicit Zoom/Filter/
@@ -13567,6 +13688,8 @@ def main():
                                 gesture = "frequency_entry"
                             elif frequency_entry_open:
                                 gesture = "frequency_entry_outside"
+                            elif deepgram_setup_open and LCD_800_MODE and contains(lcd_drawer_back_box(), x, y):
+                                gesture = "deepgram_sidebar_back"
                             elif deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y):
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
@@ -13682,6 +13805,8 @@ def main():
                                 gesture = "audio_control"
                             elif audio_panel_open:
                                 gesture = "audio_panel_outside"
+                            elif dj_tune_open and LCD_800_MODE and contains(lcd_drawer_back_box(), x, y):
+                                gesture = "dj_sidebar_back"
                             elif dj_tune_open and contains(DJ_TRACK_BOX, x, y):
                                 dj_drag_remainder_hz = 0.0
                                 gesture = "dj_tune"
@@ -13694,7 +13819,7 @@ def main():
                                 gesture = "dj_controls"
                             elif dj_tune_open:
                                 gesture = "dj_tune_outside"
-                            elif globe_open and contains(GLOBE_BACK_BOX, x, y):
+                            elif globe_open and contains(lcd_drawer_back_box() if LCD_800_MODE else GLOBE_BACK_BOX, x, y):
                                 gesture = "globe_back"
                             elif globe_open and any(contains(box, x, y) for box in GLOBE_STATION_BOXES):
                                 gesture = "globe_station"
@@ -14074,7 +14199,20 @@ def main():
                                 # FM-DX supplies already-demodulated programme
                                 # audio. Kiwi demodulator choices do not apply,
                                 # so its protocol-owned mode is informational.
-                                radio_setup_open = False if fmdx.is_fmdx_server(active_server) else not radio_setup_open
+                                if fmdx.is_fmdx_server(active_server):
+                                    radio_setup_open = False
+                                else:
+                                    requested_mode = lcd_mode_annunciator_at(x, y) if LCD_800_MODE else None
+                                    if requested_mode is not None:
+                                        radio_mode = requested_mode
+                                        digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
+                                        manual_radio_mode = True
+                                        filter_custom_width = False
+                                        state.set_radio_mode(radio_mode)
+                                        remember_current_view()
+                                        radio_setup_open = True
+                                    else:
+                                        radio_setup_open = not radio_setup_open
                                 radio_family_open = None
                                 menu_open = False
                                 picker_open = False
@@ -14183,6 +14321,13 @@ def main():
                                 audio_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "dj_tune":
+                            wake_controls()
+                        elif touch_started and gesture == "dj_sidebar_back":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                restore_dj_origin("closed")
+                                dj_tune_open = False
+                                tests_panel_open = True
                             wake_controls()
                         elif touch_started and gesture == "dj_controls":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14327,7 +14472,9 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = tests_option_at(x, y)
-                                if choice == "globe":
+                                if choice == "close":
+                                    tests_panel_open = False
+                                elif choice == "globe":
                                     tests_panel_open = False
                                     globe_open = True
                                     if not globe_fetch_started:
@@ -14702,6 +14849,13 @@ def main():
                                     deepgram_key_value += action
                                     deepgram_key_error = ""
                             wake_controls()
+                        elif touch_started and gesture == "deepgram_sidebar_back":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                deepgram_setup_open = False
+                                deepgram_key_value = ""
+                                deepgram_key_error = ""
+                            wake_controls()
                         elif touch_started and gesture == "deepgram_setup_outside":
                             # Keep an entered secret intact until the operator
                             # explicitly dismisses it with X.
@@ -14726,7 +14880,10 @@ def main():
                             if moved <= args.tap_px:
                                 selection = asr_option_at(x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
-                                if selection_kind == "caption_mode":
+                                if selection_kind == "close":
+                                    asr_panel_open = False
+                                    asr_moon_language_open = False
+                                elif selection_kind == "caption_mode":
                                     if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
                                         state.set_asr_engine("whisper")
                                     state.set_caption_mode(selected_value)
@@ -14829,7 +14986,11 @@ def main():
                         elif touch_started and gesture == "search":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                if contains(SEARCH_EXIT_BOX, x, y) or contains(SEARCH_LEFT_EXIT_BOX, x, y):
+                                if (
+                                    contains(lcd_drawer_back_box(), x, y)
+                                    if LCD_800_MODE
+                                    else contains(SEARCH_EXIT_BOX, x, y) or contains(SEARCH_LEFT_EXIT_BOX, x, y)
+                                ):
                                     search_open = False
                                     station_scroll = 0
                                 elif contains(SEARCH_CASE_BOX, x, y):
