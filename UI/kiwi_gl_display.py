@@ -220,6 +220,10 @@ class HamCallsignBook:
 MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
+    "location": "rf.png",
+    "receivers": "receivers.png",
+    "cpu": "stats.png",
+    "fan": "settings.png",
 }
 SPECTRUM_H = 70
 LCD_SPECTRUM_H = 240
@@ -1177,6 +1181,8 @@ def configure_popup_layout():
     global PICKER_SEARCH_BOX, PICKER_SORT_BOX, PICKER_ROUTE_ALL_BOX, PICKER_ROUTE_DIRECT_BOX
     global PICKER_ROUTE_PROXY_BOX, PICKER_ROUTE_FMDX_BOX, PICKER_ROUTE_FAVORITES_BOX, PICKER_EXIT_BOX
     global RADIOGARDEN_LIST_BOX, RADIOGARDEN_EXIT_BOX, RADIOGARDEN_VIEW_BOX
+    global GLOBE_PANEL_BOX, GLOBE_MAP_BOX, GLOBE_BACK_BOX, GLOBE_INFO_BOX
+    global GLOBE_SCOUT_BAR_BOX, GLOBE_STATION_BOXES
 
     def offset(kind):
         panel = POPUP_LAYOUT_BASE[kind][0]
@@ -1298,6 +1304,26 @@ def configure_popup_layout():
         TEST_PATTERN_BOX = (inner_x0, 320, inner_x1, 406)
         TEST_RUN_BOX = (inner_x0, 422, inner_x1, 508)
 
+        # Constellation was still using the legacy 960x320 popup geometry.
+        # Give its map, warm receivers, and scout status the complete 1024x800
+        # radio canvas while preserving the fixed 256 px navigation rail.
+        GLOBE_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+        GLOBE_MAP_BOX = (16, 54, LCD_NAV_X0 - 16, 548)
+        GLOBE_INFO_BOX = (16, 562, LCD_NAV_X0 - 16, 692)
+        card_gap = 10
+        card_x0 = GLOBE_INFO_BOX[0] + 8
+        card_x1 = GLOBE_INFO_BOX[2] - 8
+        card_w = (card_x1 - card_x0 - 2 * card_gap) / 3
+        GLOBE_STATION_BOXES = tuple(
+            (
+                card_x0 + index * (card_w + card_gap), 604,
+                card_x0 + index * (card_w + card_gap) + card_w, 684,
+            )
+            for index in range(3)
+        )
+        GLOBE_SCOUT_BAR_BOX = (16, 706, LCD_NAV_X0 - 16, 786)
+        GLOBE_BACK_BOX = lcd_drawer_back_box()
+
     dy = offset("dj")
     (DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX,
      DJ_RATE_BOX, DJ_RETURN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["dj"])
@@ -1390,13 +1416,83 @@ MENU_ITEMS = (
 )
 SETTINGS_MENU_ITEMS = (
     ("display", "DISPLAY"),
-    ("network", "NETWORK"),
-    ("kiwi", "KIWI"),
-    ("stats", "STATS"),
+    ("location", "LOCATION"),
+    ("receivers", "RECEIVERS"),
+    ("cpu", "CPU"),
     ("tests", "TESTS"),
-    ("system", "SYSTEM"),
+    ("fan", "FAN"),
     ("settings_back", "BACK"),
 )
+
+
+def navigation_back_target(current, parent=None):
+    """Return the visible parent promised by a nested screen's Back button."""
+    fixed_parents = {
+        "dj_tune": "tests",
+        "moon_languages": "asr",
+        "deepgram": "asr",
+    }
+    return parent or fixed_parents.get(current, "home")
+
+
+def drawer_blank_tap_closes(_drawer):
+    """Right-rail drawers close through their labelled Back control only."""
+    return False
+
+
+def settings_destination_presentation(kind):
+    """Keep drill-down navigation in the rail and large leaf tools centered."""
+    return "center" if kind in ("cpu", "receivers") else "right"
+
+
+def settings_background_input_enabled(settings_session_open=False):
+    """A Settings session is modal with respect to the live radio surface."""
+    return not settings_session_open
+
+
+def settings_surface_overlay_alpha(_settings_session_open=False):
+    """Settings locks background input without visually dimming the radio."""
+    return 0
+
+
+def settings_center_workspace_box():
+    """Large leaf workspace that deliberately stops before the right rail."""
+    return 72, 72, LCD_NAV_X0 - 72, LOGICAL_H - 72
+
+
+def lcd_primary_action_at(x, y, settings_open=False):
+    """Resolve the visible rail before any covered Home controls."""
+    items = lcd_nav_items(settings_open)
+    nav_index = lcd_nav_item_at(x, y, items)
+    if settings_open and nav_index is not None:
+        return "navigation", items[nav_index][0]
+    if not settings_open:
+        if contains(lcd_home_bandwidth_box(), x, y):
+            return "home_passband", None
+        if contains(lcd_home_volume_mute_box(), x, y):
+            return "home_volume_mute", None
+        if contains(lcd_home_volume_box(), x, y):
+            return "home_volume", None
+        if nav_index is not None:
+            return "navigation", items[nav_index][0]
+    return None
+
+
+def waterfall_overlay_controls_enabled(picker_open=False):
+    """Opaque receiver workspaces own every point they visibly cover."""
+    return not picker_open
+
+
+def next_search_case_mode(mode):
+    """Make the visible aA key useful even after switching to numeric input."""
+    if mode == "numeric":
+        return "lower"
+    return "lower" if mode == "upper" else "upper"
+
+
+def pending_connection_closes_picker(origin, map_open=False):
+    """Only an explicit list-row connection auto-returns to the waterfall."""
+    return origin == "list" and not map_open
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 PICKER_BOX = (0, 0, 790, LOGICAL_H)
@@ -4476,7 +4572,7 @@ def draw_audio_transport_graph(text_cache, history, box):
             draw_logical_line(x, plot_y0, x, plot_y1, (255, 185, 62, 235), 1)
 
 
-def draw_cpu_utilization_graph(text_cache, history, latest, box):
+def draw_cpu_utilization_graph(text_cache, history, latest, box, close_hint="TAP CPU TO CLOSE"):
     """Draw a two-minute, right-to-left CPU history for all Pi cores."""
     x0, y0, x1, y1 = box
     header_h = 44
@@ -4493,7 +4589,7 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
     draw_logical_line(x0, y0, x1, y0, (91, 221, 241, 230), 2)
     draw_logical_line(x0, y1, x1, y1, (91, 221, 241, 170), 1)
     draw_text(text_cache, x0 + 14, y0 + 18, "CPU UTILIZATION", (161, 235, 246), 18, True, True, "lm")
-    draw_text(text_cache, x1 - 14, y0 + 18, "120 s  ·  TAP CPU TO CLOSE", (170, 193, 199), 12, False, True, "rm")
+    draw_text(text_cache, x1 - 14, y0 + 18, f"120 s  ·  {close_hint}", (170, 193, 199), 12, False, True, "rm")
     for percent in (25, 50, 75):
         y = plot_y1 - (percent / 100.0) * (plot_y1 - plot_y0)
         draw_logical_line(plot_x0, y, plot_x1, y, (89, 134, 147, 66), 1)
@@ -6434,7 +6530,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "RECEIVER HOME")
+    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "LOCATION")
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 154, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
@@ -6545,7 +6641,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
     draw_lcd_audio_tile(
         text_cache, AUDIO_FILTER_BOX,
-        "STATIONS" if fmdx_receiver else "FILTER",
+        "STATIONS" if fmdx_receiver else "PASSBAND",
         f"{station_count} PRESETS" if fmdx_receiver else format_filter_width(high_cut - low_cut),
     )
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
@@ -7359,6 +7455,26 @@ def map_receiver_health_label(receiver, station_health, now=None):
     return "UNTESTED"
 
 
+def map_nearby_receiver_boxes(box, count):
+    """Return the exact selectable rows used by the smart-receiver panel."""
+    panel_x1 = box[2] - 16
+    panel_x0 = max(box[0] + 620, panel_x1 - 382)
+    panel_y0 = box[1] + 16
+    row_h = 43
+    return tuple(
+        (panel_x0 + 5, panel_y0 + 30 + index * row_h + 2,
+         panel_x1 - 5, panel_y0 + 30 + (index + 1) * row_h - 2)
+        for index in range(max(0, int(count)))
+    )
+
+
+def map_nearby_receiver_at(x, y, box, count):
+    for index, row_box in enumerate(map_nearby_receiver_boxes(box, count)):
+        if contains(row_box, x, y):
+            return index
+    return None
+
+
 def draw_map_nearby_receivers(
     text_cache, receivers, station_health, selected_server, connection_status,
     smeter_dbm, box,
@@ -7366,8 +7482,9 @@ def draw_map_nearby_receivers(
     """Show the health-ranked local trio selected by a map tap."""
     if not receivers:
         return
-    panel_x1 = box[2] - 16
-    panel_x0 = max(box[0] + 620, panel_x1 - 382)
+    row_boxes = map_nearby_receiver_boxes(box, len(receivers))
+    panel_x0 = row_boxes[0][0] - 5
+    panel_x1 = row_boxes[0][2] + 5
     panel_y0 = box[1] + 16
     row_h = 43
     panel_y1 = panel_y0 + 30 + row_h * len(receivers) + 8
@@ -7380,12 +7497,12 @@ def draw_map_nearby_receivers(
     )
     now = time.time()
     for index, receiver in enumerate(receivers):
-        row_y0 = panel_y0 + 30 + index * row_h
+        row_x0, row_y0, row_x1, row_y1 = row_boxes[index]
         server = receiver.get("server")
         selected = server == selected_server
         fill = (16, 73, 43, 232) if selected else (8, 39, 29, 216)
-        draw_logical_rect(panel_x0 + 5, row_y0 + 2, panel_x1 - 5, row_y0 + row_h - 2, fill)
-        dot_x, dot_y = panel_x0 + 18, row_y0 + row_h / 2
+        draw_logical_rect(row_x0, row_y0, row_x1, row_y1, fill)
+        dot_x, dot_y = panel_x0 + 18, panel_y0 + 30 + index * row_h + row_h / 2
         draw_logical_circle(dot_x, dot_y, 6.0 if selected else 4.5, (39, 255, 105, 255), 18)
         title = bottom_station_title(receiver.get("name", "Receiver"), receiver.get("location", ""))
         title = fit_station_text(text_cache, title, panel_x1 - panel_x0 - 142, 14, True, family="Cantarell")
@@ -7572,7 +7689,7 @@ def draw_receiver_map(
         "no_waterfall": "NO WATERFALL",
         "waterfall_audio_retry": "AUDIO RETRY",
         "failed": "UNAVAILABLE",
-    }.get(connection_status, "SELECTED") if selected else "TAP A SQUARE TO SELECT"
+    }.get(connection_status, "SELECTED") if selected else "TAP A RECEIVER TO SELECT"
     detail = bottom_station_title(selected["name"], selected["location"]) if selected else f"{len(receivers)} GPS RECEIVERS"
     draw_logical_rect(box[0] + 14, box[1] + 14, min(box[2] - 14, box[0] + 604), box[1] + 66, (3, 13, 19, 202))
     draw_text(text_cache, box[0] + 28, box[1] + 32, state_label, (108, 250, 191) if selected else (180, 213, 219), 17, True, False, "lm", family="Cantarell")
@@ -7644,7 +7761,6 @@ def draw_receiver_map(
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 42, "GLOBE", (150, 218, 214), 19, True, False, "cm", family="Cantarell")
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
-        (RADIOGARDEN_VIEW_BOX, "display", MAP_VIEW_LABELS.get(map_view, "BORDERS")),
     ):
         bx0, by0, bx1, by1 = command_box
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 232))
@@ -7654,6 +7770,13 @@ def draw_receiver_map(
         draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 190), 1)
         tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
+    draw_picker_two_line_button(
+        text_cache,
+        RADIOGARDEN_VIEW_BOX,
+        "VIEW",
+        MAP_VIEW_LABELS.get(map_view, "BORDERS"),
+        18,
+    )
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
     if timings is not None:
@@ -7815,8 +7938,19 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
     draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
     if LCD_800_MODE:
-        draw_logical_rect(LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 246))
-        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 12, 90, "CONSTELLATION")
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, lcd_rail_bottom(), (6, 13, 19, 252))
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 16, 62, "CONSTELLATION")
+        draw_text(text_cache, LCD_NAV_X0 + 16, 98, "3 WARM STREAMS", (112, 223, 169), 14, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 16, 124, "4 ROTATING SCOUTS", (255, 204, 113), 14, True, False, "lm", family="Liberation Sans")
+        status_lines = wrap_caption_lines(
+            text_cache, status, LOGICAL_W - LCD_NAV_X0 - 32, 14,
+            max_rows=5, max_characters=27, family="Liberation Sans",
+        )
+        for index, line in enumerate(status_lines):
+            draw_text(
+                text_cache, LCD_NAV_X0 + 16, 170 + index * 23, line,
+                (171, 204, 211), 14, False, False, "lm", family="Liberation Sans",
+            )
         draw_radio_close_button(text_cache, lcd_drawer_back_box())
     else:
         draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
@@ -7832,8 +7966,9 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
             draw_logical_line(a[0], a[1], b[0], b[1], (80, 148, 170, 42), 1)
     draw_flat_coastlines(center_lon, center_lat, map_box, scale)
     draw_constellation_heatmap(scouts, scout_history, scout_measurements, center_lon, center_lat, map_box, scale, time.monotonic())
-    legend_x = 42
-    draw_text(text_cache, legend_x, 54, "SNR", (180, 204, 208), 13, True, True, "lm")
+    legend_x = map_box[0] + 26
+    legend_y = map_box[1] + 16
+    draw_text(text_cache, legend_x, legend_y, "SNR", (180, 204, 208), 13, True, True, "lm")
     for color, label, offset in (
         ((111, 74, 175), "<-4", 34),
         ((76, 125, 220), "-4–-1", 78),
@@ -7841,8 +7976,8 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
         ((255, 186, 63), "2–5", 186),
         ((239, 88, 75), ">5 dB", 232),
     ):
-        draw_logical_circle(legend_x + offset, 54, 3.5, (*color, 235), 12)
-        draw_text(text_cache, legend_x + offset + 8, 54, label, (180, 204, 208), 13, False, True, "lm")
+        draw_logical_circle(legend_x + offset, legend_y, 3.5, (*color, 235), 12)
+        draw_text(text_cache, legend_x + offset + 8, legend_y, label, (180, 204, 208), 13, False, True, "lm")
     listener_servers = {receiver["server"] for receiver in listeners}
     for receiver in receivers:
         for longitude_offset in (-360.0, 0.0, 360.0):
@@ -7857,16 +7992,18 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
                 dot_radius = 4.2
             draw_logical_circle(p[0], p[1], dot_radius, dot_color, 10)
     draw_text(text_cache, (map_box[0] + map_box[2]) / 2, map_box[3] - 10, "DRAG / PINCH   •   TAP TO START", (154, 201, 210), 13, True, True, "cm")
-    right_x = 610
+    info_x0, info_y0, info_x1, info_y1 = GLOBE_INFO_BOX
+    right_x = info_x0 + 16
+    info_heading_y = info_y0 + 20
     draw_logical_rect(*GLOBE_INFO_BOX, (5, 13, 19, 232))
     draw_logical_line(GLOBE_INFO_BOX[0], GLOBE_INFO_BOX[1], GLOBE_INFO_BOX[2], GLOBE_INFO_BOX[1], (104, 180, 188, 104), 1)
-    draw_text(text_cache, right_x, 22, "HOT RECEIVERS", (239, 248, 248), 19, True, True, "lm")
-    draw_text(text_cache, 932, 22, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
+    draw_text(text_cache, right_x, info_heading_y, "HOT RECEIVERS", (239, 248, 248), 19, True, True, "lm")
+    draw_text(text_cache, info_x1 - 16, info_heading_y, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
     if not receivers:
-        draw_text(text_cache, right_x, 96, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
+        draw_text(text_cache, right_x, info_y0 + 64, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
     elif not listeners:
-        draw_text(text_cache, right_x, 96, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
-        draw_text(text_cache, right_x, 126, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
+        draw_text(text_cache, right_x, info_y0 + 58, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
+        draw_text(text_cache, right_x, info_y0 + 88, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
     else:
         for index, receiver in enumerate(listeners):
             bx0, by0, bx1, by1 = GLOBE_STATION_BOXES[index]
@@ -7907,10 +8044,10 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     bar = GLOBE_SCOUT_BAR_BOX
     draw_logical_rect(*bar, (5, 13, 19, 236))
     draw_logical_line(bar[0], bar[1], bar[2], bar[1], (255, 190, 93, 160), 1)
-    draw_text(text_cache, 24, 282, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
-    draw_text(text_cache, 250, 282, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
+    draw_text(text_cache, bar[0] + 12, bar[1] + 22, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
+    draw_text(text_cache, bar[0] + 238, bar[1] + 22, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
     scan_mode = "LOCAL EXPANSION" if "expanding locally" in status else "MAXIMIZING MAP COVERAGE"
-    draw_text(text_cache, 26, 304, scan_mode, (176, 208, 213), 14, True, True, "lm")
+    draw_text(text_cache, bar[0] + 12, bar[1] + 54, scan_mode, (176, 208, 213), 14, True, True, "lm")
 
 
 def draw_dj_control(text_cache, box, title, detail, active=False):
@@ -8994,7 +9131,13 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     items = lcd_nav_items(settings_open)
-    if not settings_open:
+    if settings_open:
+        draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 18, 62, "SETTINGS")
+        draw_text(
+            text_cache, LCD_NAV_X0 + 18, 92, "SELECT A CATEGORY",
+            (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
+        )
+    else:
         draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, unavailable=not passband_available)
         draw_lcd_home_volume_slider(text_cache, volume, muted)
     for index, (kind, label) in enumerate(items):
@@ -9011,6 +9154,29 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
+
+
+def draw_settings_scrim():
+    """Apply the configured Settings surface treatment, if any."""
+    alpha = settings_surface_overlay_alpha(True)
+    if alpha > 0:
+        draw_logical_rect(0, 0, LCD_NAV_X0, LOGICAL_H, (0, 0, 0, alpha))
+
+
+def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
+    """Persistent parent rail for a large Settings leaf workspace."""
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+    draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 18, 62, title)
+    draw_text(
+        text_cache, LCD_NAV_X0 + 18, 96, detail,
+        (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
+    )
+    draw_text(
+        text_cache, LCD_NAV_X0 + 18, 128, "BACKGROUND CONTROLS LOCKED",
+        (112, 223, 169), 12, True, False, "lm", family="Liberation Sans",
+    )
+    draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
 def lcd_mode_annunciator_cells():
@@ -9168,6 +9334,18 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
     draw_logical_line(x0, y0, x0, y1, outline, 1)
     draw_logical_line(x1, y0, x1, y1, outline, 1)
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
+
+
+def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
+    x0, y0, x1, y1 = box
+    draw_picker_button(text_cache, box, "", size, selected)
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    line_offset = max(10, size * 0.65)
+    draw_text(text_cache, center_x, center_y - line_offset, first_line,
+              (238, 240, 242), size, True, False, "cm")
+    draw_text(text_cache, center_x, center_y + line_offset, second_line,
+              (238, 240, 242), size, True, False, "cm")
 
 
 def deepgram_keyboard_rows(mode):
@@ -9448,6 +9626,14 @@ def station_fields(station):
     return name, location, server, listener_used, listener_total
 
 
+def receiver_picker_range_label(count, scroll, cols=1, rows=5):
+    if count <= 0:
+        return "0 / 0"
+    first_visible = int(math.floor(scroll)) + 1
+    last_visible = min(count, int(math.ceil(scroll)) + cols * rows)
+    return f"{first_visible}–{last_visible} / {count}"
+
+
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
@@ -9465,14 +9651,14 @@ def draw_station_picker(
     if LCD_800_MODE:
         draw_picker_button(text_cache, PICKER_MAP_MODE_BOX, "GLOBE", 18, selected=False)
     draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 19 if LCD_800_MODE else 23)
-    first_visible = int(math.floor(scroll)) + 1
-    last_visible = min(len(stations), int(math.ceil(scroll)) + PICKER_COLS * PICKER_ROWS)
     draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
-              f"{first_visible}–{last_visible} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
-    draw_picker_button(
+              receiver_picker_range_label(len(stations), scroll, PICKER_COLS, PICKER_ROWS),
+              (198, 202, 205), 12, False, False, "cm")
+    draw_picker_two_line_button(
         text_cache,
         PICKER_SORT_BOX,
-        "SORT: LOCATION" if sort_mode == "location" else "SORT: NAME",
+        "SORT",
+        "LOCATION" if sort_mode == "location" else "NAME",
         14 if LCD_800_MODE else 20,
         False,
     )
@@ -10527,7 +10713,7 @@ def draw_ui(
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
-    if LCD_800_MODE:
+    if LCD_800_MODE and not settings_menu_open:
         draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm)
 
 
@@ -12372,6 +12558,7 @@ def main():
     picker_profiler = PickerFrameProfiler(enabled=args.picker_perf)
     picker_input_at = None
     station_pending_server = None
+    station_pending_origin = None
     station_pending_started_at = 0.0
     station_connected_at = 0.0
     next_health_reload = 0.0
@@ -12424,11 +12611,19 @@ def main():
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
     display_setup_open = False
+    display_parent = "home"
     filter_drawer_open = False
+    filter_parent = "home"
     filter_drawer_width_hz = None
     settings_menu_open = False
+    settings_session_open = False
     receiver_home_panel_open = False
+    receiver_home_parent = "home"
     fan_curve_panel_open = False
+    fan_parent = "home"
+    tests_parent = "home"
+    cpu_parent = "home"
+    picker_parent = "home"
     audio_panel_open = False
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
@@ -12922,15 +13117,28 @@ def main():
 
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, receiver_home_panel_open, fan_curve_panel_open
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, settings_session_open, receiver_home_panel_open, fan_curve_panel_open
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
-        nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
+        nonlocal stations, search_open, radio_family_open, station_pending_server, station_pending_origin, station_connected_at
+        nonlocal display_parent, receiver_home_parent, fan_parent, tests_parent, cpu_parent, picker_parent
         kind, label = items[index]
+        destination_presentation = (
+            settings_destination_presentation(kind)
+            if items == SETTINGS_MENU_ITEMS and kind != "settings_back"
+            else None
+        )
+        destination_parent = "settings" if destination_presentation else "home"
         wake_controls()
         menu_open = False
         asr_moon_language_open = False
-        if kind == "rx":
+        if items == SETTINGS_MENU_ITEMS:
+            settings_session_open = True
+        elif kind != "settings":
+            settings_session_open = False
+        if kind in ("rx", "receivers"):
+            picker_parent = destination_parent
+            settings_session_open = picker_parent == "settings"
             settings_menu_open = False
             picker_open = True
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
@@ -12944,35 +13152,36 @@ def main():
             search_open = False
             picker_map_open = False
             station_pending_server = None
+            station_pending_origin = None
             station_connected_at = 0.0
         elif kind == "display":
+            display_parent = destination_parent
             settings_menu_open = False
             display_setup_open = True
             picker_open = radio_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "settings":
+            settings_session_open = True
             settings_menu_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "settings_back":
             settings_menu_open = False
-        elif kind == "network":
-            # The existing profile drawer owns the deployed network/location
-            # settings (including IP-based location); it is the safe landing
-            # point until Wi-Fi credential editing is exposed here.
+            settings_session_open = False
+        elif kind == "location":
+            receiver_home_parent = destination_parent
             receiver_home_panel_open = True
             settings_menu_open = False
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "system":
-            receiver_home_panel_open = True
+        elif kind == "fan":
+            fan_parent = destination_parent
+            fan_curve_panel_open = True
             settings_menu_open = False
-            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "kiwi":
-            settings_menu_open = False
-            activate_navigation_item(next(index for index, (candidate, _label) in enumerate(MENU_ITEMS) if candidate == "rx"))
-        elif kind == "stats":
+        elif kind == "cpu":
+            cpu_parent = destination_parent
             settings_menu_open = False
             cpu_utilization_graph_open = True
         elif kind == "digital":
@@ -12988,12 +13197,29 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
+            tests_parent = destination_parent
             settings_menu_open = False
             tests_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         else:
             print(f"gl navigation {label} pending", flush=True)
+
+    def restore_navigation_parent(parent):
+        nonlocal settings_menu_open, audio_panel_open, receiver_home_panel_open, tests_panel_open, asr_panel_open
+        nonlocal audio_volume, asr_moon_language_open
+        if parent == "settings":
+            settings_menu_open = True
+        elif parent == "audio":
+            audio_volume = pipewire_default_volume()
+            audio_panel_open = True
+        elif parent == "location":
+            receiver_home_panel_open = True
+        elif parent == "tests":
+            tests_panel_open = True
+        elif parent == "asr":
+            asr_panel_open = True
+            asr_moon_language_open = False
 
     def set_lcd_filter_edge(edge, x):
         """Apply one live passband-edge slider position from the rail drawer."""
@@ -13303,7 +13529,7 @@ def main():
         """Connect one smart-map candidate through the normal audio/W/F path."""
         nonlocal picker_map_selected_server, picker_map_hover_server
         nonlocal picker_map_lock_target, picker_map_zoom_target
-        nonlocal station_pending_server, station_pending_started_at, station_connected_at
+        nonlocal station_pending_server, station_pending_origin, station_pending_started_at, station_connected_at
         nonlocal picker_map_notice, picker_map_notice_until
         nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch
         nonlocal picker_map_auto_tune_pending
@@ -13324,6 +13550,7 @@ def main():
         wf_texture.clear()
         animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
         station_pending_server = selected["server"]
+        station_pending_origin = "map"
         station_pending_started_at = time.monotonic()
         station_connected_at = 0.0
         picker_map_auto_tune_pending = True
@@ -13665,6 +13892,7 @@ def main():
                                 start_span = fmdx.audio_waterfall_span_khz(_zoom)
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
+                                and settings_background_input_enabled(settings_session_open)
                                 and (
                                     radio_setup_open or audio_panel_open or display_setup_open
                                     or filter_drawer_open or receiver_home_panel_open
@@ -13721,28 +13949,36 @@ def main():
                                 gesture = "asr_select"
                             elif asr_panel_open:
                                 gesture = "asr_outside"
+                            elif settings_menu_open and LCD_800_MODE and lcd_primary_action_at(x, y, True) is not None:
+                                gesture = "lcd_nav"
+                            elif settings_menu_open:
+                                gesture = "settings_modal_idle"
+                            elif settings_session_open and cpu_utilization_graph_open and contains(lcd_drawer_back_box(), x, y):
+                                gesture = "settings_cpu_back"
+                            elif settings_session_open and cpu_utilization_graph_open:
+                                gesture = "settings_modal_idle"
                             # Operating controls always win over movable live
                             # captions, even when an ASR/HAM lane crosses the
                             # bottom of the waterfall.
-                            elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
+                            elif not picker_open and settings_background_input_enabled(settings_session_open) and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
-                            elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
+                            elif not picker_open and settings_background_input_enabled(settings_session_open) and contains(ZOOM_MINUS_BOX, x, y):
                                 gesture = "zoom_minus"
-                            elif not picker_open and contains(SPECTRUM_TOGGLE_BOX, x, y):
+                            elif not picker_open and settings_background_input_enabled(settings_session_open) and contains(SPECTRUM_TOGGLE_BOX, x, y):
                                 gesture = "spectrum_toggle"
-                            elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
+                            elif not picker_open and settings_background_input_enabled(settings_session_open) and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
-                            elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
-                            elif active_touch_is_fmdx and contains(stations_waterfall_box(), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and active_touch_is_fmdx and contains(stations_waterfall_box(), x, y):
                                 gesture = "filter_toggle"
-                            elif contains(favorite_waterfall_box(), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and contains(favorite_waterfall_box(), x, y):
                                 gesture = "favorite_toggle"
-                            elif contains(stream_waterfall_box(), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and contains(stream_waterfall_box(), x, y):
                                 gesture = "stream_toggle"
-                            elif audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y):
                                 gesture = "buffer_graph_move"
-                            elif cpu_utilization_graph_open and cpu_graph_box and contains(cpu_graph_box, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and cpu_utilization_graph_open and cpu_graph_box and contains(cpu_graph_box, x, y):
                                 gesture = "cpu_graph_move"
                             elif drawer_waterfall_touch:
                                 # Rail drawers are intentionally non-modal.
@@ -13764,19 +14000,19 @@ def main():
                                     if contains(station_layout["panel"], x, y)
                                     else "fmdx_station_outside"
                                 )
-                            elif caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
                                 gesture = "caption_translation_toggle"
-                            elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
                                 gesture = "callsign_caption"
-                            elif state.transcription_snapshot()[0] and contains(caption_box, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and state.transcription_snapshot()[0] and contains(caption_box, x, y):
                                 # Protect readable text from accidental tuning,
                                 # but do not move the fixed caption window.
                                 gesture = "caption_readonly"
-                            elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
                                 gesture = "frequency_entry_open"
-                            elif contains(CPU_ANNUNCIATOR_BOX, x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
-                            elif contains(audio_jitter_status_box(), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and contains(audio_jitter_status_box(), x, y):
                                 gesture = "audio_transport_graph"
                             elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, AUDIO_PANEL_BOX[1], LOGICAL_W, AUDIO_PANEL_BOX[3]), x, y):
                                 # The drawer owns the top-right rail while it
@@ -13816,7 +14052,7 @@ def main():
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
-                            elif contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif waterfall_overlay_controls_enabled(picker_open) and settings_background_input_enabled(settings_session_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -13920,14 +14156,11 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
-                            elif not picker_open and LCD_800_MODE and not settings_menu_open and contains(lcd_home_bandwidth_box(), x, y):
-                                gesture = "home_passband"
-                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_mute_box(), x, y):
-                                gesture = "home_volume_mute"
-                            elif not picker_open and LCD_800_MODE and contains(lcd_home_volume_box(), x, y):
-                                gesture = "home_volume"
-                            elif not picker_open and lcd_nav_item_at(x, y, lcd_nav_items(settings_menu_open)) is not None:
-                                gesture = "lcd_nav"
+                            elif not picker_open and LCD_800_MODE and lcd_primary_action_at(x, y, settings_menu_open) is not None:
+                                primary_action, _primary_kind = lcd_primary_action_at(x, y, settings_menu_open)
+                                gesture = "lcd_nav" if primary_action == "navigation" else primary_action
+                            elif settings_session_open:
+                                gesture = "settings_modal_idle"
                             elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
                                 gesture = "callsign_toggle"
                             elif not picker_open and contains(ASR_TOGGLE_BOX, x, y):
@@ -13950,6 +14183,10 @@ def main():
                                 gesture = "picker_map_view"
                             elif picker_open and picker_map_open and any(contains(box, x, y) for box in receiver_map_zoom_boxes()):
                                 gesture = "picker_map_zoom"
+                            elif picker_open and picker_map_open and map_nearby_receiver_at(
+                                x, y, PICKER_MAP_BOX, len(picker_map_nearby_receivers)
+                            ) is not None:
+                                gesture = "picker_map_candidate"
                             elif picker_open and picker_map_open and contains(PICKER_MAP_BOX, x, y):
                                 picker_map_start_yaw = picker_map_yaw
                                 picker_map_start_pitch = picker_map_pitch
@@ -14213,6 +14450,7 @@ def main():
                                 frequency_entry_open = True
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
                                 audio_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
+                                filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = settings_menu_open = False
                             wake_controls()
                         elif touch_started and gesture == "radio_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14298,7 +14536,7 @@ def main():
                                 choice = audio_option_at(x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 fmdx_audio = fmdx.is_fmdx_server(state.snapshot()[0])
-                                if choice in (None, "close"):
+                                if choice == "close":
                                     audio_panel_open = False
                                 elif choice == "mute":
                                     state.set_audio_controls(audio_mute=not controls["mute"])
@@ -14330,6 +14568,7 @@ def main():
                                     state.set_audio_controls(deemphasis=(int(controls["deemphasis"]) + 1) % 3)
                                 elif choice == "filter":
                                     audio_panel_open = False
+                                    filter_parent = "audio"
                                     current_server = state.snapshot()[0]
                                     if fmdx.is_fmdx_server(current_server) and LCD_800_MODE:
                                         open_lcd_filter_drawer()
@@ -14340,7 +14579,7 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "audio_panel_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if moved <= args.tap_px and drawer_blank_tap_closes("audio"):
                                 audio_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "dj_tune":
@@ -14379,6 +14618,7 @@ def main():
                             if moved <= args.tap_px:
                                 restore_dj_origin("closed")
                                 dj_tune_open = False
+                                restore_navigation_parent(navigation_back_target("dj_tune", "tests"))
                             wake_controls()
                         elif touch_started and gesture == "globe_back":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14497,6 +14737,7 @@ def main():
                                 choice = tests_option_at(x, y)
                                 if choice == "close":
                                     tests_panel_open = False
+                                    restore_navigation_parent(navigation_back_target("tests", tests_parent))
                                 elif choice == "globe":
                                     tests_panel_open = False
                                     globe_open = True
@@ -14516,21 +14757,15 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "tests_panel_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if moved <= args.tap_px and drawer_blank_tap_closes("tests"):
                                 tests_panel_open = False
+                                restore_navigation_parent(navigation_back_target("tests", tests_parent))
                             wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = radio_option_at(x, y, radio_family_open)
-                                if choice is None:
-                                    # The drawer is intentionally modal only
-                                    # inside its own rail: a blank tap is the
-                                    # quickest, least surprising close action.
-                                    radio_setup_open = False
-                                    radio_family_open = None
-                                    wake_controls()
-                                else:
+                                if choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         radio_setup_open = False
@@ -14550,7 +14785,7 @@ def main():
                                         print(f"gl radio {radio_mode} {digital_mode} step {tune_step_hz} Hz", flush=True)
                         elif touch_started and gesture == "radio_setup_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if moved <= args.tap_px and drawer_blank_tap_closes("modes"):
                                 radio_setup_open = False
                                 radio_family_open = None
                                 wake_controls()
@@ -14559,6 +14794,7 @@ def main():
                             if moved <= args.tap_px:
                                 current_server = state.snapshot()[0]
                                 if not fmdx.is_fmdx_server(current_server):
+                                    filter_parent = "home"
                                     open_lcd_filter_drawer()
                                     menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
                             wake_controls()
@@ -14569,6 +14805,7 @@ def main():
                                 station_layout = fmdx_station_panel_layout(len(station_rows))
                                 if station_layout["close"] and contains(station_layout["close"], x, y):
                                     filter_drawer_open = filter_panel_open = False
+                                    restore_navigation_parent(navigation_back_target("filter", filter_parent))
                                 else:
                                     station_index = fmdx_station_at(
                                         x, y, station_rows, fmdx_station_scroll,
@@ -14586,7 +14823,7 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "fmdx_station_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if moved <= args.tap_px and drawer_blank_tap_closes("passband"):
                                 filter_drawer_open = filter_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "lcd_filter_shift":
@@ -14605,6 +14842,7 @@ def main():
                                 if contains(filter_boxes["close"], x, y):
                                     filter_drawer_open = False
                                     filter_drawer_width_hz = None
+                                    restore_navigation_parent(navigation_back_target("filter", filter_parent))
                                 else:
                                     for _name, preset_width_hz, preset_box in filter_boxes["presets"]:
                                         if contains(preset_box, x, y):
@@ -14649,20 +14887,17 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 filter_panel_open = False
+                                restore_navigation_parent(navigation_back_target("filter", filter_parent))
                                 wake_controls()
                         elif touch_started and gesture == "display_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = display_option_at(x, y)
-                                if choice is None and LCD_800_MODE:
-                                    # Match the other rail drawers: a blank
-                                    # rail tap is an easy, unambiguous close.
-                                    display_setup_open = False
-                                    wake_controls()
-                                elif choice is not None:
+                                if choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         display_setup_open = False
+                                        restore_navigation_parent(navigation_back_target("display", display_parent))
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -14707,8 +14942,9 @@ def main():
                                     wake_controls()
                         elif touch_started and gesture == "display_setup_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if moved <= args.tap_px and drawer_blank_tap_closes("display"):
                                 display_setup_open = False
+                                restore_navigation_parent(navigation_back_target("display", display_parent))
                                 wake_controls()
                         elif touch_started and gesture == "receiver_home":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14716,8 +14952,10 @@ def main():
                                 home_boxes = receiver_home_drawer_boxes()
                                 if contains(home_boxes["close"], x, y):
                                     receiver_home_panel_open = False
+                                    restore_navigation_parent(navigation_back_target("location", receiver_home_parent))
                                 elif contains(home_boxes["fan"], x, y):
                                     receiver_home_panel_open = False
+                                    fan_parent = "location"
                                     fan_curve_panel_open = True
                                 elif contains(home_boxes["fallback"], x, y):
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
@@ -14729,8 +14967,6 @@ def main():
                                         target=detect_receiver_home,
                                         args=(receiver_home_result_queue,), daemon=True,
                                     ).start()
-                                else:
-                                    receiver_home_panel_open = False
                                 wake_controls()
                         elif touch_started and gesture == "fan_curve":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -14738,6 +14974,7 @@ def main():
                                 fan_boxes = fan_curve_drawer_boxes()
                                 if contains(fan_boxes["close"], x, y):
                                     fan_curve_panel_open = False
+                                    restore_navigation_parent(navigation_back_target("fan", fan_parent))
                                 wake_controls()
                         elif touch_started and gesture == "fan_start_slider":
                             adjust_fan_curve_slider(fan_curve, "start", x)
@@ -14762,6 +14999,18 @@ def main():
                                 idx = lcd_nav_item_at(x, y, nav_items)
                                 if idx is not None:
                                     activate_navigation_item(idx, nav_items)
+                        elif touch_started and gesture == "settings_cpu_back":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                cpu_utilization_graph_open = False
+                                cpu_core_history.clear()
+                                cpu_core_percentages = ()
+                                cpu_core_samples = None
+                                settings_menu_open = navigation_back_target("cpu", cpu_parent) == "settings"
+                                settings_session_open = settings_menu_open
+                            wake_controls()
+                        elif touch_started and gesture == "settings_modal_idle":
+                            wake_controls()
                         elif touch_started and gesture in ("menu_close", "menu_outside"):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -14855,6 +15104,7 @@ def main():
                                     deepgram_setup_open = False
                                     deepgram_key_value = ""
                                     deepgram_key_error = ""
+                                    restore_navigation_parent(navigation_back_target("deepgram", "asr"))
                                 elif action == "SAVE":
                                     try:
                                         save_deepgram_api_key(deepgram_key_value)
@@ -14868,6 +15118,7 @@ def main():
                                         deepgram_setup_open = False
                                         deepgram_key_value = ""
                                         deepgram_key_error = ""
+                                        restore_navigation_parent(navigation_back_target("deepgram", "asr"))
                                 elif action and len(deepgram_key_value) < 512:
                                     deepgram_key_value += action
                                     deepgram_key_error = ""
@@ -14878,6 +15129,7 @@ def main():
                                 deepgram_setup_open = False
                                 deepgram_key_value = ""
                                 deepgram_key_error = ""
+                                restore_navigation_parent(navigation_back_target("deepgram", "asr"))
                             wake_controls()
                         elif touch_started and gesture == "deepgram_setup_outside":
                             # Keep an entered secret intact until the operator
@@ -14904,8 +15156,10 @@ def main():
                                 selection = asr_option_at(x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
                                 if selection_kind == "close":
-                                    asr_panel_open = False
-                                    asr_moon_language_open = False
+                                    if asr_moon_language_open:
+                                        asr_moon_language_open = False
+                                    else:
+                                        asr_panel_open = False
                                 elif selection_kind == "caption_mode":
                                     if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
                                         state.set_asr_engine("whisper")
@@ -14995,6 +15249,7 @@ def main():
                         elif touch_started and gesture == "filter_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
+                                filter_parent = "home"
                                 if LCD_800_MODE:
                                     open_lcd_filter_drawer()
                                 else:
@@ -15017,8 +15272,7 @@ def main():
                                     search_open = False
                                     station_scroll = 0
                                 elif contains(SEARCH_CASE_BOX, x, y):
-                                    if keyboard_mode != "numeric":
-                                        keyboard_mode = "lower" if keyboard_mode == "upper" else "upper"
+                                    keyboard_mode = next_search_case_mode(keyboard_mode)
                                 elif contains(SEARCH_MODE_BOX, x, y):
                                     keyboard_mode = "upper" if keyboard_mode == "numeric" else "numeric"
                                 else:
@@ -15036,6 +15290,7 @@ def main():
                             if moved <= args.tap_px:
                                 picker_map_open = True
                                 picker_map_scale = 0.72
+                                picker_map_selected_server = None
                                 picker_map_focus_server = state.snapshot()[0]
                                 if focus_receiver_map_on_server(picker_map_focus_server):
                                     picker_map_focus_server = None
@@ -15078,6 +15333,19 @@ def main():
                                 picker_map_notice = f"GLOBE {picker_map_zoom_target:.1f}x"
                                 picker_map_notice_until = time.monotonic() + 1.2
                             wake_controls()
+                        elif touch_started and gesture == "picker_map_candidate":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                candidate_index = map_nearby_receiver_at(
+                                    x, y, PICKER_MAP_BOX, len(picker_map_nearby_receivers)
+                                )
+                                if candidate_index is not None:
+                                    picker_map_candidate_index = candidate_index
+                                    activate_map_receiver(
+                                        picker_map_nearby_receivers[candidate_index],
+                                        f"SMART RX {candidate_index + 1}/{len(picker_map_nearby_receivers)}",
+                                    )
+                            wake_controls()
                         elif touch_started and gesture == "picker_map_garden":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -15108,7 +15376,13 @@ def main():
                                 search_open = False
                                 station_scroll = 0
                                 station_pending_server = None
+                                station_pending_origin = None
                                 station_connected_at = 0.0
+                                if picker_parent == "settings":
+                                    settings_menu_open = True
+                                    settings_session_open = True
+                                else:
+                                    settings_session_open = False
                                 wake_controls()
                         elif touch_started and gesture == "picker_search":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -15163,6 +15437,7 @@ def main():
                                     # report the live connection outcome before
                                     # returning to the waterfall.
                                     station_pending_server = server
+                                    station_pending_origin = "list"
                                     station_pending_started_at = time.monotonic()
                                     station_connected_at = 0.0
                                     zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
@@ -15222,6 +15497,7 @@ def main():
                 and (settings_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
             ):
                 settings_menu_open = False
+                settings_session_open = False
                 radio_setup_open = False
                 radio_family_open = None
                 display_setup_open = False
@@ -15354,7 +15630,9 @@ def main():
                                     animate_to(auto_tuned_khz, kiwi.zoom_to_span_khz(zoom), 0.16)
                                     remember_current_view()
                                     print(f"gl map auto peak {auto_tuned_khz:.3f} kHz", flush=True)
-                        if map_connection_ready_to_finalize and picker_map_open:
+                        if map_connection_ready_to_finalize and not pending_connection_closes_picker(
+                            station_pending_origin, picker_map_open
+                        ):
                             # A map selection is intentionally persistent: the
                             # square stays marked after a successful connect.
                             selected_map_receiver = (
@@ -15371,10 +15649,13 @@ def main():
                                 )
                                 picker_map_notice_until = now + 2.75
                             station_pending_server = None
+                            station_pending_origin = None
                         elif map_connection_ready_to_finalize:
                             picker_open = False
+                            settings_session_open = False
                             station_scroll = 0
                             station_pending_server = None
+                            station_pending_origin = None
                         if map_connection_ready_to_finalize:
                             station_connected_at = 0.0
                 elif station_connection_status == "failed":
@@ -15408,6 +15689,11 @@ def main():
                                 f"LOCAL RX UNAVAILABLE  {bottom_station_title(selected_map_receiver['name'], selected_map_receiver['location'])}"
                             )
                             picker_map_notice_until = now + 4.0
+                    elif not picker_map_open:
+                        # Keep the unavailable result visible for this frame,
+                        # then release the row from its pressed/pending style.
+                        station_pending_server = None
+                        station_pending_origin = None
             smeter_dbm, smeter_peak_dbm = state.smeter_snapshot()
             # The bar itself remains frame-smooth. The numerical readout is
             # intentionally sampled at a calmer, radio-like 3.3 Hz cadence.
@@ -15842,7 +16128,7 @@ def main():
             # Mode, Audio, and Display are right-rail drawers, not modal
             # screens. Keep the waterfall's operating controls visible and
             # tappable behind them. Full-canvas tools still own the view.
-            control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
+            control_alpha = 0.0 if settings_session_open or menu_open or picker_open or asr_panel_open or deepgram_setup_open or tests_panel_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = next(
                 (
                     bottom_station_title(name, location)
@@ -15949,7 +16235,7 @@ def main():
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
             if not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                settings_session_open or menu_open or picker_open or asr_panel_open or deepgram_setup_open
                 or tests_panel_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -15960,13 +16246,13 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
             if audio_controls.get("mute", False) and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                settings_session_open or menu_open or picker_open or asr_panel_open or deepgram_setup_open
                 or tests_panel_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_muted_waterfall_badge(text_cache)
             if audio_transport_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                settings_session_open or menu_open or picker_open or asr_panel_open or deepgram_setup_open
                 or tests_panel_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -15976,7 +16262,7 @@ def main():
                     buffer_graph_box,
                 )
             if cpu_utilization_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                settings_session_open or menu_open or picker_open or asr_panel_open or deepgram_setup_open
                 or tests_panel_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -15986,6 +16272,8 @@ def main():
                     cpu_core_percentages,
                     cpu_graph_box,
                 )
+            if settings_session_open:
+                draw_settings_scrim()
             if asr_panel_open:
                 draw_asr_panel(text_cache, asr_engine, caption_mode, asr_moon_language_open)
             if deepgram_setup_open:
@@ -16036,6 +16324,15 @@ def main():
                 )
             if tests_panel_open:
                 draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
+            if settings_session_open and cpu_utilization_graph_open:
+                draw_cpu_utilization_graph(
+                    text_cache,
+                    cpu_core_history,
+                    cpu_core_percentages,
+                    settings_center_workspace_box(),
+                    "BACK IN RIGHT PANEL",
+                )
+                draw_settings_leaf_sidebar(text_cache, "CPU", "LIVE UTILIZATION")
             if globe_open:
                 draw_globe_panel(
                     text_cache, globe_receivers, globe_yaw, globe_pitch, globe_scale,
