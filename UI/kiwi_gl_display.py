@@ -95,7 +95,9 @@ from receiver_picker_model import (
     choose_nearby_receivers,
     closest_strong_spectrum_frequency,
     globe_native_matrix,
+    health_prioritized_stations,
     receiver_server_index,
+    receiver_scroll_for_server,
     visible_station_range,
 )
 
@@ -2146,6 +2148,24 @@ def filtered_stations(stations, query, sort_mode, route_filter="all", favorites=
     filtered = [station for station in stations if matches(station)]
     key = (lambda station: (station[1].casefold(), station[0].casefold())) if sort_mode == "location" else (lambda station: (station[0].casefold(), station[1].casefold()))
     return sorted(filtered, key=key)
+
+
+def receiver_picker_landing(all_stations, sort_mode, route_filter, favorites,
+                            station_health, active_server, columns, rows):
+    """Build a receiver list whose first frame contains the active server."""
+    stations = filtered_stations(
+        all_stations, "", sort_mode, route_filter, favorites,
+    )
+    if active_server and not any(station[2] == active_server for station in stations):
+        route_filter = "all"
+        stations = filtered_stations(
+            all_stations, "", sort_mode, route_filter, favorites,
+        )
+    ordered = health_prioritized_stations(stations, station_health, sort_mode)
+    scroll = receiver_scroll_for_server(
+        ordered, active_server, columns, rows,
+    )
+    return stations, route_filter, scroll
 
 
 def bottom_station_title(name, location):
@@ -12915,9 +12935,12 @@ def main():
             picker_open = True
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-            station_scroll = 0
             station_query = ""
-            stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
+            active_server = state.snapshot()[0]
+            stations, station_route_filter, station_scroll = receiver_picker_landing(
+                all_stations, station_sort, station_route_filter, favorite_servers,
+                station_health, active_server, PICKER_COLS, PICKER_ROWS,
+            )
             search_open = False
             picker_map_open = False
             station_pending_server = None

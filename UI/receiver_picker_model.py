@@ -182,6 +182,27 @@ def receiver_server_index(receiver, candidates):
     )
 
 
+def receiver_scroll_for_server(stations, server, columns, rows):
+    """Center a receiver in the visible list, clamped at either list edge."""
+    columns = max(1, int(columns))
+    rows = max(1, int(rows))
+    index = next(
+        (
+            index for index, station in enumerate(stations)
+            if len(station) > 2 and station[2] == server
+        ),
+        None,
+    )
+    if index is None:
+        return 0
+    station_count = len(stations)
+    selected_row = index // columns
+    total_rows = math.ceil(station_count / columns)
+    first_row = max(0, selected_row - rows // 2)
+    first_row = min(first_row, max(0, total_rows - rows))
+    return first_row * columns
+
+
 def closest_strong_spectrum_frequency(values, center_khz, span_khz, minimum_contrast=0.12):
     """Return the strongest clear local spectrum peak, or None for noise-only data."""
     values = tuple(float(value) for value in values)

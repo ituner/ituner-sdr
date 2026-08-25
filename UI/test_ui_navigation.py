@@ -55,5 +55,30 @@ class RightSidebarNavigationTests(unittest.TestCase):
         self.assertEqual(ui.ASR_PANEL_BOX[2], ui.LOGICAL_W)
 
 
+class ReceiverPickerLandingTests(unittest.TestCase):
+    def test_opening_receivers_centers_the_active_server(self):
+        stations = [
+            (f"Receiver {index:02d}", "Somewhere", f"server-{index}")
+            for index in range(12)
+        ]
+        filtered, route, scroll = ui.receiver_picker_landing(
+            stations, "name", "all", (), {}, "server-8", 1, 5,
+        )
+        self.assertEqual(route, "all")
+        self.assertEqual(filtered[8][2], "server-8")
+        self.assertEqual(scroll, 6)
+
+    def test_route_falls_back_to_all_when_it_hides_the_active_server(self):
+        stations = [
+            (f"Receiver {index:02d}", "Somewhere", f"server-{index}")
+            for index in range(12)
+        ]
+        _filtered, route, scroll = ui.receiver_picker_landing(
+            stations, "name", "favorites", {"server-1"}, {}, "server-8", 1, 5,
+        )
+        self.assertEqual(route, "all")
+        self.assertEqual(scroll, 6)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ from receiver_picker_model import (
     closest_strong_spectrum_frequency,
     globe_native_matrix,
     receiver_server_index,
+    receiver_scroll_for_server,
     visible_station_range,
 )
 
@@ -179,6 +180,23 @@ class NearbyReceiverTests(unittest.TestCase):
         )
 
         self.assertEqual(receiver_server_index({"server": "tapped"}, candidates), 1)
+
+    def test_centers_the_active_receiver_when_opening_the_list(self):
+        stations = tuple(
+            (f"Receiver {index}", "Somewhere", f"server-{index}")
+            for index in range(20)
+        )
+        self.assertEqual(receiver_scroll_for_server(stations, "server-12", 1, 5), 10)
+        self.assertEqual(receiver_scroll_for_server(stations, "server-1", 1, 5), 0)
+        self.assertEqual(receiver_scroll_for_server(stations, "server-19", 1, 5), 15)
+
+    def test_active_receiver_scroll_supports_multi_column_lists(self):
+        stations = tuple(
+            (f"Receiver {index}", "Somewhere", f"server-{index}")
+            for index in range(20)
+        )
+        self.assertEqual(receiver_scroll_for_server(stations, "server-14", 2, 3), 12)
+        self.assertEqual(receiver_scroll_for_server(stations, "missing", 2, 3), 0)
 
     def test_prefers_proven_audio_within_the_local_pool(self):
         now = time.time()
