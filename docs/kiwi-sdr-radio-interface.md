@@ -270,6 +270,9 @@ The client does not embed or automate a browser. It speaks directly to the KiwiS
 - `W/F` stream: live waterfall lines and waterfall commands; this is the stream used by the current OpenGL renderer.
 - The OpenGL spectrum trace uses that same `W/F` stream, not a browser or a separate spectrum/audio connection.
 - `SND` stream: receiver-level messages and live mono PCM audio. The OpenGL service decodes compatible raw PCM and feeds PipeWire's current default sink, normally the Pi USB-audio output.
+- **Audio transport and latency:** the live path is `Kiwi SND WebSocket -> BufferedAudioPlayer -> pw-cat -> PipeWire -> WirePlumber -> ALSA -> USB DAC/speaker`. Kiwi sends 512-frame PCM quanta at 12 kHz (42.7 ms each). The custom client normally keeps a six-quantum adaptive reserve (256 ms) and asks PipeWire for a 3072-frame, 12 kHz output latency (256 ms), for roughly 512 ms of local buffering before network transport. The reserve is bounded at 24 quanta (1.024 s), grows only after a true output underrun, and decays automatically back toward six after clean packet timing. PipeWire is the audio routing/clocking layer; ALSA is the final USB-audio hardware driver. Do not mistake PipeWire latency for Kiwi network jitter.
+- **Temporary output A/B:** `Home > Audio > OUTPUT` toggles `PIPEWIRE` and `ALSA DIRECT`. The direct branch stops PipeWire/WirePlumber for this listener, opens the USB DAC through `aplay` and ALSA `plughw:2,0`, and uses a 512-frame period with a 1536-frame output buffer. It is deliberately a two-path test for catching rare clicks over long listening/reboot cycles, not a permanent platform decision. The selected path and volume are stored with the normal receiver preferences and survive a reboot. On return to `PIPEWIRE`, its services are restarted and the same volume is restored.
+- **Broadcast identity policy:** `UI/broadcast-identification-policy.json` contains the visible, versioned policy for schedule matching: frequency tolerance, ambiguity guard, cache timing, and the UTC expectations for each source. The waterfall overlay is deliberately labelled `SCHEDULED BROADCASTS`, not a claim that RF content has been verified. It shows UTC, the selected receiver's own location/GPS state, and transmitter distance when both endpoints have coordinates. A remote receiver with no GPS yields `DIST ?`; the Pi's saved home point is used only for the colocated LAN Kiwi.
 - Station changes reset the visible waterfall texture/queue and reconnect the worker to the new server.
 - The station list is a curated list of public receivers, not the full Kiwi directory.
 - The selected receiver, tuned frequency, zoom, and any manually selected radio mode are persisted at `~/.local/state/kiwi-gl-display-receiver.json` on the Pi. Startup restores the full view before the first WebSocket connection; changing receiver keeps the same frequency/zoom and manual radio mode. Use `--no-remember-receiver` only when a deliberate default-server boot is wanted.
@@ -338,7 +341,7 @@ Some public Kiwi receivers can limit concurrent `W/F` and `SND` connections. The
 
 ### Home > Audio and Tests
 
-`AUDIO` is the listening-control sheet. Its `SPEAKER VOLUME` slider reads and writes the real PipeWire default-sink volume, while squelch and Audio Filter control the live SND path.
+`AUDIO` is the listening-control sheet. Its `SPEAKER VOLUME` slider writes the active output path (PipeWire's default sink or the direct ALSA USB gain), while squelch and Audio Filter control the live SND path. The `OUTPUT` tile is the persisted temporary PipeWire/direct-ALSA A/B switch.
 
 The lower-right `ASR` readout is also a touch control. It opens a seven-choice
 caption-engine selector: `OFF`, `VOSK`, `MOON`, `PARA`, `WHISPER`, `DEEP`, and

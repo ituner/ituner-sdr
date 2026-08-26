@@ -192,7 +192,20 @@ class KiwiWebSocket:
                 payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
 
             if opcode == 0x8:
-                raise EOFError("websocket closed")
+                # Keep the peer's close information. It is especially useful
+                # with public Kiwi receivers, whose client/slot policies can
+                # otherwise look identical to a generic transport failure.
+                close_code = None
+                close_reason = ""
+                if len(payload) >= 2:
+                    close_code = struct.unpack(">H", payload[:2])[0]
+                    close_reason = payload[2:].decode("utf-8", "replace").strip()
+                detail = "websocket closed"
+                if close_code is not None:
+                    detail += f" code={close_code}"
+                if close_reason:
+                    detail += f" reason={close_reason[:120]}"
+                raise EOFError(detail)
             if opcode == 0x9:
                 self._send_frame(0xA, payload)
                 continue
