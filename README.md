@@ -103,31 +103,57 @@ Because desktop windows are borderless, use `Esc` or `q` instead of a macOS clos
 The receiver is a live public KiwiSDR or FM-DX Webserver connection. KiwiSDR
 receivers provide audio and RF waterfall bins. FM-DX receivers provide tuned
 FM audio, RDS/status metadata, and signal strength; the app derives a clearly
-labelled carrier-centred ±10 kHz programme-audio waterfall from that decoded stream because
-the core protocol has no continuous RF waterfall. Choose receivers from the
-`RECEIVERS` tile and use the `FMDX` route filter for FM-DX-only results. Desktop
-mode is a development/runtime option only; it leaves the Pi's rotated
-framebuffer output untouched.
+labelled carrier-centred ±10 kHz programme-audio waterfall from that decoded
+stream because the core protocol has no continuous RF waterfall. Choose
+receivers from the `RECEIVERS` tile. Its `ALL`, `KIWI`, `FMDX`, and `FAVORITES`
+filters use each directory row's explicit protocol metadata; the `KIWI` view
+includes both direct and proxied KiwiSDRs. Opening Receivers selects the active
+protocol filter and centres the active endpoint. Desktop mode is a
+development/runtime option only; it leaves the Pi's rotated framebuffer output
+untouched.
+
+Selecting a Kiwi receiver never inherits an FM-DX carrier or sticks at the
+29.999 MHz Kiwi limit. The selected Kiwi demodulator is preserved and the app
+opens a practical band for that mode, inspects the live spectrum, and tunes to
+the strongest clear local peak. AM/SAM prioritises 520–1710 kHz; LSB, USB, CW,
+NBFM, IQ, and DRM use their own mode-appropriate windows. The UI reports
+`SCANNING`, `TUNED`, or `NO STRONG SIGNAL`; after two seconds without a clear
+peak it remains on that mode's safe default frequency. Any manual tune, drag,
+or subsequent receiver selection cancels the automatic landing immediately.
+
+Constellation displays both protocols on one map, but its three warm audio
+streams and rotating RF scouts are Kiwi-only. Selecting an FM-DX dot hands
+audio back to the normal FM-DX worker; selecting a warmed Kiwi changes streams
+without rebuilding the temporary Kiwi session. Leaving Constellation preserves
+the selected endpoint, protocol, frequency, zoom, and mode so the waterfall can
+be scrubbed immediately. Reopening Receivers lands on that same selected row.
+Temporary listeners, scouts, measurements, and failover state are discarded
+when Constellation closes and recreated on its next visit.
 
 On FM-DX receivers, Zoom locally magnifies the 20 kHz audio-derived waterfall.
 The always-visible Stations control beside Favorite and Play/Pause loads the
 server owner's `/static_data` presets and adds RDS PS/PI names learned while
-listening. When an FM-DX session loads, unnamed presets are visited nearest-first for a
-short, locally-muted RDS discovery pass; results appear in Stations immediately,
-are cached per receiver, and a manual tune cancels the pass. Selecting an FM-DX
-receiver forces FM-FMDX mode and finishes on the nearest discovered RDS channel,
-falling back to the nearest server preset. During waterfall tuning, an orange travel marker
-and target-frequency readout make the carrier-centred audio view's drag visible.
-Station taps tune immediately while leaving the Stations drawer open. Receiver
-route, sorting, and map-view selectors are remembered, including the FM-DX-only
-route. The active FM-DX endpoint and final discovered or tapped frequency are
-committed immediately so an app or device restart resumes the same station.
-Changing an FM-DX station clears the prior waterfall and partial FFT audio,
-shows a brief tuning state, then rebuilds the waterfall from the new programme.
-Passband and Kiwi-only audio DSP controls are disabled because the FM-DX
-protocol supplies already-decoded programme audio. FM-DX receivers use constant-
-size orange globe dots; KiwiSDR receivers use constant-size cyan dots, with an
-on-map color legend and no idle marker halos.
+listening. Loading those presets never retunes or interrupts the playing
+station. `START SCAN` explicitly begins a cancellable 100 kHz pass across the
+server's FM band; the same control becomes `STOP SCAN` while active. Scan audio
+is locally silenced, progress and the current channel remain visible, learned
+RDS stations appear immediately, and completion or cancellation restores the
+station that was playing when the scan began. A simultaneous manual tune or
+receiver handoff wins and cannot be overwritten by a late scan callback.
+Selecting an FM-DX receiver forces the server-controlled `FM-FMDX` mode and
+finishes on the nearest cached RDS channel, falling back to the nearest server
+preset. During waterfall tuning, an orange travel marker and target-frequency
+readout make the carrier-centred audio view's drag visible. Station taps tune
+immediately while leaving the Stations drawer open. Receiver route, sorting,
+and map-view selectors are remembered, including the FM-DX-only route. The
+active FM-DX endpoint and final scanned or tapped frequency are committed
+immediately so an app or device restart resumes the same station. Changing an
+FM-DX station clears the prior waterfall and partial FFT audio, shows a brief
+tuning state, then rebuilds the waterfall from the new programme. Passband and
+Kiwi-only audio DSP controls are disabled because the FM-DX protocol supplies
+already-decoded programme audio. FM-DX receivers use constant-size orange globe
+dots; KiwiSDR receivers use constant-size cyan dots, with an on-map color legend
+and no idle marker halos.
 
 ## Boot services and status
 

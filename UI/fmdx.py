@@ -30,6 +30,7 @@ TUNE_INTERVAL_SECONDS = 0.125
 RDS_DISCOVERY_DWELL_SECONDS = 1.4
 RDS_DISCOVERY_MIN_LOCK_SECONDS = 0.35
 RDS_DISCOVERY_MAX_PRESETS = 32
+RDS_SCAN_STEP_KHZ = 100.0
 MODE_LABEL = "FM-FMDX"
 AUDIO_SAMPLE_RATE = 48_000
 AUDIO_WATERFALL_SPAN_HZ = 20_000
@@ -264,6 +265,20 @@ def rds_discovery_frequencies(stations, frequency_khz, limit=RDS_DISCOVERY_MAX_P
         ),
     )
     return tuple(float(station["frequency_khz"]) for station in ordered[:max(0, int(limit))])
+
+
+def band_scan_frequencies(minimum_khz, maximum_khz, step_khz=RDS_SCAN_STEP_KHZ):
+    """Return every complete FM channel step inside a receiver's band limits."""
+    step_khz = max(1.0, float(step_khz))
+    minimum_khz, maximum_khz = sorted((float(minimum_khz), float(maximum_khz)))
+    first = math.ceil(minimum_khz / step_khz) * step_khz
+    count = max(0, int(math.floor((maximum_khz - first) / step_khz)) + 1)
+    return tuple(round(first + index * step_khz, 1) for index in range(count))
+
+
+def playback_pcm(pcm, muted=False, scan_active=False):
+    """Silence only an explicit mute or an operator-started band scan."""
+    return bytes(len(pcm)) if muted or scan_active else pcm
 
 
 def status_frequency_khz(payload):

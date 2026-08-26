@@ -183,6 +183,18 @@ class FmdxDirectoryTests(unittest.TestCase):
         self.assertTrue(fmdx.status_matches_frequency({"freq": 101.5}, 101_500.0))
         self.assertFalse(fmdx.status_matches_frequency({"freq": 99.9}, 101_500.0))
 
+    def test_manual_band_scan_covers_every_100_khz_channel(self):
+        self.assertEqual(
+            fmdx.band_scan_frequencies(87_550.0, 87_850.0),
+            (87_600.0, 87_700.0, 87_800.0),
+        )
+
+    def test_only_an_active_manual_scan_silences_playback(self):
+        pcm = b"\x01\x02\x03\x04"
+        self.assertEqual(fmdx.playback_pcm(pcm, muted=False, scan_active=False), pcm)
+        self.assertEqual(fmdx.playback_pcm(pcm, muted=False, scan_active=True), bytes(4))
+        self.assertEqual(fmdx.playback_pcm(pcm, muted=True, scan_active=False), bytes(4))
+
     def test_remembered_fmdx_server_can_be_registered_without_directory_cache(self):
         fmdx.register_receivers([])
         fmdx.ensure_receiver("https://remembered.example/radio", "fmdx")
