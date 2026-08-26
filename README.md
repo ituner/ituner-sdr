@@ -1,19 +1,18 @@
 # iTuner SDR for Raspberry Pi 5
 
-One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
+One self-contained installer for the Waveshare 8-DSI-TOUCH-A display, Goodix touch controller, and iTuner SDR radio interface on a Raspberry Pi 5 running current Raspberry Pi OS. It installs the required packages, Waveshare DSI overlay, UI, configuration, and boot services.
 
 ## Hardware connection
 
-Use **only Raspberry Pi 5 CAM/DISP 1 (DSI1)**. The 22-pin FFC from the adapter board connects to CAM/DISP 1; do **not** move it to CAM/DISP 0. The display overlay targets DSI1 and the bundled GT911 touch overlay targets the matching `i2c_csi_dsi1` controller (Linux I2C bus 11, address `0x5d`).
+Use the Raspberry Pi 5 DSI connector required by the Waveshare 8-DSI-TOUCH-A cable assembly. The installer configures the in-kernel `vc4-kms-dsi-waveshare-panel-v2,8_0_inch_a` overlay; no replacement panel driver is required.
 
-The display framebuffer is **400x960**, not 320x960. The panel is physically 960 pixels tall and is used in the installed flipped/portrait orientation.
+The native framebuffer is **800x1280** portrait. The panel is physically mounted landscape, so the SDR application uses a **1280x800** logical UI. This is the only active platform profile.
 
 ## Architecture
 
 ```text
-CAM/DISP 1 (DSI1) ── display overlay + rebuilt ST7701 panel module ── DRM/KMS framebuffer (400x960)
-                    └─ GT911 overlay ── Goodix input event ── OpenGL SDR UI
-                                                           └─ KiwiSDR WebSocket receiver + PipeWire audio
+Waveshare DSI ── vc4-kms-dsi-waveshare-panel-v2 overlay ── DRM framebuffer (800x1280)
+               └─ Goodix input event ── rotated OpenGL UI (1280x800) ── KiwiSDR/FM-DX + PipeWire audio
 ```
 
 `UI/` contains two UI implementations:
@@ -35,7 +34,15 @@ All current and future UI updates are made to the **OpenGL implementation**. The
    sudo reboot
    ```
 
-The install is idempotent. It rebuilds the display module for the currently running kernel, stores the original module under `/var/lib/ituner-sdr/`, installs the display and touch overlays, configures the required boot settings in one marked block, installs Python/OpenGL/PipeWire dependencies, and enables all boot services.
+The install is idempotent. It configures the in-kernel Waveshare display and
+touch overlay, installs the complete UI asset set, Python/OpenGL/PipeWire
+runtime, every local ASR engine and model, Whisper.cpp, RNNoise neural voice
+cleaner, and both bundled HF Enhance ONNX listening models. It then verifies the installed AI runtime before enabling the
+boot services. The initial download is about 500 MB of models plus build
+artifacts, so allow several minutes and keep the Pi online.
+
+Deepgram is included as a client but still requires the operator's own API key;
+all other caption engines work locally after installation.
 
 The public receiver configured by default is the established working initial endpoint. To use a receiver you are authorized to access, configure it after reboot:
 
@@ -63,6 +70,10 @@ source UI/.venv/bin/activate
 python -m pip install pygame PyOpenGL sounddevice Pillow
 ```
 
+FM-DX audio additionally requires `ffmpeg` on the developer machine
+(`brew install ffmpeg` on macOS). The Raspberry Pi installer installs it
+automatically.
+
 On macOS where Anaconda shadows the desired interpreter, use the system Python explicitly:
 
 ```bash
@@ -73,11 +84,10 @@ Available output modes, run from the repository root:
 
 | Output | Command | Layout |
 | --- | --- | --- |
-| Standard macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 30` | `960x320` SDR canvas |
-| Wide macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop-1280 --fps 30` | `1024x480` SDR canvas plus a `256x480` navigation rail (`1280x480` total) |
-| Raspberry Pi display | `UI/.venv/bin/python UI/kiwi_gl_display.py` | Fullscreen rotated `400x960` KMS/DRM framebuffer |
+| macOS LCD simulator | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 24` | The target `1280x800` landscape UI |
+| Raspberry Pi LCD | `python3 UI/kiwi_gl_display.py --orientation flipped --swap-x-y` | Fullscreen rotated `800x1280` Waveshare framebuffer |
 
-The Raspberry Pi command requires its KMS/DRM display and touch environment and is normally started by `ituner-sdr.service` rather than launched from macOS.
+The Raspberry Pi command requires its DSI/Wayland display and touch environment. See [the LCD platform guide](docs/lcd-800x1280-platform.md) for the tested launch command and dependency inventory.
 
 Desktop controls:
 
@@ -90,7 +100,60 @@ Desktop controls:
 
 Because desktop windows are borderless, use `Esc` or `q` instead of a macOS close button.
 
-The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
+The receiver is a live public KiwiSDR or FM-DX Webserver connection. KiwiSDR
+receivers provide audio and RF waterfall bins. FM-DX receivers provide tuned
+FM audio, RDS/status metadata, and signal strength; the app derives a clearly
+labelled carrier-centred ±10 kHz programme-audio waterfall from that decoded
+stream because the core protocol has no continuous RF waterfall. Choose
+receivers from the `RECEIVERS` tile. Its `ALL`, `KIWI`, `FMDX`, and `FAVORITES`
+filters use each directory row's explicit protocol metadata; the `KIWI` view
+includes both direct and proxied KiwiSDRs. Opening Receivers selects the active
+protocol filter and centres the active endpoint. Desktop mode is a
+development/runtime option only; it leaves the Pi's rotated framebuffer output
+untouched.
+
+Selecting a Kiwi receiver never inherits an FM-DX carrier or sticks at the
+29.999 MHz Kiwi limit. The selected Kiwi demodulator is preserved and the app
+opens a practical band for that mode, inspects the live spectrum, and tunes to
+the strongest clear local peak. AM/SAM prioritises 520–1710 kHz; LSB, USB, CW,
+NBFM, IQ, and DRM use their own mode-appropriate windows. The UI reports
+`SCANNING`, `TUNED`, or `NO STRONG SIGNAL`; after two seconds without a clear
+peak it remains on that mode's safe default frequency. Any manual tune, drag,
+or subsequent receiver selection cancels the automatic landing immediately.
+
+Constellation displays both protocols on one map, but its three warm audio
+streams and rotating RF scouts are Kiwi-only. Selecting an FM-DX dot hands
+audio back to the normal FM-DX worker; selecting a warmed Kiwi changes streams
+without rebuilding the temporary Kiwi session. Leaving Constellation preserves
+the selected endpoint, protocol, frequency, zoom, and mode so the waterfall can
+be scrubbed immediately. Reopening Receivers lands on that same selected row.
+Temporary listeners, scouts, measurements, and failover state are discarded
+when Constellation closes and recreated on its next visit.
+
+On FM-DX receivers, Zoom locally magnifies the 20 kHz audio-derived waterfall.
+The always-visible Stations control beside Favorite and Play/Pause loads the
+server owner's `/static_data` presets and adds RDS PS/PI names learned while
+listening. Loading those presets never retunes or interrupts the playing
+station. `START SCAN` explicitly begins a cancellable 100 kHz pass across the
+server's FM band; the same control becomes `STOP SCAN` while active. Scan audio
+is locally silenced, progress and the current channel remain visible, learned
+RDS stations appear immediately, and completion or cancellation restores the
+station that was playing when the scan began. A simultaneous manual tune or
+receiver handoff wins and cannot be overwritten by a late scan callback.
+Selecting an FM-DX receiver forces the server-controlled `FM-FMDX` mode and
+finishes on the nearest cached RDS channel, falling back to the nearest server
+preset. During waterfall tuning, an orange travel marker and target-frequency
+readout make the carrier-centred audio view's drag visible. Station taps tune
+immediately while leaving the Stations drawer open. Receiver route, sorting,
+and map-view selectors are remembered, including the FM-DX-only route. The
+active FM-DX endpoint and final scanned or tapped frequency are committed
+immediately so an app or device restart resumes the same station. Changing an
+FM-DX station clears the prior waterfall and partial FFT audio, shows a brief
+tuning state, then rebuilds the waterfall from the new programme. Passband and
+Kiwi-only audio DSP controls are disabled because the FM-DX protocol supplies
+already-decoded programme audio. FM-DX receivers use constant-size orange globe
+dots; KiwiSDR receivers use constant-size cyan dots, with an on-map color legend
+and no idle marker halos.
 
 ## Boot services and status
 
@@ -140,8 +203,8 @@ sudo reboot
 
 ## Repository layout
 
-- `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
-- `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
+- `docs/lcd-800x1280-platform.md` — active Waveshare LCD geometry, launch, and dependency guide.
+- `touch-driver/` — Goodix touch test utility retained for diagnostics.
 - `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture assets.
 - `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.

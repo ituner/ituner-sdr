@@ -10,6 +10,7 @@ SupplementaryGroups=video input render audio
 WorkingDirectory=/opt/ituner-sdr/UI
 EnvironmentFile=/etc/ituner-sdr.conf
 Environment=SDL_VIDEODRIVER=kmsdrm
+Environment=SDL_AUDIODRIVER=dummy
 Environment=PYGAME_HIDE_SUPPORT_PROMPT=1
 Environment=XDG_RUNTIME_DIR=/run/user/__ITUNER_SDR_UID__
 ExecStart=/usr/local/lib/ituner-sdr/start-opengl.sh
