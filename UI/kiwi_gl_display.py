@@ -4,6 +4,7 @@ import calendar
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
+from dataclasses import dataclass
 import errno
 import faulthandler
 import gzip
@@ -200,6 +201,14 @@ from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
 import render_sdr_frontend_mockup as sdr_ui
+from knob_controller import (
+    AccelerationConfig,
+    FocusableControl,
+    KnobCommandKind,
+    KnobContext,
+    KnobController,
+)
+from knob_input import DesktopKnobAdapter, KnobConfigError, load_knob_configuration
 
 
 LCD_NATIVE_W = 800
@@ -2352,6 +2361,174 @@ SETTINGS_MENU_ITEMS = (
     ("system", "SYSTEM"),
     ("settings_back", "HOME"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class KnobUiFlags:
+    settings_menu_open: bool = False
+    digital_menu_open: bool = False
+    picker_open: bool = False
+    picker_map_open: bool = False
+    search_open: bool = False
+    radio_setup_open: bool = False
+    band_navigation_open: bool = False
+    display_setup_open: bool = False
+    audio_panel_open: bool = False
+    tests_panel_open: bool = False
+    globe_open: bool = False
+    frequency_entry_open: bool = False
+    network_panel_open: bool = False
+    receiver_home_panel_open: bool = False
+    fan_curve_panel_open: bool = False
+    filter_drawer_open: bool = False
+    asr_panel_open: bool = False
+    deepgram_setup_open: bool = False
+    dj_tune_open: bool = False
+    filter_panel_open: bool = False
+    cpu_utilization_graph_open: bool = False
+    wspr_panel_open: bool = False
+    wspr_identity_open: bool = False
+    dual_vfo_open: bool = False
+    local_receiver_panel_open: bool = False
+    font_lab_open: bool = False
+
+
+def knob_main_control_id(kind):
+    return "receivers" if kind == "rx" else kind
+
+
+def active_knob_context(flags, receiver_row_count=0):
+    """Describe only controls that are visible in the active UI workspace."""
+    if flags.picker_open:
+        if flags.picker_map_open:
+            return KnobContext("receiver_map", (
+                FocusableControl("map_list"),
+                FocusableControl("map_view"),
+                FocusableControl("back"),
+            ), map_active=True)
+        if flags.search_open:
+            return KnobContext("receiver_search", (FocusableControl("back"),))
+        controls = [
+            FocusableControl("globe"),
+            FocusableControl("search"),
+            FocusableControl("sort"),
+            FocusableControl("route_all"),
+            FocusableControl("route_direct"),
+            FocusableControl("route_proxy"),
+            FocusableControl("route_favorites"),
+        ]
+        controls.extend(
+            FocusableControl(f"receiver_row:{index}", category="receiver")
+            for index in range(max(0, int(receiver_row_count)))
+        )
+        controls.append(FocusableControl("back"))
+        return KnobContext("receivers", tuple(controls), receiver_list_active=True)
+    if flags.settings_menu_open:
+        return KnobContext("settings", tuple(
+            FocusableControl("back" if kind == "settings_back" else kind)
+            for kind, _label in SETTINGS_MENU_ITEMS
+        ))
+    if flags.digital_menu_open:
+        return KnobContext("digital", tuple(
+            FocusableControl("back" if kind == "digital_back" else kind)
+            for kind, _label in DIGITAL_MENU_ITEMS
+        ))
+    if flags.globe_open:
+        return KnobContext("constellation", (FocusableControl("back"),), map_active=True)
+    if flags.audio_panel_open:
+        return KnobContext("audio", (
+            FocusableControl("volume", editable=True),
+            FocusableControl("mute"),
+            FocusableControl("back"),
+        ))
+    nested_screens = (
+        (flags.frequency_entry_open, "frequency_entry"),
+        (flags.radio_setup_open, "modes"),
+        (flags.band_navigation_open, "bands"),
+        (flags.display_setup_open, "display"),
+        (flags.tests_panel_open, "tests"),
+        (flags.network_panel_open, "network"),
+        (flags.receiver_home_panel_open, "receiver_home"),
+        (flags.fan_curve_panel_open, "fan_curve"),
+        (flags.filter_drawer_open, "filter_drawer"),
+        (flags.asr_panel_open, "asr"),
+        (flags.deepgram_setup_open, "deepgram"),
+        (flags.dj_tune_open, "dj_tune"),
+        (flags.filter_panel_open, "filter"),
+        (flags.cpu_utilization_graph_open, "cpu"),
+        (flags.wspr_panel_open, "wspr"),
+        (flags.wspr_identity_open, "wspr_identity"),
+        (flags.dual_vfo_open, "dual_vfo"),
+        (flags.local_receiver_panel_open, "local_receiver"),
+        (flags.font_lab_open, "font_lab"),
+    )
+    for is_open, screen_id in nested_screens:
+        if is_open:
+            return KnobContext(screen_id, (FocusableControl("back"),))
+    return KnobContext("main", tuple(
+        FocusableControl(knob_main_control_id(kind)) for kind, _label in MENU_ITEMS
+    ))
+
+
+def knob_tune_frequency(current_khz, clicks, multiplier, step_hz, low_khz=0.0, high_khz=TUNING_MAX_KHZ):
+    """Apply logical knob clicks with exact step quantization and bounds."""
+    step_hz = max(1, int(step_hz))
+    target_hz = round(
+        (float(current_khz) * 1000.0 + int(clicks) * int(multiplier) * step_hz)
+        / step_hz
+    ) * step_hz
+    return clamp(target_hz / 1000.0, float(low_khz), float(high_khz))
+
+
+def knob_focus_box(control_id, flags, receiver_row_count=0, receiver_scroll=0):
+    """Resolve the current visible rectangle for a semantic focus target."""
+    if control_id == "back":
+        if flags.globe_open:
+            return GLOBE_BACK_BOX
+        if flags.font_lab_open:
+            return FONT_LAB_BACK_BOX
+        if flags.local_receiver_panel_open:
+            return RTL_LAB_BACK_BOX
+        if flags.audio_panel_open:
+            return lcd_audio_drawer_close_box() if LCD_800_MODE else None
+    if flags.picker_open:
+        picker_boxes = {
+            "globe": PICKER_MAP_MODE_BOX,
+            "search": PICKER_SEARCH_BOX,
+            "sort": PICKER_SORT_BOX,
+            "route_all": PICKER_ROUTE_ALL_BOX,
+            "route_direct": PICKER_ROUTE_DIRECT_BOX,
+            "route_proxy": PICKER_ROUTE_PROXY_BOX,
+            "route_favorites": PICKER_ROUTE_FAVORITES_BOX,
+            "back": PICKER_EXIT_BOX,
+            "map_list": RADIOGARDEN_LIST_BOX,
+            "map_view": RADIOGARDEN_VIEW_BOX,
+        }
+        if control_id.startswith("receiver_row:"):
+            try:
+                row = int(control_id.partition(":")[2])
+            except ValueError:
+                return None
+            if not 0 <= row < min(receiver_row_count, PICKER_COLS * PICKER_ROWS):
+                return None
+            return station_tile(int(receiver_scroll) + row, receiver_scroll)
+        return picker_boxes.get(control_id)
+    if flags.settings_menu_open:
+        ids = ["back" if kind == "settings_back" else kind for kind, _ in SETTINGS_MENU_ITEMS]
+        return lcd_nav_box(ids.index(control_id), len(ids)) if control_id in ids else None
+    if flags.digital_menu_open:
+        ids = ["back" if kind == "digital_back" else kind for kind, _ in DIGITAL_MENU_ITEMS]
+        return lcd_nav_box(ids.index(control_id), len(ids)) if control_id in ids else None
+    main_ids = [knob_main_control_id(kind) for kind, _label in MENU_ITEMS]
+    return lcd_nav_box(main_ids.index(control_id), len(main_ids)) if control_id in main_ids else None
+
+
+def knob_overlay_lines(snapshot, tune_step_hz):
+    return (
+        f"VIEW {snapshot.view_mode.value}",
+        f"TUNE STEP {int(tune_step_hz)} Hz",
+        f"TUNE x{snapshot.tune_multiplier}",
+    )
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
     ("digital_back", "HOME"),
@@ -18664,6 +18841,9 @@ def main():
     parser.add_argument("--fps", type=float, default=24.0, help="render target; 24 fps is the balanced Raspberry Pi LCD default")
     parser.add_argument("--duration", type=float, default=0.0, help="optional run limit in seconds")
     parser.add_argument("--desktop", action="store_true", help="run the LCD 1280x800 landscape UI locally with mouse input")
+    parser.add_argument("--desktop-knobs", action="store_true", help="simulate TUNE, VIEW, and NAV knobs with the desktop keyboard")
+    parser.add_argument("--knob-config", type=Path, default=Path("/etc/ituner-knobs.json"), help="three-knob hardware mapping JSON")
+    parser.add_argument("--knob-diagnostic-count", action="store_true", help="disable acceleration and count exact normalized knob clicks")
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
@@ -18714,6 +18894,30 @@ def main():
     parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
+    try:
+        knob_configuration = load_knob_configuration(args.knob_config)
+        knob_warning = None
+    except KnobConfigError as exc:
+        knob_configuration = load_knob_configuration(Path("/knob-config-disabled"))
+        knob_warning = str(exc)
+        print(f"gl knob configuration disabled: {exc}", flush=True)
+    knob_controller = KnobController(
+        acceleration=AccelerationConfig(
+            knob_configuration.acceleration_window_seconds,
+            knob_configuration.medium_clicks_per_second,
+            knob_configuration.fast_clicks_per_second,
+            knob_configuration.medium_multiplier,
+            knob_configuration.fast_multiplier,
+        ),
+        diagnostic_count_mode=args.knob_diagnostic_count,
+    )
+    desktop_knob_adapter = (
+        DesktopKnobAdapter(knob_configuration.hold_seconds)
+        if args.desktop and args.desktop_knobs
+        else None
+    )
+    if knob_configuration.enabled:
+        knob_warning = "Physical knob mapping loaded; hardware reader not active yet"
     remembered_radio_mode = None
     remembered_preferences = {}
     if args.remember_receiver:
@@ -19523,6 +19727,7 @@ def main():
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
     tune_step_hz = max(1, int(saved_tune_step_hz)) if isinstance(saved_tune_step_hz, (int, float)) else args.tune_step_hz
+    knob_feedback_until = 0.0
     rc28_zoom_detents = 0
     rc28_zoom_last_at = 0.0
     rc28_dial_mode = "TUNE"
@@ -20754,11 +20959,243 @@ def main():
         picker_map_notice_until = picker_map_motion_at + 2.8
         return True
 
+    def current_knob_flags():
+        return KnobUiFlags(
+            settings_menu_open=settings_menu_open,
+            digital_menu_open=digital_menu_open,
+            picker_open=picker_open,
+            picker_map_open=picker_map_open,
+            search_open=search_open,
+            radio_setup_open=radio_setup_open,
+            band_navigation_open=band_navigation_open,
+            display_setup_open=display_setup_open,
+            audio_panel_open=audio_panel_open,
+            tests_panel_open=tests_panel_open,
+            globe_open=globe_open,
+            frequency_entry_open=frequency_entry_open,
+            network_panel_open=network_panel_open,
+            receiver_home_panel_open=receiver_home_panel_open,
+            fan_curve_panel_open=fan_curve_panel_open,
+            filter_drawer_open=filter_drawer_open,
+            asr_panel_open=asr_panel_open,
+            deepgram_setup_open=deepgram_setup_open,
+            dj_tune_open=dj_tune_open,
+            filter_panel_open=filter_panel_open,
+            cpu_utilization_graph_open=cpu_utilization_graph_open,
+            wspr_panel_open=wspr_panel_open,
+            wspr_identity_open=wspr_identity_open,
+            dual_vfo_open=dual_vfo_open,
+            local_receiver_panel_open=rtl_lab_open,
+            font_lab_open=font_lab_open,
+        )
+
+    def knob_receiver_row_count():
+        if not picker_open or picker_map_open or search_open:
+            return 0
+        return min(PICKER_COLS * PICKER_ROWS, max(0, len(stations) - int(station_scroll)))
+
+    def activate_knob_control(control_id):
+        nonlocal picker_open, picker_map_open, search_open, station_sort
+        nonlocal station_route_filter, stations, station_scroll
+        if settings_menu_open:
+            ids = ["back" if kind == "settings_back" else kind for kind, _ in SETTINGS_MENU_ITEMS]
+            if control_id in ids:
+                activate_navigation_item(ids.index(control_id), SETTINGS_MENU_ITEMS)
+            return
+        if digital_menu_open:
+            ids = ["back" if kind == "digital_back" else kind for kind, _ in DIGITAL_MENU_ITEMS]
+            if control_id in ids:
+                activate_navigation_item(ids.index(control_id), DIGITAL_MENU_ITEMS)
+            return
+        if picker_open:
+            if control_id == "back":
+                picker_open = False
+                picker_map_open = False
+                search_open = False
+            elif control_id == "globe":
+                picker_map_open = True
+                focus_receiver_map_on_server(state.snapshot()[0])
+            elif control_id == "search":
+                search_open = True
+            elif control_id == "sort":
+                station_sort = "name" if station_sort == "location" else "location"
+                stations = filtered_stations(
+                    all_stations, station_query, station_sort,
+                    station_route_filter, favorite_servers,
+                )
+                station_scroll = 0
+            elif control_id.startswith("route_"):
+                station_route_filter = control_id.removeprefix("route_")
+                stations = filtered_stations(
+                    all_stations, station_query, station_sort,
+                    station_route_filter, favorite_servers,
+                )
+                station_scroll = 0
+            elif control_id.startswith("receiver_row:"):
+                visible_stations = health_prioritized_stations(stations, station_health, station_sort)
+                row = int(control_id.partition(":")[2])
+                index = int(station_scroll) + row
+                if 0 <= index < len(visible_stations):
+                    connect_to_station(visible_stations[index])
+            wake_controls()
+            return
+        ids = [knob_main_control_id(kind) for kind, _ in MENU_ITEMS]
+        if control_id in ids:
+            activate_navigation_item(ids.index(control_id))
+
+    def close_knob_context(home=False):
+        nonlocal menu_open, picker_open, picker_map_open, search_open
+        nonlocal settings_menu_open, digital_menu_open, radio_setup_open, band_navigation_open
+        nonlocal display_setup_open, audio_panel_open, tests_panel_open, globe_open
+        nonlocal frequency_entry_open, network_panel_open, receiver_home_panel_open
+        nonlocal fan_curve_panel_open, filter_drawer_open, asr_panel_open
+        nonlocal deepgram_setup_open, dj_tune_open, filter_panel_open
+        nonlocal cpu_utilization_graph_open, wspr_panel_open, wspr_identity_open
+        nonlocal rtl_lab_open, dual_vfo_open, font_lab_open
+        return_to_settings = any((
+            display_setup_open, network_panel_open, receiver_home_panel_open,
+            fan_curve_panel_open, cpu_utilization_graph_open, tests_panel_open,
+        )) and not home
+        return_to_tests = globe_open and not home
+        if rtl_lab_open:
+            rtl_lab.stop()
+        if globe_open:
+            globe_mixer.stop()
+            scout_probe.stop()
+        if dual_vfo_open:
+            stop_dual_vfo_clients()
+        picker_open = picker_map_open = search_open = False
+        digital_menu_open = radio_setup_open = band_navigation_open = False
+        display_setup_open = audio_panel_open = tests_panel_open = globe_open = False
+        frequency_entry_open = network_panel_open = receiver_home_panel_open = False
+        fan_curve_panel_open = filter_drawer_open = asr_panel_open = False
+        deepgram_setup_open = dj_tune_open = filter_panel_open = False
+        cpu_utilization_graph_open = wspr_panel_open = wspr_identity_open = False
+        rtl_lab_open = dual_vfo_open = font_lab_open = False
+        menu_open = False
+        tests_panel_open = return_to_tests
+        settings_menu_open = return_to_settings and not return_to_tests
+
+    def execute_knob_commands(commands):
+        nonlocal tune_step_hz, frequency_entry_open, frequency_entry_value
+        nonlocal frequency_entry_invalid, frequency_entry_replace_on_digit
+        nonlocal display_freq, candidate_freq, station_scroll
+        nonlocal picker_map_yaw, picker_map_pitch, picker_map_scale
+        nonlocal globe_yaw, globe_pitch, globe_scale, knob_feedback_until
+        if commands:
+            knob_feedback_until = time.monotonic() + 2.0
+        for command in commands:
+            if command.kind is KnobCommandKind.TUNE:
+                _server, current_frequency, zoom, _smeter, _generation, _server_generation = state.snapshot()
+                low_khz, high_khz = active_tuning_bounds()
+                frequency = knob_tune_frequency(
+                    current_frequency, command.delta, command.multiplier,
+                    tune_step_hz, low_khz, high_khz,
+                )
+                state.set_view(freq_khz=frequency)
+                display_freq = candidate_freq = frequency
+                apply_band_default(frequency)
+                animate_to(frequency, kiwi.zoom_to_span_khz(zoom), 0.08)
+                remember_current_view()
+                wake_controls()
+            elif command.kind is KnobCommandKind.CYCLE_TUNE_STEP:
+                steps = (10, 50, 100, 500, 1000, 5000, 10000)
+                tune_step_hz = steps[(steps.index(tune_step_hz) + 1) % len(steps)] if tune_step_hz in steps else 100
+                wake_controls()
+            elif command.kind is KnobCommandKind.OPEN_FREQUENCY_ENTRY:
+                frequency_entry_value = f"{state.snapshot()[1] / 1000.0:.6f}"
+                frequency_entry_invalid = False
+                frequency_entry_replace_on_digit = True
+                close_knob_context(home=True)
+                frequency_entry_open = True
+                wake_controls()
+            elif command.kind is KnobCommandKind.SET_ZOOM:
+                change_zoom(command.delta)
+            elif command.kind in (
+                KnobCommandKind.SET_VOLUME,
+                KnobCommandKind.ADJUST_FINE,
+                KnobCommandKind.ADJUST_COARSE,
+            ):
+                if command.kind is KnobCommandKind.SET_VOLUME or command.control_id == "volume":
+                    scale = 0.10 if command.kind is KnobCommandKind.ADJUST_COARSE else 0.025
+                    apply_main_volume(clamp((audio_volume or 0.0) + command.delta * scale, 0.0, 1.0))
+                    wake_controls()
+            elif command.kind is KnobCommandKind.ACTIVATE:
+                if command.control_id == "mute":
+                    controls, _generation = state.audio_controls_snapshot()
+                    state.set_audio_controls(audio_mute=not controls["mute"])
+                else:
+                    activate_knob_control(command.control_id)
+            elif command.kind is KnobCommandKind.PAGE:
+                station_scroll = clamp(
+                    station_scroll + command.delta * PICKER_COLS * PICKER_ROWS,
+                    0, station_page_max(stations),
+                )
+            elif command.kind is KnobCommandKind.MAP_PAN_X:
+                if globe_open:
+                    globe_yaw = (globe_yaw + command.delta * 0.035 + math.pi) % math.tau - math.pi
+                elif picker_map_open:
+                    picker_map_yaw = (picker_map_yaw + command.delta * 0.035 + math.pi) % math.tau - math.pi
+            elif command.kind is KnobCommandKind.MAP_PAN_Y:
+                if globe_open:
+                    globe_pitch = clamp(globe_pitch + command.delta * 0.025, math.radians(-82), math.radians(82))
+                elif picker_map_open:
+                    picker_map_pitch = clamp(picker_map_pitch + command.delta * 0.025, math.radians(-82), math.radians(82))
+            elif command.kind is KnobCommandKind.MAP_ZOOM:
+                if globe_open:
+                    globe_scale = clamp(globe_scale * (1.10 ** command.delta), 0.35, 10.0)
+                elif picker_map_open:
+                    picker_map_scale = clamp(
+                        picker_map_scale * (1.10 ** command.delta),
+                        RADIOGARDEN_ZOOM_MIN, RADIOGARDEN_ZOOM_MAX,
+                    )
+            elif command.kind is KnobCommandKind.BACK:
+                close_knob_context()
+            elif command.kind is KnobCommandKind.HOME:
+                close_knob_context(home=True)
+
+    def update_knob_context():
+        knob_controller.update_context(active_knob_context(
+            current_knob_flags(), receiver_row_count=knob_receiver_row_count(),
+        ))
+
+    def draw_knob_feedback_layer(now):
+        snapshot = knob_controller.snapshot()
+        focus_box = knob_focus_box(
+            snapshot.focused_control_id or "", current_knob_flags(),
+            receiver_row_count=knob_receiver_row_count(), receiver_scroll=station_scroll,
+        )
+        if snapshot.focus_visible and focus_box:
+            color = (255, 181, 71, 255) if snapshot.editing_control_id else (92, 255, 161, 255)
+            x0, y0, x1, y1 = focus_box
+            for inset in (0, 3):
+                draw_logical_line(x0 + inset, y0 + inset, x1 - inset, y0 + inset, color, 2)
+                draw_logical_line(x0 + inset, y1 - inset, x1 - inset, y1 - inset, color, 2)
+                draw_logical_line(x0 + inset, y0 + inset, x0 + inset, y1 - inset, color, 2)
+                draw_logical_line(x1 - inset, y0 + inset, x1 - inset, y1 - inset, color, 2)
+        if now < knob_feedback_until:
+            draw_logical_rect(14, 48, 242, 128, (3, 12, 9, 222))
+            for index, line in enumerate(knob_overlay_lines(snapshot, tune_step_hz)):
+                draw_text(
+                    text_cache, 26, 66 + index * 23, line,
+                    (112, 255, 177), 14, index == 0, False, "lm",
+                    family="Cantarell",
+                )
+        if knob_warning:
+            draw_text(
+                text_cache, 18, LOGICAL_H - 20, knob_warning,
+                (255, 190, 90), 12, False, False, "lm", family="Cantarell",
+            )
+
 
     try:
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            update_knob_context()
+            if desktop_knob_adapter is not None:
+                for knob_event in desktop_knob_adapter.poll(time.monotonic()):
+                    execute_knob_commands(knob_controller.handle(knob_event))
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     # KMS/SDL can emit a synthetic QUIT while the DSI panel
@@ -20767,6 +21204,21 @@ def main():
                     # appliance, so it has no valid in-app QUIT action: a
                     # service manager or explicit system command owns exit.
                     print("gl ignored synthetic SDL QUIT", flush=True)
+                elif (
+                    desktop_knob_adapter is not None
+                    and event.type in (pygame.KEYDOWN, pygame.KEYUP)
+                    and (
+                        (knob_key := ({"return": "enter"}.get(
+                            pygame.key.name(event.key).lower(),
+                            pygame.key.name(event.key).lower(),
+                        ))) in DesktopKnobAdapter.ROTATION_KEYS
+                        or knob_key in DesktopKnobAdapter.BUTTON_KEYS
+                    )
+                ):
+                    for knob_event in desktop_knob_adapter.handle_key(
+                        knob_key, event.type == pygame.KEYDOWN, time.monotonic(),
+                    ):
+                        execute_knob_commands(knob_controller.handle(knob_event))
                 elif (
                     args.desktop
                     and deepgram_setup_open
@@ -20788,6 +21240,7 @@ def main():
                 ):
                     desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    execute_knob_commands(knob_controller.touch_takeover())
                     desktop_window_drag_button = None
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
@@ -20877,6 +21330,8 @@ def main():
                     else:
                         change_zoom(1 if event.y > 0 else -1)
 
+            execute_knob_commands(knob_controller.flush_frame())
+
             while True:
                 try:
                     data = os.read(ev.fileno(), kiwi.EVENT_STRUCT.size)
@@ -20911,6 +21366,8 @@ def main():
                         slot["active"] = value >= 0
                 elif event_type == kiwi.EV_KEY and code == kiwi.BTN_TOUCH:
                     active = value == 1
+                    if active:
+                        execute_knob_commands(knob_controller.touch_takeover())
                     if not active:
                         mt_slots.clear()
                 elif event_type == kiwi.EV_SYN and code == kiwi.SYN_REPORT:
@@ -24501,6 +24958,7 @@ def main():
                 draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
+            draw_knob_feedback_layer(now)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
