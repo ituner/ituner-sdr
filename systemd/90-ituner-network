@@ -1,0 +1,2 @@
+# Limited NetworkManager bridge used by the local touch UI.
+ituner ALL=(root) NOPASSWD: /usr/local/sbin/ituner-network status, /usr/local/sbin/ituner-network scan, /usr/local/sbin/ituner-network connect

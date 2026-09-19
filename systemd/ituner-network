@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Small root-only NetworkManager bridge for the iTuner touch UI."""
+
+import json
+import subprocess
+import sys
+
+
+WLAN_DEVICE = "wlan0"
+PROFILE_PREFIX = "iTuner Wi-Fi "
+
+
+def run(*args, timeout=35):
+    return subprocess.run(
+        ["nmcli", *args],
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def message(result, fallback):
+    text = (result.stderr or result.stdout or fallback).strip()
+    # Do not reflect an entered passphrase to the unprivileged UI process.
+    return text.replace("password", "Wi-Fi key")
+
+
+def json_reply(payload, exit_code=0):
+    print(json.dumps(payload, separators=(",", ":")))
+    raise SystemExit(exit_code)
+
+
+def connection_exists(name):
+    return run("-g", "UUID", "connection", "show", name, timeout=8).returncode == 0
+
+
+def profile_name(ssid):
+    return f"{PROFILE_PREFIX}{ssid}"
+
+
+def ensure_persistent_profile(ssid, password):
+    name = profile_name(ssid)
+    if not connection_exists(name):
+        result = run(
+            "--wait",
+            "30",
+            "device",
+            "wifi",
+            "connect",
+            ssid,
+            "password",
+            password,
+            "ifname",
+            WLAN_DEVICE,
+            "name",
+            name,
+            timeout=38,
+        )
+        if result.returncode:
+            return None, message(result, "Could not join this Wi-Fi network.")
+
+    result = run(
+        "connection",
+        "modify",
+        name,
+        "connection.permissions",
+        "",
+        "connection.autoconnect",
+        "yes",
+        "connection.autoconnect-priority",
+        "100",
+        "802-11-wireless-security.key-mgmt",
+        "wpa-psk",
+        "802-11-wireless-security.psk",
+        password,
+        "802-11-wireless-security.psk-flags",
+        "0",
+        timeout=15,
+    )
+    if result.returncode:
+        return None, message(result, "Could not save this Wi-Fi network.")
+
+    # Enable device-level autoconnect too: it survives a manually interrupted
+    # connection and lets NetworkManager recover after an AP reboot.
+    run("device", "set", WLAN_DEVICE, "managed", "yes", timeout=8)
+    run("device", "set", WLAN_DEVICE, "autoconnect", "yes", timeout=8)
+    result = run("--wait", "30", "connection", "up", name, "ifname", WLAN_DEVICE, timeout=38)
+    if result.returncode:
+        return None, message(result, "Wi-Fi profile saved, but it could not connect now.")
+    return name, "Wi-Fi saved. It will reconnect automatically after reboot."
+
+
+def network_status():
+    devices = {}
+    result = run("-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status", timeout=10)
+    for line in result.stdout.splitlines():
+        parts = line.split(":", 3)
+        if len(parts) != 4 or parts[0] not in ("eth0", WLAN_DEVICE):
+            continue
+        device, _kind, state, connection = parts
+        addresses = run("-g", "IP4.ADDRESS", "device", "show", device, timeout=8).stdout.splitlines()
+        devices[device] = {
+            "state": state,
+            "connection": connection or "NOT CONNECTED",
+            "addresses": [address.split("/", 1)[0] for address in addresses if address],
+        }
+    return {"ok": result.returncode == 0, "devices": devices}
+
+
+def scan_networks():
+    result = run(
+        "-t",
+        "-f",
+        "IN-USE,SSID,SECURITY,SIGNAL",
+        "device",
+        "wifi",
+        "list",
+        "ifname",
+        WLAN_DEVICE,
+        "--rescan",
+        "yes",
+        timeout=25,
+    )
+    networks = []
+    seen = set()
+    for line in result.stdout.splitlines():
+        parts = line.split(":", 3)
+        if len(parts) != 4:
+            continue
+        active, ssid, security, signal = parts
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        try:
+            strength = int(signal)
+        except ValueError:
+            strength = 0
+        networks.append({"ssid": ssid, "security": security, "signal": strength, "active": active == "*"})
+    return {"ok": result.returncode == 0, "networks": networks, "message": "Wi-Fi scan complete."}
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "scan", "connect"}:
+        json_reply({"ok": False, "error": "Unsupported network request."}, 2)
+    action = sys.argv[1]
+    if action == "status":
+        response = network_status()
+        response["message"] = "Network status updated."
+        json_reply(response, 0 if response["ok"] else 1)
+    if action == "scan":
+        response = scan_networks()
+        json_reply(response, 0 if response["ok"] else 1)
+
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        json_reply({"ok": False, "error": "Invalid Wi-Fi request."}, 2)
+    ssid = str(payload.get("ssid") or "").strip()
+    password = str(payload.get("password") or "")
+    if not ssid or not password:
+        json_reply({"ok": False, "error": "Choose a network and enter its Wi-Fi key."}, 2)
+    name, result_message = ensure_persistent_profile(ssid, password)
+    if name is None:
+        json_reply({"ok": False, "error": result_message}, 1)
+    response = network_status()
+    response.update({"ok": True, "message": result_message, "profile": name})
+    json_reply(response)
+
+
+if __name__ == "__main__":
+    main()
