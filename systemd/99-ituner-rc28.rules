@@ -1,0 +1,3 @@
+# Give the iTuner LCD service access to the Icom RC-28 vendor HID endpoint.
+# The service runs as user "ituner", which is a member of the input group.
+KERNEL=="hidraw*", ATTRS{idVendor}=="0c26", ATTRS{idProduct}=="001e", MODE="0660", GROUP="input"
