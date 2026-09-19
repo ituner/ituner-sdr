@@ -14030,16 +14030,17 @@ def network_password_boxes():
         "panel": panel,
         "field": (x0 + 26, y0 + 82, x1 - 26, y0 + 142),
         "mode": (x0 + 26, y0 + 160, x0 + 130, y0 + 216),
-        "clear": (x0 + 146, y0 + 160, x0 + 250, y0 + 216),
+        "caps": (x0 + 146, y0 + 160, x0 + 250, y0 + 216),
+        "clear": (x0 + 266, y0 + 160, x0 + 370, y0 + 216),
         "cancel": (x1 - 254, y0 + 160, x1 - 146, y0 + 216),
         "join": (x1 - 130, y0 + 160, x1 - 26, y0 + 216),
     }
 
 
-def network_keyboard_rows(mode):
+def network_keyboard_rows(mode, caps=False):
     if mode == "symbols":
         labels = ("1234567890", "!@#$%&*_-+", "()[]{}.,/<")
-    elif mode == "upper":
+    elif caps or mode == "upper":
         labels = ("QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM<")
     else:
         labels = ("qwertyuiop", "asdfghjkl", "zxcvbnm<")
@@ -14054,8 +14055,8 @@ def network_keyboard_rows(mode):
     return rows
 
 
-def network_password_key_at(x, y, mode):
-    for keys, x0, y0, key_w in network_keyboard_rows(mode):
+def network_password_key_at(x, y, mode, caps=False):
+    for keys, x0, y0, key_w in network_keyboard_rows(mode, caps):
         if y0 <= y <= y0 + 58 and x0 <= x <= x0 + len(keys) * key_w:
             key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
             return "BACK" if key == "<" else key
@@ -14121,7 +14122,7 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
     draw_text(text_cache, x0 + 408, y1 - 43, fit_station_text(text_cache, notice, x1 - (x0 + 430) - 18, 15, False, False, family="Liberation Sans"), (241, 175, 121) if not snapshot.get("ok") else (156, 194, 197), 15, False, False, "lm", family="Liberation Sans")
 
 
-def draw_network_password(text_cache, ssid, value, mode, busy, error="", placeholder_visible=True):
+def draw_network_password(text_cache, ssid, value, mode, caps, busy, error="", placeholder_visible=True):
     boxes = network_password_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (1, 6, 10, 202))
@@ -14135,10 +14136,11 @@ def draw_network_password(text_cache, ssid, value, mode, busy, error="", placeho
     field_text = "*" * len(value) or ("WI-FI PASSWORD" if placeholder_visible else "")
     draw_text(text_cache, fx0 + 14, (fy0 + fy1) / 2, field_text, (226, 241, 243) if value else (130, 163, 167), 22, False, False, "lm", family="Liberation Sans")
     draw_picker_button(text_cache, boxes["mode"], "123" if mode != "symbols" else "ABC", 16)
+    draw_picker_button(text_cache, boxes["caps"], "CAPS", 16, caps and mode != "symbols")
     draw_picker_button(text_cache, boxes["clear"], "CLR", 16)
     draw_picker_button(text_cache, boxes["cancel"], "CANCEL", 15)
     draw_picker_button(text_cache, boxes["join"], "JOINING" if busy else "JOIN", 16, bool(value) and not busy)
-    for keys, row_x0, row_y0, key_w in network_keyboard_rows(mode):
+    for keys, row_x0, row_y0, key_w in network_keyboard_rows(mode, caps):
         for index, key in enumerate(keys):
             box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 58)
             draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 14 if key == "<" else 22)
@@ -19046,6 +19048,7 @@ def main():
     network_password_value = ""
     network_password_placeholder_visible = True
     network_keyboard_mode = "lower"
+    network_keyboard_caps = False
     network_notice = ""
     network_next_refresh = 0.0
     network_bridge = NetworkManagerBridge()
@@ -20192,7 +20195,7 @@ def main():
 
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_notice, network_next_refresh
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_keyboard_caps, network_notice, network_next_refresh
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
@@ -20275,6 +20278,7 @@ def main():
             network_selected_ssid = ""
             network_password_value = ""
             network_password_placeholder_visible = True
+            network_keyboard_caps = False
             network_notice = "Loading network status..."
             network_bridge.request("refresh")
             network_next_refresh = time.monotonic() + 12.0
@@ -23098,6 +23102,12 @@ def main():
                                 boxes = network_password_boxes()
                                 if contains(boxes["mode"], x, y):
                                     network_keyboard_mode = "symbols" if network_keyboard_mode != "symbols" else "lower"
+                                elif contains(boxes["caps"], x, y):
+                                    network_keyboard_caps = not network_keyboard_caps
+                                    # CAPS is an alphabet control. Return from symbols
+                                    # immediately so its effect is visible on the keys.
+                                    if network_keyboard_mode == "symbols":
+                                        network_keyboard_mode = "lower"
                                 elif contains(boxes["clear"], x, y):
                                     network_password_value = ""
                                     network_password_placeholder_visible = False
@@ -23106,6 +23116,7 @@ def main():
                                     network_password_open = False
                                     network_password_value = ""
                                     network_password_placeholder_visible = True
+                                    network_keyboard_caps = False
                                     network_notice = ""
                                 elif contains(boxes["join"], x, y):
                                     if len(network_password_value) >= 8 and network_bridge.request(
@@ -23114,11 +23125,12 @@ def main():
                                         network_notice = f"Joining {network_selected_ssid}..."
                                         network_password_value = ""
                                         network_password_placeholder_visible = True
+                                        network_keyboard_caps = False
                                         network_next_refresh = time.monotonic() + 4.0
                                 elif contains(boxes["field"], x, y):
                                     network_password_placeholder_visible = False
                                 else:
-                                    key = network_password_key_at(x, y, network_keyboard_mode)
+                                    key = network_password_key_at(x, y, network_keyboard_mode, network_keyboard_caps)
                                     if key == "BACK":
                                         network_password_value = network_password_value[:-1]
                                         network_password_placeholder_visible = False
@@ -23143,6 +23155,7 @@ def main():
                                     network_password_value = ""
                                     network_password_placeholder_visible = True
                                     network_keyboard_mode = "lower"
+                                    network_keyboard_caps = False
                                     network_notice = ""
                                 else:
                                     for network, box in zip(networks, network_scan_boxes(networks)):
@@ -24285,6 +24298,7 @@ def main():
                         network_selected_ssid,
                         network_password_value,
                         network_keyboard_mode,
+                        network_keyboard_caps,
                         network_busy,
                         network_notice,
                         network_password_placeholder_visible,
