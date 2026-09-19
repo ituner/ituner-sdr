@@ -61,6 +61,7 @@ class NetworkManagerBridge:
             if self._busy:
                 return False
             self._busy = True
+            self._snapshot["scanning"] = action in ("open", "scan")
         threading.Thread(target=self._run, args=(action, payload), daemon=True).start()
         return True
 
@@ -85,12 +86,17 @@ class NetworkManagerBridge:
                     response.setdefault("error", "Network helper is unavailable.")
                 return response
 
-            if action == "refresh":
+            if action == "open":
                 response = invoke("status")
                 scan_response = invoke("scan")
                 response["networks"] = scan_response.get("networks", [])
                 if not scan_response.get("ok") and response.get("ok"):
                     response["notice"] = scan_response.get("error", "Wi-Fi scan unavailable.")
+            elif action == "refresh":
+                # Status refreshes must stay quiet. Repeating a full RF scan
+                # every few seconds makes the Wi-Fi page feel permanently busy
+                # and can interrupt a just-selected access point.
+                response = invoke("status")
             else:
                 response = invoke(action, payload)
             notice = response.get("message") or response.get("error") or "Network status updated."
@@ -106,6 +112,7 @@ class NetworkManagerBridge:
         finally:
             with self._lock:
                 self._busy = False
+                self._snapshot["scanning"] = False
 
 
 _runtime_stack_probe_stream = None
@@ -14095,12 +14102,15 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
     draw_logical_line(x0, y0, x1, y0, (93, 205, 192, 205), 2)
     draw_text(text_cache, x0 + 20, y0 + 35, "NETWORK", (230, 245, 247), 26, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 20, y0 + 66, "ETHERNET PREFERRED  ·  WI-FI AUTOMATIC BACKUP", (121, 187, 184), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 20, y0 + 91, "SELECT A WI-FI NETWORK, THEN ENTER ITS KEY", (171, 220, 215), 14, True, False, "lm", family="Liberation Sans")
     draw_picker_button(text_cache, boxes["back"], "BACK", 17)
     draw_network_status_card(text_cache, boxes["ethernet"], "ETHERNET", devices.get("eth0"), True)
     draw_network_status_card(text_cache, boxes["wifi"], "WI-FI", devices.get("wlan0"), False)
     lx0, ly0, lx1, ly1 = boxes["list"]
     draw_text(text_cache, lx0, ly0 + 14, "WI-FI NETWORKS", (207, 232, 234), 18, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, lx1, ly0 + 14, "SCANNING..." if busy else f"{len(networks)} FOUND", (109, 235, 178) if busy else (145, 184, 189), 13, True, False, "rm", family="Liberation Sans")
+    scanning = bool(snapshot.get("scanning"))
+    status_label = "SCANNING..." if scanning else ("UPDATING..." if busy else f"{len(networks)} FOUND")
+    draw_text(text_cache, lx1, ly0 + 14, status_label, (109, 235, 178) if scanning else (145, 184, 189), 13, True, False, "rm", family="Liberation Sans")
     scan_boxes = network_scan_boxes(networks)
     for network, box in zip(networks, scan_boxes):
         bx0, by0, bx1, by1 = box
@@ -14113,12 +14123,14 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
         ssid = fit_station_text(text_cache, str(network.get("ssid", "")), bx1 - bx0 - 26, 17, True, False, family="Liberation Sans")
         draw_text(text_cache, bx0 + 13, by0 + 21, ssid, (232, 246, 247), 17, True, False, "lm", family="Liberation Sans")
         security = "LOCKED" if network.get("security") not in ("", "--") else "OPEN"
-        draw_text(text_cache, bx0 + 13, by1 - 16, f"{network.get('signal', 0):.0f}%  {security}", (109, 233, 177) if active else (158, 188, 193), 13, True, False, "lm", family="Liberation Sans")
+        detail = "SELECTED - ENTER WI-FI KEY" if selected else f"{network.get('signal', 0):.0f}%  {security}"
+        draw_text(text_cache, bx0 + 13, by1 - 16, detail, (109, 233, 177) if selected or active else (158, 188, 193), 13, True, False, "lm", family="Liberation Sans")
     if not networks and not busy:
         draw_text(text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2, "NO NETWORKS YET", (139, 166, 170), 19, True, False, "cm", family="Liberation Sans")
-    draw_picker_button(text_cache, boxes["rescan"], "RESCAN", 16, busy)
-    draw_picker_button(text_cache, boxes["join"], "JOIN WI-FI", 16, bool(selected_ssid) and not busy)
-    notice = str(snapshot.get("notice") or "Select a network, then JOIN WI-FI.")
+    draw_picker_button(text_cache, boxes["rescan"], "SCANNING" if scanning else "RESCAN", 16, scanning)
+    join_label = "ENTER WI-FI KEY" if selected_ssid else "SELECT WI-FI"
+    draw_picker_button(text_cache, boxes["join"], join_label, 14 if selected_ssid else 15, bool(selected_ssid) and not busy)
+    notice = str(snapshot.get("notice") or "Select a network, then enter its Wi-Fi key.")
     draw_text(text_cache, x0 + 408, y1 - 43, fit_station_text(text_cache, notice, x1 - (x0 + 430) - 18, 15, False, False, family="Liberation Sans"), (241, 175, 121) if not snapshot.get("ok") else (156, 194, 197), 15, False, False, "lm", family="Liberation Sans")
 
 
@@ -20280,7 +20292,7 @@ def main():
             network_password_placeholder_visible = True
             network_keyboard_caps = False
             network_notice = "Loading network status..."
-            network_bridge.request("refresh")
+            network_bridge.request("open")
             network_next_refresh = time.monotonic() + 12.0
             settings_menu_open = False
             digital_menu_open = False
@@ -23161,7 +23173,7 @@ def main():
                                     for network, box in zip(networks, network_scan_boxes(networks)):
                                         if contains(box, x, y):
                                             network_selected_ssid = str(network.get("ssid") or "")
-                                            network_notice = f"Selected {network_selected_ssid}."
+                                            network_notice = f"{network_selected_ssid} selected. Tap ENTER WI-FI KEY to continue."
                                             break
                             wake_controls()
                         elif touch_started and gesture == "callsign_toggle":
