@@ -1,0 +1,35 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2712";
+
+    /* Visually verified YX80030ACT3 profile on FPC2. */
+    fragment@0 {
+        target = <&rp1_dsi1>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+            port {
+                yx80030_dsi_out: endpoint {
+                    remote-endpoint = <&yx80030_panel_in>;
+                };
+            };
+            panel@0 {
+                compatible = "yousee,yx80030act3";
+                reg = <0>;
+                vdd-supply = <&vdd_3v3_reg>;
+                vccio-supply = <&vdd_3v3_reg>;
+                reset-gpios = <&rp1_gpio 26 1>; /* GPIO_ACTIVE_LOW */
+                /* U8 EN has no GPIO in the supplied board schematic. */
+                port {
+                    yx80030_panel_in: endpoint {
+                        remote-endpoint = <&yx80030_dsi_out>;
+                        data-lanes = <1 2 3 4>;
+                    };
+                };
+            };
+        };
+    };
+};

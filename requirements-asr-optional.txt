@@ -1,0 +1,8 @@
+# Optional ASR and cloud-caption clients. Install these only with the matching
+# model data under vendor/; see docs/lcd-800x1280-platform.md.
+vosk>=0.3.45
+sherpa-onnx>=1.12
+moonshine-voice
+deepgram-sdk>=3,<4
+numpy>=1.26
+onnxruntime>=1.18

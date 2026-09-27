@@ -1,0 +1,28 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2712";
+
+    fragment@0 {
+        target = <&rp1_i2c0>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&rp1_i2c0_0_1>;
+            clock-frequency = <100000>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            touchscreen@5d {
+                compatible = "goodix,gt911";
+                reg = <0x5d>;
+                interrupt-parent = <&rp1_gpio>;
+                interrupts = <12 2>;
+                irq-gpios = <&rp1_gpio 12 0>;
+                reset-gpios = <&rp1_gpio 16 0>;
+                status = "okay";
+            };
+        };
+    };
+};

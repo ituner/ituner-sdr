@@ -1,0 +1,41 @@
+{
+  "baseline": "lcd-live-2026-09-27",
+  "reference_host": "lcd",
+  "reference_git_head": "2beac721643d2abaf98394a16663c6443ce1f183",
+  "github_main_base": "09cde873386b3ef721ae8f423d4e06e3ffacd97e",
+  "source_of_truth": "Captured live files, not reference Git HEAD; reference checkout had uncommitted changes.",
+  "sha256": {
+    "UI/kiwi_gl_display.py": "464968e2bb62667a72ee532e51f341f901e86714f06cb2e4d01c3357983118f2",
+    "UI/openwebrx_client.py": "ba8a3aa39dfec0bb7a3437e9bd5abeed00bacd82b272c7ebcd7bc584580b745e",
+    "UI/openwebrx_recorder.py": "7a760e2a3912a76000b8421bd4c7ef185692deb5380eb809d3c17eecad347f64",
+    "UI/kiwi_live_display_fb.py": "88f9a0ade93f410049e5691e5d1f3146805bb2decb76e19dbd31e8522cf600b1",
+    "UI/kiwi_station_health.py": "819b3755db18dd3a2cdfa072a7967886e1697ccaf921db8d23d5b232284d21f3",
+    "UI/render_sdr_frontend_mockup.py": "0b48380f0cbc68e60a602c00cccfd478519d850d5cc8b4f9ed7f5deeab6b8505",
+    "UI/broadcast-identification-policy.json": "53bafc375eef0f6b3d75bacfb85578ef3348748be3e79c45e9c298debd4ff134",
+    "assets/fonts/oxanium/Oxanium.ttf": "2ce01d946e1e1ffc8d7eecfffbda8623bedd63eaf811a20488c4b69af45babb0"
+  },
+  "ui_defaults": {
+    "instrument_layout": "compact",
+    "compact_frequency_font_family": "Oxanium"
+  },
+  "profiles": {
+    "cm5": {
+      "orientation": "normal",
+      "touch_flags": [
+        "--swap-x-y",
+        "--no-invert-x",
+        "--invert-y"
+      ],
+      "display_drivers": "preserve installed"
+    },
+    "lcd": {
+      "orientation": "flipped",
+      "touch_flags": [
+        "--swap-x-y",
+        "--invert-x",
+        "--no-invert-y"
+      ],
+      "display_drivers": "preserve installed"
+    }
+  }
+}

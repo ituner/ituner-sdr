@@ -1,0 +1,35 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2712";
+
+    /* Supplier-confirmed INX F080A11-601 initialization profile. */
+    fragment@0 {
+        target = <&rp1_dsi0>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+            port {
+                z80029_dsi_out: endpoint {
+                    remote-endpoint = <&z80029_panel_in>;
+                };
+            };
+            panel@0 {
+                compatible = "zhunyi,z80029-vf206h-zc1";
+                reg = <0>;
+                vdd-supply = <&vdd_3v3_reg>;
+                vccio-supply = <&vdd_3v3_reg>;
+                reset-gpios = <&rp1_gpio 25 1>; /* GPIO_ACTIVE_LOW */
+                /* U1 EN has no GPIO in the supplied board schematic. */
+                port {
+                    z80029_panel_in: endpoint {
+                        remote-endpoint = <&z80029_dsi_out>;
+                        data-lanes = <1 2 3 4>;
+                    };
+                };
+            };
+        };
+    };
+};
