@@ -1,7 +1,8 @@
 # One application baseline for LCD and CM5
 
 This is a consolidation candidate, based on LCD's running application captured
-on 2026-09-27. It has not yet replaced GitHub main or either live installation.
+on 2026-09-27. The candidate is under test on CM5; GitHub main and the original
+LCD installation remain unchanged. See `cm5-pr9-validation.md` for test results.
 
 ## What belongs in GitHub
 
@@ -79,7 +80,7 @@ feature is ready. WSJT-X supplies the external `wsprd` executable.
 
 1. Preserve LCD as the reference while reviewing this branch. Its source and
    settings were backed up privately on LCD and the development Mac.
-2. Validate the candidate in a separate CM5 application release directory.
+2. Clone the candidate separately and validate the CM5 application installation.
    Back up application settings, preserve normal orientation, and select compact
    layout. Compare display, touch, receiver/Wi-Fi controls and enabled features
    with LCD. Preserve the previous application release for rollback.
@@ -90,4 +91,6 @@ feature is ready. WSJT-X supplies the external `wsprd` executable.
    the next release. A dirty working folder is not a release identifier.
 
 Local source/syntax/default-seeding checks do not replace the staged hardware
-and feature checks above. Neither live device was updated during preparation.
+and feature checks above. CM5 now has the candidate application; its previous
+application and settings are backed up for rollback. The original LCD remains
+the unchanged reference.
