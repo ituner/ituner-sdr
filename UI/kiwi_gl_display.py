@@ -385,7 +385,15 @@ MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
     "wspr": "digi.png",
+    "tests": "apps.png",
 }
+
+
+def menu_icon_filename(kind, muted=False):
+    """Resolve an icon asset without changing the navigation destination."""
+    if kind == "audio" and muted:
+        return "audio-muted.png"
+    return MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
 SPECTRUM_H = 70
 LCD_SPECTRUM_H = 240
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
@@ -13266,9 +13274,9 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.circle(surface, color, (cx, cy - 20), 3)
 
 
-def menu_icon_texture(text_cache, kind, label, width=132, height=112):
+def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False):
     """Build a menu tile at its eventual raster size to avoid texture blur."""
-    key = f"menu_asset_{kind}_{label}_{width}x{height}"
+    key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -13280,7 +13288,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
             draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
-            asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
+            asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)
             icon = pygame.image.load(str(asset_path)).convert_alpha()
             # Keep the supplied vector-derived art deliberately understated in the
             # compact menu. Its transparent alpha allows one clean 30% reduction.
@@ -14023,7 +14031,8 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
         draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
         tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8
+            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
+            muted=muted and kind == "audio",
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
 
