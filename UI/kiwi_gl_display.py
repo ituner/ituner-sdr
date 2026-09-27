@@ -1274,6 +1274,7 @@ TEST_PATTERN_BOX = (492, 178, 918, 232)
 TEST_FONT_BOX = (42, 244, 468, 298)
 TEST_OPENWEBRX_BOX = (492, 244, 918, 298)
 TEST_RUN_BOX = (42, 310, 918, 366)
+TEST_BACK_BOX = (0, 0, 0, 0)
 # This deliberately fixed public receiver is a protocol/display smoke test,
 # not a directory entry. The isolated Tests tile always restores the prior
 # Kiwi endpoint so it cannot quietly replace the user's remembered radio.
@@ -1693,7 +1694,7 @@ def configure_popup_layout():
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
-    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_BACK_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
@@ -1824,6 +1825,21 @@ def configure_popup_layout():
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
      TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX,
      TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+    TEST_BACK_BOX = (0, 0, 0, 0)
+    if LCD_800_MODE:
+        TEST_PANEL_BOX = (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H)
+        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 121
+        right_x0, right_x1 = LCD_NAV_X0 + 135, LOGICAL_W - 10
+        row_h, row_gap = 104, 12
+        rows = tuple(112 + index * (row_h + row_gap) for index in range(4))
+        TEST_GLOBE_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
+        TEST_DJ_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
+        TEST_RTL_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
+        TEST_PATTERN_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
+        TEST_FONT_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
+        TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
+        TEST_RUN_BOX = (left_x0, rows[3], right_x1, rows[3] + 78)
+        TEST_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("rtl_lab")
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
@@ -1897,7 +1913,7 @@ def configure_popup_layout():
         PICKER_EXIT_BOX = lcd_nav_box(7, 8)
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
-        RADIOGARDEN_EXIT_BOX = (1031, 372, 1273, 490)
+        RADIOGARDEN_EXIT_BOX = lcd_drawer_back_box()
     else:
         PICKER_BOX = (0, 0, 790, LOGICAL_H)
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -3725,6 +3741,7 @@ def configure_output(desktop=False):
     # panel uses its native portrait framebuffer and the existing rotation.
     NATIVE_W, NATIVE_H = (LOGICAL_W, LOGICAL_H) if DESKTOP_MODE else (LCD_NATIVE_W, LCD_NATIVE_H)
     configure_popup_layout()
+    sync_constellation_geometry()
 
 
 def rgba(color):
@@ -9715,6 +9732,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
 
 def tests_option_at(x, y):
+    if contains(TEST_BACK_BOX, x, y):
+        return "back"
     if contains(TEST_GLOBE_BOX, x, y):
         return "globe"
     if contains(TEST_DJ_BOX, x, y):
@@ -9789,6 +9808,22 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     x0, y0, x1, y1 = TEST_PANEL_BOX
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
     _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
+    if LCD_800_MODE:
+        draw_settings_leaf_sidebar(text_cache, "APPS", "TOOLS & DIAGNOSTICS")
+        for box, title, detail, active in (
+            (TEST_GLOBE_BOX, "CONSTELLATION", "SNR MAP", True),
+            (TEST_DJ_BOX, "DJ TUNE", "LIVE DIAL", False),
+            (TEST_RTL_BOX, "LOCAL SDR", "USB RX", False),
+            (TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES", False),
+            (TEST_FONT_BOX, "FONT LAB", "TYPE", False),
+            (TEST_OPENWEBRX_BOX, "RETURN KIWI" if openwebrx_active else "OPENWEBRX", "PUBLIC RX", openwebrx_active),
+            (TEST_RUN_BOX, "STOP" if sweep is not None else "RUN TEST", "RETUNE PATTERN", sweep is not None),
+        ):
+            draw_lcd_audio_tile(
+                text_cache, box, title, detail, active,
+                accent=(255, 184, 83, 220), title_size=12, detail_size=11,
+            )
+        return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
@@ -12350,7 +12385,6 @@ def draw_receiver_map(
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 42, "GLOBE", (150, 218, 214), 19, True, False, "cm", family="Cantarell")
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
-        (RADIOGARDEN_EXIT_BOX, "home", "EXIT"),
     ):
         bx0, by0, bx1, by1 = command_box
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 232))
@@ -12367,6 +12401,7 @@ def draw_receiver_map(
         MAP_VIEW_LABELS.get(map_view, "BORDERS"),
         18,
     )
+    draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
@@ -12517,13 +12552,13 @@ def scouted_receiver_at_tap(x, y, scouts, scout_history, scout_measurements, cen
 
 def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listener_measurements, scouts, scout_history, scout_measurements, replacement_slots, scout_total, active_server, anchor, status):
     """Constellation receiver model with listener streams and scout heatmaps."""
-    x0, y0, x1, y1 = GLOBE_PANEL_BOX
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 0, 0, 174))
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 20, 220))
-    draw_logical_line(x0, y0, x1, y0, (116, 170, 183, 100), 1)
-    draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
-    draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
-    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
+    sync_constellation_geometry()
+    layout = constellation_layout()
+    x0, y0, x1, y1 = settings_center_workspace_box()
+    draw_logical_rect(x0, y0, x1, y1, (6, 13, 20, 255))
+    draw_settings_leaf_sidebar(text_cache, "CONSTELLATION", "SNR COVERAGE")
+    draw_text(text_cache, 24, 26, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
+    draw_text(text_cache, 216, 24, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
     map_box = GLOBE_MAP_BOX
     draw_logical_rect(*map_box, (10, 35, 55, 245))
     draw_logical_line(map_box[0], map_box[1], map_box[2], map_box[1], (86, 173, 195, 150), 1)
@@ -12537,7 +12572,8 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     draw_flat_coastlines(center_lon, center_lat, map_box, scale)
     draw_constellation_heatmap(scouts, scout_history, scout_measurements, center_lon, center_lat, map_box, scale, time.monotonic())
     legend_x = 42
-    draw_text(text_cache, legend_x, 54, "SNR", (180, 204, 208), 13, True, True, "lm")
+    legend_y = layout["map"][1] + 43
+    draw_text(text_cache, legend_x, legend_y, "SNR", (180, 204, 208), 13, True, True, "lm")
     for color, label, offset in (
         ((111, 74, 175), "<-4", 34),
         ((76, 125, 220), "-4–-1", 78),
@@ -12545,8 +12581,8 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
         ((255, 186, 63), "2–5", 186),
         ((239, 88, 75), ">5 dB", 232),
     ):
-        draw_logical_circle(legend_x + offset, 54, 3.5, (*color, 235), 12)
-        draw_text(text_cache, legend_x + offset + 8, 54, label, (180, 204, 208), 13, False, True, "lm")
+        draw_logical_circle(legend_x + offset, legend_y, 3.5, (*color, 235), 12)
+        draw_text(text_cache, legend_x + offset + 8, legend_y, label, (180, 204, 208), 13, False, True, "lm")
     listener_servers = {receiver["server"] for receiver in listeners}
     for receiver in receivers:
         for longitude_offset in (-360.0, 0.0, 360.0):
@@ -12561,24 +12597,25 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
                 dot_radius = 4.2
             draw_logical_circle(p[0], p[1], dot_radius, dot_color, 10)
     draw_text(text_cache, (map_box[0] + map_box[2]) / 2, map_box[3] - 10, "DRAG / PINCH   •   TAP TO START", (154, 201, 210), 13, True, True, "cm")
-    right_x = 610
+    right_x = GLOBE_INFO_BOX[0] + 12
     draw_logical_rect(*GLOBE_INFO_BOX, (5, 13, 19, 232))
     draw_logical_line(GLOBE_INFO_BOX[0], GLOBE_INFO_BOX[1], GLOBE_INFO_BOX[2], GLOBE_INFO_BOX[1], (104, 180, 188, 104), 1)
-    draw_text(text_cache, right_x, 22, "HOT RECEIVERS", (239, 248, 248), 19, True, True, "lm")
-    draw_text(text_cache, 932, 22, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
+    info_heading_y = GLOBE_INFO_BOX[1] + 18
+    draw_text(text_cache, right_x, info_heading_y, "HOT RECEIVERS", (239, 248, 248), 17, True, True, "lm")
+    draw_text(text_cache, GLOBE_INFO_BOX[2] - 12, info_heading_y, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
     if not receivers:
-        draw_text(text_cache, right_x, 96, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 78, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
     elif not listeners:
-        draw_text(text_cache, right_x, 96, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
-        draw_text(text_cache, right_x, 126, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 70, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 98, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
     else:
         for index, receiver in enumerate(listeners):
             bx0, by0, bx1, by1 = GLOBE_STATION_BOXES[index]
             active = receiver["server"] == active_server
             draw_logical_rect(bx0, by0, bx1, by1, (26, 79, 68, 205) if active else (18, 34, 43, 204))
             draw_logical_line(bx0, by0, bx1, by0, (98, 226, 172, 210) if active else (120, 169, 181, 108), 1)
-            title = bottom_station_title(receiver["name"], receiver["location"])[:21]
-            draw_text(text_cache, bx0 + 12, by0 + 16, f"{index + 1}. {title}", (239, 248, 248), 21, True, True, "lm")
+            title = bottom_station_title(receiver["name"], receiver["location"])[:25]
+            draw_text(text_cache, bx0 + 10, by0 + 21, f"{index + 1}. {title}", (239, 248, 248), 16, True, True, "lm")
             smeter_dbm = listener_measurements.get(receiver["server"], {}).get("smeter")
             slot = replacement_slots[index] if index < len(replacement_slots) else {}
             snr_db = slot.get("snr") if slot.get("current_server") == receiver["server"] else None
@@ -12593,7 +12630,7 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
                 f"SNR {snr_db:+.1f} dB" if snr_is_direct
                 else (f"MAP SNR~ {snr_db:+.1f}" if snr_db is not None else "MAP SNR —")
             )
-            draw_text(text_cache, bx0 + 12, by0 + 43, f"{rf_label}   {snr_label}", (107, 229, 168) if active else (185, 212, 217), 16, True, True, "lm")
+            draw_text(text_cache, bx0 + 10, by0 + 52, f"{rf_label}   {snr_label}", (107, 229, 168) if active else (185, 212, 217), 13, True, True, "lm")
             if slot.get("reason") == "scout":
                 previous = slot.get("previous_name", "original")[:19]
                 detail = f"SCOUT REPLACED {previous}  +{slot.get('gain_db', 0):.0f} dB"
@@ -12604,17 +12641,21 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
             else:
                 detail = "ORIGINAL HOT RECEIVER" if not active else "ORIGINAL HOT • LIVE AUDIO"
                 detail_color = (141, 184, 193)
-            draw_text(text_cache, bx0 + 12, by0 + 65, detail, detail_color, 13, True, True, "lm")
+            draw_text(text_cache, bx0 + 10, by0 + 81, detail[:35], detail_color, 11, True, True, "lm")
 
     # Keep the active scouts and accumulated coverage in one large bottom bar,
     # leaving the three warm receiver cards readable at a glance.
     bar = GLOBE_SCOUT_BAR_BOX
     draw_logical_rect(*bar, (5, 13, 19, 236))
     draw_logical_line(bar[0], bar[1], bar[2], bar[1], (255, 190, 93, 160), 1)
-    draw_text(text_cache, 24, 282, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
-    draw_text(text_cache, 250, 282, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
+    status_y = bar[1] + 25
+    draw_text(text_cache, bar[0] + 12, status_y, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
+    draw_text(text_cache, bar[0] + 238, status_y, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
     scan_mode = "LOCAL EXPANSION" if "expanding locally" in status else "MAXIMIZING MAP COVERAGE"
-    draw_text(text_cache, 26, 304, scan_mode, (176, 208, 213), 14, True, True, "lm")
+    draw_text(text_cache, bar[0] + 14, status_y + 28, scan_mode, (176, 208, 213), 14, True, True, "lm")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 146, f"LISTENERS  {len(listeners)}/3", (116, 238, 180), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 174, f"MAPPED  {len(receivers)}", (139, 174, 183), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 202, f"SCOUTS  {len(scouts)}/4", (255, 204, 113), 13, True, False, "lm", family="Liberation Sans")
 
 
 def draw_dj_control(text_cache, box, title, detail, active=False):
@@ -13409,6 +13450,59 @@ def lcd_drawer_back_box():
         LOGICAL_W - 10,
         lcd_rail_bottom() - 10,
     )
+
+
+def settings_center_workspace_box():
+    """Live center workspace left unobscured by Settings leaf rails."""
+    return 0, 0, LCD_NAV_X0, LOGICAL_H
+
+
+def constellation_layout():
+    """Bounded regions for the enlarged Constellation workspace."""
+    return {
+        "map": (0, 0, LCD_NAV_X0, 545),
+        "info": (0, 545, LCD_NAV_X0, 714),
+        "status": (0, 714, LCD_NAV_X0, LOGICAL_H),
+        "sidebar": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
+    }
+
+
+def sync_constellation_geometry():
+    """Keep Constellation drawing and touch targets on the same layout."""
+    global GLOBE_PANEL_BOX, GLOBE_MAP_BOX, GLOBE_BACK_BOX, GLOBE_INFO_BOX
+    global GLOBE_SCOUT_BAR_BOX, GLOBE_STATION_BOXES
+    layout = constellation_layout()
+    GLOBE_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+    map_region = layout["map"]
+    info_region = layout["info"]
+    status_region = layout["status"]
+    GLOBE_MAP_BOX = (map_region[0] + 12, map_region[1] + 58, map_region[2] - 12, map_region[3] - 10)
+    GLOBE_INFO_BOX = (info_region[0] + 12, info_region[1] + 8, info_region[2] - 12, info_region[3] - 8)
+    GLOBE_SCOUT_BAR_BOX = (status_region[0] + 12, status_region[1] + 8, status_region[2] - 12, status_region[3] - 10)
+    GLOBE_BACK_BOX = lcd_drawer_back_box()
+    gap = 10
+    card_width = (GLOBE_INFO_BOX[2] - GLOBE_INFO_BOX[0] - 2 * gap) / 3
+    GLOBE_STATION_BOXES = tuple(
+        (
+            GLOBE_INFO_BOX[0] + index * (card_width + gap),
+            GLOBE_INFO_BOX[1] + 35,
+            GLOBE_INFO_BOX[0] + index * (card_width + gap) + card_width,
+            GLOBE_INFO_BOX[3] - 8,
+        )
+        for index in range(3)
+    )
+
+
+def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
+    """Render the common Settings leaf rail without veiling live content."""
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+    draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 18, 62, title)
+    draw_text(
+        text_cache, LCD_NAV_X0 + 18, 96, detail,
+        (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
+    )
+    draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
 def lcd_radio_drawer_close_box():
@@ -22726,7 +22820,7 @@ def main():
                                 gesture = "wspr_workspace_outside"
                             elif tests_panel_open and contains(TEST_PANEL_BOX, x, y):
                                 gesture = "tests_panel"
-                            elif tests_panel_open:
+                            elif tests_panel_open and not LCD_800_MODE:
                                 gesture = "tests_panel_outside"
                             elif filter_drawer_open and LCD_800_MODE and contains(lcd_filter_drawer_boxes()["panel"], x, y):
                                 filter_boxes = lcd_filter_drawer_boxes()
@@ -24121,7 +24215,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = tests_option_at(x, y)
-                                if choice == "globe":
+                                if choice == "back":
+                                    tests_panel_open = False
+                                    restore_navigation_parent(tests_parent)
+                                elif choice == "globe":
                                     tests_panel_open = False
                                     globe_open = True
                                     if not globe_fetch_started:
