@@ -3,6 +3,7 @@ import argparse
 import calendar
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import ctypes
 import errno
 import faulthandler
@@ -206,6 +207,7 @@ import pygame
 from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
+import openwebrx_client as owrx
 import render_sdr_frontend_mockup as sdr_ui
 
 
@@ -516,6 +518,8 @@ SMETER_CEILING_DBM = -33
 SMETER_S1_TO_S9_SEGMENTS = 22
 SMETER_S9_TO_PLUS20_SEGMENTS = 6
 SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
+SMETER_COMPACT_BAR_HALF_HEIGHT = 17.5
+SMETER_HOME_RAIL_BAR_HALF_HEIGHT = 14.0
 # One Display Reset restores this known-good waterfall rendering baseline.
 WATERFALL_DEFAULT_FLOOR = 142
 WATERFALL_DEFAULT_CEIL = 245
@@ -874,6 +878,7 @@ WIDE_VIEW_GROUP_BOX = (782, 338, 986, 412)
 # output configuration. Never use a fixed Y coordinate for this platform.
 LCD_CONTROL_GAP = 10
 HOME_BOX = (30, 13, 102, 71)
+TIME_SOURCE_LABEL = "UTC"
 # The top instruments share one right alignment. Home is intentionally the
 # single left-anchored control.
 # The S legend sits left of the LED bars. Align to that true visual edge,
@@ -1097,9 +1102,10 @@ def radio_panel_box():
     return radio_popup_box(RADIO_PANEL_BOX)
 
 
-def lcd_radio_step_y0():
+def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Top-justified LCD tuning-step control pair, below mode families."""
-    grid_height = 4 * 62 + 3 * 7
+    rows = max(1, math.ceil(int(mode_family_count) / 2))
+    grid_height = rows * 62 + (rows - 1) * 7
     return lcd_radio_mode_grid_y0() + grid_height + 30
 
 
@@ -1257,7 +1263,15 @@ TEST_DJ_BOX = (492, 112, 918, 166)
 TEST_RTL_BOX = (42, 178, 468, 232)
 TEST_PATTERN_BOX = (492, 178, 918, 232)
 TEST_FONT_BOX = (42, 244, 468, 298)
+TEST_OPENWEBRX_BOX = (492, 244, 918, 298)
 TEST_RUN_BOX = (42, 310, 918, 366)
+# This deliberately fixed public receiver is a protocol/display smoke test,
+# not a directory entry. The isolated Tests tile always restores the prior
+# Kiwi endpoint so it cannot quietly replace the user's remembered radio.
+OPENWEBRX_TEST_SERVER = "owrxs://rx.oh6ah.fi/"
+OPENWEBRX_TEST_FREQUENCY_KHZ = 7_100.0
+OPENWEBRX_TEST_ZOOM = 4
+OPENWEBRX_TEST_MODE = "LSB"
 FONT_LAB_PREV_BOX = (936, 16, 1020, 62)
 FONT_LAB_NEXT_BOX = (1028, 16, 1136, 62)
 FONT_LAB_BACK_BOX = (1144, 16, 1264, 62)
@@ -1641,7 +1655,7 @@ POPUP_LAYOUT_BASE = {
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
               AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX),
     "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
-              TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX),
+              TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX),
     "rtl_lab": (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
                 RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX),
     "wspr": (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES,
@@ -1670,7 +1684,7 @@ def configure_popup_layout():
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
-    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
@@ -1799,7 +1813,8 @@ def configure_popup_layout():
 
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
-     TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+     TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX,
+     TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
 
     dy = offset("rtl_lab")
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
@@ -2117,7 +2132,7 @@ def draw_dual_vfo_smeter(text_cache, box, smeter_dbm, accent=None, staged=False)
             color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
         else:
             color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
-        draw_logical_rect(sx0, track_y - 6, sx1, track_y + 6, color)
+        draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
     for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
         lx = track_x0 + (track_x1 - track_x0) * position / 36.0
         draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
@@ -4133,6 +4148,7 @@ class SharedState:
         # second instead of repainting each packet transition.
         self.audio_jitter_display_after = 0.0
         self.external_audio = False
+        self.external_audio_sink_released = False
         # A local I/Q source can temporarily own the waterfall texture while
         # preserving the selected Kiwi receiver for an instant return.
         self.external_waterfall = False
@@ -4544,10 +4560,21 @@ class SharedState:
     def set_external_audio(self, enabled):
         with self.lock:
             self.external_audio = bool(enabled)
+            self.external_audio_sink_released = not self.external_audio
 
     def external_audio_snapshot(self):
         with self.lock:
             return self.external_audio
+
+    def mark_external_audio_sink_released(self):
+        """Acknowledge that Kiwi has released the exclusive output device."""
+        with self.lock:
+            if self.external_audio:
+                self.external_audio_sink_released = True
+
+    def external_audio_sink_released_snapshot(self):
+        with self.lock:
+            return self.external_audio_sink_released
 
     def set_external_waterfall(self, enabled):
         with self.lock:
@@ -7269,6 +7296,23 @@ def draw_home_button(text_cache, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
+def draw_utc_clock(text_cache):
+    """Draw the system's synchronized UTC clock in the open top-left lane."""
+    timestamp = time.strftime("%H:%M:%S", time.gmtime())
+    draw_text(
+        text_cache,
+        8,
+        12,
+        f"{timestamp} UTC ({TIME_SOURCE_LABEL})",
+        VFO_NEON_COLOR,
+        16,
+        True,
+        True,
+        "lm",
+        family="Liberation Sans",
+    )
+
+
 def frequency_right_x():
     """Keep the wide-layout frequency/meter cluster aligned as one unit."""
     return FREQUENCY_RIGHT_X + (50 if DESKTOP_1280_MODE else 0)
@@ -7373,8 +7417,8 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
     draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", (192, 218, 222), 12, True, False, "rm", family="Liberation Sans")
 
 
-def radio_mode_layout():
-    """Yield eight simple, readable entry points for all Kiwi modes."""
+def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
+    """Yield the active source's readable mode-family controls."""
     if LCD_800_MODE:
         panel_x0, _panel_y0, panel_x1, _panel_y1 = radio_panel_box()
         grid_x0, grid_x1 = panel_x0 + 10, panel_x1 - 10
@@ -7384,7 +7428,7 @@ def radio_mode_layout():
         available = grid_x1 - grid_x0
         cols = 2
         button_w = (available - gap * (cols - 1)) / cols
-        for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
+        for index, (family, modes) in enumerate(mode_families):
             col = index % cols
             row = index // cols
             x0 = grid_x0 + col * (button_w + gap)
@@ -7395,7 +7439,7 @@ def radio_mode_layout():
     grid_x1 = radio_popup_x(RADIO_FAMILY_GRID_X1)
     available = grid_x1 - grid_x0
     button_w = (available - RADIO_FAMILY_BUTTON_GAP * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
-    for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
+    for index, (family, modes) in enumerate(mode_families):
         col = index % RADIO_FAMILY_COLS
         row = index // RADIO_FAMILY_COLS
         x0 = grid_x0 + col * (button_w + RADIO_FAMILY_BUTTON_GAP)
@@ -7419,12 +7463,12 @@ def radio_variant_layout(modes):
         yield mode, (x0, y0, x0 + button_w, y0 + RADIO_VARIANT_BUTTON_H)
 
 
-def radio_option_at(x, y, family_open=None):
+def radio_option_at(x, y, family_open=None, mode_families=KIWI_MODE_FAMILIES):
     if LCD_800_MODE and y > lcd_radio_drawer_reveal_y():
         return None
     if LCD_800_MODE and contains(lcd_radio_drawer_close_box(), x, y):
         return "close", None
-    for _family, modes, box in radio_mode_layout():
+    for _family, modes, box in radio_mode_layout(mode_families):
         if contains(box, x, y):
             return "mode_cycle", modes
     for step_hz, box in radio_step_options():
@@ -7545,7 +7589,7 @@ def draw_radio_variant_option(text_cache, box, mode, active):
     )
 
 
-def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None):
+def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None, mode_families=KIWI_MODE_FAMILIES):
     x0, y0, x1, y1 = radio_panel_box()
     # On the 800×1280 target this is a compact drawer in the permanent right
     # rail. Do not veil or occupy the waterfall: it remains the radio's live
@@ -7562,10 +7606,10 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None)
         if reveal_y >= close_y1:
             draw_radio_close_button(text_cache, (close_x0, close_y0, close_x1, close_y1))
         active_mode = mode.upper()
-        for family, modes, box in radio_mode_layout():
+        for family, modes, box in radio_mode_layout(mode_families):
             if reveal_y >= box[3]:
                 draw_radio_family_option(text_cache, box, family, modes, active_mode)
-        step_y0 = lcd_radio_step_y0()
+        step_y0 = lcd_radio_step_y0(len(mode_families))
         if reveal_y >= step_y0:
             draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
         for option, box in radio_step_options():
@@ -7582,7 +7626,7 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None)
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
     draw_text(text_cache, radio_popup_x(532), radio_popup_y(87), "STEP", (145, 183, 190), 13, True, False, "lm", family="Liberation Sans")
     active_mode = mode.upper()
-    for family, modes, box in radio_mode_layout():
+    for family, modes, box in radio_mode_layout(mode_families):
         draw_radio_family_option(text_cache, box, family, modes, active_mode)
     if not LCD_800_MODE:
         draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
@@ -9497,6 +9541,8 @@ def tests_option_at(x, y):
         return "pattern"
     if contains(TEST_FONT_BOX, x, y):
         return "font_lab"
+    if contains(TEST_OPENWEBRX_BOX, x, y):
+        return "openwebrx"
     if contains(TEST_RUN_BOX, x, y):
         return "run"
     return None
@@ -9531,7 +9577,7 @@ def font_lab_sample_size(text_cache, family, bold):
 
 def rtl_lab_option_at(x, y):
     if contains(RTL_LAB_PROBE_BOX, x, y):
-        return "probe"
+        return "source"
     if contains(RTL_LAB_PRESET_BOX, x, y):
         return "preset"
     if contains(RTL_LAB_RUN_BOX, x, y):
@@ -9554,7 +9600,7 @@ def draw_tests_button(text_cache, box, title, detail, active=False):
     draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm", family="Liberation Sans")
 
 
-def draw_tests_panel(text_cache, pattern_index, sweep):
+def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     """Dedicated, extensible diagnostics workspace; Audio remains listening-only."""
     x0, y0, x1, y1 = TEST_PANEL_BOX
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
@@ -9566,9 +9612,16 @@ def draw_tests_panel(text_cache, pattern_index, sweep):
     draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
-    draw_tests_button(text_cache, TEST_RTL_BOX, "RTL-SDR LAB", "LOCAL USB RADIO  /  ISOLATED EXPERIMENT")
+    draw_tests_button(text_cache, TEST_RTL_BOX, "LOCAL SDR", "RTL-SDR + AIRSPY HF+  /  USB RECEIVERS")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
     draw_tests_button(text_cache, TEST_FONT_BOX, "FONT LAB", "30 FACES  /  256 PX COLUMN COMPARISON")
+    draw_tests_button(
+        text_cache,
+        TEST_OPENWEBRX_BOX,
+        "RETURN TO KIWI" if openwebrx_active else "OPENWEBRX",
+        "RESTORE PRIOR RECEIVER" if openwebrx_active else "PUBLIC RX  /  USB + WATERFALL",
+        openwebrx_active,
+    )
     if sweep is None:
         draw_tests_button(text_cache, TEST_RUN_BOX, "RUN TEST", "LIVE KIWI WATERFALL + USB AUDIO")
     else:
@@ -9635,7 +9688,7 @@ def draw_font_lab(text_cache, page):
 
 
 def draw_rtl_lab_panel(text_cache, rtl_lab):
-    """Draw the intentionally isolated first local-USB radio experiment."""
+    """Draw the selected local SDR source workspace."""
     x0, y0, x1, y1 = RTL_LAB_PANEL_BOX
     snapshot = rtl_lab.snapshot()
     name, frequency_hz, mode, _rate = snapshot["preset"]
@@ -9651,19 +9704,21 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     draw_logical_rect(x0, y0, x1, y1, (7, 17, 24, 244))
     draw_logical_line(x0, y0, x1, y0, (102, 220, 183, 158), 1)
     draw_logical_line(x0, y1, x1, y1, (82, 151, 158, 126), 1)
-    draw_text(text_cache, x0 + 24, y0 + 24, "LOCAL RTL-SDR LAB", (232, 246, 247), 22, True, True, "lm", family="Liberation Sans")
+    source_label = snapshot["capabilities"].label
+    draw_text(text_cache, x0 + 24, y0 + 24, f"LOCAL {source_label}", (232, 246, 247), 22, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 24, y0 + 24, status, status_color, 16, True, True, "rm", family="Liberation Sans")
     device = fit_station_text(text_cache, snapshot["device"], x1 - x0 - 48, 18, True, False, family="Liberation Sans")
     tuner = f"  ·  {snapshot['tuner']}" if snapshot["tuner"] else ""
     draw_text(text_cache, x0 + 24, y0 + 54, f"{device}{tuner}", (166, 205, 207), 18, True, False, "lm", family="Liberation Sans")
-    draw_tests_button(text_cache, RTL_LAB_PROBE_BOX, "PROBE", "USB DEVICE + TUNER", snapshot["probing"])
+    other_source = "AIRSPY HF+" if snapshot["source_id"] == "rtl-sdr" else "RTL-SDR"
+    draw_tests_button(text_cache, RTL_LAB_PROBE_BOX, "SOURCE", f"{source_label}  ·  TAP FOR {other_source}", snapshot["probing"])
     draw_tests_button(
         text_cache, RTL_LAB_PRESET_BOX, name,
         f"{frequency_hz / 1e6:.3f} MHz  ·  {mode.upper()}  ·  TAP TO CHANGE", running,
     )
     draw_tests_button(
         text_cache, RTL_LAB_RUN_BOX, "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
-        "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else "RTL-FM PCM → EXISTING USB AUDIO OUTPUT",
+        "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
         running,
     )
     draw_tests_button(text_cache, RTL_LAB_BACK_BOX, "BACK TO TESTS", "STOP AND RETURN", False)
@@ -13127,13 +13182,12 @@ COMPACT_FREQUENCY_FONT_FAMILY = "Oxanium"
 VFO_NEON_COLOR = (115, 255, 177)
 # Shared active-line half-height for every continuous control.
 SLIDER_STEM_HALF_HEIGHT = 3
-# 118 px was visually too dominant in the compact right rail. Keep the
-# instrument centred but reduce its height by exactly 25% (rounded to 89 px).
+# Keep enough vertical space for a readable passband scale and silhouette.
 LCD_HOME_PASSBAND_HEIGHT = 89
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 271)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 266)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -13188,7 +13242,7 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     gap = 4
     # Keep a distinct 17 px air gap beneath the compact S-meter scale. The
     # mode annunciators are a separate control group, not its bottom label.
-    compact_grid_y0 = 186
+    compact_grid_y0 = 190
     compact_cell_h = 31
     grid_y0 = compact_grid_y0 if show_compact_readouts else 28
     return grid_y0, compact_cell_h, gap
@@ -13540,7 +13594,7 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
             color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
         else:
             color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
-        draw_logical_rect(sx0, track_y - 6, sx1, track_y + 6, color)
+        draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
     for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
         lx = track_x0 + (track_x1 - track_x0) * position / 36.0
         draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
@@ -13579,8 +13633,10 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
         tick_h = 10 if major else 5
         draw_logical_line(x, plot_y, x, plot_y - tick_h, (grid[0], grid[1], grid[2], 206 if major else 126), 1 if not major else 1.5)
     draw_logical_line(plot_x0, plot_y, plot_x1, plot_y, (107, 151, 162, 188), 1)
-    top_y = y0 + 38
-    shoulder_y = y0 + 44
+    # Raise the trace from 23 to 29 logical pixels above its baseline: a
+    # 25% taller passband silhouette without changing the panel or labels.
+    top_y = y0 + 32
+    shoulder_y = y0 + 38
     # Keep the sides almost vertical. Wide filters retain a slight analog
     # taper, while CW/narrow widths must not collapse into a camel-shaped
     # hump just because the graphical shoulders are wider than the passband.
@@ -13601,7 +13657,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     draw_text(
         text_cache,
         center_x,
-        y0 + 25,
+        y0 + 21,
         f"{width_hz / 1000.0:.1f} kHz",
         (214, 240, 242),
         14,
@@ -13876,22 +13932,28 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # rather than a thin status decoration beside the VFO.
         # Reserve quiet air around the meter so it reads as its own small
         # instrument rather than touching either the band tag or mode grid.
-        meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 113, x1 - 6, y0 + 169
+        meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 108, x1 - 6, y0 + 178
         meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
         meter_level = smeter_segment_position(meter_value)
         draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
         draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
-        draw_text(text_cache, meter_x0 + 9, meter_y0 + 14, "S-METER", (165, 199, 207), 12, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, meter_x0 + 9, meter_y0 + 12, "S-METER", (165, 199, 207), 13, True, False, "lm", family="Liberation Sans")
         draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 17, True, False, "rm", family="Liberation Sans")
         meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-        meter_track_y = meter_y0 + 32
+        meter_track_y = meter_y0 + 37
         segment_w = (meter_track_x1 - meter_track_x0) / 36
         for index in range(36):
             sx0 = meter_track_x0 + index * segment_w + 1
             sx1 = meter_track_x0 + (index + 1) * segment_w - 1
             active = index + 0.5 <= meter_level
             color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
-            draw_logical_rect(sx0, meter_track_y - 7, sx1, meter_track_y + 7, color if active else (31, 52, 61, 208))
+            draw_logical_rect(
+                sx0,
+                meter_track_y - SMETER_HOME_RAIL_BAR_HALF_HEIGHT,
+                sx1,
+                meter_track_y + SMETER_HOME_RAIL_BAR_HALF_HEIGHT,
+                color if active else (31, 52, 61, 208),
+            )
         for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
             lx = meter_track_x0 + (meter_track_x1 - meter_track_x0) * position / 36.0
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
@@ -15668,28 +15730,150 @@ def stop_audio_player(player):
 
 RTL_LAB_PRESETS = (
     ("FM BROADCAST", 100.1e6, "wbfm", 32000),
-    ("AIR AM", 118.0e6, "am", 12000),
-    ("2 m FM", 145.5e6, "fm", 12000),
-    ("WEATHER FM", 162.55e6, "fm", 12000),
+    ("VHF LOW FM", 49.860e6, "fm", 32000),
+    ("AIR AM", 118.0e6, "am", 32000),
+    ("2 m FM", 145.5e6, "fm", 32000),
+    ("TAXI / VHF SERVICES", 160.0e6, "fm", 32000),
+    ("WEATHER FM", 162.55e6, "fm", 32000),
+    ("70 cm FM", 433.5e6, "fm", 32000),
+    ("PMR 446", 446.0e6, "fm", 32000),
 )
-RTL_IQ_SAMPLE_RATE = 2_400_000
+# 1.024 Msps / 32 kHz is exactly 32.  One 32,768 byte RTL transfer therefore
+# turns into one 512-frame ALSA packet, rather than making the audio writer
+# wait for irregular partial blocks from a 2.4 Msps capture. This keeps the
+# local source on the same packet cadence as the Kiwi audio transport.
+RTL_IQ_SAMPLE_RATE = 1_024_000
 RTL_IQ_BLOCK_BYTES = 32_768
+RTL_WATERFALL_INTERVAL_SECONDS = 0.10
+AIRSPY_HF_SAMPLE_RATE = 768_000
+AIRSPY_HF_AUDIO_RATE = 32_000
+AIRSPY_HF_AUDIO_PACKET_BYTES = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2
 # The waterfall texture stores 1,024 columns. Two FFT bins per texture
 # column keeps the local source sharp without resampling artefacts.
 RTL_IQ_FFT_SIZE = 2_048
 RTL_TUNING_MIN_KHZ = 24_000.0
 RTL_TUNING_MAX_KHZ = 1_766_000.0
 RTL_MIN_ZOOM = kiwi.span_to_zoom(RTL_IQ_SAMPLE_RATE / 1000.0)
+AIRSPY_HF_MIN_ZOOM = kiwi.span_to_zoom(AIRSPY_HF_SAMPLE_RATE / 1000.0)
+
+# These are source capabilities, not merely labels in the mode drawer. RTL
+# Lab has real AM, narrow-FM and broadcast-FM demodulators today. SSB/CW/DRM
+# /IQ remain disabled until a proper quadrature demodulator is added, so Home
+# never claims a setting that cannot affect the audio path.
+RTL_MODE_FAMILIES = (
+    ("AM", ("AM",)),
+    ("NFM", ("NFM",)),
+    ("WFM", ("WFM",)),
+)
+RTL_HOME_MODE_CAPABILITIES = frozenset(mode for _family, modes in RTL_MODE_FAMILIES for mode in modes)
+
+AIRSPY_HF_PRESETS = (
+    ("VLF / LF", 17.2e3, "am", AIRSPY_HF_AUDIO_RATE),
+    ("LONGWAVE", 198.0e3, "am", AIRSPY_HF_AUDIO_RATE),
+    ("MEDIUM WAVE", 1.000e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("80 m", 3.750e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("40 m", 7.100e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("31 m SHORTWAVE", 9.500e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("25 m SHORTWAVE", 11.800e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("22 m SHORTWAVE", 13.600e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("20 m", 14.200e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("19 m SHORTWAVE", 15.100e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("16 m SHORTWAVE", 17.700e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("15 m", 21.200e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("10 m", 28.500e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("FM BROADCAST", 100.1e6, "wbfm", AIRSPY_HF_AUDIO_RATE),
+    ("AIR AM", 121.5e6, "am", AIRSPY_HF_AUDIO_RATE),
+    ("VHF SERVICES", 160.0e6, "fm", AIRSPY_HF_AUDIO_RATE),
+    ("2 m FM", 145.5e6, "fm", AIRSPY_HF_AUDIO_RATE),
+)
+
+
+@dataclass(frozen=True)
+class ReceiverCapabilities:
+    """Truthful control and coverage contract for one physical receiver.
+
+    The Home UI is deliberately built on this small contract. A Kiwi, an RTL
+    device, and a future Airspy session may expose different implementation
+    details while presenting only the controls that actually reach their DSP.
+    """
+
+    source_id: str
+    label: str
+    frequency_ranges_khz: tuple
+    source_span_khz: float
+    mode_families: tuple
+    controls: frozenset
+    required_driver: str
+
+    def supports_frequency(self, frequency_khz):
+        value = float(frequency_khz)
+        return any(low <= value <= high for low, high in self.frequency_ranges_khz)
+
+    def tuning_bounds(self):
+        return self.frequency_ranges_khz[0][0], self.frequency_ranges_khz[-1][1]
+
+
+RTL_SDR_CAPABILITIES = ReceiverCapabilities(
+    source_id="rtl-sdr",
+    label="RTL-SDR",
+    frequency_ranges_khz=((RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ),),
+    source_span_khz=RTL_IQ_SAMPLE_RATE / 1000.0,
+    mode_families=RTL_MODE_FAMILIES,
+    controls=frozenset(("frequency", "zoom", "volume", "mode", "squelch", "waterfall")),
+    required_driver="librtlsdr",
+)
+
+# Airspy HF+ has two intentionally separate RF windows. Keep that fact in the
+# shared model now: future source selection can reject a 40 MHz tune cleanly
+# instead of treating it as a mystery connection failure. The actual capture
+# adapter is only enabled when libairspyhf is installed and a device is found.
+AIRSPY_HF_CAPABILITIES = ReceiverCapabilities(
+    source_id="airspy-hf",
+    label="AIRSPY HF+",
+    frequency_ranges_khz=((0.5, 31_000.0), (60_000.0, 260_000.0)),
+    source_span_khz=AIRSPY_HF_SAMPLE_RATE / 1000.0,
+    mode_families=(
+        ("AM", ("AM",)),
+        ("NFM", ("NFM",)),
+        ("WFM", ("WFM",)),
+    ),
+    controls=frozenset(("frequency", "zoom", "volume", "mode", "squelch", "gain", "waterfall")),
+    required_driver="libairspyhf",
+)
+
+LOCAL_RECEIVER_CAPABILITIES = {
+    RTL_SDR_CAPABILITIES.source_id: RTL_SDR_CAPABILITIES,
+    AIRSPY_HF_CAPABILITIES.source_id: AIRSPY_HF_CAPABILITIES,
+}
+
+
+class AirspyHFComplex(ctypes.Structure):
+    _fields_ = (("re", ctypes.c_float), ("im", ctypes.c_float))
+
+
+class AirspyHFTransfer(ctypes.Structure):
+    _fields_ = (
+        ("device", ctypes.c_void_p),
+        ("ctx", ctypes.c_void_p),
+        ("samples", ctypes.POINTER(AirspyHFComplex)),
+        ("sample_count", ctypes.c_int),
+        ("dropped_samples", ctypes.c_uint64),
+    )
+
+
+AIRSPY_HF_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(AirspyHFTransfer))
 
 
 class RTLSDRLab:
-    """One local I/Q stream feeding both the rendered waterfall and USB audio."""
+    """Selected local I/Q source feeding the common waterfall and USB audio."""
 
     def __init__(self, args, state, line_queue):
         self.args = args
         self.state = state
         self.line_queue = line_queue
-        self.lock = threading.Lock()
+        self.source_id = RTL_SDR_CAPABILITIES.source_id
+        self.capabilities = RTL_SDR_CAPABILITIES
+        self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
         self.player = None
@@ -15698,15 +15882,43 @@ class RTLSDRLab:
         self.tuner = ""
         self.status = "PROBE REQUIRED"
         self.detail = "No local SDR source is active."
-        self.preset_index = 0
+        self.preset_indices = defaultdict(int)
+        self.source_inventory = {}
         self.probing = False
-        self._library = None
+        self._rtl_library = None
+        self._airspy_library = None
         self._restore_view = None
+        self.waterfall_queue = queue.Queue(maxsize=2)
+        self.waterfall_thread = None
+        self.demod_mode = "wbfm"
+        self.demod_generation = 0
+        self.control_notice = ""
+        self.local_squelch_closed = False
         self.probe()
+
+    def _presets(self):
+        return AIRSPY_HF_PRESETS if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else RTL_LAB_PRESETS
+
+    def _preset(self):
+        presets = self._presets()
+        index = self.preset_indices[self.source_id] % len(presets)
+        return presets[index]
+
+    def _apply_source_inventory(self):
+        inventory = self.source_inventory.get(self.source_id, {})
+        self.present = bool(inventory.get("present"))
+        self.device = inventory.get("device", f"{self.capabilities.label} NOT DETECTED")
+        self.tuner = inventory.get("tuner", "")
+        if self.present:
+            self.status = "READY"
+            self.detail = f"{self.capabilities.label} · {len(self._presets())} listening presets"
+        else:
+            self.status = "NOT FOUND"
+            self.detail = inventory.get("detail", f"Connect {self.capabilities.label} and tap SOURCE.")
 
     def snapshot(self):
         with self.lock:
-            preset = RTL_LAB_PRESETS[self.preset_index]
+            preset = self._preset()
             return {
                 "present": self.present,
                 "device": self.device,
@@ -15716,23 +15928,111 @@ class RTLSDRLab:
                 "preset": preset,
                 "running": bool(self.thread and self.thread.is_alive()),
                 "probing": self.probing,
+                "supported_modes": tuple(mode for _family, modes in self.capabilities.mode_families for mode in modes),
+                "control_notice": self.control_notice,
+                "capabilities": self.capabilities,
+                "source_id": self.source_id,
+                "sources": dict(self.source_inventory),
             }
 
     def is_running(self):
         with self.lock:
             return bool(self.thread and self.thread.is_alive())
 
-    @staticmethod
-    def source_span_khz():
-        return RTL_IQ_SAMPLE_RATE / 1000.0
+    def source_span_khz(self):
+        return self.capabilities.source_span_khz
+
+    def minimum_zoom(self):
+        return AIRSPY_HF_MIN_ZOOM if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else RTL_MIN_ZOOM
+
+    def tuning_bounds(self):
+        return self.capabilities.tuning_bounds()
 
     @staticmethod
-    def minimum_zoom():
-        return RTL_MIN_ZOOM
+    def _demod_for_home_mode(radio_mode, frequency_khz):
+        """Map shared Home modes to the demodulators the local source owns."""
+        radio_mode = str(radio_mode).upper()
+        if radio_mode == "AM":
+            return "am"
+        if radio_mode == "NFM":
+            return "fm"
+        if radio_mode == "WFM":
+            return "wbfm"
+        return None
 
     @staticmethod
-    def tuning_bounds():
-        return RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ
+    def preferred_home_mode(preset):
+        _name, _frequency_hz, demod_mode, _rate = preset
+        if demod_mode == "am":
+            return "AM"
+        return "WFM" if demod_mode == "wbfm" else "NFM"
+
+    @staticmethod
+    def shared_radio_mode(radio_mode):
+        """Use the nearest Kiwi value for shared filters and persistence."""
+        return "AM" if str(radio_mode).upper() == "AM" else "NBFM"
+
+    def mode_families(self):
+        return self.capabilities.mode_families
+
+    def supports_home_mode(self, radio_mode):
+        return any(str(radio_mode).upper() in modes for _family, modes in self.capabilities.mode_families)
+
+    def cycle_source(self):
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                return False
+            source_ids = tuple(LOCAL_RECEIVER_CAPABILITIES)
+            index = source_ids.index(self.source_id)
+            self.source_id = source_ids[(index + 1) % len(source_ids)]
+            self.capabilities = LOCAL_RECEIVER_CAPABILITIES[self.source_id]
+            self._apply_source_inventory()
+        return True
+
+    def set_home_mode(self, radio_mode, frequency_khz=None):
+        """Apply a shared Home demodulator choice to the live local source.
+
+        Returning False lets the common UI retain its previous truthful mode
+        when an unsupported Kiwi-only mode is selected.
+        """
+        if frequency_khz is None:
+            _server, frequency_khz, _zoom, _smeter, _generation, _server_generation = self.state.snapshot()
+        requested = str(radio_mode).upper()
+        demod_mode = self._demod_for_home_mode(requested, frequency_khz)
+        with self.lock:
+            if demod_mode is None:
+                self.control_notice = f"{requested} is not implemented by {self.capabilities.label} yet"
+                return False
+            if demod_mode != self.demod_mode:
+                self.demod_mode = demod_mode
+                self.demod_generation += 1
+            self.control_notice = ""
+        return True
+
+    def demod_snapshot(self):
+        with self.lock:
+            return self.demod_mode, self.demod_generation
+
+    def _apply_local_squelch(self, pcm):
+        """Apply the shared squelch control to locally demodulated audio."""
+        controls, _generation = self.state.audio_controls_snapshot()
+        level = int(controls.get("squelch_level", 0) or 0)
+        muted = bool(controls.get("mute", False))
+        closed = muted
+        if not closed and level > 0 and pcm:
+            samples = np.frombuffer(pcm, dtype="<i2")
+            # This is intentionally an audio-domain gate for the initial
+            # universal source layer. It is stable for analog NFM/WFM and
+            # does not pretend to be calibrated RF carrier squelch.
+            rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+            threshold = 130.0 + level * 48.0
+            closed = rms < threshold
+        if closed != self.local_squelch_closed:
+            self.local_squelch_closed = closed
+            self.state.set_squelch_closed(closed)
+        if closed and pcm:
+            return bytes(len(pcm))
+        return pcm
 
     def probe(self):
         with self.lock:
@@ -15744,26 +16044,38 @@ class RTLSDRLab:
 
         def worker():
             try:
-                result = subprocess.run(
+                rtl_result = subprocess.run(
                     ["rtl_test", "-t"], capture_output=True, text=True,
                     timeout=14, check=False,
                 )
-                output = (result.stdout or "") + "\n" + (result.stderr or "")
+                output = (rtl_result.stdout or "") + "\n" + (rtl_result.stderr or "")
                 device_match = re.search(r"^\s*0:\s*(.+)$", output, re.MULTILINE)
                 tuner_match = re.search(r"Found\s+(.+?)\s+tuner", output, re.IGNORECASE)
-                present = "Found 1 device(s)" in output or device_match is not None
-                device = device_match.group(1).strip() if device_match else "RTL-SDR USB DEVICE"
-                tuner = tuner_match.group(1).strip() if tuner_match else ""
+                rtl_present = "Found 1 device(s)" in output or device_match is not None
+                airspy_result = subprocess.run(
+                    ["airspyhf_info"], capture_output=True, text=True,
+                    timeout=12, check=False,
+                )
+                airspy_output = (airspy_result.stdout or "") + "\n" + (airspy_result.stderr or "")
+                serial_match = re.search(r"S/N:\s*(0x[0-9A-F]+)", airspy_output, re.IGNORECASE)
+                firmware_match = re.search(r"Firmware Version:\s*([^\r\n]+)", airspy_output, re.IGNORECASE)
+                airspy_present = serial_match is not None
                 with self.lock:
-                    self.present = present
-                    self.device = device if present else "NO RTL-SDR DETECTED"
-                    self.tuner = tuner
-                    if present:
-                        self.status = "READY"
-                        self.detail = f"{tuner or 'RTL tuner'} · {len(RTL_LAB_PRESETS)} listening presets"
-                    else:
-                        self.status = "NOT FOUND"
-                        self.detail = "Connect an RTL-SDR and tap PROBE."
+                    self.source_inventory = {
+                        RTL_SDR_CAPABILITIES.source_id: {
+                            "present": rtl_present,
+                            "device": device_match.group(1).strip() if device_match else "NO RTL-SDR DETECTED",
+                            "tuner": tuner_match.group(1).strip() if tuner_match else "",
+                            "detail": "Connect an RTL-SDR and tap SOURCE.",
+                        },
+                        AIRSPY_HF_CAPABILITIES.source_id: {
+                            "present": airspy_present,
+                            "device": f"AIRSPY HF+ {serial_match.group(1)}" if serial_match else "NO AIRSPY HF+ DETECTED",
+                            "tuner": firmware_match.group(1).strip() if firmware_match else "",
+                            "detail": "Install libairspyhf or reconnect the Airspy HF+.",
+                        },
+                    }
+                    self._apply_source_inventory()
             except (OSError, subprocess.TimeoutExpired) as exc:
                 with self.lock:
                     self.present = False
@@ -15780,21 +16092,22 @@ class RTLSDRLab:
         with self.lock:
             if self.thread and self.thread.is_alive():
                 return False
-            self.preset_index = (self.preset_index + 1) % len(RTL_LAB_PRESETS)
-            name, frequency_hz, _mode, _rate = RTL_LAB_PRESETS[self.preset_index]
+            presets = self._presets()
+            self.preset_indices[self.source_id] = (self.preset_indices[self.source_id] + 1) % len(presets)
+            name, frequency_hz, _mode, _rate = self._preset()
             self.detail = f"Selected {name} {frequency_hz / 1e6:.3f} MHz"
         return True
 
     def start(self, frequency_khz, zoom):
         """Atomically hand the shared view to the local I/Q source.
 
-        Kiwi and an RTL dongle do not share a frequency range.  Park Kiwi's
-        workers *before* publishing an FM/VHF RTL frequency, then restore the
-        exact Kiwi view when this temporary lab source stops.
+        Kiwi and local SDR sources do not share a frequency range. Park Kiwi's
+        workers before publishing the local view, then restore the exact Kiwi
+        view when this temporary source stops.
         """
         with self.lock:
             if not self.present:
-                self.detail = "No RTL-SDR detected; tap PROBE."
+                self.detail = f"No {self.capabilities.label} detected; tap SOURCE."
                 return False
             if np is None:
                 self.status = "ERROR"
@@ -15804,29 +16117,40 @@ class RTLSDRLab:
                 return True
             _server, prior_frequency, prior_zoom, _smeter, _generation, _server_generation = self.state.snapshot()
             self._restore_view = (prior_frequency, prior_zoom)
-            target_frequency = clamp(float(frequency_khz), RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ)
+            bounds_low, bounds_high = self.tuning_bounds()
+            target_frequency = clamp(float(frequency_khz), bounds_low, bounds_high)
+            if not self.capabilities.supports_frequency(target_frequency):
+                # The HF+ has a physical gap between 31 and 60 MHz. Snap to
+                # the nearest valid edge rather than making a doomed tune.
+                target_frequency = min(
+                    (edge for interval in self.capabilities.frequency_ranges_khz for edge in interval),
+                    key=lambda edge: abs(edge - target_frequency),
+                )
             target_zoom = int(clamp(max(self.minimum_zoom(), int(zoom)), self.minimum_zoom(), kiwi.DISPLAY_MAX_ZOOM))
             # The flags are deliberately set before state.set_view(), so the
             # normal Kiwi SND/W/F workers never receive e.g. 100.100 MHz.
             self.state.set_external_waterfall(True)
             self.state.set_external_audio(True)
             self.state.set_view(freq_khz=target_frequency, zoom=target_zoom)
-            name, frequency_hz, mode, rate = RTL_LAB_PRESETS[self.preset_index]
+            preset = self._preset()
+            name, frequency_hz, mode, rate = preset
+            home_mode = self.preferred_home_mode(preset)
+            # The source chooses its initial real demodulator and publishes
+            # the equivalent Home state before its worker starts.
+            self.set_home_mode(home_mode, target_frequency)
+            self.state.set_radio_mode(self.shared_radio_mode(home_mode))
             self.stop_event.clear()
             self.status = "STARTING"
             self.detail = f"{name} {frequency_hz / 1e6:.3f} MHz · local I/Q"
-            self.thread = threading.Thread(
-                target=self._iq_worker,
-                args=(name, mode, rate),
-                name="rtl-sdr-lab-iq",
-                daemon=True,
-            )
+            worker = self._airspyhf_worker if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else self._iq_worker
+            worker_name = "airspy-hf-lab-iq" if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else "rtl-sdr-lab-iq"
+            self.thread = threading.Thread(target=worker, args=(name, rate), name=worker_name, daemon=True)
             self.thread.start()
         return True
 
     def _librtlsdr(self):
-        if self._library is not None:
-            return self._library
+        if self._rtl_library is not None:
+            return self._rtl_library
         last_error = None
         for name in ("librtlsdr.so.0", "librtlsdr.so"):
             try:
@@ -15848,19 +16172,19 @@ class RTLSDRLab:
                     ctypes.POINTER(ctypes.c_int),
                 )
                 library.rtlsdr_read_sync.restype = ctypes.c_int
-                self._library = library
+                self._rtl_library = library
                 return library
             except OSError as exc:
                 last_error = exc
         raise RuntimeError(f"librtlsdr unavailable: {last_error}")
 
     @staticmethod
-    def _pcm_from_iq(samples, mode, output_rate, previous_sample):
+    def _pcm_from_iq(samples, mode, output_rate, previous_sample, sample_rate=RTL_IQ_SAMPLE_RATE):
         if len(samples) < 4:
             return b"", previous_sample
         if mode == "am":
             signal = np.abs(samples)
-            ratio = max(1, int(round(RTL_IQ_SAMPLE_RATE / output_rate)))
+            ratio = max(1, int(round(sample_rate / output_rate)))
             usable = len(signal) // ratio * ratio
             if not usable:
                 return b"", samples[-1]
@@ -15870,7 +16194,7 @@ class RTLSDRLab:
         else:
             prior = samples[0] if previous_sample is None else previous_sample
             phase = np.angle(samples * np.conj(np.concatenate(([prior], samples[:-1]))))
-            ratio = max(1, int(round(RTL_IQ_SAMPLE_RATE / output_rate)))
+            ratio = max(1, int(round(sample_rate / output_rate)))
             usable = len(phase) // ratio * ratio
             if not usable:
                 return b"", samples[-1]
@@ -15928,10 +16252,243 @@ class RTLSDRLab:
         # measurement. The UI retains its usual smooth attack/release.
         self.state.set_smeter(-117.0 + (noise - levels[0]) * 1.8, source="snd")
 
-    def _iq_worker(self, name, mode, output_rate):
+    def _waterfall_worker(self, lut):
+        """Keep expensive FFT and texture preparation off the PCM capture thread."""
+        levels = [None, None]
+        while not self.stop_event.is_set():
+            try:
+                item = self.waterfall_queue.get(timeout=0.10)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            samples, center_khz = item
+            self._publish_waterfall(samples, center_khz, lut, levels)
+
+    def _queue_waterfall(self, samples, center_khz):
+        item = (samples, center_khz)
+        try:
+            self.waterfall_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self.waterfall_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.waterfall_queue.put_nowait(item)
+            except queue.Full:
+                pass
+
+    def _libairspyhf(self):
+        if self._airspy_library is not None:
+            return self._airspy_library
+        last_error = None
+        for name in ("libairspyhf.so.1", "libairspyhf.so"):
+            try:
+                library = ctypes.CDLL(name)
+                library.airspyhf_open.argtypes = (ctypes.POINTER(ctypes.c_void_p),)
+                library.airspyhf_open.restype = ctypes.c_int
+                library.airspyhf_close.argtypes = (ctypes.c_void_p,)
+                library.airspyhf_close.restype = ctypes.c_int
+                library.airspyhf_set_freq.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+                library.airspyhf_set_freq.restype = ctypes.c_int
+                library.airspyhf_set_samplerate.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+                library.airspyhf_set_samplerate.restype = ctypes.c_int
+                library.airspyhf_set_lib_dsp.argtypes = (ctypes.c_void_p, ctypes.c_uint8)
+                library.airspyhf_set_lib_dsp.restype = ctypes.c_int
+                library.airspyhf_set_hf_agc.argtypes = (ctypes.c_void_p, ctypes.c_uint8)
+                library.airspyhf_set_hf_agc.restype = ctypes.c_int
+                library.airspyhf_start.argtypes = (ctypes.c_void_p, AIRSPY_HF_CALLBACK, ctypes.c_void_p)
+                library.airspyhf_start.restype = ctypes.c_int
+                library.airspyhf_stop.argtypes = (ctypes.c_void_p,)
+                library.airspyhf_stop.restype = ctypes.c_int
+                self._airspy_library = library
+                return library
+            except OSError as exc:
+                last_error = exc
+        raise RuntimeError(f"libairspyhf unavailable: {last_error}")
+
+    def _airspy_frequency_khz(self, value):
+        """Clamp a requested tune to an actual Airspy HF+ RF window."""
+        value = float(value)
+        if self.capabilities.supports_frequency(value):
+            return value
+        return min(
+            (edge for interval in self.capabilities.frequency_ranges_khz for edge in interval),
+            key=lambda edge: abs(edge - value),
+        )
+
+    def _airspyhf_worker(self, name, output_rate):
+        """Native libairspyhf I/Q source, kept off the render thread."""
         device = None
         player = None
+        waterfall_thread = None
+        library = None
         try:
+            configure_realtime_audio_path(announce=True, priority=AUDIO_INGRESS_RT_PRIORITY, role="airspy-hf")
+            library = self._libairspyhf()
+            device_ref = ctypes.c_void_p()
+            if library.airspyhf_open(ctypes.byref(device_ref)) < 0:
+                raise RuntimeError("could not open Airspy HF+")
+            device = device_ref
+            if library.airspyhf_set_samplerate(device, AIRSPY_HF_SAMPLE_RATE) < 0:
+                raise RuntimeError("could not set Airspy HF+ sample rate")
+            library.airspyhf_set_lib_dsp(device, 1)
+            library.airspyhf_set_hf_agc(device, 1)
+            _server, freq_khz, _zoom, _smeter, view_generation, _server_generation = self.state.snapshot()
+            tuned_khz = self._airspy_frequency_khz(freq_khz)
+            if library.airspyhf_set_freq(device, int(round(tuned_khz * 1000.0))) < 0:
+                raise RuntimeError("could not tune Airspy HF+")
+            handoff_deadline = time.monotonic() + 2.0
+            while not self.stop_event.is_set() and not self.state.external_audio_sink_released_snapshot() and time.monotonic() < handoff_deadline:
+                self.stop_event.wait(0.02)
+            if not self.state.external_audio_sink_released_snapshot():
+                raise RuntimeError("audio handoff timed out")
+            audio_args = argparse.Namespace(**vars(self.args))
+            audio_args.audio_rate = output_rate
+            player = BufferedAudioPlayer(audio_args, 1, self.state)
+            if not self.stop_event.wait(0.08) and player.poll() is not None:
+                raise RuntimeError("USB audio device is unavailable")
+            with self.lock:
+                self.player = player
+                self.status = "LIVE"
+                self.detail = f"{name} · Airspy HF+ I/Q waterfall + USB audio"
+            drain_queue(self.line_queue)
+            drain_queue(self.waterfall_queue)
+            lut = tuple(np.asarray(channel, dtype=np.uint8) for channel in waterfall_mapper("kiwi"))
+            waterfall_thread = threading.Thread(target=self._waterfall_worker, args=(lut,), name="airspy-hf-waterfall", daemon=True)
+            self.waterfall_thread = waterfall_thread
+            waterfall_thread.start()
+            iq_queue = queue.Queue(maxsize=10)
+            capture_bytes = bytearray()
+            capture_chunk_bytes = (AIRSPY_HF_SAMPLE_RATE // AIRSPY_HF_AUDIO_RATE) * KIWI_RAW_AUDIO_QUANTUM_FRAMES * ctypes.sizeof(AirspyHFComplex)
+
+            @AIRSPY_HF_CALLBACK
+            def on_samples(transfer_ptr):
+                try:
+                    transfer = transfer_ptr.contents
+                    if transfer.sample_count > 0:
+                        capture_bytes.extend(ctypes.string_at(transfer.samples, transfer.sample_count * ctypes.sizeof(AirspyHFComplex)))
+                        # The HF+ callbacks can be much smaller than one PCM
+                        # packet. Coalesce in the native callback into 16 ms
+                        # chunks, then wake Python DSP only 62.5 times/sec.
+                        while len(capture_bytes) >= capture_chunk_bytes:
+                            payload = bytes(capture_bytes[:capture_chunk_bytes])
+                            del capture_bytes[:capture_chunk_bytes]
+                            try:
+                                iq_queue.put_nowait(payload)
+                            except queue.Full:
+                                try:
+                                    iq_queue.get_nowait()
+                                except queue.Empty:
+                                    pass
+                                try:
+                                    iq_queue.put_nowait(payload)
+                                except queue.Full:
+                                    pass
+                except Exception:
+                    return -1
+                return 0
+
+            if library.airspyhf_start(device, on_samples, None) < 0:
+                raise RuntimeError("could not start Airspy HF+ stream")
+            previous_sample = None
+            pcm_pending = bytearray()
+            seen_generation = view_generation
+            seen_demod_generation = self.demod_snapshot()[1]
+            next_waterfall_at = 0.0
+            last_tune_at = 0.0
+            while not self.stop_event.is_set():
+                try:
+                    payload = iq_queue.get(timeout=0.15)
+                except queue.Empty:
+                    continue
+                values = np.frombuffer(payload, dtype=np.float32)
+                values = values[:len(values) // 2 * 2]
+                if len(values) < RTL_IQ_FFT_SIZE * 2:
+                    continue
+                samples = values[0::2].astype(np.complex64) + 1j * values[1::2]
+                demod_mode, demod_generation = self.demod_snapshot()
+                if demod_generation != seen_demod_generation:
+                    previous_sample = None
+                    seen_demod_generation = demod_generation
+                pcm, previous_sample = self._pcm_from_iq(
+                    samples, demod_mode, output_rate, previous_sample, AIRSPY_HF_SAMPLE_RATE,
+                )
+                if pcm:
+                    pcm_pending.extend(self._apply_local_squelch(pcm))
+                    while len(pcm_pending) >= AIRSPY_HF_AUDIO_PACKET_BYTES:
+                        player.submit(bytes(pcm_pending[:AIRSPY_HF_AUDIO_PACKET_BYTES]))
+                        del pcm_pending[:AIRSPY_HF_AUDIO_PACKET_BYTES]
+                _server, requested_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
+                now = time.monotonic()
+                supported_khz = self._airspy_frequency_khz(requested_khz)
+                if abs(supported_khz - requested_khz) > 0.0005:
+                    self.state.set_view(freq_khz=supported_khz)
+                    requested_khz = supported_khz
+                    _server, requested_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
+                if abs(requested_khz - tuned_khz) > 0.0005 and next_generation != seen_generation and now - last_tune_at >= 0.025:
+                    if library.airspyhf_set_freq(device, int(round(requested_khz * 1000.0))) < 0:
+                        raise RuntimeError("Airspy HF+ retune failed")
+                    tuned_khz = requested_khz
+                    seen_generation = next_generation
+                    last_tune_at = now
+                    previous_sample = None
+                    pcm_pending.clear()
+                    drain_queue(self.line_queue)
+                elif next_generation != seen_generation:
+                    seen_generation = next_generation
+                if now >= next_waterfall_at:
+                    self._queue_waterfall(samples, tuned_khz)
+                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
+        except Exception as exc:
+            with self.lock:
+                if not self.stop_event.is_set():
+                    self.status = "ERROR"
+                    self.detail = str(exc)[:72]
+            print(f"gl Airspy HF+ lab {exc}\n{traceback.format_exc()}", flush=True)
+        finally:
+            if library is not None and device is not None:
+                try:
+                    library.airspyhf_stop(device)
+                except Exception:
+                    pass
+            if waterfall_thread is not None:
+                try:
+                    self.waterfall_queue.put_nowait(None)
+                except queue.Full:
+                    pass
+                waterfall_thread.join(timeout=0.5)
+            self.waterfall_thread = None
+            if player is not None:
+                player.close()
+            if library is not None and device is not None:
+                try:
+                    library.airspyhf_close(device)
+                except Exception:
+                    pass
+            with self.lock:
+                restore_view, self._restore_view = self._restore_view, None
+            if restore_view is not None:
+                self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
+            self.state.set_external_audio(False)
+            self.state.set_external_waterfall(False)
+            with self.lock:
+                self.player = None
+                if self.stop_event.is_set():
+                    self._apply_source_inventory()
+            release_realtime_audio_thread()
+
+    def _iq_worker(self, name, output_rate):
+        device = None
+        player = None
+        waterfall_thread = None
+        try:
+            configure_realtime_audio_path(
+                announce=True,
+                priority=AUDIO_INGRESS_RT_PRIORITY,
+                role="rtl-iq",
+            )
             library = self._librtlsdr()
             device_ref = ctypes.c_void_p()
             if library.rtlsdr_open(ctypes.byref(device_ref), 0) < 0:
@@ -15945,9 +16502,24 @@ class RTLSDRLab:
             if library.rtlsdr_set_center_freq(device, initial_hz) < 0:
                 raise RuntimeError("could not tune RTL-SDR")
             library.rtlsdr_reset_buffer(device)
+            # Direct ALSA is deliberately exclusive. Wait for the normal Kiwi
+            # listener to close its sink before the local source opens one.
+            handoff_deadline = time.monotonic() + 2.0
+            while (
+                not self.stop_event.is_set()
+                and not self.state.external_audio_sink_released_snapshot()
+                and time.monotonic() < handoff_deadline
+            ):
+                self.stop_event.wait(0.02)
+            if not self.state.external_audio_sink_released_snapshot():
+                raise RuntimeError("audio handoff timed out")
             audio_args = argparse.Namespace(**vars(self.args))
             audio_args.audio_rate = output_rate
-            player = BufferedAudioPlayer(audio_args, 1)
+            player = BufferedAudioPlayer(audio_args, 1, self.state)
+            # ``aplay`` reports an exclusive-device error immediately. Catch
+            # it here rather than running a silent local receiver.
+            if not self.stop_event.wait(0.08) and player.poll() is not None:
+                raise RuntimeError("USB audio device is unavailable")
             with self.lock:
                 self.player = player
                 self.status = "LIVE"
@@ -15956,12 +16528,21 @@ class RTLSDRLab:
             buffer = ctypes.create_string_buffer(RTL_IQ_BLOCK_BYTES)
             received = ctypes.c_int()
             previous_sample = None
+            _demod_mode, seen_demod_generation = self.demod_snapshot()
             seen_generation = view_generation
             tuned_hz = initial_hz
             last_tune_at = 0.0
             next_waterfall_at = 0.0
             lut = tuple(np.asarray(channel, dtype=np.uint8) for channel in waterfall_mapper("kiwi"))
-            levels = [None, None]
+            drain_queue(self.waterfall_queue)
+            waterfall_thread = threading.Thread(
+                target=self._waterfall_worker,
+                args=(lut,),
+                name="rtl-sdr-lab-waterfall",
+                daemon=True,
+            )
+            self.waterfall_thread = waterfall_thread
+            waterfall_thread.start()
             while not self.stop_event.is_set():
                 result = library.rtlsdr_read_sync(
                     device, buffer, RTL_IQ_BLOCK_BYTES, ctypes.byref(received)
@@ -15973,9 +16554,15 @@ class RTLSDRLab:
                 if len(raw) < RTL_IQ_FFT_SIZE * 2:
                     continue
                 samples = (raw[0::2].astype(np.float32) - 127.5) + 1j * (raw[1::2].astype(np.float32) - 127.5)
-                pcm, previous_sample = self._pcm_from_iq(samples, mode, output_rate, previous_sample)
+                demod_mode, demod_generation = self.demod_snapshot()
+                if demod_generation != seen_demod_generation:
+                    # Do not carry a phase derivative over a demodulator
+                    # change: it creates a one-packet click.
+                    previous_sample = None
+                    seen_demod_generation = demod_generation
+                pcm, previous_sample = self._pcm_from_iq(samples, demod_mode, output_rate, previous_sample)
                 if pcm:
-                    player.submit(pcm)
+                    player.submit(self._apply_local_squelch(pcm))
                 _server, next_freq_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
                 now = time.monotonic()
                 desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
@@ -15991,8 +16578,8 @@ class RTLSDRLab:
                 elif next_generation != seen_generation:
                     seen_generation = next_generation
                 if now >= next_waterfall_at:
-                    self._publish_waterfall(samples, tuned_hz / 1000.0, lut, levels)
-                    next_waterfall_at = now + 0.055
+                    self._queue_waterfall(samples, tuned_hz / 1000.0)
+                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
         except Exception as exc:
             with self.lock:
                 if not self.stop_event.is_set():
@@ -16000,6 +16587,20 @@ class RTLSDRLab:
                     self.detail = str(exc)[:72]
             print(f"gl RTL-SDR lab {exc}\n{traceback.format_exc()}", flush=True)
         finally:
+            if waterfall_thread is not None:
+                try:
+                    self.waterfall_queue.put_nowait(None)
+                except queue.Full:
+                    try:
+                        self.waterfall_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        self.waterfall_queue.put_nowait(None)
+                    except queue.Full:
+                        pass
+                waterfall_thread.join(timeout=0.5)
+            self.waterfall_thread = None
             if player is not None:
                 player.close()
             if device is not None:
@@ -16020,6 +16621,7 @@ class RTLSDRLab:
                 if self.stop_event.is_set():
                     self.status = "READY" if self.present else "NOT FOUND"
                     self.detail = "Local I/Q stopped; Kiwi audio and waterfall resumed."
+            release_realtime_audio_thread()
 
     def stop(self):
         self.stop_event.set()
@@ -17859,10 +18461,129 @@ def set_audio_output_volume(args, volume):
     return set_pipewire_default_volume(volume)
 
 
+def openwebrx_live_worker(args, stop_event, state, line_queue):
+    """Adapt one OpenWebRX socket into the normal Home audio and waterfall."""
+    player = session = None
+    generation = None
+    leveler = mapper = None
+    waterfall_rows = 0
+    try:
+        while not stop_event.is_set():
+            server, freq_khz, zoom, _smeter, _view, server_generation = state.snapshot()
+            if not owrx.is_openwebrx_endpoint(server):
+                return
+            if state.stream_paused_snapshot():
+                if session:
+                    session.close()
+                    session = None
+                stop_audio_player(player)
+                player = None
+                if stop_event.wait(0.10):
+                    return
+                continue
+            if session is None or generation != server_generation:
+                if session:
+                    session.close()
+                state.connection_attempt(server_generation, "audio")
+                session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent="iTuner-SDR")
+                session.connect()
+                generation = server_generation
+                leveler = mapper = None
+                if player is None:
+                    player = BufferedAudioPlayer(args, 1, state)
+                else:
+                    player.reset()
+            radio_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
+            audio_controls, _audio_generation = state.audio_controls_snapshot()
+            source_center_hz = session.center_frequency_hz
+            source_rate_hz = session.sample_rate_hz
+            if source_center_hz is not None and source_rate_hz:
+                # A profile is a finite slice of spectrum. Keep the visible
+                # dial honest when a finger/encoder reaches its boundary,
+                # rather than repeatedly reconnecting with an impossible DSP
+                # request and leaving the operator with silent audio.
+                source_low_khz = (source_center_hz - source_rate_hz / 2.0) / 1000.0
+                source_high_khz = (source_center_hz + source_rate_hz / 2.0) / 1000.0
+                bounded_frequency = clamp(freq_khz, source_low_khz, source_high_khz)
+                if abs(bounded_frequency - freq_khz) > 0.0005:
+                    state.set_view(freq_khz=bounded_frequency)
+                    print(
+                        f"gl OpenWebRX tuning limited {freq_khz:.3f}->{bounded_frequency:.3f} kHz",
+                        flush=True,
+                    )
+                    continue
+            session.set_controls(
+                frequency_hz=freq_khz * 1000.0, mode=radio_mode,
+                low_cut=low_cut, high_cut=high_cut,
+                squelch_level=-100 if audio_controls.get("squelch_enabled") else -150,
+            )
+            try:
+                event = session.recv_event()
+            except socket.timeout:
+                continue
+            if event is None:
+                continue
+            if event.kind == "audio" and event.audio:
+                state.connection_ready(server_generation, "audio")
+                muted = bool(audio_controls.get("mute", False))
+                player.submit(bytes(len(event.audio)) if muted else event.audio, silence=muted)
+                if np is not None:
+                    samples = np.frombuffer(event.audio, dtype="<i2")
+                    if len(samples):
+                        rms = max(1.0, float(np.sqrt(np.mean(samples.astype(np.float32) ** 2))))
+                        state.set_smeter(max(-120.0, min(-15.0, 20.0 * math.log10(rms / 32767.0))), source="openwebrx")
+            elif event.kind == "waterfall" and event.waterfall and line_queue is not None:
+                state.connection_ready(server_generation, "waterfall")
+                samples = bytes(clamp(int(round(value + 160.0)), 0, 255) for value in event.waterfall)
+                if leveler is None:
+                    wf_floor, wf_ceil, _speed, wf_auto, palette, _wf_generation = state.waterfall_snapshot()
+                    if wf_auto:
+                        # OpenWebRX sends FFT dB values while Kiwi's saved
+                        # display range is calibrated to its unsigned W/F
+                        # bytes. Seed auto-level from the first actual row so
+                        # the OpenWebRX waterfall is visible immediately.
+                        ordered = sorted(samples)
+                        median = ordered[len(ordered) // 2]
+                        p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
+                        wf_floor = clamp(median - 8, 40, 230)
+                        wf_ceil = clamp(max(p98 + 72, wf_floor + 95), wf_floor + 55, 255)
+                    leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
+                    mapper = waterfall_mapper(palette)
+                floor, ceiling = leveler.levels_for(samples)
+                line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
+                source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom)) / 1000.0
+                # FFT rows describe the receiver's whole current profile,
+                # not merely the narrow audio demodulator offset.
+                row_center_khz = float(session.center_frequency_hz or freq_khz * 1000.0) / 1000.0
+                waterfall_rows += 1
+                if waterfall_rows == 1:
+                    print(
+                        "gl OpenWebRX waterfall "
+                        f"bins={len(samples)} levels={floor:.0f}/{ceiling:.0f} "
+                        f"center={row_center_khz:.3f} span={source_span:.1f} kHz",
+                        flush=True,
+                    )
+                try:
+                    line_queue.put_nowait((line, row_center_khz, source_span))
+                except queue.Full:
+                    try:
+                        line_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        line_queue.put_nowait((line, row_center_khz, source_span))
+                    except queue.Full:
+                        pass
+    finally:
+        if session:
+            session.close()
+        stop_audio_player(player)
+
+
 def snd_meter_worker(
     args, stop_event, state, transcript_queue=None, callsign_queue=None,
     dual_mixer=None, dual_source=None, dual_matcher=None, enable_listener_dsp=True,
-    listener_name=None,
+    listener_name=None, waterfall_line_queue=None,
 ):
     # SND ingress is part of the audio path: a late WebSocket read leaves the
     # PCM reserve empty even when the playback clock itself is perfectly on
@@ -17895,6 +18616,30 @@ def snd_meter_worker(
     retry_failures = 0
     retry_outage_started_at = None
     retry_server_generation = None
+    audio_sink_retry_at = 0.0
+
+    def ensure_audio_player(desired_channels, server_generation):
+        """Open one PCM sink, with a brief backoff after an ALSA refusal."""
+        nonlocal player, player_channels, player_server_generation, audio_sink_retry_at
+        now = time.monotonic()
+        player_failed = player is not None and player.poll() is not None
+        configuration_changed = (
+            desired_channels != player_channels
+            or (player is not None and player.backend != selected_audio_backend(args))
+        )
+        if not configuration_changed and not player_failed:
+            return False
+        if player_failed and not configuration_changed and now < audio_sink_retry_at:
+            return False
+        stop_audio_player(player)
+        player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
+        player_channels = desired_channels
+        player_server_generation = server_generation
+        # An exclusive ALSA denial is reported by the child almost at once.
+        # Avoid reopening it for every incoming network packet while busy.
+        audio_sink_retry_at = now + 0.75
+        return True
+
     while not stop_event.is_set():
         ws = None
         try:
@@ -17910,9 +18655,21 @@ def snd_meter_worker(
                 stop_audio_player(player)
                 player = None
                 player_channels = None
+                state.mark_external_audio_sink_released()
                 stop_event.wait(0.10)
                 continue
             server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+            if owrx.is_openwebrx_endpoint(server):
+                # The previous Kiwi loop may still own the direct ALSA sink
+                # for one outer iteration after a source switch. Release it
+                # before the OpenWebRX adapter creates its normal clocked
+                # player, otherwise the USB DAC reports itself busy.
+                stop_audio_player(player)
+                player = None
+                player_channels = None
+                player_server_generation = None
+                openwebrx_live_worker(args, stop_event, state, waterfall_line_queue)
+                continue
             if server_generation != retry_server_generation:
                 retry_server_generation = server_generation
                 retry_failures = 0
@@ -17920,20 +18677,14 @@ def snd_meter_worker(
             state.connection_attempt(server_generation, "audio")
             radio_mode, low_cut, high_cut, radio_generation = state.radio_snapshot()
             desired_channels = kiwi_audio_channels(radio_mode)
+            player_reopened = False
             if mixer_active:
                 stop_audio_player(player)
                 player = None
                 player_channels = None
-            elif (
-                desired_channels != player_channels
-                or (player is not None and player.backend != selected_audio_backend(args))
-                or (player is not None and player.poll() is not None)
-            ):
-                stop_audio_player(player)
-                player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
-                player_channels = desired_channels
-                player_server_generation = server_generation
-            elif player is not None:
+            else:
+                player_reopened = ensure_audio_player(desired_channels, server_generation)
+            if not mixer_active and not player_reopened and player is not None and player.poll() is None:
                 if player_server_generation != server_generation:
                     # A deliberate receiver switch must never leak buffered
                     # audio from the previous station into the new one.
@@ -17961,6 +18712,10 @@ def snd_meter_worker(
             while not stop_event.is_set():
                 mixer_active = bool(dual_mixer and dual_mixer.active_snapshot())
                 if state.external_audio_snapshot() and not mixer_active:
+                    stop_audio_player(player)
+                    player = None
+                    player_channels = None
+                    state.mark_external_audio_sink_released()
                     break
                 if state.stream_paused_snapshot():
                     break
@@ -17971,15 +18726,8 @@ def snd_meter_worker(
                     stop_audio_player(player)
                     player = None
                     player_channels = None
-                elif (
-                    desired_channels != player_channels
-                    or (player is not None and player.backend != selected_audio_backend(args))
-                    or (player is not None and player.poll() is not None)
-                ):
-                    stop_audio_player(player)
-                    player = BufferedAudioPlayer(args, desired_channels, state) if desired_channels else None
-                    player_channels = desired_channels
-                    player_server_generation = server_generation
+                else:
+                    ensure_audio_player(desired_channels, server_generation)
                 audio_controls, audio_generation = state.audio_controls_snapshot()
                 voice_clean_level = int(audio_controls.get("voice_clean_level", 0))
                 want_voice_clean = (
@@ -18525,6 +19273,13 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     break
                 continue
             server, freq_khz, zoom, _smeter_dbm, seen_generation, seen_server_generation = state.snapshot()
+            if owrx.is_openwebrx_endpoint(server):
+                # OpenWebRX multiplexes FFT rows with audio on its receiver
+                # socket. The audio worker publishes those rows into this
+                # same queue, so never claim a second Kiwi W/F slot here.
+                if stop_event.wait(0.10):
+                    break
+                continue
             if seen_server_generation != retry_server_generation:
                 retry_server_generation = seen_server_generation
                 retry_failures = 0
@@ -18936,6 +19691,7 @@ def main():
             "dual_mixer": dual_audio_mixer,
             "dual_source": "A",
             "dual_matcher": dual_program_matcher,
+            "waterfall_line_queue": line_queue,
         },
         daemon=True,
     )
@@ -19142,6 +19898,7 @@ def main():
         return applied_volume
 
     tests_panel_open = False
+    openwebrx_test_restore = None
     font_lab_open = False
     font_lab_page = 0
     rtl_lab_open = bool(args.rtl_lab_preview)
@@ -19306,6 +20063,7 @@ def main():
                 "dual_source": "B",
                 "dual_matcher": dual_program_matcher,
                 "enable_listener_dsp": False,
+                "waterfall_line_queue": dual_b_line_queue,
                 # A second listener must present a distinct Kiwi identity.
                 # Some receivers tear down a duplicate name even with a
                 # correctly unique SND/W/F session timestamp.
@@ -20215,6 +20973,52 @@ def main():
         zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
         print(f"gl station {name}: {target_server}", flush=True)
 
+    def toggle_openwebrx_test():
+        """Enter/leave the fixed OpenWebRX smoke receiver without persistence."""
+        nonlocal openwebrx_test_restore, radio_mode, manual_radio_mode
+        nonlocal filter_custom_width, digital_mode, display_freq, display_span
+        nonlocal candidate_freq, anim_start, inertia_velocity_khz_s
+        if openwebrx_test_restore is None:
+            prior_server, prior_frequency, prior_zoom, _smeter, _generation, _server_generation = state.snapshot()
+            prior_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
+            openwebrx_test_restore = {
+                "server": prior_server,
+                "frequency": prior_frequency,
+                "zoom": prior_zoom,
+                "mode": prior_mode.upper(),
+                "manual_mode": manual_radio_mode,
+            }
+            target_server = OPENWEBRX_TEST_SERVER
+            target_frequency = OPENWEBRX_TEST_FREQUENCY_KHZ
+            target_zoom = OPENWEBRX_TEST_ZOOM
+            target_mode = OPENWEBRX_TEST_MODE
+            manual_radio_mode = True
+            digital_mode = "DIG"
+            print("gl OpenWebRX test started", flush=True)
+        else:
+            restore = openwebrx_test_restore
+            openwebrx_test_restore = None
+            target_server = restore["server"]
+            target_frequency = restore["frequency"]
+            target_zoom = restore["zoom"]
+            target_mode = restore["mode"]
+            manual_radio_mode = bool(restore["manual_mode"])
+            print(f"gl OpenWebRX test restored {target_server}", flush=True)
+        _server, _frequency, _zoom, _generation, _server_generation = state.set_server(
+            target_server, zoom=target_zoom,
+        )
+        radio_mode = target_mode
+        state.set_radio_mode(radio_mode)
+        filter_custom_width = False
+        state.set_view(freq_khz=target_frequency, zoom=target_zoom)
+        display_freq = target_frequency
+        display_span = kiwi.zoom_to_span_khz(target_zoom)
+        candidate_freq = target_frequency
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+        drain_queue(line_queue)
+        wf_texture.clear()
+
     def refresh_wspr_waterfalls():
         """Keep active WSPR cards current even while their workspace is hidden."""
         wspr_monitor.sync(wspr_tiles)
@@ -21070,6 +21874,12 @@ def main():
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
                                 gesture = "deepgram_setup_outside"
+                            elif rtl_lab_open:
+                                # The local-source sheet is a full modal
+                                # workspace. Claim it before retained zoom,
+                                # scope, or waterfall targets so START cannot
+                                # fall through to a control beneath its tile.
+                                gesture = "rtl_lab" if contains(RTL_LAB_PANEL_BOX, x, y) else "rtl_lab_outside"
                             elif font_lab_open:
                                 # A full-canvas static comparison sheet owns
                                 # the display completely; do not let a test
@@ -21311,10 +22121,6 @@ def main():
                                 gesture = "wspr_workspace"
                             elif wspr_panel_open:
                                 gesture = "wspr_workspace_outside"
-                            elif rtl_lab_open and contains(RTL_LAB_PANEL_BOX, x, y):
-                                gesture = "rtl_lab"
-                            elif rtl_lab_open:
-                                gesture = "rtl_lab_outside"
                             elif tests_panel_open and contains(TEST_PANEL_BOX, x, y):
                                 gesture = "tests_panel"
                             elif tests_panel_open:
@@ -22728,6 +23534,9 @@ def main():
                                     tests_panel_open = False
                                     font_lab_open = True
                                     font_lab_page = 0
+                                elif choice == "openwebrx":
+                                    toggle_openwebrx_test()
+                                    tests_panel_open = False
                                 elif choice == "pattern" and retune_sweep is None:
                                     retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
                                 elif choice == "run":
@@ -22757,8 +23566,8 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = rtl_lab_option_at(x, y)
-                                if choice == "probe":
-                                    rtl_lab.probe()
+                                if choice == "source":
+                                    rtl_lab.cycle_source()
                                 elif choice == "preset":
                                     rtl_lab.cycle_preset()
                                 elif choice == "run":
@@ -22767,9 +23576,19 @@ def main():
                                     else:
                                         _name, preset_hz, _mode, _rate = rtl_lab.snapshot()["preset"]
                                         _server, _current_freq, current_zoom, _smeter, _generation, _server_generation = state.snapshot()
-                                        local_zoom = int(clamp(max(RTL_MIN_ZOOM, current_zoom), RTL_MIN_ZOOM, args.max_zoom))
+                                        local_minimum_zoom = rtl_lab.minimum_zoom()
+                                        local_zoom = int(clamp(max(local_minimum_zoom, current_zoom), local_minimum_zoom, args.max_zoom))
                                         local_frequency = preset_hz / 1000.0
                                         if rtl_lab.start(local_frequency, local_zoom):
+                                            # RTL now consumes the same Home
+                                            # mode state as Kiwi. Start the
+                                            # drawer on its truthful local
+                                            # equivalent, not the previous
+                                            # remote receiver's sideband.
+                                            radio_mode = rtl_lab.preferred_home_mode(rtl_lab.snapshot()["preset"])
+                                            manual_radio_mode = True
+                                            filter_custom_width = False
+                                            digital_mode = "DIG"
                                             _server, active_frequency, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
                                             display_freq = active_frequency
                                             display_span = kiwi.zoom_to_span_khz(active_zoom)
@@ -22794,7 +23613,8 @@ def main():
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = radio_option_at(x, y, radio_family_open)
+                                active_mode_families = rtl_lab.mode_families() if rtl_lab.is_running() else KIWI_MODE_FAMILIES
+                                choice = radio_option_at(x, y, radio_family_open, active_mode_families)
                                 if choice is None:
                                     # The drawer is intentionally modal only
                                     # inside its own rail: a blank tap is the
@@ -22808,13 +23628,25 @@ def main():
                                         radio_setup_open = False
                                         radio_family_open = None
                                     elif kind == "mode_cycle":
-                                        radio_mode = next_radio_mode_variant(radio_mode, value)
-                                        radio_family_open = None
-                                        manual_radio_mode = True
-                                        filter_custom_width = False
-                                        digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
-                                        state.set_radio_mode(radio_mode)
-                                        remember_current_view()
+                                        next_mode = next_radio_mode_variant(radio_mode, value)
+                                        # The Home drawer is shared, but the
+                                        # active source owns its actual
+                                        # demodulator. Do not let a local RTL
+                                        # session display a Kiwi-only mode.
+                                        rtl_active = rtl_lab.is_running()
+                                        if rtl_active and not rtl_lab.set_home_mode(next_mode):
+                                            next_mode = None
+                                        if next_mode is not None:
+                                            radio_mode = next_mode
+                                            radio_family_open = None
+                                            manual_radio_mode = True
+                                            filter_custom_width = False
+                                            digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
+                                            state.set_radio_mode(
+                                                rtl_lab.shared_radio_mode(radio_mode)
+                                                if rtl_active else radio_mode
+                                            )
+                                            remember_current_view()
                                     elif kind == "step":
                                         tune_step_hz = value
                                     wake_controls()
@@ -24113,8 +24945,9 @@ def main():
             # tappable behind them. Full-canvas tools still own the view.
             control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = (
-                f"LOCAL RTL-SDR · {rtl_lab.snapshot()['preset'][0]}"
-                if local_iq_active else next(
+                f"LOCAL {rtl_lab.snapshot()['capabilities'].label} · {rtl_lab.snapshot()['preset'][0]}"
+                if local_iq_active else "OPENWEBRX TEST · ON0LLV"
+                if owrx.is_openwebrx_endpoint(server) else next(
                     (
                         bottom_station_title(name, location)
                         for name, location, candidate_server, *_capacity in all_stations
@@ -24126,8 +24959,9 @@ def main():
             # One compact HTTP status request every 20 seconds keeps the
             # `used/max USERS` annunciator factual without touching the audio
             # or waterfall sockets.
-            main_receiver_capacity.refresh(server)
-            selected_station_capacity = main_receiver_capacity.snapshot(server)
+            if not owrx.is_openwebrx_endpoint(server):
+                main_receiver_capacity.refresh(server)
+            selected_station_capacity = None if owrx.is_openwebrx_endpoint(server) else main_receiver_capacity.snapshot(server)
             connection_status = state.connection_snapshot()
             connection_timeout_seconds = state.connection_timeout_snapshot()
             connection_retry_seconds = state.connection_retry_snapshot()
@@ -24309,7 +25143,14 @@ def main():
                         station_route_filter, receiver_home_profile,
                     )
             if radio_setup_open or radio_drawer_visible:
-                draw_radio_setup_panel(text_cache, radio_mode, digital_mode, tune_step_hz, radio_family_open)
+                draw_radio_setup_panel(
+                    text_cache,
+                    radio_mode,
+                    digital_mode,
+                    tune_step_hz,
+                    radio_family_open,
+                    rtl_lab.mode_families() if local_iq_active else KIWI_MODE_FAMILIES,
+                )
             if display_setup_open:
                 wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, _wf_generation = state.waterfall_snapshot()
                 spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
@@ -24360,7 +25201,12 @@ def main():
                     selected_audio_backend(args),
                 )
             if tests_panel_open:
-                draw_tests_panel(text_cache, retune_pattern_index, retune_sweep)
+                draw_tests_panel(
+                    text_cache,
+                    retune_pattern_index,
+                    retune_sweep,
+                    openwebrx_active=openwebrx_test_restore is not None,
+                )
             if font_lab_open:
                 draw_font_lab(text_cache, font_lab_page)
             if rtl_lab_open:
@@ -24558,6 +25404,13 @@ def main():
                 draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
+            if not (
+                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open
+                or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open
+                or filter_panel_open or frequency_entry_open or dual_vfo_open
+            ):
+                draw_utc_clock(text_cache)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

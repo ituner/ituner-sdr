@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Hardware changes must be explicitly selected. The CM5 path preserves drivers.
+case "${1:-}" in
+  --cm5-existing-display)
+    exec bash "$(dirname -- "${BASH_SOURCE[0]}")/install-cm5-app-only.sh"
+    ;;
+  --legacy-display) shift ;;
+  *)
+    echo 'Choose --cm5-existing-display (preserves working drivers) or --legacy-display (installs ST7701 hardware support).' >&2
+    exit 2
+    ;;
+esac
+
 [[ ${EUID} -eq 0 ]] || { echo 'Run with sudo: sudo ./scripts/install.sh' >&2; exit 1; }
 grep -aq 'Raspberry Pi 5' /proc/device-tree/model 2>/dev/null || { echo 'This installer is for Raspberry Pi 5 only.' >&2; exit 1; }
 
@@ -50,9 +62,9 @@ awk '/^# BEGIN ITUNER SDR$/ {skip=1; next} /^# END ITUNER SDR$/ {skip=0; next} !
   printf '# END ITUNER SDR\n'
 } >"${config_txt}"
 
-install -m 0644 "${repo_dir}/UI/kiwi_gl_display.py" "${repo_dir}/UI/kiwi_live_display_fb.py" "${repo_dir}/UI/kiwi_station_health.py" "${repo_dir}/UI/render_sdr_frontend_mockup.py" /opt/ituner-sdr/UI/
+install -m 0644 "${repo_dir}"/UI/*.py "${repo_dir}"/UI/*.json /opt/ituner-sdr/UI/
 install -d -m 0755 /opt/ituner-sdr/UI/assets
-install -m 0644 "${repo_dir}/UI/assets/waterfall-texture.png" /opt/ituner-sdr/UI/assets/
+cp -a "${repo_dir}/UI/assets/." /opt/ituner-sdr/UI/assets/
 install -m 0755 "${repo_dir}/scripts/start-opengl.sh" /usr/local/lib/ituner-sdr/start-opengl.sh
 install -m 0755 "${repo_dir}/scripts/touch-ready.sh" /usr/local/lib/ituner-sdr/touch-ready.sh
 install -m 0755 "${repo_dir}/touch-driver/src/sdr_touch_dot_fb.py" /usr/local/lib/ituner-sdr/touch-test.py

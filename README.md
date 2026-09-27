@@ -1,3 +1,8 @@
+> **LCD/CM5 consolidation candidate:** this branch preserves the live LCD
+> application captured on 2026-09-27. For CM5, use the application-only path in
+> [the consolidation guide](docs/consolidated-baseline.md). The legacy installer
+> below replaces display drivers and must not be run on the verified CM5.
+
 # iTuner SDR for Raspberry Pi 5
 
 One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
@@ -31,7 +36,7 @@ All current and future UI updates are made to the **OpenGL implementation**. The
    ```bash
    git clone https://github.com/ituner/ituner-sdr.git
    cd ituner-sdr
-   sudo ./scripts/install.sh
+   sudo ./scripts/install.sh --legacy-display
    sudo reboot
    ```
 
