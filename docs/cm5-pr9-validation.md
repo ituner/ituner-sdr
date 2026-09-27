@@ -40,11 +40,15 @@ The legacy ST7701 dependency path was explicitly omitted.
 
 ## Remaining validation boundaries
 
-Physical touch alignment and visual quality require the user's on-device check.
+The user confirmed the on-device screen looked correct after the reboot test.
+The established touch mapping is preserved; no new physical driver was installed.
 OpenWebRX, local Airspy/RTL hardware, Wi-Fi reconnect, optional speech models and
 onboard speaker output were not comprehensively exercised in this test. The
 known onboard audio wiring repair remains separate. Existing optional runtime
 packages/models were reused, so this does not establish their reproducibility
 on a blank OS image. Complete download/checksum manifests before claiming that.
 
-Original LCD and GitHub main remain unchanged. PR remains a draft.
+Original LCD remains unchanged. The user accepted the CM5 test and requested
+a fresh application install from GitHub main. This validation supports promoting
+the shared application baseline; it does not remove the optional-feature and
+fresh-OS limitations above.
