@@ -1929,7 +1929,7 @@ MENU_ITEMS = (
     ("local_rx", "LOCAL RX"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DIGI"),
+    ("digital", "MODES"),
     ("dual", "DUAL"),
     ("settings", "SETTINGS"),
 )
@@ -2379,9 +2379,9 @@ SETTINGS_MENU_ITEMS = (
     ("network", "NETWORK"),
     ("kiwi", "KIWI"),
     ("stats", "STATS"),
-    ("tests", "TESTS"),
+    ("tests", "APPS"),
     ("system", "SYSTEM"),
-    ("settings_back", "HOME"),
+    ("settings_back", "BACK"),
 )
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
@@ -7851,8 +7851,7 @@ def display_option_at(x, y):
 
 
 def lcd_display_drawer_close_box():
-    x0, _y0, x1, y1 = DISPLAY_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_display_control(text_cache, box, label, active=False):
@@ -9426,8 +9425,7 @@ def audio_option_at(x, y):
 
 
 def lcd_audio_drawer_close_box():
-    x0, _y0, x1, y1 = AUDIO_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
@@ -9457,7 +9455,7 @@ def receiver_home_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "fan": (x0 + 10, 258, x1 - 10, 326),
         "locate": (x0 + 10, 346, x1 - 10, 414),
         "fallback": (x0 + 10, 426, x1 - 10, 494),
@@ -9489,7 +9487,7 @@ def fan_curve_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "start": (x0 + 10, 248, x1 - 10, 318),
         "full": (x0 + 10, 346, x1 - 10, 416),
         "minimum": (x0 + 10, 444, x1 - 10, 514),
@@ -9581,7 +9579,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
     draw_lcd_audio_tile(text_cache, AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
-    draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "FILTER", format_filter_width(high_cut - low_cut))
+    draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut))
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
     direct = audio_backend == "alsa"
     draw_lcd_audio_tile(
@@ -12352,7 +12350,6 @@ def draw_receiver_map(
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 42, "GLOBE", (150, 218, 214), 19, True, False, "cm", family="Cantarell")
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
-        (RADIOGARDEN_VIEW_BOX, "display", MAP_VIEW_LABELS.get(map_view, "BORDERS")),
         (RADIOGARDEN_EXIT_BOX, "home", "EXIT"),
     ):
         bx0, by0, bx1, by1 = command_box
@@ -12363,6 +12360,13 @@ def draw_receiver_map(
         draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 190), 1)
         tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
+    draw_picker_two_line_button(
+        text_cache,
+        RADIOGARDEN_VIEW_BOX,
+        "VIEW",
+        MAP_VIEW_LABELS.get(map_view, "BORDERS"),
+        18,
+    )
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
@@ -13397,11 +13401,18 @@ def lcd_rail_bottom():
     return LOGICAL_H
 
 
+def lcd_drawer_back_box():
+    """Shared bottom return target for every right-rail drawer."""
+    return (
+        LCD_NAV_X0 + 10,
+        lcd_rail_bottom() - 78,
+        LOGICAL_W - 10,
+        lcd_rail_bottom() - 10,
+    )
+
+
 def lcd_radio_drawer_close_box():
-    x0, _y0, x1, y1 = radio_panel_box()
-    # The mode choices are top-justified. A broad, isolated bottom return is
-    # easy to find and cannot be confused with a mode-family control.
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def lcd_radio_drawer_reveal_y():
@@ -13671,6 +13682,8 @@ def lcd_home_bandwidth_box(show_compact_readouts=True):
 
 def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
+    if item_count == len(SETTINGS_MENU_ITEMS) and index == len(SETTINGS_MENU_ITEMS) - 1:
+        return lcd_drawer_back_box()
     col = index % 2
     row = index // 2
     grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
@@ -13873,7 +13886,7 @@ def lcd_filter_drawer_boxes():
         preset_boxes.append((name, width_hz, (left, top, left + preset_w, top + preset_h)))
     return {
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
-        "close": (inner_x0, lcd_rail_bottom() - 78, inner_x1, lcd_rail_bottom() - 10),
+        "close": lcd_drawer_back_box(),
         "visual": (inner_x0, 108, inner_x1, 211),
         "shift": (inner_x0, 217, inner_x1, 329),
         "width": (inner_x0, 341, inner_x1, 441),
@@ -14185,6 +14198,16 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
     draw_logical_line(x0, y0, x0, y1, outline, 1)
     draw_logical_line(x1, y0, x1, y1, outline, 1)
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
+
+
+def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
+    """Draw a picker command with a stable action name and changing value."""
+    x0, y0, x1, y1 = box
+    draw_picker_button(text_cache, box, "", size, selected)
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    draw_text(text_cache, center_x, center_y - 12, first_line, (238, 240, 242), size, True, False, "cm")
+    draw_text(text_cache, center_x, center_y + 13, second_line, (168, 211, 214), max(11, size - 3), True, False, "cm")
 
 
 def deepgram_keyboard_rows(mode):
@@ -14672,10 +14695,11 @@ def draw_station_picker(
     last_visible = min(len(stations), int(math.ceil(scroll)) + PICKER_COLS * PICKER_ROWS)
     draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
               f"{first_visible}–{last_visible} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
-    draw_picker_button(
+    draw_picker_two_line_button(
         text_cache,
         PICKER_SORT_BOX,
-        "SORT: LOCATION" if sort_mode == "location" else "SORT: NAME",
+        "SORT",
+        "LOCATION" if sort_mode == "location" else "NAME",
         14 if LCD_800_MODE else 20,
         False,
     )

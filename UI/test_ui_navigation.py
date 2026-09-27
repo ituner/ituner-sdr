@@ -43,5 +43,36 @@ class MenuIconTests(unittest.TestCase):
         self.assertEqual(ui.menu_icon_filename("tests", muted=True), "apps.png")
 
 
+class DrawerGeometryTests(unittest.TestCase):
+    def test_home_destinations_are_preserved_with_updated_mode_label(self):
+        kinds = [kind for kind, _label in ui.MENU_ITEMS]
+        self.assertEqual(
+            kinds,
+            ["local_rx", "rx", "audio", "digital", "dual", "settings"],
+        )
+        self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "MODES")
+
+    def test_settings_apps_and_back_labels_preserve_routes(self):
+        labels = dict(ui.SETTINGS_MENU_ITEMS)
+        self.assertEqual(labels["tests"], "APPS")
+        self.assertEqual(labels["settings_back"], "BACK")
+
+    def test_drawers_share_one_back_target(self):
+        expected = ui.lcd_drawer_back_box()
+        self.assertEqual(ui.lcd_radio_drawer_close_box(), expected)
+        self.assertEqual(ui.lcd_display_drawer_close_box(), expected)
+        self.assertEqual(ui.lcd_audio_drawer_close_box(), expected)
+        self.assertEqual(ui.lcd_filter_drawer_boxes()["close"], expected)
+        self.assertEqual(ui.receiver_home_drawer_boxes()["close"], expected)
+        self.assertEqual(ui.fan_curve_drawer_boxes()["close"], expected)
+
+    def test_settings_back_tile_uses_shared_back_target(self):
+        last = len(ui.SETTINGS_MENU_ITEMS) - 1
+        self.assertEqual(
+            ui.lcd_nav_box(last, len(ui.SETTINGS_MENU_ITEMS)),
+            ui.lcd_drawer_back_box(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
