@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "baseline": "CM5 tested runtime 2026-09-27",
+  "models": [
+    {
+      "id": "sherpa-onnx-moonshine-base-en-int8",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
+      "archive_sha256": "21870cecaa2e44e4e2bf63e02d1072bed183ccd10284871353bd9d24dad14e5e",
+      "download_bytes": 250807309,
+      "files": {
+        "cached_decode.int8.onnx": "2db74e51cedf64a8b1be3c8192e0bb5e4923af0e90bd9e87f8e8771873f8ea03",
+        "LICENSE": "29f60769d1779eb7e196d96b8d2dd471d0263cf8200c79e55c0c00183971ee1b",
+        "uncached_decode.int8.onnx": "c01f4b35093bcac20d352d23a75a539e772964579f9d024a90e5e6f09cae9987",
+        "tokens.txt": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea",
+        "preprocess.onnx": "ffa630d395c5ccf76f5d4954be5b882df76aaf6491519ec01fd82ea7a3819fb2",
+        "README.md": "47c3767ed840f4176000cd6b8bab82c6c5e0acfc1c702d93cdefe85ee48d7d89",
+        "encode.int8.onnx": "7e38770f776f2e5583a53b052936005df2ba5c833d7e09c2a5fd796b94bf73e2"
+      }
+    },
+    {
+      "id": "sherpa-onnx-moonshine-tiny-en-int8",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2",
+      "archive_sha256": "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2",
+      "download_bytes": 107600538,
+      "files": {
+        "cached_decode.int8.onnx": "2aff28bba6a03d8dcf5c9feac45462629bae37317442299f28115ad09da773f6",
+        "LICENSE": "29f60769d1779eb7e196d96b8d2dd471d0263cf8200c79e55c0c00183971ee1b",
+        "uncached_decode.int8.onnx": "216737000dd5881a17aa043f6bbd286add33e4c3b0ae257153e2ec15438bdc41",
+        "tokens.txt": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea",
+        "preprocess.onnx": "f33addce61a143460fe753b5ee5b7db255e5140b5b779c065b94f6c83ff0bf4e",
+        "README.md": "47c3767ed840f4176000cd6b8bab82c6c5e0acfc1c702d93cdefe85ee48d7d89",
+        "encode.int8.onnx": "8774dfba578de027ec6595c2c654a0836434489bc963a0db124a7f181f571acb"
+      }
+    },
+    {
+      "id": "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2",
+      "archive_sha256": "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b",
+      "download_bytes": 104337827,
+      "files": {
+        "model.int8.onnx": "9177a9146cf32ee0cc8152276ef95116f312018d316be37ccf57f7efea81fc1a",
+        "tokens.txt": "450e56bd2f036fe5b6aa821865838cc5aa9d8b0106134ce9a9ba0664abe6cd10"
+      }
+    },
+    {
+      "id": "vosk-model-small-en-us-0.15",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+      "archive_sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+      "download_bytes": 41205931,
+      "files": {
+        "am/final.mdl": "75370a0137f9daf8f469dedd7daa4513ae7a621f03240c6e512e2b50b656a7b6",
+        "graph/disambig_tid.int": "9ad87cc166d0998f08f758f47a6223a120dfffcbee805c4849c3aa5e6bb3c0fc",
+        "graph/HCLr.fst": "5caafba3081e1646545ac6bff0dd7a318e53dcbdc86f237909ce1d2ac1293d34",
+        "graph/Gr.fst": "023c8b7e30704a9e37765c635c252e608a02f361235bf94abdcf2a5225d85b20",
+        "graph/phones/word_boundary.int": "da199d9c991e0e84681ddbb34627b915b26302d50a8fdaa23c51e2bc3a50b5c3",
+        "conf/model.conf": "8f14cb1eeb07c762c371db648c6be688d347236155ca0f64fb13b6567a8ce81f",
+        "conf/mfcc.conf": "1e2228006d01d805ad1c267fee9f79709ca87ac51bd82b0e3f5c69ba543f0fc4",
+        "ivector/splice.conf": "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756",
+        "ivector/final.dubm": "8c5d7dd69d2122313baaf19f61f35dd3fa18b70c62ac0687e311e1c46e6daca7",
+        "ivector/global_cmvn.stats": "33be09afcc80059847a275c3d043b51f1ab954c7c2438ddbbf4745e8ba144ff9",
+        "ivector/final.ie": "3f37faf90c375b9e4740b569398b5829ed9cc07d19be6d441f72c3b71d7efcc6",
+        "ivector/online_cmvn.conf": "a2f3571754b64297cb7efb2e7ca3df61995c5a45fcbb97188f90613552bb2dfe",
+        "ivector/final.mat": "ddd83586dc5f928cda8738b922c85ffe38fc789cb5f9151a712ca12f37265382",
+        "README": "c0cf286e4f7783306c5f6469b37db69228fb16803b03cae661edb2d7bba64ebb"
+      }
+    },
+    {
+      "id": "hf-enhance-tiny",
+      "bundled": {
+        "hf-enhance-tiny.onnx": "assets/models/hf-enhance-tiny.onnx"
+      },
+      "files": {
+        "hf-enhance-tiny.onnx": "4fd0c2191f7fba410ab7fee80564ec303de98519e95d2a9d7dfdaba6629f48be"
+      }
+    }
+  ]
+}
