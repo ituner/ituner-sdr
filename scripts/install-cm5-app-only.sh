@@ -7,6 +7,15 @@ app_user=${SUDO_USER:?Run sudo as the application user}
 app_uid=$(id -u "$app_user")
 app_home=$(getent passwd "$app_user" | cut -d: -f6)
 [[ -f "$repo/UI/kiwi_gl_display.py" ]]
+PYGAME_HIDE_SUPPORT_PROMPT=1 python3 -c 'import pygame, OpenGL, PIL'
+
+# Stop the old process before copying source and assets. Enabling an already
+# active service does not restart it, so an update must explicitly relaunch it.
+for unit in ituner-sdr.service ituner-sdr-health.service; do
+    if systemctl is-active --quiet "$unit"; then
+        systemctl stop "$unit"
+    fi
+done
 
 install -d /opt/ituner-sdr /usr/local/lib/ituner-sdr /var/lib/ituner-sdr
 cp -a "$repo/UI" "$repo/assets" /opt/ituner-sdr/
@@ -117,4 +126,6 @@ The cloned upstream repository remains unchanged.
 EOF
 systemd-analyze verify /etc/systemd/system/ituner-sdr.service /etc/systemd/system/ituner-sdr-touch-ready.service /etc/systemd/system/ituner-sdr-health.service
 systemctl daemon-reload
-systemctl enable --now ituner-sdr-touch-ready.service ituner-sdr.service ituner-sdr-health.service
+systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service ituner-sdr-health.service
+systemctl restart ituner-sdr-touch-ready.service
+systemctl restart ituner-sdr.service ituner-sdr-health.service
