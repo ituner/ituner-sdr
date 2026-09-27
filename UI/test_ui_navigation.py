@@ -74,5 +74,18 @@ class DrawerGeometryTests(unittest.TestCase):
         )
 
 
+class ParentNavigationTests(unittest.TestCase):
+    def test_shared_destination_records_the_surface_that_opened_it(self):
+        self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "rx"), "home")
+        self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "display"), "settings")
+        self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "tests"), "settings")
+        self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "settings_back"), "home")
+
+    def test_unknown_parent_falls_back_to_home(self):
+        self.assertEqual(ui.navigation_back_surface("settings"), "settings")
+        self.assertEqual(ui.navigation_back_surface("home"), "home")
+        self.assertEqual(ui.navigation_back_surface("unexpected"), "home")
+
+
 if __name__ == "__main__":
     unittest.main()

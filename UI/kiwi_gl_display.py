@@ -13699,6 +13699,18 @@ def lcd_nav_items(settings_open=False, digital_open=False):
     return SETTINGS_MENU_ITEMS if settings_open else MENU_ITEMS
 
 
+def navigation_parent(items, kind):
+    """Return the rail surface that owns a destination opened from *items*."""
+    if items is SETTINGS_MENU_ITEMS and kind != "settings_back":
+        return "settings"
+    return "home"
+
+
+def navigation_back_surface(parent):
+    """Normalize stored leaf parents so invalid state always returns Home."""
+    return "settings" if parent == "settings" else "home"
+
+
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
@@ -20352,6 +20364,7 @@ def main():
     menu_opened_at = 0.0
     menu_scroll = 0.0
     picker_open = False
+    picker_parent = "home"
     picker_map_open = False
     picker_map_yaw = math.radians(-18)
     picker_map_pitch = math.radians(18)
@@ -20386,12 +20399,15 @@ def main():
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
     display_setup_open = False
+    display_parent = "home"
     filter_drawer_open = False
     filter_drawer_width_hz = None
     settings_menu_open = False
     digital_menu_open = False
     receiver_home_panel_open = False
+    receiver_home_parent = "home"
     fan_curve_panel_open = False
+    fan_curve_parent = "home"
     network_panel_open = False
     network_password_open = False
     network_selected_ssid = ""
@@ -20406,6 +20422,7 @@ def main():
     audio_panel_open = False
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
+    cpu_utilization_parent = "home"
     asr_panel_open = False
     asr_moon_language_open = False
     deepgram_setup_open = False
@@ -20457,6 +20474,7 @@ def main():
         return applied_volume
 
     tests_panel_open = False
+    tests_parent = "home"
     openwebrx_test_restore = None
     font_lab_open = False
     font_lab_page = 0
@@ -21602,9 +21620,16 @@ def main():
                 wspr_mini_textures[key] = texture
             session.drain_rows(texture)
 
+    def restore_navigation_parent(parent):
+        """Close a leaf back to its recorded rail surface."""
+        nonlocal settings_menu_open, digital_menu_open
+        settings_menu_open = navigation_back_surface(parent) == "settings"
+        digital_menu_open = False
+
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
+        nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
@@ -21613,6 +21638,7 @@ def main():
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
+        parent = navigation_parent(items, kind)
         wake_controls()
         menu_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
@@ -21651,6 +21677,7 @@ def main():
             station_connected_at = 0.0
             connect_to_station(LOCAL_KIWI_STATION)
         elif kind == "rx":
+            picker_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             picker_open = True
@@ -21667,6 +21694,7 @@ def main():
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "display":
+            display_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             display_setup_open = True
@@ -21697,6 +21725,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "system":
+            receiver_home_parent = parent
             receiver_home_panel_open = True
             settings_menu_open = False
             digital_menu_open = False
@@ -21706,7 +21735,9 @@ def main():
             settings_menu_open = False
             digital_menu_open = False
             activate_navigation_item(next(index for index, (candidate, _label) in enumerate(MENU_ITEMS) if candidate == "rx"))
+            picker_parent = parent
         elif kind == "stats":
+            cpu_utilization_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             cpu_utilization_graph_open = True
@@ -21736,6 +21767,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
+            tests_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             tests_panel_open = True
@@ -24120,6 +24152,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 tests_panel_open = False
+                                restore_navigation_parent(tests_parent)
                             wake_controls()
                         elif touch_started and gesture == "font_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -24331,11 +24364,13 @@ def main():
                                     # Match the other rail drawers: a blank
                                     # rail tap is an easy, unambiguous close.
                                     display_setup_open = False
+                                    restore_navigation_parent(display_parent)
                                     wake_controls()
                                 elif choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         display_setup_open = False
+                                        restore_navigation_parent(display_parent)
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -24390,6 +24425,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 display_setup_open = False
+                                restore_navigation_parent(display_parent)
                                 wake_controls()
                         elif touch_started and gesture == "receiver_home":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -24397,9 +24433,11 @@ def main():
                                 home_boxes = receiver_home_drawer_boxes()
                                 if contains(home_boxes["close"], x, y):
                                     receiver_home_panel_open = False
+                                    restore_navigation_parent(receiver_home_parent)
                                 elif contains(home_boxes["fan"], x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
+                                    fan_curve_parent = receiver_home_parent
                                 elif contains(home_boxes["fallback"], x, y):
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
@@ -24412,6 +24450,7 @@ def main():
                                     ).start()
                                 else:
                                     receiver_home_panel_open = False
+                                    restore_navigation_parent(receiver_home_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_curve":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -24419,6 +24458,7 @@ def main():
                                 fan_boxes = fan_curve_drawer_boxes()
                                 if contains(fan_boxes["close"], x, y):
                                     fan_curve_panel_open = False
+                                    restore_navigation_parent(fan_curve_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_start_slider":
                             adjust_fan_curve_slider(fan_curve, "start", x)
@@ -24514,6 +24554,7 @@ def main():
                                     cpu_core_samples = None
                                     next_system_sample = 0.0
                                 else:
+                                    restore_navigation_parent(cpu_utilization_parent)
                                     cpu_core_history.clear()
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
@@ -24618,6 +24659,8 @@ def main():
                                 if contains(boxes["back"], x, y):
                                     network_panel_open = False
                                     network_selected_ssid = ""
+                                    settings_menu_open = True
+                                    digital_menu_open = False
                                 elif contains(boxes["rescan"], x, y):
                                     network_bridge.request("scan")
                                     network_notice = "Scanning Wi-Fi networks..."
@@ -24866,6 +24909,7 @@ def main():
                                 station_scroll = 0
                                 station_pending_server = None
                                 station_connected_at = 0.0
+                                restore_navigation_parent(picker_parent)
                                 wake_controls()
                         elif touch_started and gesture == "picker_search":
                             moved = max(abs(x - start_x), abs(y - start_y))
