@@ -1,4 +1,12 @@
 {
   "instrument_layout": "compact",
-  "compact_frequency_font_family": "Oxanium"
+  "compact_frequency_font_family": "Oxanium",
+  "spectrum_enabled": true,
+  "waterfall": {
+    "floor": 142.0,
+    "ceil": 245.0,
+    "speed": 4,
+    "auto": false,
+    "palette": "classic"
+  }
 }

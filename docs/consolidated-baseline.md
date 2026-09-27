@@ -1,22 +1,28 @@
-# One application baseline for LCD and CM5
+# Official shared application baseline for LCD and CM5
 
-This is a consolidation candidate, based on LCD's running application captured
-on 2026-09-27. The candidate is under test on CM5; GitHub main and the original
-LCD installation remain unchanged. See `cm5-pr9-validation.md` for test results.
+The official repository is `https://github.com/ituner/ituner-sdr`, branch `main`.
+PR #9 is merged. A fresh CM5 application/settings installation from main passed,
+and the owner accepted the display tests on both machines on 2026-09-27.
+PR #8 remains excluded. See `cm5-pr9-validation.md` for evidence and scope.
+
+The shared runtime source matches both running machines. This does not mean
+LCD's historical dirty Git checkout was reset, or that both operating systems,
+drivers, private preferences and optional dependencies are identical.
 
 ## What belongs in GitHub
 
 - Shared application source, including the live OpenWebRX modules and local
   receiver changes. The renderer is byte-identical to the captured LCD file.
 - UI assets and the exact Oxanium font used by LCD, with its OFL license.
-- Reviewed UI defaults: compact instruments and Oxanium. No personal receiver
+- Reviewed UI defaults: compact instruments, Oxanium, spectrum on, Classic
+  waterfall palette, fixed floor 142 / ceiling 245, speed 4, auto levelling off. No personal receiver
   history, credentials, API keys, or private saved settings.
 - Separate machine startup profiles and reproducible dependency instructions.
 - A version manifest with checksums: `config/lcd-baseline-manifest.json`.
 - CM5 display source archived under `hardware/cm5/reference-display` for
   recovery. Application installation does not install or rebuild that driver.
 
-The candidate starts from GitHub main and incorporates the actual live files.
+The consolidated baseline incorporates the actual live LCD files on top of main.
 It does not blindly merge the old LCD branch or reset LCD's dirty working tree.
 Existing main Wi-Fi and HID support is retained. The historical uncompressed
 country-map fallback is excluded: main's valid compressed map already matches
@@ -31,7 +37,7 @@ LCD byte for byte, as do all its tracked UI assets.
 | Rendering backend | existing direct KMS service | existing Wayland desktop |
 | Display/touch drivers | preserve installed | preserve verified JD9365/GT911 |
 | Audio backend | current ALSA setup | current PipeWire setup |
-| Instrument layout | compact | compact after adopting the baseline |
+| Instrument layout | compact | compact |
 
 Do not copy LCD's boot configuration, display driver, direct audio device,
 system services, or entire user configuration onto CM5. CM5's onboard audio
@@ -53,9 +59,9 @@ The CM5 application-only path installs all UI modules/assets and the matching
 font, adds the NetworkManager helper and RC-28 access rule, and configures
 application startup without writing boot settings, overlays, or kernel modules.
 It preserves `/etc/ituner-sdr.conf` when present. A fresh CM5 configuration uses
-normal orientation. A fresh user state gets the compact UI defaults; existing
-user settings are preserved. Existing CM5 therefore still needs its saved
-instrument layout changed from expanded to compact during the staged update.
+normal orientation. A fresh user state gets the validated compact UI and fixed waterfall defaults;
+existing user settings are preserved. Both running machines were explicitly
+matched to these waterfall settings after finding auto levelling on only on CM5.
 
 The stock ST7701 hardware installer now requires explicit `--legacy-display`.
 It must not be selected for this CM5 or the reference LCD. The old uninstaller
@@ -76,21 +82,20 @@ verified download manifest, not as undocumented files existing only on LCD.
 Cloud API keys remain local. Installing a Python package alone is not proof its
 feature is ready. WSJT-X supplies the external `wsprd` executable.
 
-## Promotion and validation
+## Accepted validation and future changes
 
-1. Preserve LCD as the reference while reviewing this branch. Its source and
-   settings were backed up privately on LCD and the development Mac.
-2. Clone the candidate separately and validate the CM5 application installation.
-   Back up application settings, preserve normal orientation, and select compact
-   layout. Compare display, touch, receiver/Wi-Fi controls and enabled features
-   with LCD. Preserve the previous application release for rollback.
-3. Once validated, merge the reviewed changes to main and create an immutable
-   release tag. Record the installed tag/commit and hashes on both devices.
-4. Future work follows branch -> review/test -> merge -> tagged deployment.
-   Any emergency on-device source edit must be captured back into GitHub before
-   the next release. A dirty working folder is not a release identifier.
+- PR #9 application installed, then removed with its services and saved UI
+  settings backed up. CM5 rebooted and installed from a fresh main checkout.
+- Compact layout, Oxanium, normal orientation and touch mapping were generated
+  automatically. All 51 tracked UI/assets matched main byte for byte.
+- Final reboot started app and health services, detected GT911 and connected
+  Kiwi sound/waterfall streams. All eight protected display hashes stayed intact.
+- Waterfall settings were subsequently matched on both machines and accepted
+  by the owner; they are now included in fresh-install defaults.
+- The source baseline tag identifies an application/configuration snapshot,
+  not a reproducible full OS image or validation of every optional feature.
 
-Local source/syntax/default-seeding checks do not replace the staged hardware
-and feature checks above. CM5 now has the candidate application; its previous
-application and settings are backed up for rollback. The original LCD remains
-the unchanged reference.
+Future application changes should originate in this repository, be reviewed and
+validated before merging to main, and be deployed by a recorded commit/tag.
+Capture emergency on-device source changes in GitHub before the next deployment.
+Keep hardware profiles separate; never copy one machine's boot setup to the other.

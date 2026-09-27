@@ -1,9 +1,32 @@
-> **LCD/CM5 consolidation candidate:** this branch preserves the live LCD
-> application captured on 2026-09-27. For CM5, use the application-only path in
-> [the consolidation guide](docs/consolidated-baseline.md). The legacy installer
-> below replaces display drivers and must not be run on the verified CM5.
+# iTuner SDR — official application repository
 
-# iTuner SDR for Raspberry Pi 5
+**Official source:** [ituner/ituner-sdr](https://github.com/ituner/ituner-sdr),
+branch **`main`**. The shared LCD/CM5 application baseline was consolidated in
+PR #9 and accepted on both machines on 2026-09-27. PR #8 three-knob controls are
+not included. See [the baseline guide](docs/consolidated-baseline.md) and
+[validation results](docs/cm5-pr9-validation.md).
+
+For a CM5 with the verified working display, use:
+
+```sh
+sudo ./scripts/install.sh --cm5-existing-display
+```
+
+This installs the application while preserving the existing display/touch
+drivers and boot settings. Fresh UI preferences use compact instruments,
+Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
+levelling off. Existing preferences are preserved. LCD and CM5 retain their
+own orientation, touch mapping and audio backend.
+
+This is an application baseline, not a complete OS image. Optional models and
+native runtime binaries remain separate; their full reproducible download
+manifest is not yet complete. The reference LCD's running source matches this
+baseline, but its old dirty Git checkout has not been reset or replaced.
+
+## Legacy Raspberry Pi 5 / YX45011A hardware installation
+
+The remaining hardware instructions describe the legacy 400×960 ST7701 setup.
+**Do not apply that hardware installer to either verified LCD/CM5 installation.**
 
 One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
 

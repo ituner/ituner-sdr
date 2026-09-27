@@ -52,3 +52,18 @@ Original LCD remains unchanged. The user accepted the CM5 test and requested
 a fresh application install from GitHub main. This validation supports promoting
 the shared application baseline; it does not remove the optional-feature and
 fresh-OS limitations above.
+
+## Official baseline acceptance
+
+PR #9 merged as `b548509f0bbdb0986794ec435e0501fb13403196`. CM5 application
+files, services and UI settings were backed up and removed, CM5 rebooted, and
+a fresh main checkout installed. Compact/Oxanium defaults and normal orientation
+were created automatically. All 51 UI/assets matched; all eight protected display
+files remained unchanged. A second reboot automatically started the application,
+detected touch and connected the receiver streams. Existing OS packages and
+vendor models/runtimes were retained.
+
+On 2026-09-27 the waterfall settings on both machines were matched to Classic,
+floor 142, ceiling 245, speed 4, auto levelling off, spectrum enabled. The owner
+confirmed all tests were OK and designated main as the official application
+source. The same settings are now recorded in fresh-install defaults.
