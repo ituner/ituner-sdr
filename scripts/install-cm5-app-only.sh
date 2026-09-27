@@ -7,6 +7,7 @@ app_user=${SUDO_USER:?Run sudo as the application user}
 app_uid=$(id -u "$app_user")
 app_home=$(getent passwd "$app_user" | cut -d: -f6)
 [[ -f "$repo/UI/kiwi_gl_display.py" ]]
+bash "$repo/scripts/install-dependencies.sh"
 PYGAME_HIDE_SUPPORT_PROMPT=1 python3 -c 'import pygame, OpenGL, PIL'
 
 # Stop the old process before copying source and assets. Enabling an already

@@ -18,9 +18,12 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
-This is an application baseline, not a complete OS image. Optional models and
-native runtime binaries remain separate; their full reproducible download
-manifest is not yet complete. The reference LCD's running source matches this
+The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet
+and HF-enhancement models automatically, using fixed versions and verified
+checksums. It requires 64-bit Raspberry Pi OS Trixie / Python 3.13. See
+[dependency setup and version policy](docs/runtime-dependencies.md). This is an
+application/model baseline, not a complete OS image; experimental engines and
+hardware setup remain separate. The reference LCD's running source matches this
 baseline, but its old dirty Git checkout has not been reset or replaced.
 
 ## Legacy Raspberry Pi 5 / YX45011A hardware installation
@@ -28,7 +31,7 @@ baseline, but its old dirty Git checkout has not been reset or replaced.
 The remaining hardware instructions describe the legacy 400×960 ST7701 setup.
 **Do not apply that hardware installer to either verified LCD/CM5 installation.**
 
-One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a clean Raspberry Pi 5 running current Raspberry Pi OS (Bookworm or newer). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
+One self-contained installer for the YX45011A display, GT911 touch controller, and iTuner SDR radio interface on a Raspberry Pi 5 running 64-bit Raspberry Pi OS Trixie (Python 3.13). It installs the required packages, driver, overlays, UI, configuration, and systemd boot services.
 
 ## Hardware connection
 
@@ -53,7 +56,7 @@ All current and future UI updates are made to the **OpenGL implementation**. The
 
 ## Install
 
-1. Start with Raspberry Pi OS on a Raspberry Pi 5, network access, and the adapter FFC firmly seated in **CAM/DISP 1**.
+1. Start with 64-bit Raspberry Pi OS Trixie on a Raspberry Pi 5, network access, and the adapter FFC firmly seated in **CAM/DISP 1**.
 2. Clone this repository and run:
 
    ```bash

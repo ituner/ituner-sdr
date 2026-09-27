@@ -1,8 +1,4 @@
-# Optional ASR and cloud-caption clients. Install these only with the matching
-# model data under vendor/; see docs/lcd-800x1280-platform.md.
-vosk>=0.3.45
-sherpa-onnx>=1.12
-moonshine-voice
-deepgram-sdk>=3,<4
-numpy>=1.26
-onnxruntime>=1.18
+# Compatibility entry point for the tested CM5 speech runtime.
+# Exact packages/hashes, Python 3.13 aarch64 only. Model installation is a separate
+# step handled automatically by scripts/install-dependencies.sh.
+-r requirements/pi-cp313-aarch64.lock

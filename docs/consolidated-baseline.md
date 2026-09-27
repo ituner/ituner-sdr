@@ -46,12 +46,11 @@ requires validation of the machine's cooling device before enabling it.
 
 ## CM5 installation path
 
-Keep the running kernel. Install application packages rather than upgrading the
-whole OS; the external working panel module is tied to its kernel version.
+Keep the running kernel. The dependency helper installs application packages
+without a full OS upgrade; the external working panel module is tied to its
+kernel version. Use the tested 64-bit Trixie / Python 3.13 platform.
 
 ```sh
-sudo apt-get install --no-install-recommends python3-pygame python3-opengl python3-pil \
-  pipewire-audio wireplumber fontconfig
 sudo ./scripts/install.sh --cm5-existing-display
 ```
 
@@ -67,20 +66,14 @@ The stock ST7701 hardware installer now requires explicit `--legacy-display`.
 It must not be selected for this CM5 or the reference LCD. The old uninstaller
 is not installed by the CM5 path because it manipulates display hardware files.
 
-## Dependencies outside the base UI
+## Reproducible application dependencies
 
-Keep Python wheels isolated under `/opt/ituner-sdr/vendor/python`; do not replace
-the OS-managed Python packages. `requirements-runtime.txt` describes PortAudio
-Python support (also needs OS package `libportaudio2`). Optional ASR requirements
-are separate; Deepgram is constrained to SDK 3.x to preserve the live API.
-
-Speech engines also need their model data. Before tagging a complete release,
-record the selected model download URLs/checksums and native-library versions,
-including any enabled RNNoise, Whisper, Airspy HF+ and RTL-SDR support. Large
-downloaded models and machine-built binaries belong in release assets or a
-verified download manifest, not as undocumented files existing only on LCD.
-Cloud API keys remain local. Installing a Python package alone is not proof its
-feature is ready. WSJT-X supplies the external `wsprd` executable.
+The installer now provisions OS libraries, 40 exactly pinned/hash-checked Python
+packages and verified model downloads for the accepted CM5 baseline. See
+[runtime-dependencies.md](runtime-dependencies.md) for supported platform,
+installation, isolated verification and update policy. No display drivers are
+installed by the dependency helper. Optional experimental engines remain outside
+this baseline, and cloud API keys stay local. OS security packages are not frozen.
 
 ## Accepted validation and future changes
 

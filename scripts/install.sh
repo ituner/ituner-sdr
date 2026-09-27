@@ -38,6 +38,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   build-essential raspberrypi-kernel-headers device-tree-compiler \
   python3-pygame python3-opengl python3-pil pipewire-audio wireplumber
 
+# The legacy hardware path also needs the same pinned application runtime.
+# This helper never edits display hardware; those changes remain below.
+bash "$repo_dir/scripts/install-dependencies.sh"
+
 install -d -m 0755 /usr/local/src/ituner-sdr-display /opt/ituner-sdr/UI /usr/local/lib/ituner-sdr "${state_dir}"
 install -m 0644 "${repo_dir}/display-driver/driver/Makefile" "${repo_dir}/display-driver/driver/panel-sitronix-st7701.c" /usr/local/src/ituner-sdr-display/
 install -m 0644 "${repo_dir}/display-driver/overlays/yousee-yx45011act2-pi5-overlay.dts" /usr/local/src/ituner-sdr-display/
