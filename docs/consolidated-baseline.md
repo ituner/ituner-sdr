@@ -19,8 +19,9 @@ drivers, private preferences and optional dependencies are identical.
   history, credentials, API keys, or private saved settings.
 - Separate machine startup profiles and reproducible dependency instructions.
 - A version manifest with checksums: `config/lcd-baseline-manifest.json`.
-- CM5 display source archived under `hardware/cm5/reference-display` for
-  recovery. Application installation does not install or rebuild that driver.
+- CM5 display source and opt-in [hardware build kit](../hardware/cm5/reference-display/README.md)
+  under `hardware/cm5/reference-display` for recovery and fresh hardware setup.
+  Application installation does not install or rebuild that driver.
 
 The consolidated baseline incorporates the actual live LCD files on top of main.
 It does not blindly merge the old LCD branch or reset LCD's dirty working tree.
