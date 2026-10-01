@@ -26,6 +26,15 @@ application/model baseline, not a complete OS image; experimental engines and
 hardware setup remain separate. The reference LCD's running source matches this
 baseline, but its old dirty Git checkout has not been reset or replaced.
 
+## CM5 / JD9365DA-H3 30-pin LCD hardware setup
+
+For a fresh system using the r2 main board's **YX80030ACT3 on FPC2**, see the
+[JD9365DA-H3 + GT911 build kit](hardware/cm5/reference-display/README.md).
+It includes the verified LCD module source, LCD/touch overlays, Makefile,
+boot and desktop configuration examples, installation and recovery steps.
+Touch uses the kernel's Goodix driver. Hardware setup is separate from the
+application installer; other panels using JD9365 may need different initialization.
+
 ## Legacy Raspberry Pi 5 / YX45011A hardware installation
 
 The remaining hardware instructions describe the legacy 400×960 ST7701 setup.
