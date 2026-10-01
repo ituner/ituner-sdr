@@ -537,10 +537,8 @@ WATERFALL_DEFAULT_SPEED = 4
 # to work on permissive receivers but cause others to keep the paired socket
 # open without emitting any waterfall frames.
 WATERFALL_MAX_SPEED = 4
-# Match the deep-blue/cyan waterfall texture used by the original iTuner
-# frontend artwork. It is deliberately distinct from both Kiwi's rainbow map
-# and the later ICE experiment.
-WATERFALL_DEFAULT_PALETTE = "classic"
+# New installs and Reset Display use the Kiwi palette. Saved choices remain valid.
+WATERFALL_DEFAULT_PALETTE = "kiwi"
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
@@ -1282,8 +1280,8 @@ OPENWEBRX_TEST_SERVER = "owrxs://rx.oh6ah.fi/"
 OPENWEBRX_TEST_FREQUENCY_KHZ = 7_100.0
 OPENWEBRX_TEST_ZOOM = 4
 OPENWEBRX_TEST_MODE = "LSB"
-FONT_LAB_PREV_BOX = (936, 16, 1020, 62)
-FONT_LAB_NEXT_BOX = (1028, 16, 1136, 62)
+FONT_LAB_PREV_BOX = (1040, 112, 1264, 174)
+FONT_LAB_NEXT_BOX = (1040, 190, 1264, 252)
 FONT_LAB_BACK_BOX = (1144, 16, 1264, 62)
 FONT_LAB_SAMPLE = "13.784.290"
 # Five physical 256 px columns, each with six real Pi-installed candidates.
@@ -1309,8 +1307,8 @@ FONT_LAB_PAGES = (
     ("BOLD WEIGHTS", FONT_LAB_FAMILIES, True),
     ("REGULAR WEIGHTS", FONT_LAB_FAMILIES, False),
 )
-FONT_LAB_COLUMN_WIDTH = 256
-FONT_LAB_SAMPLE_WIDTH = 230
+FONT_LAB_COLUMN_WIDTH = 1024 / 5
+FONT_LAB_SAMPLE_WIDTH = 184
 FONT_LAB_SIZE_CACHE = {}
 # The USB-radio workbench deliberately remains outside the normal receiver
 # flow until it has earned the same stability guarantees as KiwiSource.
@@ -1694,6 +1692,7 @@ def configure_popup_layout():
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
+    global FONT_LAB_BACK_BOX, WSPR_EXPANDED_LOG_BACK_BOX
     global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_BACK_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
@@ -1840,12 +1839,17 @@ def configure_popup_layout():
         TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
         TEST_RUN_BOX = (left_x0, rows[3], right_x1, rows[3] + 78)
         TEST_BACK_BOX = lcd_drawer_back_box()
+        FONT_LAB_BACK_BOX = lcd_drawer_back_box()
+        WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("rtl_lab")
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
      RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["rtl_lab"]
     )
+
+    if LCD_800_MODE:
+        RTL_LAB_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("wspr")
     (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, base_wspr_windows,
@@ -1910,7 +1914,7 @@ def configure_popup_layout():
         PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 8)
         PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 8)
         PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6, 8)
-        PICKER_EXIT_BOX = lcd_nav_box(7, 8)
+        PICKER_EXIT_BOX = lcd_drawer_back_box()
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
         RADIOGARDEN_EXIT_BOX = lcd_drawer_back_box()
@@ -4288,6 +4292,7 @@ class SharedState:
         self.connection_stream_failures = {"audio": 0, "waterfall": 0}
         # Workers register live sockets here so Pause can release Kiwi client
         # slots immediately instead of waiting for their next poll cycle.
+        self.kiwi_landing = {"active": False, "status": "idle"}
         self.transport_sockets = {}
         # Kiwi pairs SND and W/F by this browser-style millisecond session id.
         self.kiwi_session_timestamp = next_kiwi_session_timestamp()
@@ -4343,6 +4348,25 @@ class SharedState:
             self.fmdx_scan_request_generation += 1
             return self.fmdx_scan_requested, self.fmdx_scan_request_generation
 
+    def scan_tune(self, generation, expected_view, frequency, finished=False):
+        """A scan may move the dial only while it owns this receiver and view."""
+        with self.lock:
+            if generation != self.server_generation or self.receiver_type != "fmdx":
+                return None
+            if expected_view != self.view_generation:
+                self.fmdx_scan_requested = False
+                self.fmdx_scan_request_generation += 1
+                return None
+            if not finished and not self.fmdx_scan_requested:
+                return None
+            self.freq_khz = fmdx.clamp_receiver_frequency(self.server, frequency)
+            self.fmdx_status = {}
+            self.view_generation += 1
+            if finished:
+                self.fmdx_scan_requested = False
+                self.fmdx_scan_request_generation += 1
+            return self.view_generation
+
     def fmdx_scan_request_snapshot(self):
         with self.lock:
             return self.fmdx_scan_requested, self.fmdx_scan_request_generation
@@ -4355,6 +4379,7 @@ class SharedState:
 
     def set_view(self, freq_khz=None, zoom=None):
         with self.lock:
+            self.kiwi_landing.update(active=False, status="cancelled")
             if freq_khz is not None:
                 self.freq_khz = (
                     fmdx.clamp_receiver_frequency(self.server, freq_khz)
@@ -4401,8 +4426,16 @@ class SharedState:
             )
             self.fmdx_scan_requested = False
             self.fmdx_scan_request_generation += 1
+            landing_profile = None
             if self.receiver_type == "fmdx":
                 self.freq_khz = fmdx.receiver_frequency(server, self.freq_khz)
+                target = fmdx.nearest_station_frequency(self.fmdx_stations, self.freq_khz)
+                if target is not None:
+                    self.freq_khz = fmdx.clamp_receiver_frequency(server, target)
+            elif not owrx.is_openwebrx_endpoint(server):
+                landing_profile = kiwi_landing_profile(self.radio_mode)
+                self.freq_khz = landing_profile["default_khz"]
+                self.zoom = landing_profile["zoom"]
             # Selecting another receiver is an intentional request to listen
             # to it, even if the previous one had been paused.
             self.stream_paused = False
@@ -4420,6 +4453,12 @@ class SharedState:
             self.spectrum_peak_history.clear()
             self.view_generation += 1
             self.server_generation += 1
+            self.kiwi_landing = {
+                **(landing_profile or {}), "active": landing_profile is not None,
+                "status": "scanning" if landing_profile else "idle",
+                "server_generation": self.server_generation,
+                "view_generation": self.view_generation,
+            }
             self.kiwi_session_timestamp = next_kiwi_session_timestamp()
             self.radio_generation += 1
             self.connection_announce = True
@@ -4633,10 +4672,48 @@ class SharedState:
         if radio_mode not in KIWI_RADIO_MODES:
             raise ValueError(f"unsupported Kiwi mode: {radio_mode}")
         with self.lock:
+            self.kiwi_landing.update(active=False, status="cancelled")
             self.radio_mode = radio_mode.lower()
             self.low_cut, self.high_cut = kiwi_mode_filter(self.radio_mode)
             self.radio_generation += 1
             return self.radio_mode, self.low_cut, self.high_cut, self.radio_generation
+
+    def kiwi_landing_ready(self):
+        """Wait for actual waterfall data, not the temporary connection badge."""
+        with self.lock:
+            return bool(self.kiwi_landing.get("active") and
+                        self.connection_streams.get("waterfall") and
+                        not self.stream_paused)
+
+    def kiwi_landing_snapshot(self):
+        with self.lock:
+            return dict(self.kiwi_landing)
+
+    def finish_kiwi_landing(self, generation, frequency_khz=None):
+        with self.lock:
+            landing = self.kiwi_landing
+            if (
+                self.receiver_type != "kiwi"
+                or not landing.get("active")
+                or generation != self.server_generation
+                or landing.get("server_generation") != generation
+                or landing.get("view_generation") != self.view_generation
+            ):
+                return None
+            status = "no_signal"
+            if frequency_khz is not None:
+                frequency_khz = snap_frequency_khz(
+                    clamp(float(frequency_khz), landing["low_khz"], landing["high_khz"]),
+                    landing["step_hz"],
+                )
+                self.freq_khz = frequency_khz
+                self.view_generation += 1
+                status = "tuned"
+            landing["active"] = False
+            landing["status"] = status
+            landing["view_generation"] = self.view_generation
+            landing["completed_at"] = time.monotonic()
+            return status, self.freq_khz
 
     def audio_snapshot(self):
         with self.lock:
@@ -7782,7 +7859,7 @@ def draw_radio_setup_panel(
         # Cover the old Home tiles as the drawer grows, but intentionally do
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
-        draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, reveal_y, (6, 13, 19, 246))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, (6, 13, 19, 255))
         if reveal_y < y0 + 44:
             return
         close_x0, close_y0, close_x1, close_y1 = lcd_radio_drawer_close_box()
@@ -9552,7 +9629,7 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
     """Right-rail audio drawer; it never obscures the waterfall workspace."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
-    draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
     draw_radio_close_button(text_cache, lcd_audio_drawer_close_box())
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
@@ -9866,10 +9943,13 @@ def draw_font_lab(text_cache, page):
         "lm", family="Liberation Sans",
     )
     draw_text(
-        text_cache, 18, 48, f"PAGE {page + 1}/{len(FONT_LAB_PAGES)}  /  {page_title}  /  230 PX WIDTH", (121, 164, 171), 13,
+        text_cache, 18, 48, f"PAGE {page + 1}/{len(FONT_LAB_PAGES)}  /  {page_title}  /  184 PX WIDTH", (121, 164, 171), 13,
         True, False, "lm", family="Liberation Sans",
     )
+    draw_settings_leaf_sidebar(text_cache, "FONT LAB", "FONT PAGES")
     for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT"), (FONT_LAB_BACK_BOX, "BACK")):
+        if label == "BACK":
+            continue
         x0, y0, x1, y1 = box
         draw_logical_rect(x0, y0, x1, y1, (17, 35, 43, 246))
         for line in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
@@ -9904,6 +9984,7 @@ def draw_font_lab(text_cache, page):
                 specimen_bold, False, "cm", family=family,
             )
     draw_logical_line(LOGICAL_W - 1, header_h, LOGICAL_W - 1, LOGICAL_H, (98, 140, 147, 108), 1)
+    draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
 def draw_rtl_lab_panel(text_cache, rtl_lab):
@@ -9940,7 +10021,7 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
         "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
         running,
     )
-    draw_tests_button(text_cache, RTL_LAB_BACK_BOX, "BACK TO TESTS", "STOP AND RETURN", False)
+    draw_settings_leaf_sidebar(text_cache, "LOCAL SDR", "BACK TO APPS")
     detail = fit_station_text(text_cache, snapshot["detail"], x1 - x0 - 48, 15, False, False, family="Liberation Sans")
     draw_text(text_cache, x0 + 24, y1 - 18, detail, (149, 190, 194), 15, False, True, "lm", family="Liberation Sans")
 
@@ -11086,24 +11167,19 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
 def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows=0):
     """One-column, full-screen recent decode log for one WSPR monitor."""
     snapshot = monitor.snapshot() if monitor is not None else {}
-    x0, x1 = 28, LOGICAL_W - 28
+    x0, x1 = 28, rf_canvas_width() - 28
     header_h = WSPR_EXPANDED_LOG_HEADER_H
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, LOGICAL_W, header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, LOGICAL_W, header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR LOG", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0, 59, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
     status = str(snapshot.get("decode_status", "ARMED"))
     status_color = (114, 235, 180) if status in ("CAPTURE", "DECODED") else ((243, 190, 102) if status == "DECODING" else (183, 213, 215))
-    draw_text(text_cache, 940, 28, status, status_color, 18, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 940, 57, str(receiver_grid or "NO RX GRID"), (160, 205, 208), 15, True, True, "lm", family="Liberation Mono")
-    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
-    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
-    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
-    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
-
+    draw_text(text_cache, x1, 28, status, status_color, 18, True, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, x1, 57, str(receiver_grid or "NO RX GRID"), (160, 205, 208), 15, True, True, "rm", family="Liberation Mono")
     columns = {
         "utc": x0 + 6, "snr": x0 + 150, "call": x0 + 230,
         "grid": x0 + 520, "pwr": x0 + 720, "km": x1 - 12,
@@ -11137,34 +11213,30 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
             draw_text(text_cache, columns[key], y, values[key], (230, 244, 245), 21, False, True, anchor, family="Liberation Mono")
     footer = f"{len(spots)} RECENT SPOTS  ·  SWIPE TO REVIEW" if len(spots) > WSPR_EXPANDED_LOG_ROWS else f"{len(spots)} RECENT SPOTS"
     draw_text(text_cache, x0, LOGICAL_H - 22, footer, (112, 185, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
 def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows=0):
     """Full-screen WSPR waterfall review backed only by each tile's RAM ring."""
     header_h = WSPR_EXPANDED_LOG_HEADER_H
-    x0, x1 = 28, LOGICAL_W - 28
+    x0, x1 = 28, rf_canvas_width() - 28
     wf_y0, wf_y1 = header_h + 12, LOGICAL_H - 38
     snapshot = monitor.snapshot() if monitor is not None else {}
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 10, 16, 255))
-    draw_logical_rect(0, 0, LOGICAL_W, header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, LOGICAL_W, header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 10, 16, 255))
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR WATERFALL", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0, 59, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
-    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
-    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
-    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
-    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
-
     count = texture.history_count() if texture is not None else 0
     max_scroll = texture.history_scroll_max() if texture is not None else 0
     scroll_rows = int(clamp(scroll_rows, 0, max_scroll))
     status = str(snapshot.get("status", "QUEUED"))
     state_text = "LIVE" if scroll_rows == 0 else f"HISTORY {scroll_rows} ROWS"
     state_color = (112, 239, 183) if scroll_rows == 0 else (230, 194, 113)
-    draw_text(text_cache, 930, 28, state_text, state_color, 18, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 930, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", (160, 205, 208), 14, True, True, "lm", family="Liberation Mono")
+    draw_text(text_cache, x1, 28, state_text, state_color, 18, True, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, x1, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", (160, 205, 208), 14, True, True, "rm", family="Liberation Mono")
 
     draw_logical_rect(x0, wf_y0, x1, wf_y1, (1, 7, 14, 255))
     if texture is not None and count:
@@ -11181,6 +11253,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
         draw_logical_line(ax0, ay0, ax1, ay1, (86, 166, 170, 150), 1)
     footer = "SWIPE UP FOR OLDER WATERFALL  ·  TAP BACK TO RETURN" if max_scroll else "BUILDING 800-ROW RAM HISTORY"
     draw_text(text_cache, x0, LOGICAL_H - 18, footer, (113, 187, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
 def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid, graph_cache):
@@ -11235,29 +11308,19 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     points, loading, ready = history_cache.points_for(tile, window_index)
     window_s = WSPR_DISTANCE_WINDOWS[window_index]
     now = time.time()
-    x0, x1 = 28, LOGICAL_W - 28
+    x0, x1 = 28, rf_canvas_width() - 28
     header_h = 146
     plot_x0, plot_x1 = x0 + 74, x1 - 24
     plot_y0, plot_y1 = header_h + 22, LOGICAL_H - 64
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, LOGICAL_W, header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, LOGICAL_W, header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 680, 20, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0, 57, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
     state = "LOADING HISTORY" if loading else ("PRECOMPUTED" if ready else "WAITING")
     draw_text(text_cache, 888, 57, state, (118, 224, 185) if ready else (234, 187, 106), 15, True, True, "lm", family="Liberation Sans")
-    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
-    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
-    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
-    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
-    for index, box in enumerate(wspr_distance_range_boxes()):
-        active = index == window_index
-        draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
-        draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
-        draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
-
     draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
     max_distance = max((distance for _stamp, distance in points), default=0.0)
     distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
@@ -11291,13 +11354,14 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
         draw_text(text_cache, x, plot_y1 + 24, label, (123, 186, 184), 15, True, True, "cm", family="Liberation Mono")
     footer = f"{len(points)} CACHED DISTANCE POINTS  ·  DOTS = DECODED PATHS"
     draw_text(text_cache, x0, LOGICAL_H - 22, footer, (112, 185, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
 def wspr_expanded_graph_boxes(tile_count, page):
     """Two long MRTG plots per page, with vertical swipe for later receivers."""
     page_count = max(1, math.ceil(max(1, tile_count) / WSPR_EXPANDED_GRAPH_PER_PAGE))
     page = int(clamp(page, 0, page_count - 1))
-    x0, y0, x1, y1 = 28, 154, LOGICAL_W - 28, LOGICAL_H - 42
+    x0, y0, x1, y1 = 28, 154, rf_canvas_width() - 28, LOGICAL_H - 42
     gap = 16
     width = x1 - x0
     height = (y1 - y0 - gap) / WSPR_EXPANDED_GRAPH_PER_PAGE
@@ -11346,9 +11410,9 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     """A familiar MRTG overview: two detailed receiver histories per page."""
     window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
     boxes, page, page_count = wspr_expanded_graph_boxes(len(tiles), page)
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, LOGICAL_W, 140, (8, 29, 35, 250))
-    draw_logical_line(0, 139, LOGICAL_W, 139, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
+    draw_logical_rect(0, 0, rf_canvas_width(), 140, (8, 29, 35, 250))
+    draw_logical_line(0, 139, rf_canvas_width(), 139, (81, 184, 166, 176), 1)
     draw_text(text_cache, 28, 28, "WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
@@ -11356,10 +11420,6 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
         draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
         draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
         draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
-    bx0, by0, bx1, by1 = WSPR_EXPANDED_LOG_BACK_BOX
-    draw_logical_rect(bx0, by0, bx1, by1, (11, 42, 47, 234))
-    draw_logical_line(bx0, by0, bx1, by0, (115, 225, 188, 196), 1)
-    draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "BACK", (230, 248, 246), 18, True, True, "cm", family="Liberation Sans")
     start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
     visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
     for index, box in enumerate(boxes):
@@ -11371,8 +11431,8 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
             )
         else:
             draw_logical_rect(*box, (4, 14, 20, 160))
-    draw_text(text_cache, LOGICAL_W - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", (132, 194, 191), 14, True, True, "rm", family="Liberation Mono")
-
+    draw_text(text_cache, rf_canvas_width() - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", (132, 194, 191), 14, True, True, "rm", family="Liberation Mono")
+    draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(None, None), receiver_grid=None,
                            rate_info=None, mini_distance_cache=None):
@@ -12717,7 +12777,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
                              instrument_layout="expanded"):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
-        draw_logical_rect(LCD_NAV_X0, y0, LOGICAL_W, y1, (6, 13, 19, 246))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(
             text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS", False,
@@ -13518,9 +13578,11 @@ def lcd_radio_drawer_reveal_y():
 def lcd_nav_top(item_count=None):
     """Bottom-align only the rows actually present in this rail view."""
     item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
-    rows = math.ceil(item_count / 2)
+    has_back = item_count in (len(SETTINGS_MENU_ITEMS), len(DIGITAL_MENU_ITEMS), 8)
+    rows = math.ceil((item_count - int(has_back)) / 2)
     tiles_h = rows * LCD_NAV_TILE_H + (rows - 1) * LCD_NAV_GAP
-    return max(LCD_NAV_TOP_MIN, lcd_rail_bottom() - LCD_CONTROL_GAP - tiles_h)
+    bottom = lcd_drawer_back_box()[1] - 20 if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
+    return max(LCD_NAV_TOP_MIN, bottom - tiles_h)
 
 
 def lcd_home_mode_grid_geometry(show_compact_readouts=True):
@@ -13540,6 +13602,35 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     compact_cell_h = 31
     grid_y0 = compact_grid_y0 if show_compact_readouts else 28
     return grid_y0, compact_cell_h, gap
+
+
+def lcd_home_mode_boxes(show_compact_readouts=True):
+    x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
+    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
+    grid_w = (x1 - x0 - 12) * 0.85
+    grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
+    cell_w = (grid_w - 3 * gap) / 4
+    for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+        left = grid_x0 + (index % 4) * (cell_w + gap)
+        top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
+        yield label, (left, top, left + cell_w, top + cell_h)
+
+
+def engage_home_mode(state, x, y, compact=True, local_receiver=None):
+    """Commit a tapped Home mode before opening its options drawer."""
+    if state.receiver_type_snapshot() == "fmdx" and local_receiver is None:
+        return None
+    for label, box in lcd_home_mode_boxes(compact):
+        if contains(box, x, y):
+            mode = "NBFM" if label == "NFM" else label
+            if local_receiver is not None:
+                if not local_receiver.set_home_mode(mode):
+                    return None
+                state.set_radio_mode(local_receiver.shared_radio_mode(mode))
+            else:
+                state.set_radio_mode(mode)
+            return mode
+    return None
 
 
 def lcd_home_mode_grid_bottom(show_compact_readouts=True):
@@ -13776,7 +13867,7 @@ def lcd_home_bandwidth_box(show_compact_readouts=True):
 
 def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
-    if item_count == len(SETTINGS_MENU_ITEMS) and index == len(SETTINGS_MENU_ITEMS) - 1:
+    if item_count in (len(SETTINGS_MENU_ITEMS), len(DIGITAL_MENU_ITEMS), 8) and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
     row = index // 2
@@ -14147,6 +14238,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         )
     for index, (kind, label) in enumerate(items):
         bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
+        if kind in ("settings_back", "digital_back"):
+            draw_radio_close_button(text_cache, lcd_drawer_back_box())
+            continue
         tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
         draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
         tex, _tex_w, _tex_h = menu_icon_texture(
@@ -14268,16 +14362,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
             draw_text(text_cache, lx, meter_y1 - 8, label, color, 12, True, False, "cm", family="Liberation Sans")
 
-    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-    grid_w = (x1 - x0 - 12) * 0.85
-    grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
-    cell_w = (grid_w - 3 * gap) / 4
-    for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
-        col, row = index % 4, index // 4
-        bx0 = grid_x0 + col * (cell_w + gap)
-        bx1 = bx0 + cell_w
-        by0 = y0 + grid_y0 + row * (cell_h + gap)
-        by1 = by0 + cell_h
+    for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts):
         active = mode_annunciator_active(label, active_mode, digital)
         if active:
             label_w, label_h = text_cache.font(14, bold=True, family="Liberation Sans").size(label)
@@ -14384,11 +14469,11 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
 
 def network_panel_boxes():
     """Large, touch-safe Network Manager layout for the 1280x800 display."""
-    panel = (28, 32, LOGICAL_W - 28, LOGICAL_H - 28)
+    panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
     x0, y0, x1, y1 = panel
     return {
         "panel": panel,
-        "back": (x1 - 156, y0 + 16, x1 - 20, y0 + 72),
+        "back": lcd_drawer_back_box(),
         "rescan": (x0 + 20, y1 - 72, x0 + 192, y1 - 16),
         "join": (x0 + 208, y1 - 72, x0 + 380, y1 - 16),
         "ethernet": (x0 + 20, y0 + 110, x0 + 434, y0 + 250),
@@ -14503,7 +14588,7 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
     draw_text(text_cache, x0 + 20, y0 + 35, "NETWORK", (230, 245, 247), 26, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 20, y0 + 66, "ETHERNET PREFERRED  ·  WI-FI AUTOMATIC BACKUP", (121, 187, 184), 14, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 20, y0 + 91, "SELECT A WI-FI NETWORK, THEN ENTER ITS KEY", (171, 220, 215), 14, True, False, "lm", family="Liberation Sans")
-    draw_picker_button(text_cache, boxes["back"], "BACK", 17)
+    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO SETTINGS")
     draw_network_status_card(text_cache, boxes["ethernet"], "ETHERNET", devices.get("eth0"), True)
     draw_network_status_card(text_cache, boxes["wifi"], "WI-FI", devices.get("wlan0"), False)
     lx0, ly0, lx1, ly1 = boxes["list"]
@@ -14772,6 +14857,94 @@ def receiver_tuning_bounds(server, receiver_type):
     return 0.0, TUNING_MAX_KHZ
 
 
+KIWI_LANDING_PROFILES = {
+    "AM": (520.0, 1710.0, 1115.0, 4, 1000),
+    "SAM": (520.0, 1710.0, 1115.0, 4, 1000),
+    "USB": (14000.0, 14350.0, 14225.0, 6, 100),
+    "LSB": (7000.0, 7300.0, 7150.0, 6, 100),
+    "CW": (7000.0, 7125.0, 7062.5, 7, 10),
+    "NBFM": (28200.0, 29700.0, 28950.0, 4, 5000),
+    "IQ": (0.0, TUNING_MAX_KHZ, 15000.0, 0, 1000),
+    "DRM": (9500.0, 9700.0, 9600.0, 7, 1000),
+}
+
+
+def kiwi_landing_profile(radio_mode):
+    family = KIWI_MODE_FAMILY.get(str(radio_mode).upper(), "AM")
+    low_khz, high_khz, default_khz, zoom, step_hz = KIWI_LANDING_PROFILES[family]
+    return {
+        "family": family,
+        "low_khz": low_khz,
+        "high_khz": high_khz,
+        "default_khz": default_khz,
+        "zoom": zoom,
+        "step_hz": step_hz,
+    }
+def closest_strong_spectrum_frequency(values, center_khz, span_khz, minimum_contrast=0.12):
+    """Return the strongest clear local spectrum peak, or None for noise-only data."""
+    values = tuple(float(value) for value in values)
+    if len(values) < 5 or span_khz <= 0:
+        return None
+    ordered = sorted(values)
+    baseline = ordered[len(ordered) // 2]
+    threshold = max(0.35, baseline + minimum_contrast)
+    center_index = (len(values) - 1) / 2.0
+    peaks = [
+        index for index in range(1, len(values) - 1)
+        if values[index] >= threshold
+        and values[index] >= values[index - 1]
+        and values[index] >= values[index + 1]
+    ]
+    if not peaks:
+        return None
+    peak_index = min(
+        peaks,
+        key=lambda index: (-values[index], abs(index - center_index), index),
+    )
+    fraction = (peak_index + 0.5) / len(values) - 0.5
+    return float(center_khz) + fraction * float(span_khz)
+
+def resolve_kiwi_landing_scan(state, spectrum_values, elapsed_seconds):
+    """Finish one mode-scoped Kiwi landing when a peak or timeout is available."""
+    landing = state.kiwi_landing_snapshot()
+    if not landing.get("active"):
+        return None
+    _server, center_khz, zoom, _smeter, _view_generation, generation = state.snapshot()
+    if generation != landing.get("server_generation"):
+        return None
+    candidate = closest_strong_spectrum_frequency(
+        spectrum_values, center_khz, kiwi.zoom_source_span_khz(zoom),
+    )
+    if candidate is not None and not (
+        landing["low_khz"] <= candidate <= landing["high_khz"]
+    ):
+        candidate = None
+    if candidate is None and float(elapsed_seconds) < 2.0:
+        return None
+    return state.finish_kiwi_landing(generation, candidate)
+
+def advance_kiwi_landing_connection(
+    state, connection_status, connected_at, now, spectrum_values,
+):
+    """Wait for a connected Kiwi spectrum, then resolve its landing scan."""
+    if not state.kiwi_landing_snapshot().get("active"):
+        return 0.0, None
+    if connection_status != "connected":
+        return 0.0, None
+    if connected_at <= 0.0:
+        return float(now), None
+    result = resolve_kiwi_landing_scan(
+        state, spectrum_values, float(now) - float(connected_at),
+    )
+    return (0.0 if result is not None else connected_at), result
+
+def receiver_waterfall_center(tuned_khz, span_khz, receiver_type):
+    """FM-DX audio rows are centered on their FM carrier, outside Kiwi HF."""
+    if receiver_type == "fmdx":
+        return float(tuned_khz)
+    return waterfall_view_center_khz(tuned_khz, span_khz)
+
+
 def receiver_display_span(zoom, receiver_type):
     return (
         fmdx.audio_waterfall_span_khz(zoom)
@@ -14814,7 +14987,7 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_ROUTE_DIRECT_BOX, "KIWI", 18, route_filter == "kiwi")
         draw_picker_button(text_cache, PICKER_ROUTE_PROXY_BOX, "FMDX", 18, route_filter == "fmdx")
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
-    draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if LCD_800_MODE else 20)
+    draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
 
     for idx, station in enumerate(stations):
         name, location, server, listener_used, listener_total = station_fields(station)
@@ -15753,6 +15926,7 @@ def draw_ui(
     compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
     ruler_center_khz=None,
+    sidebar_open=False,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -15861,7 +16035,7 @@ def draw_ui(
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
-    if LCD_800_MODE:
+    if LCD_800_MODE and not (sidebar_open or settings_menu_open or digital_menu_open):
         draw_lcd_mode_annunciators(
             text_cache, mode, digital, freq_khz, smeter_dbm,
             show_compact_readouts=not show_large_instruments,
@@ -19069,6 +19243,8 @@ def fmdx_audio_session(
     preset_queue = queue.Queue(maxsize=1)
     analyzer = fmdx.AudioWaterfallAnalyzer(bins=SPECTRUM_BINS)
     ready = threading.Event()
+    scan_frequencies = ()
+    scan_view_generation = None
     audio_args = argparse.Namespace(**vars(args))
     audio_args.audio_rate = fmdx.AUDIO_SAMPLE_RATE
 
@@ -19116,13 +19292,14 @@ def fmdx_audio_session(
 
         def finish_scan(restore=True):
             nonlocal scan_frequencies, scan_index, scan_deadline, scan_tuned_at
+            if restore and scan_view_generation is not None:
+                state.scan_tune(server_generation, scan_view_generation, scan_origin_khz, finished=True)
             scan_frequencies = ()
             scan_index = 0
             scan_deadline = 0.0
             scan_tuned_at = 0.0
             state.request_fmdx_scan(False, server_generation)
-            if restore:
-                state.set_view(freq_khz=scan_origin_khz)
+
 
         while not stop_event.is_set():
             if state.stream_paused_snapshot() or state.external_audio_snapshot():
@@ -19142,20 +19319,14 @@ def fmdx_audio_session(
                 seen_scan_request_generation = scan_request_generation
                 if scan_requested and not scan_frequencies:
                     scan_origin_khz = freq_khz
-                    known = state.fmdx_stations_snapshot()
-                    candidates = fmdx.rds_discovery_frequencies(known, freq_khz)
-                    if not candidates:
-                        bounds = fmdx.receiver_bounds(server) or (
-                            fmdx.DEFAULT_MIN_KHZ, fmdx.DEFAULT_MAX_KHZ,
-                        )
-                        candidates = tuple(sorted(
-                            fmdx.band_scan_frequencies(*bounds),
-                            key=lambda candidate: abs(candidate - freq_khz),
-                        )[:fmdx.RDS_DISCOVERY_MAX_PRESETS])
+                    bounds = fmdx.receiver_bounds(server) or (
+                        fmdx.DEFAULT_MIN_KHZ, fmdx.DEFAULT_MAX_KHZ,
+                    )
+                    candidates = fmdx.band_scan_frequencies(*bounds)
                     scan_frequencies = candidates
                     scan_index = 0
                     if scan_frequencies:
-                        state.set_view(freq_khz=scan_frequencies[0])
+                        scan_view_generation = state.scan_tune(server_generation, view_generation, scan_frequencies[0])
                         scan_index = 1
                         scan_tuned_at = now
                         scan_deadline = now + fmdx.RDS_DISCOVERY_DWELL_SECONDS
@@ -19163,15 +19334,22 @@ def fmdx_audio_session(
                         finish_scan(restore=False)
                 elif not scan_requested and scan_frequencies:
                     finish_scan(restore=True)
+            if scan_frequencies and (scan_view_generation is None or (
+                state.snapshot()[4] != scan_view_generation
+            )):
+                finish_scan(restore=False)
             if scan_frequencies and now >= scan_deadline:
                 if scan_index >= len(scan_frequencies):
                     finish_scan(restore=True)
                 else:
-                    state.set_view(freq_khz=scan_frequencies[scan_index])
+                    scan_view_generation = state.scan_tune(server_generation, scan_view_generation, scan_frequencies[scan_index])
                     scan_index += 1
                     scan_tuned_at = now
                     scan_deadline = now + fmdx.RDS_DISCOVERY_DWELL_SECONDS
                 current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+            current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+            if generation != server_generation:
+                break
             if view_generation != seen_view_generation and now >= next_tune_at:
                 control.send_text(fmdx.tune_command(freq_khz))
                 analyzer.reset()
@@ -19209,6 +19387,8 @@ def fmdx_audio_session(
                     if packet and not packet.startswith(b"{"):
                         decoder.feed(packet)
     finally:
+        if scan_frequencies and scan_view_generation is not None:
+            state.scan_tune(server_generation, scan_view_generation, scan_origin_khz, finished=True)
         if state.fmdx_scan_request_snapshot()[0]:
             state.request_fmdx_scan(False, server_generation)
         if decoder:
@@ -20490,6 +20670,7 @@ def main():
     radio_setup_open = False
     band_navigation_open = False
     radio_family_open = None
+    kiwi_landing_connected_at = 0.0
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
     display_setup_open = False
@@ -21342,7 +21523,7 @@ def main():
             return
         # The retune test is observational. It must not unexpectedly change
         # the current demodulator while it crosses a nearby band threshold.
-        if retune_sweep is not None:
+        if retune_sweep is not None or state.kiwi_landing_snapshot().get("status") in ("scanning", "tuned", "no_signal"):
             return
         desired_mode = default_sideband_mode(freq_khz)
         if manual_radio_mode or desired_mode == auto_sideband_mode:
@@ -21415,7 +21596,7 @@ def main():
     def active_waterfall_center(tuned_khz, span_khz):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
             return float(tuned_khz)
-        return waterfall_view_center_khz(tuned_khz, span_khz)
+        return receiver_waterfall_center(tuned_khz, span_khz, state.receiver_type_snapshot())
 
     def active_source_span_khz(zoom_level):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
@@ -23519,6 +23700,16 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 wake_controls()
+                                selected_mode = engage_home_mode(
+                                    state, x, y, instrument_layout == "compact",
+                                    rtl_lab if rtl_lab.is_running() else None,
+                                ) if LCD_800_MODE else None
+                                if selected_mode is not None:
+                                    radio_mode = selected_mode
+                                    manual_radio_mode = True
+                                    filter_custom_width = False
+                                    digital_mode = "IQ" if radio_mode == "IQ" else "DIG"
+                                    remember_current_view()
                                 radio_setup_open = not radio_setup_open
                                 radio_family_open = None
                                 menu_open = False
@@ -25535,6 +25726,19 @@ def main():
                         scout_probe.stop()
                         globe_next_scout_rotation = now + 3600.0
                         globe_status = f"Scout cap reached: {SCOUT_MAX_TOTAL} locations mapped"
+            kiwi_landing_connected_at, landing_result = advance_kiwi_landing_connection(
+                state, "connected" if state.kiwi_landing_ready() else None, kiwi_landing_connected_at,
+                now, state.spectrum_snapshot()[1],
+            )
+            if landing_result is not None:
+                landing_status, landed_khz = landing_result
+                _server, freq_khz, zoom, _smeter, _view_gen, _server_gen = state.snapshot()
+                display_freq = candidate_freq = landed_khz
+                drain_queue(line_queue)
+                wf_texture.clear()
+                animate_to(landed_khz, kiwi.zoom_to_span_khz(zoom), 0.16)
+                remember_current_view()
+                print(f"gl Kiwi landing {landing_status} {landed_khz:.3f} kHz", flush=True)
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
@@ -25766,6 +25970,9 @@ def main():
                 ),
                 status_y0=LOGICAL_H - BOTTOM_STATUS_H,
                 ruler_center_khz=view_center_khz,
+                sidebar_open=(radio_setup_open or display_setup_open or audio_panel_open
+                    or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
+                    or network_panel_open or tests_panel_open or picker_open or globe_open),
             )
             if compact_font_review_open and instrument_layout == "compact":
                 draw_compact_font_review(
