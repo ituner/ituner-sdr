@@ -118,7 +118,7 @@ class WaterfallPresentationTests(unittest.TestCase):
                 mocks['draw_lcd_mode_annunciators'].assert_not_called()
 
     def test_settings_back_uses_shared_renderer(self):
-        with patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'), \
+        with patch.object(ui,'draw_sidebar_header'), patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'), \
              patch.object(ui,'lcd_nav_tile_background',return_value=(1,1,1)), \
              patch.object(ui,'menu_icon_texture',return_value=(1,1,1)), \
              patch.object(ui,'draw_textured_quad'), patch.object(ui,'draw_radio_close_button') as back:

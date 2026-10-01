@@ -1085,7 +1085,15 @@ def radio_popup_box(box):
     return radio_popup_x(x0), radio_popup_y(y0), radio_popup_x(x1), radio_popup_y(y1)
 
 
-def radio_step_options():
+FMDX_TUNE_STEPS_HZ = (50_000, 100_000, 200_000)
+
+
+def radio_step_options(receiver_type="kiwi"):
+    if receiver_type == "fmdx":
+        for index, step in enumerate(FMDX_TUNE_STEPS_HZ):
+            y = 460 + index * 66
+            yield step, (LCD_NAV_X0 + 17, y, LOGICAL_W - 17, y + 54)
+        return
     if LCD_800_MODE:
         x0, _y0, x1, _y1 = radio_panel_box()
         gap = 7
@@ -1972,7 +1980,7 @@ def dual_vfo_layout():
         "b_header": (0, split_y1, rf_w, split_y1 + header_h),
         "b_waterfall": (0, split_y1 + header_h, rf_w, LOGICAL_H),
         "rail": (rf_w, 0, LOGICAL_W, LOGICAL_H),
-        "home": (1040, 10, 1264, 64),
+        "home": lcd_drawer_back_box(),
         # Per-VFO zoom stays over the matching waterfall, using the same
         # quiet glass control language as the primary receiver.
         "zoom_a_group": (16, 324, 248, 386),
@@ -2001,8 +2009,8 @@ def dual_vfo_layout():
         # tool rail, rather than competing with either VFO header.
         "mix_track": (1042, 371, 1262, 435),
         # Cloning is an occasional setup action, so keep it out of the
-        # mixer/receiver flow at the quiet bottom of the rail.
-        "clone": (1042, 742, 1262, 790),
+        # mixer flow, above its controls and clear of the bottom Back button.
+        "clone": (1042, 292, 1262, 340),
     }
 
 
@@ -2214,6 +2222,7 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
     rx0, ry0, rx1, ry1 = boxes["rail"]
     draw_logical_rect(rx0, ry0, rx1, ry1, (5, 12, 18, 255))
     draw_logical_line(rx0, ry0, rx0, ry1, (105, 139, 150, 175), 1)
+    draw_sidebar_header(text_cache, "DUAL VFO")
     draw_radio_close_button(text_cache, boxes["home"])
 
     draw_dual_vfo_zoom_controls(
@@ -3947,6 +3956,16 @@ def snap_frequency_khz(freq_khz, step_hz):
     """Return a receiver frequency aligned to the visible tuning step."""
     step_hz = max(1, int(step_hz))
     return round(freq_khz * 1000 / step_hz) * step_hz / 1000
+
+
+def receiver_drag_span(span_khz, receiver_type, fm_step_hz):
+    return fm_step_hz / 1000.0 * rf_canvas_width() / 40 if receiver_type == "fmdx" else span_khz
+
+
+def receiver_tune_step_hz(zoom, kiwi_step, receiver_type, fm_step=100_000):
+    if receiver_type == "fmdx":
+        return fm_step if fm_step in FMDX_TUNE_STEPS_HZ else 100_000
+    return finger_tune_step_hz(zoom, kiwi_step)
 
 
 def finger_tune_step_hz(zoom, base_step_hz):
@@ -7700,14 +7719,13 @@ def radio_variant_layout(modes):
 
 
 def fmdx_control_layout(stations, scan_active=False):
-    """Reuse the first drawer cells for explicit FM-DX station actions."""
-    boxes = [box for _family, _modes, box in radio_mode_layout()]
-    actions = []
+    """Separate station navigation and scanning from the RDS status block."""
+    left, right = LCD_NAV_X0 + 17, LOGICAL_W - 17
+    middle = (left + right) / 2
     if stations:
-        actions.extend(("preset_previous", "preset_next"))
-    actions.append("scan_stop" if scan_active else "scan_start")
-    for action, box in zip(actions, boxes):
-        yield action, box
+        yield "preset_previous", (left, 248, middle - 4, 310)
+        yield "preset_next", (middle + 4, 248, right, 310)
+    yield "scan_stop" if scan_active else "scan_start", (left, 328, right, 394)
 
 
 def radio_option_at(
@@ -7727,7 +7745,7 @@ def radio_option_at(
         for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
             if contains(box, x, y):
                 return "fmdx_action", action
-    for step_hz, box in radio_step_options():
+    for step_hz, box in radio_step_options(receiver_type):
         if contains(box, x, y):
             return "step", step_hz
     return None
@@ -7860,6 +7878,7 @@ def draw_radio_setup_panel(
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, (6, 13, 19, 255))
+        draw_sidebar_header(text_cache, "FM-DX" if receiver_type == "fmdx" else "MODES")
         if reveal_y < y0 + 44:
             return
         close_x0, close_y0, close_x1, close_y1 = lcd_radio_drawer_close_box()
@@ -7872,7 +7891,7 @@ def draw_radio_setup_panel(
             draw_text(text_cache, x0 + 12, y0 + 108, "MODE IS SERVER CONTROLLED", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
             draw_text(text_cache, x0 + 12, y0 + 137, ps[:24], (229, 243, 246), 15, True, False, "lm", family="Liberation Sans")
             draw_text(text_cache, x0 + 12, y0 + 158, f"{len(fmdx_stations)} station presets", (145, 183, 190), 11, False, False, "lm", family="Liberation Sans")
-            labels = {"preset_previous": "PREV", "preset_next": "NEXT", "scan_start": "SCAN", "scan_stop": "STOP"}
+            labels = {"preset_previous": "PREV", "preset_next": "NEXT", "scan_start": "SCAN BAND", "scan_stop": "STOP SCAN"}
             for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
                 if reveal_y >= box[3]:
                     draw_radio_option(text_cache, box, labels[action], action == "scan_stop")
@@ -7880,10 +7899,10 @@ def draw_radio_setup_panel(
             for family, modes, box in radio_mode_layout(mode_families):
                 if reveal_y >= box[3]:
                     draw_radio_family_option(text_cache, box, family, modes, active_mode)
-        step_y0 = lcd_radio_step_y0(len(mode_families))
+        step_y0 = 460 if receiver_type == "fmdx" else lcd_radio_step_y0(len(mode_families))
         if reveal_y >= step_y0:
             draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
-        for option, box in radio_step_options():
+        for option, box in radio_step_options(receiver_type):
             if reveal_y >= box[3]:
                 label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
                 draw_radio_option(text_cache, box, label, option == step_hz)
@@ -7910,7 +7929,7 @@ def draw_radio_setup_panel(
             draw_radio_option(text_cache, box, labels[action], action == "scan_stop")
     if not LCD_800_MODE:
         draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
-    for option, box in radio_step_options():
+    for option, box in radio_step_options(receiver_type):
         label = f"{option // 1000}k" if option >= 1000 else str(option)
         draw_radio_option(text_cache, box, label, option == step_hz)
 
@@ -9537,6 +9556,14 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
     draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), detail_size, True, False, "cm", family="Liberation Sans")
 
 
+def draw_sidebar_header(text_cache, title):
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, (6, 13, 19, 255))
+    draw_text(text_cache, LCD_NAV_X0 + 18, 32, title, (215, 235, 239),
+              19, True, False, "lm", family="Liberation Sans")
+    draw_logical_line(LCD_NAV_X0 + 17, LCD_DRAWER_HEADER_H,
+                      LOGICAL_W - 17, LCD_DRAWER_HEADER_H, (72, 101, 112, 160), 1)
+
+
 def draw_lcd_drawer_heading(text_cache, x, y, title):
     """Shared quiet heading treatment for LCD right-rail drawers."""
     draw_text(text_cache, x, y, title, LCD_DRAWER_HEADING_COLOR, LCD_DRAWER_HEADING_SIZE,
@@ -9563,7 +9590,6 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "RECEIVER HOME")
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 154, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
@@ -9574,6 +9600,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", f"{fan_curve['start_c']}→{fan_curve['full_c']} C", True)
     draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
     draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
+    draw_sidebar_header(text_cache, "RECEIVER HOME")
 
 
 def fan_curve_drawer_boxes():
@@ -9593,7 +9620,6 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
     draw_radio_close_button(text_cache, boxes["close"])
-    draw_lcd_drawer_heading(text_cache, x0 + 12, 90, "FAN CURVE")
     live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
     draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
@@ -9604,6 +9630,7 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     draw_lcd_audio_slider_tile(text_cache, boxes["full"], "FULL SPEED", full - (start + 8.0), 82.0 - (start + 8.0), f"{full:.0f} C", True)
     minimum = float(curve.get("min_percent", 15.0))
     draw_lcd_audio_slider_tile(text_cache, boxes["minimum"], "START SPEED", minimum - 10.0, 60.0, f"{minimum:.0f}%", True)
+    draw_sidebar_header(text_cache, "FAN CURVE")
 
 
 def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, active=False, steps=None):
@@ -9680,6 +9707,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
         text_cache, AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if direct else "PIPEWIRE",
         direct, (255, 184, 83, 230), title_size=12, detail_size=11,
     )
+    draw_sidebar_header(text_cache, "AUDIO")
 
 
 def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode=None, audio_backend="pipewire"):
@@ -12442,7 +12470,7 @@ def draw_receiver_map(
         draw_text(text_cache, (zx0 + zx1) / 2, (zy0 + zy1) / 2, glyph, (231, 254, 249), 46, True, False, "cm", family="Liberation Sans")
     # RadioGarden commands deliberately reuse the large visual language of
     # Home tiles, rather than tiny labels floating over the map.
-    draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 42, "GLOBE", (150, 218, 214), 19, True, False, "cm", family="Cantarell")
+    draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
     ):
@@ -12812,6 +12840,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
             draw_display_control(text_cache, box, label, rate == speed)
         for option, box, label in DISPLAY_PALETTE_BOXES:
             draw_display_control(text_cache, box, label, option == palette)
+        draw_sidebar_header(text_cache, "DISPLAY")
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
@@ -13557,7 +13586,7 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     """Render the common Settings leaf rail without veiling live content."""
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
-    draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 18, 62, title)
+    draw_sidebar_header(text_cache, title)
     draw_text(
         text_cache, LCD_NAV_X0 + 18, 96, detail,
         (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
@@ -14193,7 +14222,6 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     # for live controls or overlap the slider labels.
     draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
     draw_radio_close_button(text_cache, boxes["close"])
-    draw_lcd_drawer_heading(text_cache, x0 + 12, 88, "PASSBAND")
     draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
     draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
@@ -14213,6 +14241,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
             title_size=13,
             detail_size=13,
         )
+    draw_sidebar_header(text_cache, "PASSBAND")
 
 
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
@@ -14225,6 +14254,8 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     # uninterrupted black panel from the VFO to the physical bottom edge.
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
+    if settings_open or digital_open:
+        draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "MODES")
     items = lcd_nav_items(settings_open, digital_open)
     if not settings_open and not digital_open:
         show_compact_readouts = instrument_layout == "compact"
@@ -15095,6 +15126,7 @@ def draw_station_picker(
                 if listener_used is not None and listener_total is not None else "FREE ?"
             )
             draw_text(text_cache, box[2] - 20, marker_y - (16 if single_column_lcd else 10), capacity, capacity_color, 18 if single_column_lcd else 14, True, True, "rm")
+    draw_sidebar_header(text_cache, "RECEIVERS")
 
 
 def station_health_color(entry, key, fresh):
@@ -21172,6 +21204,9 @@ def main():
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
     tune_step_hz = max(1, int(saved_tune_step_hz)) if isinstance(saved_tune_step_hz, (int, float)) else args.tune_step_hz
+    fmdx_tune_step_hz = remembered_preferences.get("fmdx_tune_step_hz", 100_000)
+    if fmdx_tune_step_hz not in FMDX_TUNE_STEPS_HZ:
+        fmdx_tune_step_hz = 100_000
     rc28_zoom_detents = 0
     rc28_zoom_last_at = 0.0
     rc28_dial_mode = "TUNE"
@@ -21305,6 +21340,7 @@ def main():
             "buffer_graph_anchor": buffer_graph_anchor,
             "cpu_graph_anchor": cpu_graph_anchor,
             "tune_step_hz": int(tune_step_hz),
+            "fmdx_tune_step_hz": int(fmdx_tune_step_hz),
             "waterfall": {
                 "floor": round(float(floor), 1),
                 "ceil": round(float(ceiling), 1),
@@ -21645,7 +21681,7 @@ def main():
 
             if kind == "dial" and rc28_dial_mode == "TUNE":
                 _server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
-                step_hz = finger_tune_step_hz(zoom, tune_step_hz)
+                step_hz = receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
                 frequency = clamp_active_frequency(freq_khz + int(value) * step_hz / 1000.0)
                 if frequency == freq_khz:
                     continue
@@ -22289,7 +22325,9 @@ def main():
             else swipe_effective_sensitivity(swipe_velocity_px_s, args) * live_swipe_boost
         )
         candidate_freq = clamp(
-            candidate_freq + retune_delta_from_drag(dx, start_span, args.invert_tune, sensitivity),
+            candidate_freq + retune_delta_from_drag(
+                dx, receiver_drag_span(start_span, state.receiver_type_snapshot(), fmdx_tune_step_hz),
+                args.invert_tune, sensitivity),
             *active_tuning_bounds(),
         )
         # A normal waterfall drag is a live, positional tuning control. The
@@ -22297,7 +22335,7 @@ def main():
         # tactile detents. Publishing state here lets the two Kiwi streams
         # follow the finger; their workers coalesce to the newest request.
         _server, _live_freq, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
-        live_step_hz = finger_tune_step_hz(active_zoom, tune_step_hz)
+        live_step_hz = receiver_tune_step_hz(active_zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
         live_candidate_freq = snap_frequency_khz(candidate_freq, live_step_hz)
         last_move_x = x
         last_move_t = now_move
@@ -24567,7 +24605,11 @@ def main():
                                             )
                                             remember_current_view()
                                     elif kind == "step":
-                                        tune_step_hz = value
+                                        if state.receiver_type_snapshot() == "fmdx":
+                                            fmdx_tune_step_hz = value
+                                        else:
+                                            tune_step_hz = value
+                                        remember_current_view()
                                     wake_controls()
                                     if kind != "close":
                                         print(f"gl radio {radio_mode} {digital_mode} step {tune_step_hz} Hz", flush=True)
@@ -25243,7 +25285,7 @@ def main():
                                 # the controls, preventing a thumb near an
                                 # overlay from jumping the receiver.
                                 candidate_freq = start_freq
-                            live_step_hz = finger_tune_step_hz(zoom, tune_step_hz)
+                            live_step_hz = receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
                             candidate_freq = clamp(
                                 snap_frequency_khz(candidate_freq, live_step_hz),
                                 *active_tuning_bounds(),
@@ -25926,7 +25968,7 @@ def main():
                 smeter_readout_dbm,
                 effective_receiver_mode(state.receiver_type_snapshot(), radio_mode),
                 digital_mode,
-                finger_tune_step_hz(zoom, tune_step_hz),
+                receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz),
                 controls_alpha=control_alpha,
                 focus_progress=focus_progress,
                 ruler_y0=ruler_y0,
@@ -26093,7 +26135,7 @@ def main():
                     text_cache,
                     radio_mode,
                     digital_mode,
-                    tune_step_hz,
+                    fmdx_tune_step_hz if state.receiver_type_snapshot() == "fmdx" else tune_step_hz,
                     radio_family_open,
                     mode_families=rtl_lab.mode_families() if local_iq_active else KIWI_MODE_FAMILIES,
                     receiver_type=state.receiver_type_snapshot(),

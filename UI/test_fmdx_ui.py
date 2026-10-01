@@ -110,10 +110,10 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         self.addCleanup(setattr, ui, "LCD_RADIO_DRAWER_PROGRESS", previous_progress)
-        _family, _modes, mode_box = next(iter(ui.radio_mode_layout()))
+        _action, mode_box = next(iter(ui.fmdx_control_layout(())))
         mode_x = (mode_box[0] + mode_box[2]) / 2
         mode_y = (mode_box[1] + mode_box[3]) / 2
-        step_hz, step_box = next(iter(ui.radio_step_options()))
+        step_hz, step_box = next(iter(ui.radio_step_options("fmdx")))
         step_x = (step_box[0] + step_box[2]) / 2
         step_y = (step_box[1] + step_box[3]) / 2
 

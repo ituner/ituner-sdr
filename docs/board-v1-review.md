@@ -33,6 +33,14 @@ behavior while retaining those newer paths.
   than only a capped group of presets. Stop restores the origin. Manual tuning
   and receiver changes take ownership so late scan work cannot retune them.
 
+## Sidebar follow-up
+
+All option rails use a shared screen-name header. FM-DX status, station
+navigation, Scan/Stop, and tuning controls occupy separate rows. Manual FM-DX
+tuning offers 50, 100 (default), and 200 kHz steps, saved independently from
+Kiwi's step. FM dragging uses channel-sized detents rather than the audio
+waterfall span. The RDS band scan retains its independent 100 kHz increment.
+
 ## Branch features not silently imported
 
 The original fork also has a richer FM-DX audio scope/ruler, station shortcut
