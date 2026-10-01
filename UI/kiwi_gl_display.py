@@ -208,6 +208,7 @@ from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
+import fmdx
 import render_sdr_frontend_mockup as sdr_ui
 
 
@@ -384,7 +385,15 @@ MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
     "wspr": "digi.png",
+    "tests": "apps.png",
 }
+
+
+def menu_icon_filename(kind, muted=False):
+    """Resolve an icon asset without changing the navigation destination."""
+    if kind == "audio" and muted:
+        return "audio-muted.png"
+    return MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
 SPECTRUM_H = 70
 LCD_SPECTRUM_H = 240
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
@@ -1265,6 +1274,7 @@ TEST_PATTERN_BOX = (492, 178, 918, 232)
 TEST_FONT_BOX = (42, 244, 468, 298)
 TEST_OPENWEBRX_BOX = (492, 244, 918, 298)
 TEST_RUN_BOX = (42, 310, 918, 366)
+TEST_BACK_BOX = (0, 0, 0, 0)
 # This deliberately fixed public receiver is a protocol/display smoke test,
 # not a directory entry. The isolated Tests tile always restores the prior
 # Kiwi endpoint so it cannot quietly replace the user's remembered radio.
@@ -1684,7 +1694,7 @@ def configure_popup_layout():
     global AUDIO_SQUELCH_BOX, AUDIO_AGC_BOX, AUDIO_BLANKER_BOX
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
-    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_BACK_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
@@ -1815,6 +1825,21 @@ def configure_popup_layout():
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
      TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX,
      TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+    TEST_BACK_BOX = (0, 0, 0, 0)
+    if LCD_800_MODE:
+        TEST_PANEL_BOX = (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H)
+        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 121
+        right_x0, right_x1 = LCD_NAV_X0 + 135, LOGICAL_W - 10
+        row_h, row_gap = 104, 12
+        rows = tuple(112 + index * (row_h + row_gap) for index in range(4))
+        TEST_GLOBE_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
+        TEST_DJ_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
+        TEST_RTL_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
+        TEST_PATTERN_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
+        TEST_FONT_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
+        TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
+        TEST_RUN_BOX = (left_x0, rows[3], right_x1, rows[3] + 78)
+        TEST_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("rtl_lab")
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
@@ -1888,7 +1913,7 @@ def configure_popup_layout():
         PICKER_EXIT_BOX = lcd_nav_box(7, 8)
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
-        RADIOGARDEN_EXIT_BOX = (1031, 372, 1273, 490)
+        RADIOGARDEN_EXIT_BOX = lcd_drawer_back_box()
     else:
         PICKER_BOX = (0, 0, 790, LOGICAL_H)
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -1920,7 +1945,7 @@ MENU_ITEMS = (
     ("local_rx", "LOCAL RX"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DIGI"),
+    ("digital", "MODES"),
     ("dual", "DUAL"),
     ("settings", "SETTINGS"),
 )
@@ -2370,9 +2395,9 @@ SETTINGS_MENU_ITEMS = (
     ("network", "NETWORK"),
     ("kiwi", "KIWI"),
     ("stats", "STATS"),
-    ("tests", "TESTS"),
+    ("tests", "APPS"),
     ("system", "SYSTEM"),
-    ("settings_back", "HOME"),
+    ("settings_back", "BACK"),
 )
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
@@ -2431,6 +2456,8 @@ PUBLIC_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.js
 STATION_HEALTH_CACHE = Path.home() / ".local/state/kiwi-gl-station-health.json"
 GLOBE_DIRECTORY_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
 GLOBE_DIRECTORY_CACHE = Path.home() / ".local/state/kiwi-gl-globe-receivers.json"
+FMDX_DIRECTORY_CACHE = Path.home() / ".local/state/ituner-fmdx-directory.json"
+FMDX_STATION_CACHE = Path.home() / ".local/state/ituner-fmdx-stations.json"
 RECEIVER_HOME_PROFILE = Path.home() / ".local/state/kiwi-gl-receiver-home.json"
 FAVORITES_CACHE = Path.home() / ".local/state/kiwi-gl-favorites.json"
 FAN_CURVE_CONFIG = Path.home() / ".local/state/ituner-fan-curve.json"
@@ -2568,14 +2595,23 @@ def receiver_limit_label(entry):
     return "LIMIT SET" if entry.get("time_limit_advertised") else ""
 
 
-def receiver_route_label(server):
+def receiver_route_label(server, receiver_type=None):
     """Classify the directory route without hiding its actual receiver host."""
+    if str(receiver_type or "").casefold() == "fmdx" or fmdx.is_fmdx_server(server):
+        return "FMDX"
+    if str(receiver_type or "").casefold() == "kiwi":
+        return "KIWI"
     parsed = urlparse(server if "://" in server else "http://" + server)
     host = (parsed.hostname or "").casefold()
     # Kiwi's public relay endpoints identify themselves with a proxy host
     # label (e.g. 22551.proxy.kiwisdr.com). Everything else is a direct
     # receiver connection from the directory.
     return "PROXY" if any("proxy" in label for label in host.split(".")) else "DIRECT"
+
+
+def receiver_worker_protocol(receiver_type):
+    """Select the transport without inferring protocol from a URL shape."""
+    return "fmdx" if str(receiver_type or "").casefold() == "fmdx" else "kiwi"
 
 
 def load_favorite_servers():
@@ -3211,7 +3247,23 @@ def load_public_stations():
     return prioritize_local_station(cached if cached else kiwi.STATIONS)
 
 
-STATIONS = load_public_stations()
+FMDX_RECEIVERS = fmdx.load_cached_directory(FMDX_DIRECTORY_CACHE)
+FMDX_LEARNED_STATIONS = fmdx.load_station_cache(FMDX_STATION_CACHE)
+FMDX_STATION_CACHE_LOCK = threading.Lock()
+STATIONS = tuple(load_public_stations()) + tuple(fmdx.stations_from_receivers(FMDX_RECEIVERS))
+
+
+def remember_fmdx_station(server, station):
+    """Atomically retain one learned RDS identity per FM-DX receiver."""
+    canonical = fmdx.normalize_server_url(server)
+    if not canonical or not station:
+        return
+    with FMDX_STATION_CACHE_LOCK:
+        previous = FMDX_LEARNED_STATIONS.get(canonical, ())
+        merged = fmdx.merge_station_presets(previous, (station,))
+        if merged != previous:
+            FMDX_LEARNED_STATIONS[canonical] = merged
+            fmdx.save_station_cache(FMDX_STATION_CACHE, FMDX_LEARNED_STATIONS)
 
 
 def parse_globe_directory(script):
@@ -3245,7 +3297,11 @@ def parse_globe_directory(script):
             total = int(field("users_max", "0"))
         except ValueError:
             used = total = 0
-        receivers.append({"name": name, "location": location, "server": server, "lat": lat, "lon": lon, "used": used, "total": total})
+        receivers.append({
+            "name": name, "location": location, "server": server,
+            "lat": lat, "lon": lon, "used": used, "total": total,
+            "receiver_type": "kiwi",
+        })
     return receivers
 
 
@@ -3254,13 +3310,14 @@ def load_globe_receivers():
     try:
         cached = json.loads(GLOBE_DIRECTORY_CACHE.read_text())
         if isinstance(cached, list):
-            return cached
+            return fmdx.merge_receivers(cached, FMDX_RECEIVERS)
     except (OSError, ValueError, TypeError):
-        return []
-    return []
+        return list(FMDX_RECEIVERS)
+    return list(FMDX_RECEIVERS)
 
 
 def refresh_globe_receivers(result):
+    fmdx_receivers = fmdx.load_directory(FMDX_DIRECTORY_CACHE)
     try:
         request = Request(GLOBE_DIRECTORY_URL, headers={"User-Agent": "KiwiTouch/1.0"})
         with urlopen(request, timeout=15) as response:
@@ -3270,12 +3327,18 @@ def refresh_globe_receivers(result):
             temporary = GLOBE_DIRECTORY_CACHE.with_suffix(".tmp")
             temporary.write_text(json.dumps(receivers, separators=(",", ":")))
             os.replace(temporary, GLOBE_DIRECTORY_CACHE)
-            result.put(("ready", receivers))
+            result.put(("ready", fmdx.merge_receivers(receivers, fmdx_receivers)))
             return
     except OSError as exc:
+        if fmdx_receivers:
+            result.put(("ready", fmdx_receivers))
+            return
         result.put(("error", str(exc)))
         return
-    result.put(("error", "public map returned no usable GPS receivers"))
+    if fmdx_receivers:
+        result.put(("ready", fmdx_receivers))
+    else:
+        result.put(("error", "public maps returned no usable GPS receivers"))
 
 
 def stations_from_globe_receivers(receivers):
@@ -3300,7 +3363,8 @@ def stations_from_globe_receivers(receivers):
             lat, lon = float(receiver["lat"]), float(receiver["lon"])
         except (KeyError, TypeError, ValueError):
             lat = lon = None
-        stations.append((name, location, server, used, total, lat, lon))
+        receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
+        stations.append((name, location, server, used, total, lat, lon, receiver_type))
     return prioritize_local_station(stations)
 
 
@@ -3318,7 +3382,11 @@ def choose_constellation(center, receivers, health):
     stay nearby so their heat field describes local reception alternatives, not
     an arbitrary pentagon or other artificial shape.
     """
-    if not center:
+    receivers = [
+        receiver for receiver in receivers
+        if str(receiver.get("receiver_type") or "kiwi").casefold() == "kiwi"
+    ]
+    if not center or str(center.get("receiver_type") or "kiwi").casefold() != "kiwi":
         return [], []
 
     def readiness(receiver):
@@ -3462,7 +3530,7 @@ def filtered_stations(stations, query, sort_mode, route_filter="all", favorites=
         route_matches = (
             route_filter == "all"
             or (route_filter == "favorites" and server in favorites)
-            or receiver_route_label(server).casefold() == route_filter
+            or receiver_route_label(server, station_receiver_type(station)).casefold() == route_filter
         )
         return all(term in haystack for term in terms) and route_matches
     filtered = [station for station in stations if matches(station)]
@@ -3673,6 +3741,7 @@ def configure_output(desktop=False):
     # panel uses its native portrait framebuffer and the existing rotation.
     NATIVE_W, NATIVE_H = (LOGICAL_W, LOGICAL_H) if DESKTOP_MODE else (LCD_NATIVE_W, LCD_NATIVE_H)
     configure_popup_layout()
+    sync_constellation_geometry()
 
 
 def rgba(color):
@@ -4018,8 +4087,12 @@ def load_remembered_view(path):
         parsed = urlparse(server)
         if parsed.scheme in ("http", "https") and parsed.hostname:
             view = {"server": server}
+            receiver_type = str(saved.get("receiver_type") or "").casefold()
+            if receiver_type in ("kiwi", "fmdx"):
+                view["receiver_type"] = receiver_type
             freq_khz = saved.get("freq_khz")
-            if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= TUNING_MAX_KHZ:
+            maximum_khz = fmdx.DEFAULT_MAX_KHZ if receiver_type == "fmdx" else TUNING_MAX_KHZ
+            if isinstance(freq_khz, (int, float)) and 0.0 <= freq_khz <= maximum_khz:
                 view["freq_khz"] = float(freq_khz)
             zoom = saved.get("zoom")
             if isinstance(zoom, int) and 0 <= zoom <= kiwi.DISPLAY_MAX_ZOOM:
@@ -4036,7 +4109,10 @@ def load_remembered_view(path):
     return None
 
 
-def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False, preferences=None):
+def save_remembered_view(
+    path, server, freq_khz, zoom, radio_mode=None, manual_radio_mode=False,
+    preferences=None, receiver_type=None,
+):
     parsed = urlparse(server)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return
@@ -4044,11 +4120,13 @@ def save_remembered_view(path, server, freq_khz, zoom, radio_mode=None, manual_r
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
         saved = {
-            "version": 2,
+            "version": 3,
             "freq_khz": round(float(freq_khz), 3),
             "server": server,
             "zoom": clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM),
         }
+        if str(receiver_type or "").casefold() in ("kiwi", "fmdx"):
+            saved["receiver_type"] = str(receiver_type).casefold()
         if manual_radio_mode and isinstance(radio_mode, str) and radio_mode.upper() in KIWI_RADIO_MODES:
             saved["radio_mode"] = radio_mode.upper()
         if preferences:
@@ -4064,7 +4142,10 @@ def abort_kiwi_transport(ws):
     if ws is None:
         return
     try:
-        ws.send_close()
+        if hasattr(ws, "send_close"):
+            ws.send_close()
+        else:
+            ws.close()
     except (AttributeError, OSError):
         pass
     raw_socket = getattr(ws, "sock", None)
@@ -4094,7 +4175,19 @@ class SharedState:
     ):
         self.lock = threading.Lock()
         self.server = server
-        self.freq_khz = freq_khz
+        self.receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
+        canonical_fmdx_server = fmdx.normalize_server_url(server)
+        self.fmdx_status = {}
+        self.fmdx_stations = tuple(
+            FMDX_LEARNED_STATIONS.get(canonical_fmdx_server, ())
+            if self.receiver_type == "fmdx" and canonical_fmdx_server else ()
+        )
+        self.fmdx_scan_requested = False
+        self.fmdx_scan_request_generation = 0
+        self.freq_khz = (
+            fmdx.receiver_frequency(server, freq_khz)
+            if self.receiver_type == "fmdx" else freq_khz
+        )
         self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
         self.smeter_dbm = smeter_dbm
         self.smeter_peak_dbm = smeter_dbm
@@ -4207,6 +4300,53 @@ class SharedState:
         with self.lock:
             return self.server, self.freq_khz, self.zoom, self.smeter_dbm, self.view_generation, self.server_generation
 
+    def receiver_type_snapshot(self, generation=None):
+        with self.lock:
+            if generation is not None and generation != self.server_generation:
+                return None
+            return self.receiver_type
+
+    def update_fmdx_status(self, payload, generation):
+        """Publish current FM-DX metadata and retain any valid RDS identity."""
+        with self.lock:
+            if generation != self.server_generation or self.receiver_type != "fmdx":
+                return None
+            self.fmdx_status = dict(payload or {})
+            station = fmdx.station_from_status(self.fmdx_status, self.freq_khz)
+            if station:
+                self.fmdx_stations = fmdx.merge_station_presets(self.fmdx_stations, (station,))
+            return station
+
+    def fmdx_status_snapshot(self):
+        with self.lock:
+            return dict(self.fmdx_status)
+
+    def update_fmdx_stations(self, stations, generation):
+        with self.lock:
+            if generation != self.server_generation or self.receiver_type != "fmdx":
+                return ()
+            self.fmdx_stations = fmdx.merge_station_presets(self.fmdx_stations, stations)
+            return self.fmdx_stations
+
+    def fmdx_stations_snapshot(self):
+        with self.lock:
+            return tuple(self.fmdx_stations)
+
+    def request_fmdx_scan(self, active, generation=None):
+        with self.lock:
+            if (
+                self.receiver_type != "fmdx"
+                or (generation is not None and generation != self.server_generation)
+            ):
+                return None
+            self.fmdx_scan_requested = bool(active)
+            self.fmdx_scan_request_generation += 1
+            return self.fmdx_scan_requested, self.fmdx_scan_request_generation
+
+    def fmdx_scan_request_snapshot(self):
+        with self.lock:
+            return self.fmdx_scan_requested, self.fmdx_scan_request_generation
+
     def kiwi_session_timestamp_snapshot(self, generation):
         with self.lock:
             if generation != self.server_generation:
@@ -4216,7 +4356,10 @@ class SharedState:
     def set_view(self, freq_khz=None, zoom=None):
         with self.lock:
             if freq_khz is not None:
-                self.freq_khz = freq_khz
+                self.freq_khz = (
+                    fmdx.clamp_receiver_frequency(self.server, freq_khz)
+                    if self.receiver_type == "fmdx" else freq_khz
+                )
             if zoom is not None:
                 self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
             self.spectrum_peak_values = ()
@@ -4233,7 +4376,7 @@ class SharedState:
             self.live_tune_rate_hz = int(clamp(int(rate_hz), 1, 100))
             return self.live_tune_rate_hz
 
-    def set_server(self, server, zoom=None):
+    def set_server(self, server, zoom=None, receiver_type=None):
         """Switch receiver without inheriting that receiver's demodulator default.
 
         A Kiwi starts a fresh SND socket in its own default state (commonly
@@ -4243,7 +4386,23 @@ class SharedState:
         still connecting.
         """
         with self.lock:
+            selected_type = str(receiver_type or "").casefold()
+            if selected_type not in ("kiwi", "fmdx"):
+                selected_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
+            if selected_type == "fmdx":
+                fmdx.ensure_receiver(server, "fmdx")
             self.server = server
+            self.receiver_type = selected_type
+            canonical_fmdx_server = fmdx.normalize_server_url(server)
+            self.fmdx_status = {}
+            self.fmdx_stations = tuple(
+                FMDX_LEARNED_STATIONS.get(canonical_fmdx_server, ())
+                if selected_type == "fmdx" and canonical_fmdx_server else ()
+            )
+            self.fmdx_scan_requested = False
+            self.fmdx_scan_request_generation += 1
+            if self.receiver_type == "fmdx":
+                self.freq_khz = fmdx.receiver_frequency(server, self.freq_khz)
             # Selecting another receiver is an intentional request to listen
             # to it, even if the previous one had been paused.
             self.stream_paused = False
@@ -4877,7 +5036,7 @@ class SharedState:
             now = time.monotonic()
             if source == "wf" and now - self.last_snd_smeter_t < 2.0:
                 return
-            if source == "snd":
+            if source in ("snd", "fmdx"):
                 self.last_snd_smeter_t = now
             elapsed = min(0.25, max(0.0, now - self.last_smeter_update_t))
             time_constant = SMETER_ATTACK_SECONDS if smeter_dbm >= self.smeter_dbm else SMETER_RELEASE_SECONDS
@@ -7463,14 +7622,34 @@ def radio_variant_layout(modes):
         yield mode, (x0, y0, x0 + button_w, y0 + RADIO_VARIANT_BUTTON_H)
 
 
-def radio_option_at(x, y, family_open=None, mode_families=KIWI_MODE_FAMILIES):
+def fmdx_control_layout(stations, scan_active=False):
+    """Reuse the first drawer cells for explicit FM-DX station actions."""
+    boxes = [box for _family, _modes, box in radio_mode_layout()]
+    actions = []
+    if stations:
+        actions.extend(("preset_previous", "preset_next"))
+    actions.append("scan_stop" if scan_active else "scan_start")
+    for action, box in zip(actions, boxes):
+        yield action, box
+
+
+def radio_option_at(
+    x, y, family_open=None, mode_families=KIWI_MODE_FAMILIES,
+    receiver_type="kiwi", fmdx_stations=(),
+    fmdx_scan_active=False,
+):
     if LCD_800_MODE and y > lcd_radio_drawer_reveal_y():
         return None
     if LCD_800_MODE and contains(lcd_radio_drawer_close_box(), x, y):
         return "close", None
-    for _family, modes, box in radio_mode_layout(mode_families):
-        if contains(box, x, y):
-            return "mode_cycle", modes
+    if receiver_worker_protocol(receiver_type) == "kiwi":
+        for _family, modes, box in radio_mode_layout(mode_families):
+            if contains(box, x, y):
+                return "mode_cycle", modes
+    else:
+        for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
+            if contains(box, x, y):
+                return "fmdx_action", action
     for step_hz, box in radio_step_options():
         if contains(box, x, y):
             return "step", step_hz
@@ -7589,7 +7768,11 @@ def draw_radio_variant_option(text_cache, box, mode, active):
     )
 
 
-def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None, mode_families=KIWI_MODE_FAMILIES):
+def draw_radio_setup_panel(
+    text_cache, mode, digital, step_hz, family_open=None,
+    mode_families=KIWI_MODE_FAMILIES,
+    receiver_type="kiwi", fmdx_status=None, fmdx_stations=(), fmdx_scan_active=False,
+):
     x0, y0, x1, y1 = radio_panel_box()
     # On the 800×1280 target this is a compact drawer in the permanent right
     # rail. Do not veil or occupy the waterfall: it remains the radio's live
@@ -7605,10 +7788,21 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None,
         close_x0, close_y0, close_x1, close_y1 = lcd_radio_drawer_close_box()
         if reveal_y >= close_y1:
             draw_radio_close_button(text_cache, (close_x0, close_y0, close_x1, close_y1))
-        active_mode = mode.upper()
-        for family, modes, box in radio_mode_layout(mode_families):
-            if reveal_y >= box[3]:
-                draw_radio_family_option(text_cache, box, family, modes, active_mode)
+        active_mode = effective_receiver_mode(receiver_type, mode)
+        if receiver_worker_protocol(receiver_type) == "fmdx":
+            ps = str((fmdx_status or {}).get("ps") or "Waiting for RDS").strip()
+            draw_text(text_cache, x0 + 12, y0 + 86, "FM-FMDX", (244, 178, 91), 20, True, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, x0 + 12, y0 + 108, "MODE IS SERVER CONTROLLED", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, x0 + 12, y0 + 137, ps[:24], (229, 243, 246), 15, True, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, x0 + 12, y0 + 158, f"{len(fmdx_stations)} station presets", (145, 183, 190), 11, False, False, "lm", family="Liberation Sans")
+            labels = {"preset_previous": "PREV", "preset_next": "NEXT", "scan_start": "SCAN", "scan_stop": "STOP"}
+            for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
+                if reveal_y >= box[3]:
+                    draw_radio_option(text_cache, box, labels[action], action == "scan_stop")
+        else:
+            for family, modes, box in radio_mode_layout(mode_families):
+                if reveal_y >= box[3]:
+                    draw_radio_family_option(text_cache, box, family, modes, active_mode)
         step_y0 = lcd_radio_step_y0(len(mode_families))
         if reveal_y >= step_y0:
             draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
@@ -7622,12 +7816,21 @@ def draw_radio_setup_panel(text_cache, mode, digital, step_hz, family_open=None,
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 242))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 112), 1)
-    draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
+    server_controlled = receiver_worker_protocol(receiver_type) == "fmdx"
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "FM-FMDX" if server_controlled else "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Mode is controlled by the FM-DX server" if server_controlled else "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
     draw_text(text_cache, radio_popup_x(532), radio_popup_y(87), "STEP", (145, 183, 190), 13, True, False, "lm", family="Liberation Sans")
-    active_mode = mode.upper()
-    for family, modes, box in radio_mode_layout(mode_families):
-        draw_radio_family_option(text_cache, box, family, modes, active_mode)
+    active_mode = effective_receiver_mode(receiver_type, mode)
+    if not server_controlled:
+        for family, modes, box in radio_mode_layout(mode_families):
+            draw_radio_family_option(text_cache, box, family, modes, active_mode)
+    else:
+        ps = str((fmdx_status or {}).get("ps") or "Waiting for RDS").strip()
+        draw_text(text_cache, radio_popup_x(30), radio_popup_y(176), ps[:32], (244, 178, 91), 24, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, radio_popup_x(30), radio_popup_y(210), f"{len(fmdx_stations)} station presets available", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
+        labels = {"preset_previous": "PREVIOUS", "preset_next": "NEXT", "scan_start": "SCAN", "scan_stop": "STOP SCAN"}
+        for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
+            draw_radio_option(text_cache, box, labels[action], action == "scan_stop")
     if not LCD_800_MODE:
         draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
     for option, box in radio_step_options():
@@ -7665,8 +7868,7 @@ def display_option_at(x, y):
 
 
 def lcd_display_drawer_close_box():
-    x0, _y0, x1, y1 = DISPLAY_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_display_control(text_cache, box, label, active=False):
@@ -9240,8 +9442,7 @@ def audio_option_at(x, y):
 
 
 def lcd_audio_drawer_close_box():
-    x0, _y0, x1, y1 = AUDIO_PANEL_BOX
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
@@ -9271,7 +9472,7 @@ def receiver_home_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "fan": (x0 + 10, 258, x1 - 10, 326),
         "locate": (x0 + 10, 346, x1 - 10, 414),
         "fallback": (x0 + 10, 426, x1 - 10, 494),
@@ -9303,7 +9504,7 @@ def fan_curve_drawer_boxes():
     y0, y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x0 + 10, y1 - 78, x1 - 10, y1 - 10),
+        "close": lcd_drawer_back_box(),
         "start": (x0 + 10, 248, x1 - 10, 318),
         "full": (x0 + 10, 346, x1 - 10, 416),
         "minimum": (x0 + 10, 444, x1 - 10, 514),
@@ -9395,7 +9596,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
     draw_lcd_audio_tile(text_cache, AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
-    draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "FILTER", format_filter_width(high_cut - low_cut))
+    draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut))
     draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
     direct = audio_backend == "alsa"
     draw_lcd_audio_tile(
@@ -9531,6 +9732,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
 
 def tests_option_at(x, y):
+    if contains(TEST_BACK_BOX, x, y):
+        return "back"
     if contains(TEST_GLOBE_BOX, x, y):
         return "globe"
     if contains(TEST_DJ_BOX, x, y):
@@ -9605,6 +9808,22 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     x0, y0, x1, y1 = TEST_PANEL_BOX
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
     _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
+    if LCD_800_MODE:
+        draw_settings_leaf_sidebar(text_cache, "APPS", "TOOLS & DIAGNOSTICS")
+        for box, title, detail, active in (
+            (TEST_GLOBE_BOX, "CONSTELLATION", "SNR MAP", True),
+            (TEST_DJ_BOX, "DJ TUNE", "LIVE DIAL", False),
+            (TEST_RTL_BOX, "LOCAL SDR", "USB RX", False),
+            (TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES", False),
+            (TEST_FONT_BOX, "FONT LAB", "TYPE", False),
+            (TEST_OPENWEBRX_BOX, "RETURN KIWI" if openwebrx_active else "OPENWEBRX", "PUBLIC RX", openwebrx_active),
+            (TEST_RUN_BOX, "STOP" if sweep is not None else "RUN TEST", "RETUNE PATTERN", sweep is not None),
+        ):
+            draw_lcd_audio_tile(
+                text_cache, box, title, detail, active,
+                accent=(255, 184, 83, 220), title_size=12, detail_size=11,
+            )
+        return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
@@ -12079,9 +12298,12 @@ def draw_receiver_map(
         is_pending = receiver["server"] == pending_server
         is_failed = is_pending and connection_status == "failed"
         is_hovered = receiver["server"] == hover_server
+        is_fmdx = receiver_worker_protocol(receiver.get("receiver_type")) == "fmdx"
         color = (
             (255, 81, 96, 255) if is_failed else
-            ((94, 236, 183, 255) if is_pending else ((83, 229, 176, 232) if ready else (132, 189, 198, 165)))
+            ((94, 236, 183, 255) if is_pending else
+             (fmdx.FMDX_MARKER_COLOR if is_fmdx else
+              ((83, 229, 176, 232) if ready else (132, 189, 198, 165))))
         )
         # The panel is viewed at arm's length. Make both the luminous station
         # core and its halo substantially easier to acquire with a finger.
@@ -12163,8 +12385,6 @@ def draw_receiver_map(
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 42, "GLOBE", (150, 218, 214), 19, True, False, "cm", family="Cantarell")
     for command_box, icon, label in (
         (RADIOGARDEN_LIST_BOX, "rx", "LIST"),
-        (RADIOGARDEN_VIEW_BOX, "display", MAP_VIEW_LABELS.get(map_view, "BORDERS")),
-        (RADIOGARDEN_EXIT_BOX, "home", "EXIT"),
     ):
         bx0, by0, bx1, by1 = command_box
         draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 232))
@@ -12174,6 +12394,14 @@ def draw_receiver_map(
         draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 190), 1)
         tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
+    draw_picker_two_line_button(
+        text_cache,
+        RADIOGARDEN_VIEW_BOX,
+        "VIEW",
+        MAP_VIEW_LABELS.get(map_view, "BORDERS"),
+        18,
+    )
+    draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
@@ -12324,13 +12552,13 @@ def scouted_receiver_at_tap(x, y, scouts, scout_history, scout_measurements, cen
 
 def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listener_measurements, scouts, scout_history, scout_measurements, replacement_slots, scout_total, active_server, anchor, status):
     """Constellation receiver model with listener streams and scout heatmaps."""
-    x0, y0, x1, y1 = GLOBE_PANEL_BOX
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 0, 0, 174))
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 20, 220))
-    draw_logical_line(x0, y0, x1, y0, (116, 170, 183, 100), 1)
-    draw_text(text_cache, 36, 24, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
-    draw_text(text_cache, 214, 20, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
-    draw_tests_button(text_cache, GLOBE_BACK_BOX, "BACK", "TESTS")
+    sync_constellation_geometry()
+    layout = constellation_layout()
+    x0, y0, x1, y1 = settings_center_workspace_box()
+    draw_logical_rect(x0, y0, x1, y1, (6, 13, 20, 255))
+    draw_settings_leaf_sidebar(text_cache, "CONSTELLATION", "SNR COVERAGE")
+    draw_text(text_cache, 24, 26, "CONSTELLATION", (230, 243, 246), 20, True, True, "lm")
+    draw_text(text_cache, 216, 24, "MAP SNR COVERAGE", (119, 182, 195), 14, True, True, "lm")
     map_box = GLOBE_MAP_BOX
     draw_logical_rect(*map_box, (10, 35, 55, 245))
     draw_logical_line(map_box[0], map_box[1], map_box[2], map_box[1], (86, 173, 195, 150), 1)
@@ -12344,7 +12572,8 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
     draw_flat_coastlines(center_lon, center_lat, map_box, scale)
     draw_constellation_heatmap(scouts, scout_history, scout_measurements, center_lon, center_lat, map_box, scale, time.monotonic())
     legend_x = 42
-    draw_text(text_cache, legend_x, 54, "SNR", (180, 204, 208), 13, True, True, "lm")
+    legend_y = layout["map"][1] + 43
+    draw_text(text_cache, legend_x, legend_y, "SNR", (180, 204, 208), 13, True, True, "lm")
     for color, label, offset in (
         ((111, 74, 175), "<-4", 34),
         ((76, 125, 220), "-4–-1", 78),
@@ -12352,8 +12581,8 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
         ((255, 186, 63), "2–5", 186),
         ((239, 88, 75), ">5 dB", 232),
     ):
-        draw_logical_circle(legend_x + offset, 54, 3.5, (*color, 235), 12)
-        draw_text(text_cache, legend_x + offset + 8, 54, label, (180, 204, 208), 13, False, True, "lm")
+        draw_logical_circle(legend_x + offset, legend_y, 3.5, (*color, 235), 12)
+        draw_text(text_cache, legend_x + offset + 8, legend_y, label, (180, 204, 208), 13, False, True, "lm")
     listener_servers = {receiver["server"] for receiver in listeners}
     for receiver in receivers:
         for longitude_offset in (-360.0, 0.0, 360.0):
@@ -12368,24 +12597,25 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
                 dot_radius = 4.2
             draw_logical_circle(p[0], p[1], dot_radius, dot_color, 10)
     draw_text(text_cache, (map_box[0] + map_box[2]) / 2, map_box[3] - 10, "DRAG / PINCH   •   TAP TO START", (154, 201, 210), 13, True, True, "cm")
-    right_x = 610
+    right_x = GLOBE_INFO_BOX[0] + 12
     draw_logical_rect(*GLOBE_INFO_BOX, (5, 13, 19, 232))
     draw_logical_line(GLOBE_INFO_BOX[0], GLOBE_INFO_BOX[1], GLOBE_INFO_BOX[2], GLOBE_INFO_BOX[1], (104, 180, 188, 104), 1)
-    draw_text(text_cache, right_x, 22, "HOT RECEIVERS", (239, 248, 248), 19, True, True, "lm")
-    draw_text(text_cache, 932, 22, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
+    info_heading_y = GLOBE_INFO_BOX[1] + 18
+    draw_text(text_cache, right_x, info_heading_y, "HOT RECEIVERS", (239, 248, 248), 17, True, True, "lm")
+    draw_text(text_cache, GLOBE_INFO_BOX[2] - 12, info_heading_y, "TAP TO LISTEN", (119, 182, 195), 12, True, True, "rm")
     if not receivers:
-        draw_text(text_cache, right_x, 96, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 78, "Loading public GPS map...", (255, 196, 108), 17, False, True, "lm")
     elif not listeners:
-        draw_text(text_cache, right_x, 96, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
-        draw_text(text_cache, right_x, 126, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 70, "Tap a receiver region", (171, 204, 211), 18, False, True, "lm")
+        draw_text(text_cache, right_x, GLOBE_INFO_BOX[1] + 98, f"{len(receivers)} mapped receivers", (116, 162, 174), 16, False, True, "lm")
     else:
         for index, receiver in enumerate(listeners):
             bx0, by0, bx1, by1 = GLOBE_STATION_BOXES[index]
             active = receiver["server"] == active_server
             draw_logical_rect(bx0, by0, bx1, by1, (26, 79, 68, 205) if active else (18, 34, 43, 204))
             draw_logical_line(bx0, by0, bx1, by0, (98, 226, 172, 210) if active else (120, 169, 181, 108), 1)
-            title = bottom_station_title(receiver["name"], receiver["location"])[:21]
-            draw_text(text_cache, bx0 + 12, by0 + 16, f"{index + 1}. {title}", (239, 248, 248), 21, True, True, "lm")
+            title = bottom_station_title(receiver["name"], receiver["location"])[:25]
+            draw_text(text_cache, bx0 + 10, by0 + 21, f"{index + 1}. {title}", (239, 248, 248), 16, True, True, "lm")
             smeter_dbm = listener_measurements.get(receiver["server"], {}).get("smeter")
             slot = replacement_slots[index] if index < len(replacement_slots) else {}
             snr_db = slot.get("snr") if slot.get("current_server") == receiver["server"] else None
@@ -12400,7 +12630,7 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
                 f"SNR {snr_db:+.1f} dB" if snr_is_direct
                 else (f"MAP SNR~ {snr_db:+.1f}" if snr_db is not None else "MAP SNR —")
             )
-            draw_text(text_cache, bx0 + 12, by0 + 43, f"{rf_label}   {snr_label}", (107, 229, 168) if active else (185, 212, 217), 16, True, True, "lm")
+            draw_text(text_cache, bx0 + 10, by0 + 52, f"{rf_label}   {snr_label}", (107, 229, 168) if active else (185, 212, 217), 13, True, True, "lm")
             if slot.get("reason") == "scout":
                 previous = slot.get("previous_name", "original")[:19]
                 detail = f"SCOUT REPLACED {previous}  +{slot.get('gain_db', 0):.0f} dB"
@@ -12411,17 +12641,21 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
             else:
                 detail = "ORIGINAL HOT RECEIVER" if not active else "ORIGINAL HOT • LIVE AUDIO"
                 detail_color = (141, 184, 193)
-            draw_text(text_cache, bx0 + 12, by0 + 65, detail, detail_color, 13, True, True, "lm")
+            draw_text(text_cache, bx0 + 10, by0 + 81, detail[:35], detail_color, 11, True, True, "lm")
 
     # Keep the active scouts and accumulated coverage in one large bottom bar,
     # leaving the three warm receiver cards readable at a glance.
     bar = GLOBE_SCOUT_BAR_BOX
     draw_logical_rect(*bar, (5, 13, 19, 236))
     draw_logical_line(bar[0], bar[1], bar[2], bar[1], (255, 190, 93, 160), 1)
-    draw_text(text_cache, 24, 282, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
-    draw_text(text_cache, 250, 282, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
+    status_y = bar[1] + 25
+    draw_text(text_cache, bar[0] + 12, status_y, f"SCOUTING  {len(scouts)}/4", (255, 204, 113), 16, True, True, "lm")
+    draw_text(text_cache, bar[0] + 238, status_y, f"TOTAL  {scout_total}", (255, 204, 113), 16, True, True, "lm")
     scan_mode = "LOCAL EXPANSION" if "expanding locally" in status else "MAXIMIZING MAP COVERAGE"
-    draw_text(text_cache, 26, 304, scan_mode, (176, 208, 213), 14, True, True, "lm")
+    draw_text(text_cache, bar[0] + 14, status_y + 28, scan_mode, (176, 208, 213), 14, True, True, "lm")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 146, f"LISTENERS  {len(listeners)}/3", (116, 238, 180), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 174, f"MAPPED  {len(receivers)}", (139, 174, 183), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, layout["sidebar"][0] + 18, 202, f"SCOUTS  {len(scouts)}/4", (255, 204, 113), 13, True, False, "lm", family="Liberation Sans")
 
 
 def draw_dj_control(text_cache, box, title, detail, active=False):
@@ -13085,9 +13319,9 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.circle(surface, color, (cx, cy - 20), 3)
 
 
-def menu_icon_texture(text_cache, kind, label, width=132, height=112):
+def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False):
     """Build a menu tile at its eventual raster size to avoid texture blur."""
-    key = f"menu_asset_{kind}_{label}_{width}x{height}"
+    key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -13099,7 +13333,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
             draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
-            asset_path = MENU_ICON_ASSET_DIR / MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
+            asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)
             icon = pygame.image.load(str(asset_path)).convert_alpha()
             # Keep the supplied vector-derived art deliberately understated in the
             # compact menu. Its transparent alpha allows one clean 30% reduction.
@@ -13208,11 +13442,71 @@ def lcd_rail_bottom():
     return LOGICAL_H
 
 
+def lcd_drawer_back_box():
+    """Shared bottom return target for every right-rail drawer."""
+    return (
+        LCD_NAV_X0 + 10,
+        lcd_rail_bottom() - 78,
+        LOGICAL_W - 10,
+        lcd_rail_bottom() - 10,
+    )
+
+
+def settings_center_workspace_box():
+    """Live center workspace left unobscured by Settings leaf rails."""
+    return 0, 0, LCD_NAV_X0, LOGICAL_H
+
+
+def constellation_layout():
+    """Bounded regions for the enlarged Constellation workspace."""
+    return {
+        "map": (0, 0, LCD_NAV_X0, 545),
+        "info": (0, 545, LCD_NAV_X0, 714),
+        "status": (0, 714, LCD_NAV_X0, LOGICAL_H),
+        "sidebar": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
+    }
+
+
+def sync_constellation_geometry():
+    """Keep Constellation drawing and touch targets on the same layout."""
+    global GLOBE_PANEL_BOX, GLOBE_MAP_BOX, GLOBE_BACK_BOX, GLOBE_INFO_BOX
+    global GLOBE_SCOUT_BAR_BOX, GLOBE_STATION_BOXES
+    layout = constellation_layout()
+    GLOBE_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
+    map_region = layout["map"]
+    info_region = layout["info"]
+    status_region = layout["status"]
+    GLOBE_MAP_BOX = (map_region[0] + 12, map_region[1] + 58, map_region[2] - 12, map_region[3] - 10)
+    GLOBE_INFO_BOX = (info_region[0] + 12, info_region[1] + 8, info_region[2] - 12, info_region[3] - 8)
+    GLOBE_SCOUT_BAR_BOX = (status_region[0] + 12, status_region[1] + 8, status_region[2] - 12, status_region[3] - 10)
+    GLOBE_BACK_BOX = lcd_drawer_back_box()
+    gap = 10
+    card_width = (GLOBE_INFO_BOX[2] - GLOBE_INFO_BOX[0] - 2 * gap) / 3
+    GLOBE_STATION_BOXES = tuple(
+        (
+            GLOBE_INFO_BOX[0] + index * (card_width + gap),
+            GLOBE_INFO_BOX[1] + 35,
+            GLOBE_INFO_BOX[0] + index * (card_width + gap) + card_width,
+            GLOBE_INFO_BOX[3] - 8,
+        )
+        for index in range(3)
+    )
+
+
+def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
+    """Render the common Settings leaf rail without veiling live content."""
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+    draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 18, 62, title)
+    draw_text(
+        text_cache, LCD_NAV_X0 + 18, 96, detail,
+        (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
+    )
+    draw_radio_close_button(text_cache, lcd_drawer_back_box())
+
+
 def lcd_radio_drawer_close_box():
-    x0, _y0, x1, y1 = radio_panel_box()
-    # The mode choices are top-justified. A broad, isolated bottom return is
-    # easy to find and cannot be confused with a mode-family control.
-    return x0 + 10, y1 - 78, x1 - 10, y1 - 10
+    return lcd_drawer_back_box()
 
 
 def lcd_radio_drawer_reveal_y():
@@ -13482,6 +13776,8 @@ def lcd_home_bandwidth_box(show_compact_readouts=True):
 
 def lcd_nav_box(index, item_count=None):
     """Return the logical box for the permanent LCD navigation rail."""
+    if item_count == len(SETTINGS_MENU_ITEMS) and index == len(SETTINGS_MENU_ITEMS) - 1:
+        return lcd_drawer_back_box()
     col = index % 2
     row = index // 2
     grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
@@ -13495,6 +13791,18 @@ def lcd_nav_items(settings_open=False, digital_open=False):
     if digital_open:
         return DIGITAL_MENU_ITEMS
     return SETTINGS_MENU_ITEMS if settings_open else MENU_ITEMS
+
+
+def navigation_parent(items, kind):
+    """Return the rail surface that owns a destination opened from *items*."""
+    if items is SETTINGS_MENU_ITEMS and kind != "settings_back":
+        return "settings"
+    return "home"
+
+
+def navigation_back_surface(parent):
+    """Normalize stored leaf parents so invalid state always returns Home."""
+    return "settings" if parent == "settings" else "home"
 
 
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
@@ -13684,7 +13992,7 @@ def lcd_filter_drawer_boxes():
         preset_boxes.append((name, width_hz, (left, top, left + preset_w, top + preset_h)))
     return {
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
-        "close": (inner_x0, lcd_rail_bottom() - 78, inner_x1, lcd_rail_bottom() - 10),
+        "close": lcd_drawer_back_box(),
         "visual": (inner_x0, 108, inner_x1, 211),
         "shift": (inner_x0, 217, inner_x1, 329),
         "width": (inner_x0, 341, inner_x1, 441),
@@ -13842,7 +14150,8 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
         draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
         tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8
+            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
+            muted=muted and kind == "audio",
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
 
@@ -13995,6 +14304,16 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
     draw_logical_line(x0, y0, x0, y1, outline, 1)
     draw_logical_line(x1, y0, x1, y1, outline, 1)
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
+
+
+def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
+    """Draw a picker command with a stable action name and changing value."""
+    x0, y0, x1, y1 = box
+    draw_picker_button(text_cache, box, "", size, selected)
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    draw_text(text_cache, center_x, center_y - 12, first_line, (238, 240, 242), size, True, False, "cm")
+    draw_text(text_cache, center_x, center_y + 13, second_line, (168, 211, 214), max(11, size - 3), True, False, "cm")
 
 
 def deepgram_keyboard_rows(mode):
@@ -14433,6 +14752,34 @@ def station_fields(station):
     return name, location, server, listener_used, listener_total
 
 
+def station_receiver_type(station):
+    """Return explicit directory protocol, falling back to the FM-DX registry."""
+    if isinstance(station, (list, tuple)) and len(station) > 7:
+        receiver_type = str(station[7] or "").casefold()
+        if receiver_type in ("kiwi", "fmdx"):
+            return receiver_type
+    server = station[2] if isinstance(station, (list, tuple)) and len(station) > 2 else ""
+    return "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
+
+
+def effective_receiver_mode(receiver_type, kiwi_mode):
+    return fmdx.MODE_LABEL if str(receiver_type).casefold() == "fmdx" else str(kiwi_mode).upper()
+
+
+def receiver_tuning_bounds(server, receiver_type):
+    if str(receiver_type).casefold() == "fmdx":
+        return fmdx.receiver_bounds(server) or (fmdx.DEFAULT_MIN_KHZ, fmdx.DEFAULT_MAX_KHZ)
+    return 0.0, TUNING_MAX_KHZ
+
+
+def receiver_display_span(zoom, receiver_type):
+    return (
+        fmdx.audio_waterfall_span_khz(zoom)
+        if str(receiver_type).casefold() == "fmdx"
+        else kiwi.zoom_to_span_khz(zoom)
+    )
+
+
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
@@ -14454,17 +14801,18 @@ def draw_station_picker(
     last_visible = min(len(stations), int(math.ceil(scroll)) + PICKER_COLS * PICKER_ROWS)
     draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
               f"{first_visible}–{last_visible} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
-    draw_picker_button(
+    draw_picker_two_line_button(
         text_cache,
         PICKER_SORT_BOX,
-        "SORT: LOCATION" if sort_mode == "location" else "SORT: NAME",
+        "SORT",
+        "LOCATION" if sort_mode == "location" else "NAME",
         14 if LCD_800_MODE else 20,
         False,
     )
     if LCD_800_MODE:
         draw_picker_button(text_cache, PICKER_ROUTE_ALL_BOX, "ALL", 19, route_filter == "all")
-        draw_picker_button(text_cache, PICKER_ROUTE_DIRECT_BOX, "DIRECT", 17, route_filter == "direct")
-        draw_picker_button(text_cache, PICKER_ROUTE_PROXY_BOX, "PROXY", 18, route_filter == "proxy")
+        draw_picker_button(text_cache, PICKER_ROUTE_DIRECT_BOX, "KIWI", 18, route_filter == "kiwi")
+        draw_picker_button(text_cache, PICKER_ROUTE_PROXY_BOX, "FMDX", 18, route_filter == "fmdx")
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
     draw_picker_button(text_cache, PICKER_EXIT_BOX, "EXIT", 19 if LCD_800_MODE else 20)
 
@@ -14477,9 +14825,15 @@ def draw_station_picker(
         selected = server == selected_server
         pending = server == pending_server
         entry_health = station_health.get(server, {})
+        receiver_type = station_receiver_type(station)
+        displayed_health = dict(entry_health)
+        if receiver_type == "fmdx":
+            # FM-DX derives its local waterfall from the verified audio feed;
+            # it has no separate remote waterfall endpoint to probe.
+            displayed_health["waterfall"] = displayed_health.get("audio")
         checked = entry_health.get("checked", 0)
         health_fresh = time.time() - checked <= 86400
-        active = health_fresh and entry_health.get("audio") is True and entry_health.get("waterfall") is True
+        active = health_fresh and displayed_health.get("audio") is True and displayed_health.get("waterfall") is True
         if pending:
             # Retain the selected tile while the two Kiwi streams establish.
             # The inset/bright outline reads as a real pressed touch state.
@@ -14508,7 +14862,7 @@ def draw_station_picker(
         if pending:
             draw_logical_rect(box[0] + 3, box[1] + 3, box[2] - 3, box[1] + 8, (112, 255, 188, 230))
         marker_y = (box[1] + box[3]) / 2
-        draw_station_health_icons(text_cache, box[0] + 17, marker_y, entry_health, health_fresh)
+        draw_station_health_icons(text_cache, box[0] + 17, marker_y, displayed_health, health_fresh)
         generic_name = "0-30" in name.lower() and "sdr" in name.lower()
         if generic_name:
             # Keep the useful suffix for otherwise generic directory labels;
@@ -14540,7 +14894,7 @@ def draw_station_picker(
             draw_logical_rect(badge_x0, badge_y0, badge_x1, badge_y1, (28, 112, 91, 228))
             draw_text(text_cache, (badge_x0 + badge_x1) / 2, (badge_y0 + badge_y1) / 2, "LOCAL", (222, 255, 237), 13 if single_column_lcd else 10, True, False, "cm", family="Liberation Sans")
         limit_label = receiver_limit_label(entry_health)
-        route_label = receiver_route_label(server)
+        route_label = receiver_route_label(server, station_receiver_type(station))
         distance_label = format_station_distance(station, home_profile)
         connection_label = {
             "connecting": "CONNECTING",
@@ -14550,10 +14904,10 @@ def draw_station_picker(
             "failed": "UNAVAILABLE",
         }.get(connection_status, "CONNECTING") if pending else ""
         pill_y = marker_y + (3 if single_column_lcd else 1)
-        audio_pill_w = station_stream_pill(text_cache, title_x, pill_y, "audio", entry_health, health_fresh, pending)
+        audio_pill_w = station_stream_pill(text_cache, title_x, pill_y, "audio", displayed_health, health_fresh, pending)
         waterfall_pill_x = title_x + audio_pill_w + 8
         waterfall_pill_w = station_stream_pill(
-            text_cache, waterfall_pill_x, pill_y, "waterfall", entry_health, health_fresh, pending
+            text_cache, waterfall_pill_x, pill_y, "waterfall", displayed_health, health_fresh, pending
         )
         status_x = waterfall_pill_x + waterfall_pill_w + 14
         status_label = " · ".join(
@@ -15549,6 +15903,132 @@ def stereo_s16le_to_mono(data):
     samples = struct.unpack(f"<{frame_count * 2}h", data[:frame_count * 4])
     mono = tuple((samples[index] + samples[index + 1]) // 2 for index in range(0, len(samples), 2))
     return struct.pack(f"<{frame_count}h", *mono)
+
+
+def fmdx_decoder_command():
+    """Return the low-latency MP3-to-PCM pipeline used by FM-DX audio."""
+    return [
+        "ffmpeg", "-loglevel", "error", "-fflags", "nobuffer",
+        "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0",
+        "-f", "mp3", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le",
+        "-ar", str(fmdx.AUDIO_SAMPLE_RATE), "-ac", "2", "pipe:1",
+    ]
+
+
+class FmdxMp3Decoder:
+    """Decode the FM-DX MP3 fallback stream into 48 kHz stereo PCM."""
+
+    def __init__(self, on_pcm, process_factory=subprocess.Popen):
+        self.on_pcm = on_pcm
+        self.process = process_factory(
+            fmdx_decoder_command(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        self.closed = False
+        self.reader = threading.Thread(target=self._read, name="fmdx-mp3-decode", daemon=True)
+        self.reader.start()
+
+    def feed(self, data):
+        if self.closed or not data or not self.process.stdin:
+            return
+        try:
+            self.process.stdin.write(data)
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    def _read(self):
+        while not self.closed and self.process.stdout:
+            try:
+                pcm = self.process.stdout.read(8192)
+            except (OSError, ValueError):
+                break
+            if not pcm:
+                break
+            self.on_pcm(pcm)
+
+    def close(self):
+        if self.closed:
+            return
+        try:
+            if self.process.stdin:
+                self.process.stdin.close()
+        except (OSError, ValueError):
+            pass
+        self.reader.join(timeout=0.5)
+        self.closed = True
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                self.process.kill()
+            except OSError:
+                pass
+        self.reader.join(timeout=0.5)
+
+
+def put_latest(target_queue, item):
+    """Publish to a bounded real-time lane without ever blocking audio."""
+    if target_queue is None:
+        return
+    try:
+        target_queue.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        target_queue.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        target_queue.put_nowait(item)
+    except queue.Full:
+        pass
+
+
+def publish_fmdx_pcm(
+    pcm, args, state, server_generation, player, analyzer, line_queue,
+    transcript_queue=None, callsign_queue=None,
+):
+    """Fan decoded FM-DX PCM into the existing live presentation lanes."""
+    if (
+        not pcm
+        or state.receiver_type_snapshot(server_generation) != "fmdx"
+        or state.stream_paused_snapshot()
+    ):
+        return False
+    audio_controls, _audio_generation = state.audio_controls_snapshot()
+    scan_active = state.fmdx_scan_request_snapshot()[0]
+    muted = bool(audio_controls.get("mute", False) or scan_active)
+    if player is not None:
+        player.submit(bytes(len(pcm)) if muted else pcm, silence=muted)
+    mono = stereo_s16le_to_mono(pcm)
+    analysis_pcm = fmdx.resample_mono_s16le(
+        mono, fmdx.AUDIO_SAMPLE_RATE, getattr(args, "audio_rate", 12_000),
+    )
+    transcription_enabled, _engine, _lines, _partial, _status, _generation = state.transcription_snapshot()
+    if transcription_enabled:
+        put_latest(transcript_queue, analysis_pcm)
+    callsign_enabled, _value, _message, _status, _updated_at = state.callsign_snapshot()
+    if callsign_enabled:
+        put_latest(callsign_queue, analysis_pcm)
+    _floor, _ceiling, _speed, _auto, palette, _wf_generation = state.waterfall_snapshot()
+    mapper = waterfall_mapper(palette)
+    _server, center_khz, _zoom, _smeter, _view_generation, current_generation = state.snapshot()
+    if current_generation != server_generation:
+        return False
+    for samples in analyzer.feed(mono):
+        line = kiwi.waterfall_line(samples, mapper, 0.0, 255.0, width=WF_TEX_W)
+        state.update_spectrum(samples, 0.0, 255.0)
+        row_item = (line, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0)
+        for _ in range(max(1, int(getattr(args, "wf_row_pixels", 1)))):
+            put_latest(line_queue, row_item)
+    state.connection_ready(server_generation, "audio")
+    state.connection_ready(server_generation, "waterfall")
+    return True
 
 
 def default_sideband_mode(freq_khz):
@@ -18580,6 +19060,168 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
         stop_audio_player(player)
 
 
+def fmdx_audio_session(
+    args, stop_event, state, server, server_generation, line_queue=None,
+    transcript_queue=None, callsign_queue=None,
+):
+    """Run one typed FM-DX control/audio session until the receiver changes."""
+    control = audio = decoder = player = None
+    preset_queue = queue.Queue(maxsize=1)
+    analyzer = fmdx.AudioWaterfallAnalyzer(bins=SPECTRUM_BINS)
+    ready = threading.Event()
+    audio_args = argparse.Namespace(**vars(args))
+    audio_args.audio_rate = fmdx.AUDIO_SAMPLE_RATE
+
+    def load_presets():
+        try:
+            presets = fmdx.fetch_station_presets(server)
+        except (OSError, ValueError, TypeError):
+            presets = ()
+        put_latest(preset_queue, presets)
+
+    def on_pcm(pcm):
+        if publish_fmdx_pcm(
+            pcm, args, state, server_generation, player, analyzer, line_queue,
+            transcript_queue=transcript_queue, callsign_queue=callsign_queue,
+        ) and not ready.is_set():
+            ready.set()
+            persist_live_station_health(server, "audio", True)
+
+    try:
+        state.connection_attempt(server_generation, "audio")
+        control = fmdx.WebSocket.connect(fmdx.websocket_url(server, "text"))
+        if not state.register_transport_socket(server_generation, "fmdx-text", control):
+            control = None
+            return
+        audio = fmdx.WebSocket.connect(fmdx.websocket_url(server, "audio"))
+        if not state.register_transport_socket(server_generation, "audio", audio):
+            audio = None
+            return
+        player = BufferedAudioPlayer(audio_args, 2, state)
+        decoder = FmdxMp3Decoder(on_pcm)
+        audio.send_text(json.dumps({"type": "fallback", "data": "mp3"}, separators=(",", ":")))
+        threading.Thread(target=load_presets, name="fmdx-presets", daemon=True).start()
+        _server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+        if generation != server_generation:
+            return
+        control.send_text(fmdx.tune_command(freq_khz))
+        seen_view_generation = view_generation
+        next_tune_at = time.monotonic() + fmdx.TUNE_INTERVAL_SECONDS
+        scan_frequencies = ()
+        scan_index = 0
+        scan_origin_khz = freq_khz
+        scan_deadline = 0.0
+        scan_tuned_at = 0.0
+        seen_scan_request_generation = -1
+
+        def finish_scan(restore=True):
+            nonlocal scan_frequencies, scan_index, scan_deadline, scan_tuned_at
+            scan_frequencies = ()
+            scan_index = 0
+            scan_deadline = 0.0
+            scan_tuned_at = 0.0
+            state.request_fmdx_scan(False, server_generation)
+            if restore:
+                state.set_view(freq_khz=scan_origin_khz)
+
+        while not stop_event.is_set():
+            if state.stream_paused_snapshot() or state.external_audio_snapshot():
+                break
+            current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+            if generation != server_generation or current_server != server:
+                break
+            try:
+                presets = preset_queue.get_nowait()
+            except queue.Empty:
+                presets = None
+            if presets is not None:
+                state.update_fmdx_stations(presets, server_generation)
+            now = time.monotonic()
+            scan_requested, scan_request_generation = state.fmdx_scan_request_snapshot()
+            if scan_request_generation != seen_scan_request_generation:
+                seen_scan_request_generation = scan_request_generation
+                if scan_requested and not scan_frequencies:
+                    scan_origin_khz = freq_khz
+                    known = state.fmdx_stations_snapshot()
+                    candidates = fmdx.rds_discovery_frequencies(known, freq_khz)
+                    if not candidates:
+                        bounds = fmdx.receiver_bounds(server) or (
+                            fmdx.DEFAULT_MIN_KHZ, fmdx.DEFAULT_MAX_KHZ,
+                        )
+                        candidates = tuple(sorted(
+                            fmdx.band_scan_frequencies(*bounds),
+                            key=lambda candidate: abs(candidate - freq_khz),
+                        )[:fmdx.RDS_DISCOVERY_MAX_PRESETS])
+                    scan_frequencies = candidates
+                    scan_index = 0
+                    if scan_frequencies:
+                        state.set_view(freq_khz=scan_frequencies[0])
+                        scan_index = 1
+                        scan_tuned_at = now
+                        scan_deadline = now + fmdx.RDS_DISCOVERY_DWELL_SECONDS
+                    else:
+                        finish_scan(restore=False)
+                elif not scan_requested and scan_frequencies:
+                    finish_scan(restore=True)
+            if scan_frequencies and now >= scan_deadline:
+                if scan_index >= len(scan_frequencies):
+                    finish_scan(restore=True)
+                else:
+                    state.set_view(freq_khz=scan_frequencies[scan_index])
+                    scan_index += 1
+                    scan_tuned_at = now
+                    scan_deadline = now + fmdx.RDS_DISCOVERY_DWELL_SECONDS
+                current_server, freq_khz, _zoom, _smeter, view_generation, generation = state.snapshot()
+            if view_generation != seen_view_generation and now >= next_tune_at:
+                control.send_text(fmdx.tune_command(freq_khz))
+                analyzer.reset()
+                seen_view_generation = view_generation
+                next_tune_at = now + fmdx.TUNE_INTERVAL_SECONDS
+            readable, _writable, _errors = select.select(
+                [control.sock, audio.sock], [], [], KIWI_IO_POLL_SECONDS,
+            )
+            for source in readable:
+                if state.receiver_type_snapshot(server_generation) != "fmdx":
+                    return
+                if source is control.sock:
+                    payload = fmdx.parse_text_message(control.recv())
+                    if payload is None:
+                        continue
+                    scan_status_is_current = (
+                        not scan_frequencies
+                        or (
+                            fmdx.status_matches_frequency(payload, freq_khz)
+                            and time.monotonic() - scan_tuned_at
+                            >= fmdx.RDS_DISCOVERY_MIN_LOCK_SECONDS
+                        )
+                    )
+                    learned_station = (
+                        state.update_fmdx_status(payload, server_generation)
+                        if scan_status_is_current else None
+                    )
+                    if learned_station:
+                        remember_fmdx_station(server, learned_station)
+                    signal_dbm = fmdx.signal_dbm(payload)
+                    if signal_dbm is not None:
+                        state.set_smeter(signal_dbm, source="fmdx")
+                else:
+                    packet = audio.recv()
+                    if packet and not packet.startswith(b"{"):
+                        decoder.feed(packet)
+    finally:
+        if state.fmdx_scan_request_snapshot()[0]:
+            state.request_fmdx_scan(False, server_generation)
+        if decoder:
+            decoder.close()
+        stop_audio_player(player)
+        if control:
+            state.unregister_transport_socket("fmdx-text", control)
+            control.close()
+        if audio:
+            state.unregister_transport_socket("audio", audio)
+            audio.close()
+
+
 def snd_meter_worker(
     args, stop_event, state, transcript_queue=None, callsign_queue=None,
     dual_mixer=None, dual_source=None, dual_matcher=None, enable_listener_dsp=True,
@@ -18659,6 +19301,18 @@ def snd_meter_worker(
                 stop_event.wait(0.10)
                 continue
             server, freq_khz, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+            if receiver_worker_protocol(state.receiver_type_snapshot(server_generation)) == "fmdx":
+                stop_audio_player(player)
+                player = None
+                player_channels = None
+                player_server_generation = None
+                fmdx_audio_session(
+                    args, stop_event, state, server, server_generation,
+                    line_queue=waterfall_line_queue,
+                    transcript_queue=transcript_queue,
+                    callsign_queue=callsign_queue,
+                )
+                continue
             if owrx.is_openwebrx_endpoint(server):
                 # The previous Kiwi loop may still own the direct ALSA sink
                 # for one outer iteration after a source switch. Release it
@@ -19273,6 +19927,12 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     break
                 continue
             server, freq_khz, zoom, _smeter_dbm, seen_generation, seen_server_generation = state.snapshot()
+            if receiver_worker_protocol(state.receiver_type_snapshot(seen_server_generation)) == "fmdx":
+                # FM-DX has no RF waterfall endpoint. Its decoded-audio
+                # session publishes compatible rows into this same queue.
+                if stop_event.wait(0.10):
+                    break
+                continue
             if owrx.is_openwebrx_endpoint(server):
                 # OpenWebRX multiplexes FFT rows with audio on its receiver
                 # socket. The audio worker publishes those rows into this
@@ -19507,6 +20167,7 @@ def main():
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
     remembered_radio_mode = None
+    remembered_receiver_type = None
     remembered_preferences = {}
     if args.remember_receiver:
         remembered_view = load_remembered_view(args.receiver_state_file)
@@ -19514,6 +20175,10 @@ def main():
             args.server = remembered_view["server"]
             args.freq_khz = remembered_view.get("freq_khz", args.freq_khz)
             args.zoom = remembered_view.get("zoom", args.zoom)
+            remembered_receiver_type = remembered_view.get("receiver_type")
+            if remembered_receiver_type == "fmdx":
+                fmdx.ensure_receiver(args.server, "fmdx")
+                args.freq_khz = fmdx.receiver_frequency(args.server, args.freq_khz)
             remembered_radio_mode = remembered_view.get("radio_mode")
             remembered_preferences = remembered_view.get("preferences", {})
             print(
@@ -19733,7 +20398,7 @@ def main():
     start = time.monotonic()
     frames = 0
     display_freq = args.freq_khz
-    display_span = kiwi.zoom_to_span_khz(args.zoom)
+    display_span = receiver_display_span(args.zoom, state.receiver_type_snapshot())
     # Scope sizing is an experimental live layout control. It begins at the
     # established wide-layout height and changes only while its grab rail is
     # visible, so ordinary waterfall gestures remain untouched.
@@ -19793,6 +20458,7 @@ def main():
     menu_opened_at = 0.0
     menu_scroll = 0.0
     picker_open = False
+    picker_parent = "home"
     picker_map_open = False
     picker_map_yaw = math.radians(-18)
     picker_map_pitch = math.radians(18)
@@ -19827,12 +20493,15 @@ def main():
     radio_drawer_last_at = time.monotonic()
     drawer_last_interaction_at = radio_drawer_last_at
     display_setup_open = False
+    display_parent = "home"
     filter_drawer_open = False
     filter_drawer_width_hz = None
     settings_menu_open = False
     digital_menu_open = False
     receiver_home_panel_open = False
+    receiver_home_parent = "home"
     fan_curve_panel_open = False
+    fan_curve_parent = "home"
     network_panel_open = False
     network_password_open = False
     network_selected_ssid = ""
@@ -19847,6 +20516,7 @@ def main():
     audio_panel_open = False
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
+    cpu_utilization_parent = "home"
     asr_panel_open = False
     asr_moon_language_open = False
     deepgram_setup_open = False
@@ -19898,6 +20568,7 @@ def main():
         return applied_volume
 
     tests_panel_open = False
+    tests_parent = "home"
     openwebrx_test_restore = None
     font_lab_open = False
     font_lab_page = 0
@@ -20511,6 +21182,7 @@ def main():
             radio_mode,
             manual_radio_mode,
             preferences,
+            state.receiver_type_snapshot(),
         )
         saved_preferences_signature = signature
         preferences_dirty = False
@@ -20666,6 +21338,8 @@ def main():
     def apply_band_default(freq_khz):
         """Follow the conventional 10 MHz split until the operator takes over."""
         nonlocal radio_mode, auto_sideband_mode
+        if state.receiver_type_snapshot() == "fmdx":
+            return
         # The retune test is observational. It must not unexpectedly change
         # the current demodulator while it crosses a nearby band threshold.
         if retune_sweep is not None:
@@ -20728,7 +21402,11 @@ def main():
     def active_tuning_bounds():
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
             return rtl_lab.tuning_bounds()
-        return 0.0, TUNING_MAX_KHZ
+        server, _freq, _zoom, _smeter, _generation, server_generation = state.snapshot()
+        return receiver_tuning_bounds(
+            server,
+            state.receiver_type_snapshot(server_generation) or "kiwi",
+        )
 
     def clamp_active_frequency(value):
         low, high = active_tuning_bounds()
@@ -20742,7 +21420,7 @@ def main():
     def active_source_span_khz(zoom_level):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
             return rtl_lab.source_span_khz()
-        return kiwi.zoom_source_span_khz(zoom_level)
+        return receiver_display_span(zoom_level, state.receiver_type_snapshot())
 
     def change_zoom(delta, animation_duration=0.22):
         nonlocal zoom_osd_until, auto_zoom_levels_used
@@ -20756,7 +21434,7 @@ def main():
         freq_khz, new_zoom, _gen = state.set_view(zoom=new_zoom)
         remember_current_view()
         auto_zoom_levels_used = 0
-        animate_to(freq_khz, kiwi.zoom_to_span_khz(new_zoom), animation_duration)
+        animate_to(freq_khz, receiver_display_span(new_zoom, state.receiver_type_snapshot()), animation_duration)
         zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
         return True
@@ -20962,11 +21640,14 @@ def main():
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
         name, _location, target_server, _used, _total = station_fields(station)
-        _server, frequency, zoom, _generation, _server_generation = state.set_server(target_server)
+        _server, frequency, zoom, _generation, _server_generation = state.set_server(
+            target_server,
+            receiver_type=station_receiver_type(station),
+        )
         write_remembered_view(save_current_frequency=True, force=True)
         drain_queue(line_queue)
         wf_texture.clear()
-        animate_to(frequency, kiwi.zoom_to_span_khz(zoom), 0.20)
+        animate_to(frequency, receiver_display_span(zoom, station_receiver_type(station)), 0.20)
         station_pending_server = target_server
         station_pending_started_at = time.monotonic()
         station_connected_at = 0.0
@@ -21033,9 +21714,16 @@ def main():
                 wspr_mini_textures[key] = texture
             session.drain_rows(texture)
 
+    def restore_navigation_parent(parent):
+        """Close a leaf back to its recorded rail surface."""
+        nonlocal settings_menu_open, digital_menu_open
+        settings_menu_open = navigation_back_surface(parent) == "settings"
+        digital_menu_open = False
+
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
+        nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
@@ -21044,6 +21732,7 @@ def main():
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
+        parent = navigation_parent(items, kind)
         wake_controls()
         menu_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
@@ -21082,6 +21771,7 @@ def main():
             station_connected_at = 0.0
             connect_to_station(LOCAL_KIWI_STATION)
         elif kind == "rx":
+            picker_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             picker_open = True
@@ -21098,6 +21788,7 @@ def main():
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "display":
+            display_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             display_setup_open = True
@@ -21128,6 +21819,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "system":
+            receiver_home_parent = parent
             receiver_home_panel_open = True
             settings_menu_open = False
             digital_menu_open = False
@@ -21137,7 +21829,9 @@ def main():
             settings_menu_open = False
             digital_menu_open = False
             activate_navigation_item(next(index for index, (candidate, _label) in enumerate(MENU_ITEMS) if candidate == "rx"))
+            picker_parent = parent
         elif kind == "stats":
+            cpu_utilization_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             cpu_utilization_graph_open = True
@@ -21167,6 +21861,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
+            tests_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             tests_panel_open = True
@@ -21561,14 +22256,16 @@ def main():
             RADIOGARDEN_ZOOM_MAX,
         )
         picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
-        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(selected["server"])
+        _server, freq_khz, zoom, _gen, _server_gen = state.set_server(
+            selected["server"], receiver_type=selected.get("receiver_type", "kiwi"),
+        )
         # A receiver selection is an explicit operator decision. Persist it
         # immediately so a reboot during its connection attempt never falls
         # back to the bundled/default public endpoint.
         write_remembered_view(save_current_frequency=True, force=True)
         drain_queue(line_queue)
         wf_texture.clear()
-        animate_to(freq_khz, kiwi.zoom_to_span_khz(zoom), 0.20)
+        animate_to(freq_khz, receiver_display_span(zoom, selected.get("receiver_type", "kiwi")), 0.20)
         station_pending_server = selected["server"]
         station_pending_started_at = time.monotonic()
         station_connected_at = 0.0
@@ -22123,7 +22820,7 @@ def main():
                                 gesture = "wspr_workspace_outside"
                             elif tests_panel_open and contains(TEST_PANEL_BOX, x, y):
                                 gesture = "tests_panel"
-                            elif tests_panel_open:
+                            elif tests_panel_open and not LCD_800_MODE:
                                 gesture = "tests_panel_outside"
                             elif filter_drawer_open and LCD_800_MODE and contains(lcd_filter_drawer_boxes()["panel"], x, y):
                                 filter_boxes = lcd_filter_drawer_boxes()
@@ -22256,9 +22953,9 @@ def main():
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_ALL_BOX, x, y):
                                 gesture = "picker_route_all"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_DIRECT_BOX, x, y):
-                                gesture = "picker_route_direct"
+                                gesture = "picker_route_kiwi"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_PROXY_BOX, x, y):
-                                gesture = "picker_route_proxy"
+                                gesture = "picker_route_fmdx"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_FAVORITES_BOX, x, y):
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
@@ -23518,7 +24215,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = tests_option_at(x, y)
-                                if choice == "globe":
+                                if choice == "back":
+                                    tests_panel_open = False
+                                    restore_navigation_parent(tests_parent)
+                                elif choice == "globe":
                                     tests_panel_open = False
                                     globe_open = True
                                     if not globe_fetch_started:
@@ -23549,6 +24249,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 tests_panel_open = False
+                                restore_navigation_parent(tests_parent)
                             wake_controls()
                         elif touch_started and gesture == "font_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -23614,7 +24315,13 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 active_mode_families = rtl_lab.mode_families() if rtl_lab.is_running() else KIWI_MODE_FAMILIES
-                                choice = radio_option_at(x, y, radio_family_open, active_mode_families)
+                                choice = radio_option_at(
+                                    x, y, radio_family_open,
+                                    mode_families=active_mode_families,
+                                    receiver_type=state.receiver_type_snapshot(),
+                                    fmdx_stations=state.fmdx_stations_snapshot(),
+                                    fmdx_scan_active=state.fmdx_scan_request_snapshot()[0],
+                                )
                                 if choice is None:
                                     # The drawer is intentionally modal only
                                     # inside its own rail: a blank tap is the
@@ -23627,6 +24334,27 @@ def main():
                                     if kind == "close":
                                         radio_setup_open = False
                                         radio_family_open = None
+                                    elif kind == "fmdx_action":
+                                        _server, current_frequency, current_zoom, _smeter, _view_gen, server_generation = state.snapshot()
+                                        if value in ("scan_start", "scan_stop"):
+                                            state.request_fmdx_scan(value == "scan_start", server_generation)
+                                        else:
+                                            presets = state.fmdx_stations_snapshot()
+                                            if presets:
+                                                frequencies = [float(item["frequency_khz"]) for item in presets]
+                                                nearest_index = min(
+                                                    range(len(frequencies)),
+                                                    key=lambda index: abs(frequencies[index] - current_frequency),
+                                                )
+                                                direction = -1 if value == "preset_previous" else 1
+                                                target_frequency = frequencies[(nearest_index + direction) % len(frequencies)]
+                                                state.set_view(freq_khz=target_frequency)
+                                                animate_to(
+                                                    target_frequency,
+                                                    receiver_display_span(current_zoom, "fmdx"),
+                                                    0.20,
+                                                )
+                                                remember_current_view()
                                     elif kind == "mode_cycle":
                                         next_mode = next_radio_mode_variant(radio_mode, value)
                                         # The Home drawer is shared, but the
@@ -23733,11 +24461,13 @@ def main():
                                     # Match the other rail drawers: a blank
                                     # rail tap is an easy, unambiguous close.
                                     display_setup_open = False
+                                    restore_navigation_parent(display_parent)
                                     wake_controls()
                                 elif choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         display_setup_open = False
+                                        restore_navigation_parent(display_parent)
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -23792,6 +24522,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 display_setup_open = False
+                                restore_navigation_parent(display_parent)
                                 wake_controls()
                         elif touch_started and gesture == "receiver_home":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -23799,9 +24530,11 @@ def main():
                                 home_boxes = receiver_home_drawer_boxes()
                                 if contains(home_boxes["close"], x, y):
                                     receiver_home_panel_open = False
+                                    restore_navigation_parent(receiver_home_parent)
                                 elif contains(home_boxes["fan"], x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
+                                    fan_curve_parent = receiver_home_parent
                                 elif contains(home_boxes["fallback"], x, y):
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
@@ -23814,6 +24547,7 @@ def main():
                                     ).start()
                                 else:
                                     receiver_home_panel_open = False
+                                    restore_navigation_parent(receiver_home_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_curve":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -23821,6 +24555,7 @@ def main():
                                 fan_boxes = fan_curve_drawer_boxes()
                                 if contains(fan_boxes["close"], x, y):
                                     fan_curve_panel_open = False
+                                    restore_navigation_parent(fan_curve_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_start_slider":
                             adjust_fan_curve_slider(fan_curve, "start", x)
@@ -23916,6 +24651,7 @@ def main():
                                     cpu_core_samples = None
                                     next_system_sample = 0.0
                                 else:
+                                    restore_navigation_parent(cpu_utilization_parent)
                                     cpu_core_history.clear()
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
@@ -24020,6 +24756,8 @@ def main():
                                 if contains(boxes["back"], x, y):
                                     network_panel_open = False
                                     network_selected_ssid = ""
+                                    settings_menu_open = True
+                                    digital_menu_open = False
                                 elif contains(boxes["rescan"], x, y):
                                     network_bridge.request("scan")
                                     network_notice = "Scanning Wi-Fi networks..."
@@ -24268,6 +25006,7 @@ def main():
                                 station_scroll = 0
                                 station_pending_server = None
                                 station_connected_at = 0.0
+                                restore_navigation_parent(picker_parent)
                                 wake_controls()
                         elif touch_started and gesture == "picker_search":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -24280,7 +25019,7 @@ def main():
                                 station_sort = "name" if station_sort == "location" else "location"
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers)
                                 station_scroll = 0
-                        elif touch_started and gesture in ("picker_route_all", "picker_route_direct", "picker_route_proxy", "picker_route_favorites"):
+                        elif touch_started and gesture in ("picker_route_all", "picker_route_kiwi", "picker_route_fmdx", "picker_route_favorites"):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 station_route_filter = gesture.removeprefix("picker_route_")
@@ -24799,7 +25538,7 @@ def main():
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
-                display_span = kiwi.zoom_to_span_khz(zoom)
+                display_span = receiver_display_span(zoom, state.receiver_type_snapshot())
 
             if now >= next_system_sample:
                 # The compact status remains inexpensive at a two-second
@@ -24981,7 +25720,7 @@ def main():
                 smeter_dbm,
                 smeter_peak_dbm,
                 smeter_readout_dbm,
-                radio_mode,
+                effective_receiver_mode(state.receiver_type_snapshot(), radio_mode),
                 digital_mode,
                 finger_tune_step_hz(zoom, tune_step_hz),
                 controls_alpha=control_alpha,
@@ -25149,7 +25888,11 @@ def main():
                     digital_mode,
                     tune_step_hz,
                     radio_family_open,
-                    rtl_lab.mode_families() if local_iq_active else KIWI_MODE_FAMILIES,
+                    mode_families=rtl_lab.mode_families() if local_iq_active else KIWI_MODE_FAMILIES,
+                    receiver_type=state.receiver_type_snapshot(),
+                    fmdx_status=state.fmdx_status_snapshot(),
+                    fmdx_stations=state.fmdx_stations_snapshot(),
+                    fmdx_scan_active=state.fmdx_scan_request_snapshot()[0],
                 )
             if display_setup_open:
                 wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, _wf_generation = state.waterfall_snapshot()
