@@ -18,6 +18,7 @@ class MenuIconTests(unittest.TestCase):
             "digi.png",
             "display.png",
             "home.png",
+            "info.png",
             "receivers.png",
             "rf.png",
             "settings.png",
@@ -52,10 +53,13 @@ class DrawerGeometryTests(unittest.TestCase):
         )
         self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "MODES")
 
-    def test_settings_apps_and_back_labels_preserve_routes(self):
+    def test_settings_uses_info_and_has_no_duplicate_kiwi_route(self):
         labels = dict(ui.SETTINGS_MENU_ITEMS)
         self.assertEqual(labels["tests"], "APPS")
+        self.assertEqual(labels["system"], "INFO")
         self.assertEqual(labels["settings_back"], "BACK")
+        self.assertNotIn("kiwi", labels)
+        self.assertEqual(ui.menu_icon_filename("system"), "info.png")
 
     def test_drawers_share_one_back_target(self):
         expected = ui.lcd_drawer_back_box()
@@ -69,9 +73,31 @@ class DrawerGeometryTests(unittest.TestCase):
     def test_settings_back_tile_uses_shared_back_target(self):
         last = len(ui.SETTINGS_MENU_ITEMS) - 1
         self.assertEqual(
-            ui.lcd_nav_box(last, len(ui.SETTINGS_MENU_ITEMS)),
+            ui.lcd_nav_box(last, len(ui.SETTINGS_MENU_ITEMS), True),
             ui.lcd_drawer_back_box(),
         )
+
+    def test_modes_drawer_contains_families_wspr_and_back_without_overlap(self):
+        ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
+        mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
+        step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
+        wspr_box = ui.radio_wspr_box()
+        back_box = ui.lcd_radio_drawer_close_box()
+        overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+        for box in (*mode_boxes, *step_boxes):
+            self.assertFalse(overlaps(box, wspr_box))
+        self.assertFalse(overlaps(wspr_box, back_box))
+        x = (wspr_box[0] + wspr_box[2]) / 2
+        y = (wspr_box[1] + wspr_box[3]) / 2
+        self.assertEqual(ui.radio_option_at(x, y), ("workspace", "wspr"))
+
+    def test_stats_close_target_is_inside_graph_header(self):
+        graph = (120, 90, 900, 420)
+        close = ui.cpu_utilization_graph_close_box(graph)
+        self.assertGreaterEqual(close[0], graph[0])
+        self.assertGreaterEqual(close[1], graph[1])
+        self.assertLessEqual(close[2], graph[2])
+        self.assertLess(close[3], graph[1] + 44)
 
 
 class ParentNavigationTests(unittest.TestCase):

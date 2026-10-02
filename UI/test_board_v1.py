@@ -4,13 +4,13 @@ from unittest.mock import patch
 import kiwi_gl_display as ui
 
 class BoardLayoutTests(unittest.TestCase):
-    def test_settings_and_digital_back_have_same_target(self):
-        for items in (ui.SETTINGS_MENU_ITEMS, ui.DIGITAL_MENU_ITEMS):
-            self.assertEqual(ui.lcd_nav_box(len(items)-1, len(items)), ui.lcd_drawer_back_box())
-            boxes = [ui.lcd_nav_box(i, len(items)) for i in range(len(items))]
-            for i,a in enumerate(boxes):
-                for b in boxes[i+1:]:
-                    self.assertFalse(a[0]<b[2] and b[0]<a[2] and a[1]<b[3] and b[1]<a[3])
+    def test_settings_back_has_an_isolated_target(self):
+        items = ui.SETTINGS_MENU_ITEMS
+        self.assertEqual(ui.lcd_nav_box(len(items)-1, len(items), True), ui.lcd_drawer_back_box())
+        boxes = [ui.lcd_nav_box(i, len(items), True) for i in range(len(items))]
+        for i,a in enumerate(boxes):
+            for b in boxes[i+1:]:
+                self.assertFalse(a[0]<b[2] and b[0]<a[2] and a[1]<b[3] and b[1]<a[3])
 
     def test_home_controls_fit_before_navigation(self):
         for compact in (True, False):
@@ -136,7 +136,7 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
             self.assertEqual(box, expected)
         for count in (2, 7, 8):
             for index in range(count - 1):
-                self.assertLess(ui.lcd_nav_box(index, count)[3], expected[1])
+                self.assertLess(ui.lcd_nav_box(index, count, True)[3], expected[1])
 
     def test_audio_alone_does_not_start_landing_timeout(self):
         state = ui.SharedState('http://kiwi.test', 7075, 8, -95, 142, 245, 3, 'lsb', True)
@@ -151,4 +151,3 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

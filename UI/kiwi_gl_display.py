@@ -386,6 +386,7 @@ MENU_ICON_FILENAMES = {
     "digital": "digi.png",
     "wspr": "digi.png",
     "tests": "apps.png",
+    "system": "info.png",
 }
 
 
@@ -1912,16 +1913,16 @@ def configure_popup_layout():
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 8)
-        PICKER_SEARCH_BOX = lcd_nav_box(1, 8)
+        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 8, True)
+        PICKER_SEARCH_BOX = lcd_nav_box(1, 8, True)
         # Directory uses the full 2×4 rail: one sort tile, then separate
         # route filters. A route must never require cycling through unrelated
         # choices just to reach Direct or Proxy.
-        PICKER_SORT_BOX = lcd_nav_box(2, 8)
-        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3, 8)
-        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 8)
-        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 8)
-        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6, 8)
+        PICKER_SORT_BOX = lcd_nav_box(2, 8, True)
+        PICKER_ROUTE_ALL_BOX = lcd_nav_box(3, 8, True)
+        PICKER_ROUTE_DIRECT_BOX = lcd_nav_box(4, 8, True)
+        PICKER_ROUTE_PROXY_BOX = lcd_nav_box(5, 8, True)
+        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(6, 8, True)
         PICKER_EXIT_BOX = lcd_drawer_back_box()
         RADIOGARDEN_LIST_BOX = (1031, 112, 1273, 230)
         RADIOGARDEN_VIEW_BOX = (1031, 242, 1273, 360)
@@ -2406,15 +2407,10 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
 SETTINGS_MENU_ITEMS = (
     ("display", "DISPLAY"),
     ("network", "NETWORK"),
-    ("kiwi", "KIWI"),
     ("stats", "STATS"),
     ("tests", "APPS"),
-    ("system", "SYSTEM"),
+    ("system", "INFO"),
     ("settings_back", "BACK"),
-)
-DIGITAL_MENU_ITEMS = (
-    ("wspr", "WSPR"),
-    ("digital_back", "HOME"),
 )
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
@@ -7445,6 +7441,12 @@ def draw_audio_transport_graph(text_cache, history, box):
             draw_logical_line(x, plot_y0, x, plot_y1, (255, 185, 62, 235), 1)
 
 
+def cpu_utilization_graph_close_box(box):
+    """Large explicit close target in the CPU graph header."""
+    x0, y0, x1, _y1 = box
+    return max(x0 + 260, x1 - 112), y0 + 7, x1 - 10, y0 + 37
+
+
 def draw_cpu_utilization_graph(text_cache, history, latest, box):
     """Draw a two-minute, right-to-left CPU history for all Pi cores."""
     x0, y0, x1, y1 = box
@@ -7462,7 +7464,13 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
     draw_logical_line(x0, y0, x1, y0, (91, 221, 241, 230), 2)
     draw_logical_line(x0, y1, x1, y1, (91, 221, 241, 170), 1)
     draw_text(text_cache, x0 + 14, y0 + 18, "CPU UTILIZATION", (161, 235, 246), 18, True, True, "lm")
-    draw_text(text_cache, x1 - 14, y0 + 18, "120 s  ·  TAP CPU TO CLOSE", (170, 193, 199), 12, False, True, "rm")
+    close_x0, close_y0, close_x1, close_y1 = cpu_utilization_graph_close_box(box)
+    draw_logical_rect(close_x0, close_y0, close_x1, close_y1, (22, 54, 68, 238))
+    draw_logical_line(close_x0, close_y0, close_x1, close_y0, (105, 222, 237, 230), 1)
+    draw_logical_line(close_x0, close_y1, close_x1, close_y1, (105, 222, 237, 170), 1)
+    draw_text(text_cache, (close_x0 + close_x1) / 2, (close_y0 + close_y1) / 2,
+              "CLOSE", (232, 253, 255), 12, True, True, "cm")
+    draw_text(text_cache, close_x0 - 12, y0 + 18, "120 s", (170, 193, 199), 12, False, True, "rm")
     for percent in (25, 50, 75):
         y = plot_y1 - (percent / 100.0) * (plot_y1 - plot_y0)
         draw_logical_line(plot_x0, y, plot_x1, y, (89, 134, 147, 66), 1)
@@ -7702,6 +7710,11 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
         yield family, modes, (x0, y0, x0 + button_w, y0 + RADIO_FAMILY_BUTTON_H)
 
 
+def radio_wspr_box():
+    """Dedicated WSPR workspace launcher below the Kiwi mode controls."""
+    return LCD_NAV_X0 + 10, 522, LOGICAL_W - 10, 584
+
+
 def radio_variant_layout(modes):
     """Lay variants out in a compact two-column context menu."""
     popup_x0, popup_y0, popup_x1, _popup_y1 = radio_variant_popup_box(modes)
@@ -7741,6 +7754,8 @@ def radio_option_at(
         for _family, modes, box in radio_mode_layout(mode_families):
             if contains(box, x, y):
                 return "mode_cycle", modes
+        if LCD_800_MODE and contains(radio_wspr_box(), x, y):
+            return "workspace", "wspr"
     else:
         for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active):
             if contains(box, x, y):
@@ -7906,6 +7921,8 @@ def draw_radio_setup_panel(
             if reveal_y >= box[3]:
                 label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
                 draw_radio_option(text_cache, box, label, option == step_hz)
+        if receiver_worker_protocol(receiver_type) == "kiwi" and reveal_y >= radio_wspr_box()[3]:
+            draw_radio_option(text_cache, radio_wspr_box(), "WSPR", False)
         return
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
@@ -9600,7 +9617,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", f"{fan_curve['start_c']}→{fan_curve['full_c']} C", True)
     draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
     draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
-    draw_sidebar_header(text_cache, "RECEIVER HOME")
+    draw_sidebar_header(text_cache, "INFO")
 
 
 def fan_curve_drawer_boxes():
@@ -13604,10 +13621,9 @@ def lcd_radio_drawer_reveal_y():
     return y0 + (y1 - y0) * LCD_RADIO_DRAWER_PROGRESS
 
 
-def lcd_nav_top(item_count=None):
+def lcd_nav_top(item_count=None, has_back=False):
     """Bottom-align only the rows actually present in this rail view."""
     item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
-    has_back = item_count in (len(SETTINGS_MENU_ITEMS), len(DIGITAL_MENU_ITEMS), 8)
     rows = math.ceil((item_count - int(has_back)) / 2)
     tiles_h = rows * LCD_NAV_TILE_H + (rows - 1) * LCD_NAV_GAP
     bottom = lcd_drawer_back_box()[1] - 20 if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
@@ -13894,22 +13910,20 @@ def lcd_home_bandwidth_box(show_compact_readouts=True):
     return x0, y0, x1, y0 + LCD_HOME_PASSBAND_HEIGHT
 
 
-def lcd_nav_box(index, item_count=None):
+def lcd_nav_box(index, item_count=None, has_back=False):
     """Return the logical box for the permanent LCD navigation rail."""
-    if item_count in (len(SETTINGS_MENU_ITEMS), len(DIGITAL_MENU_ITEMS), 8) and index == item_count - 1:
+    if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
     row = index // 2
     grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
     x0 = LCD_NAV_X0 + (LOGICAL_W - LCD_NAV_X0 - grid_width) / 2 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
-    y0 = lcd_nav_top(item_count) + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+    y0 = lcd_nav_top(item_count, has_back) + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
     return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
 
 
 def lcd_nav_items(settings_open=False, digital_open=False):
-    """Return the active Home-rail level, with DIGI owning WSPR tools."""
-    if digital_open:
-        return DIGITAL_MENU_ITEMS
+    """Return Home or Settings; Modes opens its full drawer directly."""
     return SETTINGS_MENU_ITEMS if settings_open else MENU_ITEMS
 
 
@@ -13928,8 +13942,9 @@ def navigation_back_surface(parent):
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
+    has_back = items is SETTINGS_MENU_ITEMS
     for index in range(len(items)):
-        if contains(lcd_nav_box(index, len(items)), x, y):
+        if contains(lcd_nav_box(index, len(items), has_back), x, y):
             return index
     return None
 
@@ -14268,7 +14283,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             show_compact_readouts=show_compact_readouts,
         )
     for index, (kind, label) in enumerate(items):
-        bx0, by0, bx1, by1 = lcd_nav_box(index, len(items))
+        bx0, by0, bx1, by1 = lcd_nav_box(index, len(items), items is SETTINGS_MENU_ITEMS)
         if kind in ("settings_back", "digital_back"):
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
@@ -22042,31 +22057,21 @@ def main():
             digital_menu_open = False
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "kiwi":
-            settings_menu_open = False
-            digital_menu_open = False
-            activate_navigation_item(next(index for index, (candidate, _label) in enumerate(MENU_ITEMS) if candidate == "rx"))
-            picker_parent = parent
         elif kind == "stats":
-            cpu_utilization_parent = parent
             settings_menu_open = False
             digital_menu_open = False
-            cpu_utilization_graph_open = True
+            cpu_utilization_graph_open = not cpu_utilization_graph_open
+            if cpu_utilization_graph_open:
+                cpu_utilization_parent = parent
+            else:
+                restore_navigation_parent(parent)
         elif kind == "digital":
-            settings_menu_open = False
-            digital_menu_open = True
-            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
-            tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "digital_modes":
             settings_menu_open = False
             digital_menu_open = False
             radio_setup_open = True
             radio_family_open = None
             picker_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind == "digital_back":
-            settings_menu_open = False
-            digital_menu_open = False
         elif kind == "audio":
             settings_menu_open = False
             digital_menu_open = False
@@ -22921,6 +22926,11 @@ def main():
                                 gesture = "stream_toggle"
                             elif audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y):
                                 gesture = "buffer_graph_move"
+                            elif (
+                                cpu_utilization_graph_open and cpu_graph_box
+                                and contains(cpu_utilization_graph_close_box(cpu_graph_box), x, y)
+                            ):
+                                gesture = "cpu_utilization_close"
                             elif cpu_utilization_graph_open and cpu_graph_box and contains(cpu_graph_box, x, y):
                                 gesture = "cpu_graph_move"
                             elif drawer_waterfall_touch:
@@ -24584,6 +24594,14 @@ def main():
                                                     0.20,
                                                 )
                                                 remember_current_view()
+                                    elif kind == "workspace" and value == "wspr":
+                                        radio_setup_open = False
+                                        radio_family_open = None
+                                        wspr_panel_open = True
+                                        wspr_identity_open = False
+                                        wspr_add_open = False
+                                        wspr_decoder_settings_open = False
+                                        tests_panel_open = dj_tune_open = filter_panel_open = False
                                     elif kind == "mode_cycle":
                                         next_mode = next_radio_mode_variant(radio_mode, value)
                                         # The Home drawer is shared, but the
@@ -24888,6 +24906,15 @@ def main():
                                     cpu_core_history.clear()
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
+                            wake_controls()
+                        elif touch_started and gesture == "cpu_utilization_close":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                cpu_utilization_graph_open = False
+                                restore_navigation_parent(cpu_utilization_parent)
+                                cpu_core_history.clear()
+                                cpu_core_percentages = ()
+                                cpu_core_samples = None
                             wake_controls()
                         elif touch_started and gesture == "deepgram_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))

@@ -41,6 +41,11 @@ tuning offers 50, 100 (default), and 200 kHz steps, saved independently from
 Kiwi's step. FM dragging uses channel-sized detents rather than the audio
 waterfall span. The RDS band scan retains its independent 100 kHz increment.
 
+Settings no longer duplicates the receiver directory as KIWI. SYSTEM is now
+the clearer INFO destination with its own icon. STATS has an explicit Close
+target and its launcher toggles the graph. MODES opens the complete mode-family
+and tuning drawer directly; WSPR remains available in that same drawer.
+
 ## Branch features not silently imported
 
 The original fork also has a richer FM-DX audio scope/ruler, station shortcut
