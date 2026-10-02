@@ -47,6 +47,13 @@ class MenuIconTests(unittest.TestCase):
         self.assertEqual(ui.menu_icon_filename("tests", muted=True), "apps.png")
         self.assertEqual(ui.menu_icon_filename("dual"), "dual.png")
 
+    def test_dual_icon_has_requested_wide_low_profile(self):
+        icon = Path(__file__).resolve().parent / "assets/menu-icons/dual.png"
+        with Image.open(icon).convert("RGBA") as image:
+            x0, y0, x1, y1 = image.getchannel("A").getbbox()
+        self.assertGreater(x1 - x0, y1 - y0)
+        self.assertLessEqual(y1 - y0, 42)
+
 
 class DrawerGeometryTests(unittest.TestCase):
     def test_home_destinations_are_preserved_with_updated_mode_label(self):
