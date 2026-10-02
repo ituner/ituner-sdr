@@ -126,6 +126,12 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.format_frequency_digits(7075.794), "007.075.794")
         self.assertEqual(ui.format_tune_step(100_000), "100 kHz")
 
+    def test_entire_compact_frequency_area_opens_tuning_target(self):
+        compact = ui.compact_frequency_touch_box()
+        measured = (compact[0] + 40, compact[1] + 10, compact[2] - 40, compact[3] - 10)
+        self.assertTrue(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=True))
+        self.assertFalse(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=False))
+
     def test_sidebar_headers_use_one_centered_compact_style(self):
         with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line"), mock.patch.object(ui, "draw_text") as draw_text:
             ui.draw_sidebar_header(object(), "SETTINGS")

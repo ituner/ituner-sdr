@@ -13733,6 +13733,13 @@ def compact_frequency_touch_box():
     return x0 + 4, y0 + 12, x1 - 4, y0 + 83
 
 
+def is_frequency_readout_touch(x, y, measured_box, compact=False):
+    """Treat every visible compact-frequency pixel as the tuning target."""
+    return contains(measured_box, x, y) or (
+        compact and contains(compact_frequency_touch_box(), x, y)
+    )
+
+
 def frequency_band_context(freq_khz, mode=""):
     """Return a concise, frequency-derived band/sub-band operating label."""
     freq_khz = float(freq_khz or 0.0)
@@ -23038,13 +23045,21 @@ def main():
                                 # Protect readable text from accidental tuning,
                                 # but do not move the fixed caption window.
                                 gesture = "caption_readonly"
-                            elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
-                                gesture = "frequency_drawer_open"
                             elif (
-                                LCD_800_MODE and instrument_layout == "compact"
-                                and contains(compact_frequency_touch_box(), x, y)
+                                LCD_800_MODE
+                                and (
+                                    is_frequency_readout_touch(
+                                        x,
+                                        y,
+                                        frequency_display_box(text_cache, display_freq),
+                                        instrument_layout == "compact",
+                                    )
+                                )
                             ):
-                                gesture = "compact_font_review_toggle"
+                                # The complete visible readout is one tuning
+                                # target. Compact typography review remains a
+                                # Settings tool and must never steal this tap.
+                                gesture = "frequency_drawer_open"
                             elif contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
                             elif contains(audio_jitter_status_box(), x, y):
