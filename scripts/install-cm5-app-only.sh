@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-# Install the GitHub application on the verified CM5 without touching drivers.
+# Preserve the working display; audio hardware is an explicitly selected profile.
 set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
-repo=${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cm5_audio=0
+for option in "$@"; do
+    case "$option" in
+        --cm5-audio) cm5_audio=1 ;;
+        --*) echo "Unknown CM5 option: $option" >&2; exit 2 ;;
+        *) repo=$option ;;
+    esac
+done
+# Reinstall/update an already selected audio profile; never auto-select it on LCD.
+if [[ -f /etc/systemd/system/ituner-sdr.service.d/cm5-audio.conf ]]; then cm5_audio=1; fi
 app_user=${SUDO_USER:?Run sudo as the application user}
 app_uid=$(id -u "$app_user")
 app_home=$(getent passwd "$app_user" | cut -d: -f6)
@@ -127,6 +137,9 @@ The cloned upstream repository remains unchanged.
 EOF
 systemd-analyze verify /etc/systemd/system/ituner-sdr.service /etc/systemd/system/ituner-sdr-touch-ready.service /etc/systemd/system/ituner-sdr-health.service
 systemctl daemon-reload
+if ((cm5_audio)); then
+    bash "$repo/scripts/install-cm5-audio.sh" --no-restart
+fi
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service ituner-sdr-health.service
 systemctl restart ituner-sdr-touch-ready.service
 systemctl restart ituner-sdr.service ituner-sdr-health.service
