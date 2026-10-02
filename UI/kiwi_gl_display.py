@@ -384,6 +384,7 @@ class HamCallsignBook:
 MENU_ICON_FILENAMES = {
     "rx": "receivers.png",
     "digital": "digi.png",
+    "dual": "dual.png",
     "wspr": "digi.png",
     "tests": "apps.png",
     "system": "info.png",
@@ -3662,6 +3663,49 @@ def frequency_entry_action_at(x, y):
         if contains(box, x, y):
             return label
     return None
+
+
+def frequency_drawer_boxes():
+    """Touch-first tuning controls in the otherwise empty LCD rail."""
+    x0, x1 = LCD_NAV_X0, LOGICAL_W
+    return {
+        "panel": (x0, 0, x1, lcd_rail_bottom()),
+        "readout": (x0 + 10, 76, x1 - 10, 160),
+        "down": (x0 + 10, 184, x0 + 123, 326),
+        "up": (x0 + 133, 184, x1 - 10, 326),
+        "manual": (x0 + 10, 352, x1 - 10, 424),
+        "step": (x0 + 10, 442, x1 - 10, 514),
+        "close": lcd_drawer_back_box(),
+    }
+
+
+def frequency_drawer_action_at(x, y):
+    boxes = frequency_drawer_boxes()
+    for action in ("down", "up", "manual", "step", "close"):
+        if contains(boxes[action], x, y):
+            return action
+    return None
+
+
+def format_frequency_digits(freq_khz):
+    """Nine digit Hz readout grouped for fast touch-screen recognition."""
+    digits = f"{max(0, round(float(freq_khz) * 1000)):09d}"[-9:]
+    return f"{digits[:3]}.{digits[3:6]}.{digits[6:]}"
+
+
+def format_tune_step(step_hz):
+    step_hz = max(1, int(step_hz))
+    if step_hz >= 1_000_000 and step_hz % 1_000_000 == 0:
+        return f"{step_hz // 1_000_000} MHz"
+    if step_hz >= 1_000 and step_hz % 1_000 == 0:
+        return f"{step_hz // 1_000} kHz"
+    return f"{step_hz} Hz"
+
+
+def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
+    delta_khz = max(1, int(step_hz)) / 1000.0
+    return clamp(float(freq_khz) + (1 if direction > 0 else -1) * delta_khz,
+                 float(low_khz), float(high_khz))
 
 
 def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
@@ -9575,8 +9619,8 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
 
 def draw_sidebar_header(text_cache, title):
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, (6, 13, 19, 255))
-    draw_text(text_cache, LCD_NAV_X0 + 18, 32, title, (215, 235, 239),
-              19, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, (215, 235, 239),
+              15, True, False, "cm", family="Liberation Sans")
     draw_logical_line(LCD_NAV_X0 + 17, LCD_DRAWER_HEADER_H,
                       LOGICAL_W - 17, LCD_DRAWER_HEADER_H, (72, 101, 112, 160), 1)
 
@@ -13939,6 +13983,10 @@ def navigation_back_surface(parent):
     return "settings" if parent == "settings" else "home"
 
 
+def stats_keeps_settings_sidebar(parent):
+    return navigation_back_surface(parent) == "settings"
+
+
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
@@ -14772,6 +14820,41 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         draw_key(box, caption, 13 if label != "CANCEL" else 22)
     for label, box in keys:
         draw_key(box, "OK" if label == "ENTER" else label, 17 if label == "ENTER" else 28, active=label == "ENTER")
+
+
+def draw_frequency_drawer(text_cache, freq_khz, step_hz):
+    """Draw a single-purpose frequency rail for touch and encoder use."""
+    boxes = frequency_drawer_boxes()
+    x0, _y0, x1, y1 = boxes["panel"]
+    draw_logical_rect(x0, 0, x1, y1, (6, 13, 19, 255))
+    draw_sidebar_header(text_cache, "FREQUENCY")
+
+    rx0, ry0, rx1, ry1 = boxes["readout"]
+    draw_logical_rect(rx0, ry0, rx1, ry1, (3, 10, 15, 255))
+    draw_logical_line(rx0, ry1, rx1, ry1, (74, 222, 225, 170), 2)
+    draw_text(text_cache, (rx0 + rx1) / 2, (ry0 + ry1) / 2 - 3,
+              format_frequency_digits(freq_khz), (229, 242, 244), 25, True, True,
+              "cm", family="DejaVu Sans Mono")
+
+    def draw_arrow_button(box, direction):
+        bx0, by0, bx1, by1 = box
+        draw_logical_rect(bx0, by0, bx1, by1, (14, 31, 40, 255))
+        for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1),
+                                   (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
+            draw_logical_line(ax0, ay0, ax1, ay1, (82, 126, 136, 165), 1)
+        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2 - 8
+        tip_y = cy - 25 if direction > 0 else cy + 25
+        base_y = cy + 18 if direction > 0 else cy - 18
+        draw_logical_line(cx, tip_y, cx - 27, base_y, (109, 229, 186, 255), 6)
+        draw_logical_line(cx, tip_y, cx + 27, base_y, (109, 229, 186, 255), 6)
+        draw_text(text_cache, cx, by1 - 20, "UP" if direction > 0 else "DOWN",
+                  (208, 230, 233), 14, True, False, "cm", family="Liberation Sans")
+
+    draw_arrow_button(boxes["down"], -1)
+    draw_arrow_button(boxes["up"], 1)
+    draw_picker_button(text_cache, boxes["manual"], "ENTER FREQUENCY", 15)
+    draw_picker_button(text_cache, boxes["step"], f"TUNE STEP  {format_tune_step(step_hz)}", 14)
+    draw_radio_close_button(text_cache, boxes["close"])
 
 
 def fit_station_text(text_cache, text, max_width, size, bold=False, mono=False, family=None):
@@ -21210,6 +21293,7 @@ def main():
     filter_drag_audio_center = 0.0
     filter_drag_limit = FILTER_LIMIT_HZ
     filter_custom_width = bool(remembered_preferences.get("filter_custom_width", False))
+    frequency_drawer_open = args.frequency_keypad_preview
     frequency_entry_open = args.frequency_keypad_preview
     frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
     frequency_entry_invalid = False
@@ -21586,7 +21670,7 @@ def main():
 
     def controls_alpha(now=None):
         now = now or time.monotonic()
-        if menu_open or picker_open or radio_setup_open or band_navigation_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open or now <= controls_active_until:
+        if menu_open or picker_open or radio_setup_open or band_navigation_open or display_setup_open or audio_panel_open or asr_panel_open or deepgram_setup_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_drawer_open or frequency_entry_open or now <= controls_active_until:
             return 1.0
         fade_t = (now - controls_active_until) / CONTROL_FADE_SECONDS
         return clamp(1.0 - fade_t, 0.0, 1.0)
@@ -21954,7 +22038,7 @@ def main():
 
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
@@ -21967,6 +22051,8 @@ def main():
         parent = navigation_parent(items, kind)
         wake_controls()
         menu_open = False
+        frequency_drawer_open = False
+        frequency_entry_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
         # another receiver-facing page has a chance to open sockets.
         if dual_vfo_open and kind != "dual":
@@ -22058,7 +22144,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "stats":
-            settings_menu_open = False
+            settings_menu_open = stats_keeps_settings_sidebar(parent)
             digital_menu_open = False
             cpu_utilization_graph_open = not cpu_utilization_graph_open
             if cpu_utilization_graph_open:
@@ -22735,7 +22821,7 @@ def main():
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
-                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open)
+                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or frequency_drawer_open)
                                 # Drawers occupy only the right rail. Route
                                 # every remaining point in the left waterfall
                                 # band to live tuning; explicit Zoom/Filter/
@@ -22791,6 +22877,8 @@ def main():
                                 gesture = "frequency_entry"
                             elif frequency_entry_open:
                                 gesture = "frequency_entry_outside"
+                            elif frequency_drawer_open and contains(frequency_drawer_boxes()["panel"], x, y):
+                                gesture = "frequency_drawer"
                             elif deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y):
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
@@ -22956,7 +23044,7 @@ def main():
                             ):
                                 gesture = "compact_font_review_toggle"
                             elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
-                                gesture = "frequency_entry_open"
+                                gesture = "frequency_drawer_open"
                             elif contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
                             elif contains(audio_jitter_status_box(), x, y):
@@ -23657,15 +23745,50 @@ def main():
                                 frequency_entry_invalid = False
                                 frequency_entry_replace_on_digit = False
                             wake_controls()
-                        elif touch_started and gesture == "frequency_entry_open":
+                        elif touch_started and gesture == "frequency_drawer":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                frequency_entry_value = f"{display_freq / 1000.0:.6f}"
-                                frequency_entry_invalid = False
-                                frequency_entry_replace_on_digit = True
-                                frequency_entry_open = True
+                                action = frequency_drawer_action_at(x, y)
+                                if action in ("down", "up"):
+                                    _server, current_khz, current_zoom, _smeter, _gen, _server_gen = state.snapshot()
+                                    current_step_hz = receiver_tune_step_hz(
+                                        current_zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz
+                                    )
+                                    low_khz, high_khz = active_tuning_bounds()
+                                    target_khz = frequency_step_target(
+                                        current_khz, 1 if action == "up" else -1,
+                                        current_step_hz, low_khz, high_khz,
+                                    )
+                                    state.set_view(freq_khz=target_khz)
+                                    display_freq = target_khz
+                                    candidate_freq = target_khz
+                                    inertia_velocity_khz_s = 0.0
+                                    animate_to(target_khz, display_span, 0.12)
+                                    apply_band_default(target_khz)
+                                    remember_current_view()
+                                elif action == "manual":
+                                    frequency_entry_value = f"{display_freq / 1000.0:.6f}"
+                                    frequency_entry_invalid = False
+                                    frequency_entry_replace_on_digit = True
+                                    frequency_entry_open = True
+                                elif action == "step":
+                                    frequency_drawer_open = False
+                                    radio_setup_open = True
+                                    radio_family_open = None
+                                elif action == "close":
+                                    frequency_drawer_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "frequency_drawer_open":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                frequency_drawer_open = True
+                                frequency_entry_open = False
+                                rc28_dial_mode = "TUNE"
+                                band_navigation_open = False
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
-                                audio_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
+                                settings_menu_open = digital_menu_open = False
+                                filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = False
+                                audio_panel_open = asr_panel_open = tests_panel_open = globe_open = dj_tune_open = filter_panel_open = False
                             wake_controls()
                         elif touch_started and gesture == "frequency_identity_tune":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -25354,7 +25477,7 @@ def main():
             if (
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
-                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
+                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -25363,6 +25486,8 @@ def main():
                 display_setup_open = False
                 filter_drawer_open = False
                 filter_drawer_width_hz = None
+                frequency_drawer_open = False
+                frequency_entry_open = False
                 receiver_home_panel_open = False
                 fan_curve_panel_open = False
                 audio_panel_open = False
@@ -26041,7 +26166,7 @@ def main():
                 ruler_center_khz=view_center_khz,
                 sidebar_open=(radio_setup_open or display_setup_open or audio_panel_open
                     or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
-                    or network_panel_open or tests_panel_open or picker_open or globe_open),
+                    or frequency_drawer_open or network_panel_open or tests_panel_open or picker_open or globe_open),
             )
             if compact_font_review_open and instrument_layout == "compact":
                 draw_compact_font_review(
@@ -26131,6 +26256,15 @@ def main():
                 draw_asr_panel(text_cache, asr_engine, caption_mode, asr_moon_language_open)
             if deepgram_setup_open:
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
+            if frequency_drawer_open:
+                _drawer_server, _drawer_freq, _drawer_zoom, _drawer_smeter, _drawer_gen, _drawer_server_gen = state.snapshot()
+                draw_frequency_drawer(
+                    text_cache,
+                    display_freq,
+                    receiver_tune_step_hz(
+                        _drawer_zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz
+                    ),
+                )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if band_navigation_open:
