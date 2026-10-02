@@ -13888,30 +13888,54 @@ def compact_font_review_boxes():
     half = (x1 - x0 - gap) / 2
     return {
         "panel": (LCD_NAV_X0, 0, LOGICAL_W, lcd_rail_bottom()),
-        "previous": (x0, 142, x0 + half, 210),
-        "next": (x0 + half + gap, 142, x1, 210),
-        "like": (x0, 228, x0 + half, 296),
-        "delete": (x0 + half + gap, 228, x1, 296),
-        "use": (x0, 314, x1, 382),
+        "preview": (x0, 116, x1, 198),
+        "previous": (x0, 218, x0 + half, 286),
+        "next": (x0 + half + gap, 218, x1, 286),
+        "like": (x0, 304, x0 + half, 372),
+        "delete": (x0 + half + gap, 304, x1, 372),
+        "use": (x0, 390, x1, 458),
         "exit": lcd_drawer_back_box(),
     }
 
 
 def compact_font_review_action_at(x, y):
-    for action, box in compact_font_review_boxes().items():
-        if action != "panel" and contains(box, x, y):
+    boxes = compact_font_review_boxes()
+    for action in ("previous", "next", "like", "delete", "use", "exit"):
+        if contains(boxes[action], x, y):
             return action
     return None
 
 
-def draw_compact_font_review(text_cache, family, index, families, liked_fonts, active_family):
+def draw_compact_font_review(text_cache, freq_khz, family, index, families, liked_fonts, active_family):
     """Draw the dedicated font drawer over the complete Home rail."""
     boxes = compact_font_review_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 255))
     draw_sidebar_header(text_cache, "FREQUENCY FONT")
-    draw_text(text_cache, x1 - 16, 91, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, 116, family.upper(), (170, 198, 202), 16, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, 82, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, 101, family.upper(), (170, 198, 202), 14, True, False, "cm", family="Liberation Sans")
+
+    # Keep the specimen in this opaque drawer: changing candidates updates
+    # the tuned frequency immediately without revealing any Home controls.
+    px0, py0, px1, py1 = boxes["preview"]
+    draw_logical_rect(px0, py0, px1, py1, (1, 7, 10, 255))
+    for ax0, ay0, ax1, ay1 in (
+        (px0, py0, px1, py0), (px0, py1, px1, py1),
+        (px0, py0, px0, py1), (px1, py0, px1, py1),
+    ):
+        draw_logical_line(ax0, ay0, ax1, ay1, (83, 119, 127, 156), 1)
+    frequency_text = sdr_ui.format_freq(freq_khz)
+    preview_size = 60
+    preview_width = max(
+        text_cache.font(preview_size, bold=True, family=family).size(frequency_text)[0],
+        text_cache.font(preview_size, bold=True, family=family).size("30.000.000")[0],
+    )
+    preview_scale = min(1.0, (px1 - px0 - 18) / max(1, preview_width))
+    draw_text_scaled_x(
+        text_cache, px1 - 9, (py0 + py1) / 2, frequency_text,
+        (161, 169, 172), preview_size, preview_scale,
+        bold=True, anchor="rm", family=family,
+    )
 
     def button(box, label, active=False, destructive=False):
         bx0, by0, bx1, by1 = box
@@ -26229,6 +26253,7 @@ def main():
             if compact_font_review_open:
                 draw_compact_font_review(
                     text_cache,
+                    display_freq,
                     compact_font_review_families[compact_frequency_font_index],
                     compact_frequency_font_index,
                     compact_font_review_families,

@@ -90,6 +90,7 @@ class DrawerGeometryTests(unittest.TestCase):
             (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H),
         )
         back = boxes["exit"]
+        self.assertLess(boxes["preview"][3], boxes["previous"][1])
         for name in ("previous", "next", "like", "delete", "use"):
             control = boxes[name]
             self.assertLessEqual(control[3], back[1])
