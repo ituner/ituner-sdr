@@ -19,6 +19,7 @@ class MenuIconTests(unittest.TestCase):
             "digi.png",
             "display.png",
             "dual.png",
+            "frequency-chevron.png",
             "home.png",
             "info.png",
             "receivers.png",
@@ -113,7 +114,7 @@ class DrawerGeometryTests(unittest.TestCase):
     def test_frequency_drawer_controls_are_bounded_and_disjoint(self):
         boxes = ui.frequency_drawer_boxes()
         panel = boxes["panel"]
-        controls = [boxes[name] for name in ("readout", "down", "up", "manual", "step", "close")]
+        controls = [boxes[name] for name in ("readout", "down", "up", "manual", "step", "font", "close")]
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
         for box in controls:
             self.assertGreaterEqual(box[0], panel[0])
@@ -123,13 +124,17 @@ class DrawerGeometryTests(unittest.TestCase):
         for index, box in enumerate(controls):
             for other in controls[index + 1:]:
                 self.assertFalse(overlaps(box, other))
-        for name in ("down", "up", "manual", "step", "close"):
+        for name in ("down", "up", "manual", "step", "font", "close"):
             box = boxes[name]
             self.assertEqual(ui.frequency_drawer_action_at((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), name)
 
     def test_frequency_step_uses_hz_increment_and_receiver_bounds(self):
         self.assertEqual(ui.frequency_step_target(7075.0, 1, 100, 0, 30000), 7075.1)
         self.assertEqual(ui.frequency_step_target(10.0, -1, 100_000, 0, 108000), 0.0)
+        self.assertEqual(ui.frequency_step_target(7075.05, 1, 100, 0, 30000), 7075.1)
+        self.assertEqual(ui.frequency_step_target(7075.05, -1, 100, 0, 30000), 7075.0)
+        self.assertEqual(ui.configured_tune_step_hz("kiwi", 500, 100_000), 500)
+        self.assertEqual(ui.configured_tune_step_hz("fmdx", 500, 50_000), 50_000)
         self.assertEqual(ui.format_frequency_digits(7075.794), "007.075.794")
         self.assertEqual(ui.format_tune_step(100_000), "100 kHz")
 

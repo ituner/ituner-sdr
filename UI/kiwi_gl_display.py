@@ -2197,8 +2197,9 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     draw_text(text_cache, track_x1, legend_y, "VFO B", (138, 166, 176), 10, True, False, "rm", family="Liberation Sans")
 
 
-def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING", best_vfo=None):
+def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING", best_vfo=None, frequency_font_family=None):
     """Render two independent VFO instruments with a shared audio blend."""
+    frequency_font_family = frequency_font_family or "Oxanium"
     boxes = dual_vfo_layout()
     rf_w = boxes["rf_w"]
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 255))
@@ -2256,15 +2257,15 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
             - (fx0 + 10)
         )
         source_width = max(
-            text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0],
-            text_cache.font(frequency_size, bold=True, family=VFO_FONT_FAMILY).size(reference_text)[0],
+            text_cache.font(frequency_size, bold=True, family=frequency_font_family).size(frequency_text)[0],
+            text_cache.font(frequency_size, bold=True, family=frequency_font_family).size(reference_text)[0],
         )
         frequency_right = fx1 - unit_right_margin - unit_width - frequency_unit_gap
         draw_text_scaled_x(
             text_cache, frequency_right, (fy0 + fy1) / 2 + 2,
             frequency_text, VFO_NEON_COLOR, frequency_size,
             min(1.0, available_width / max(1, source_width)),
-            bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+            bold=True, anchor="rm", family=frequency_font_family,
         )
         draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
@@ -3675,13 +3676,14 @@ def frequency_drawer_boxes():
         "up": (x0 + 133, 184, x1 - 10, 326),
         "manual": (x0 + 10, 352, x1 - 10, 424),
         "step": (x0 + 10, 442, x1 - 10, 514),
+        "font": (x0 + 10, 532, x1 - 10, 604),
         "close": lcd_drawer_back_box(),
     }
 
 
 def frequency_drawer_action_at(x, y):
     boxes = frequency_drawer_boxes()
-    for action in ("down", "up", "manual", "step", "close"):
+    for action in ("down", "up", "manual", "step", "font", "close"):
         if contains(boxes[action], x, y):
             return action
     return None
@@ -3703,9 +3705,22 @@ def format_tune_step(step_hz):
 
 
 def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
-    delta_khz = max(1, int(step_hz)) / 1000.0
-    return clamp(float(freq_khz) + (1 if direction > 0 else -1) * delta_khz,
-                 float(low_khz), float(high_khz))
+    """Move to the adjacent configured tuning-grid point."""
+    step_hz = max(1, int(step_hz))
+    current_hz = float(freq_khz) * 1000.0
+    quotient = current_hz / step_hz
+    if direction > 0:
+        target_hz = (math.floor(quotient + 1e-9) + 1) * step_hz
+    else:
+        target_hz = (math.ceil(quotient - 1e-9) - 1) * step_hz
+    return clamp(target_hz / 1000.0, float(low_khz), float(high_khz))
+
+
+def configured_tune_step_hz(receiver_type, kiwi_step_hz, fmdx_step_hz):
+    """Return the operator-selected grid, independent of display zoom."""
+    if receiver_type == "fmdx":
+        return fmdx_step_hz if fmdx_step_hz in FMDX_TUNE_STEPS_HZ else 100_000
+    return max(1, int(kiwi_step_hz))
 
 
 def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
@@ -7625,16 +7640,18 @@ def frequency_right_x():
     return FREQUENCY_RIGHT_X + (50 if DESKTOP_1280_MODE else 0)
 
 
-def frequency_display_box(text_cache, freq_khz):
+def frequency_display_box(text_cache, freq_khz, font_family=None):
+    font_family = font_family or VFO_FONT_FAMILY
     frequency_text = sdr_ui.format_freq(freq_khz)
-    width = text_cache.font(58, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
+    width = text_cache.font(58, bold=True, family=font_family).size(frequency_text)[0]
     return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
 
 
-def top_instrument_layout(text_cache, freq_khz):
+def top_instrument_layout(text_cache, freq_khz, font_family=None):
     """Return a right-aligned mode/frequency cluster next to the S-meter."""
+    font_family = font_family or VFO_FONT_FAMILY
     frequency_text = sdr_ui.format_freq(freq_khz)
-    frequency_width = text_cache.font(58, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
+    frequency_width = text_cache.font(58, bold=True, family=font_family).size(frequency_text)[0]
     frequency_left = frequency_right_x() - frequency_width
     radio_x1 = frequency_left - RADIO_SETUP_GAP
     radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
@@ -13769,9 +13786,9 @@ def compact_band_context_touch_box():
     return x0 + 4, y0 + 78, x1 - 4, y0 + 105
 
 
-def main_band_context_box(text_cache, freq_khz):
+def main_band_context_box(text_cache, freq_khz, font_family=VFO_FONT_FAMILY):
     """Place the large-layout band tag beside, never over, the VFO digits."""
-    freq_box = frequency_display_box(text_cache, freq_khz)
+    freq_box = frequency_display_box(text_cache, freq_khz, font_family)
     x1 = freq_box[0] - 12
     x0 = max(HOME_BOX[2] + 14, x1 - 142)
     return x0, 13, x1, 43
@@ -14829,7 +14846,23 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         draw_key(box, "OK" if label == "ENTER" else label, 17 if label == "ENTER" else 28, active=label == "ENTER")
 
 
-def draw_frequency_drawer(text_cache, freq_khz, step_hz):
+def frequency_chevron_texture(text_cache, direction, pressed=False):
+    key = f"frequency_chevron_{direction}_{'pressed' if pressed else 'normal'}"
+    cached = text_cache.cache.get(("surface", key))
+    if cached is not None:
+        return cached
+    icon = pygame.image.load(str(MENU_ICON_ASSET_DIR / "frequency-chevron.png")).convert_alpha()
+    if direction > 0:
+        icon = pygame.transform.rotate(icon, 180)
+    if pressed:
+        colored = pygame.Surface(icon.get_size(), pygame.SRCALPHA)
+        colored.fill((5, 24, 20, 255))
+        colored.blit(icon, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        icon = colored
+    return text_cache.surface_texture(key, icon)
+
+
+def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=None):
     """Draw a single-purpose frequency rail for touch and encoder use."""
     boxes = frequency_drawer_boxes()
     x0, _y0, x1, y1 = boxes["panel"]
@@ -14841,26 +14874,29 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz):
     draw_logical_line(rx0, ry1, rx1, ry1, (74, 222, 225, 170), 2)
     draw_text(text_cache, (rx0 + rx1) / 2, (ry0 + ry1) / 2 - 3,
               format_frequency_digits(freq_khz), (229, 242, 244), 25, True, True,
-              "cm", family="DejaVu Sans Mono")
+              "cm", family=font_family)
 
-    def draw_arrow_button(box, direction):
+    def draw_arrow_button(box, direction, action):
         bx0, by0, bx1, by1 = box
-        draw_logical_rect(bx0, by0, bx1, by1, (14, 31, 40, 255))
+        active = pressed == action
+        fill = (104, 225, 181, 255) if active else (14, 31, 40, 255)
+        edge = (222, 255, 241, 255) if active else (82, 126, 136, 165)
+        draw_logical_rect(bx0, by0, bx1, by1, fill)
         for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1),
                                    (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
-            draw_logical_line(ax0, ay0, ax1, ay1, (82, 126, 136, 165), 1)
-        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2 - 8
-        tip_y = cy - 25 if direction > 0 else cy + 25
-        base_y = cy + 18 if direction > 0 else cy - 18
-        draw_logical_line(cx, tip_y, cx - 27, base_y, (109, 229, 186, 255), 6)
-        draw_logical_line(cx, tip_y, cx + 27, base_y, (109, 229, 186, 255), 6)
+            draw_logical_line(ax0, ay0, ax1, ay1, edge, 2 if active else 1)
+        tex, tex_w, tex_h = frequency_chevron_texture(text_cache, direction, active)
+        cx = (bx0 + bx1) / 2
+        icon_y = by0 + 17
+        draw_textured_quad(tex, cx - tex_w / 2, icon_y, cx + tex_w / 2, icon_y + tex_h, 0, 0, 1, 1)
         draw_text(text_cache, cx, by1 - 20, "UP" if direction > 0 else "DOWN",
-                  (208, 230, 233), 14, True, False, "cm", family="Liberation Sans")
+                  (5, 24, 20) if active else (208, 230, 233), 14, True, False, "cm", family="Liberation Sans")
 
-    draw_arrow_button(boxes["down"], -1)
-    draw_arrow_button(boxes["up"], 1)
-    draw_picker_button(text_cache, boxes["manual"], "ENTER FREQUENCY", 15)
-    draw_picker_button(text_cache, boxes["step"], f"TUNE STEP  {format_tune_step(step_hz)}", 14)
+    draw_arrow_button(boxes["down"], -1, "down")
+    draw_arrow_button(boxes["up"], 1, "up")
+    draw_picker_button(text_cache, boxes["manual"], "ENTER FREQUENCY", 15, pressed == "manual")
+    draw_picker_button(text_cache, boxes["step"], f"TUNE STEP  {format_tune_step(step_hz)}", 14, pressed == "step")
+    draw_picker_button(text_cache, boxes["font"], f"FONT  {font_family.upper()}", 14, pressed == "font")
     draw_radio_close_button(text_cache, boxes["close"])
 
 
@@ -16079,22 +16115,24 @@ def draw_ui(
     # instrument strip.
     draw_logical_rect(68, 0, rf_canvas_width(), sdr_ui.TOP_H, (0, 0, 0, 144))
     show_large_instruments = instrument_layout != "compact"
-    frequency_text, radio_box = top_instrument_layout(text_cache, freq_khz)
+    frequency_text, radio_box = top_instrument_layout(
+        text_cache, freq_khz, compact_frequency_font_family
+    )
     if DESKTOP_1280_MODE:
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
     if show_large_instruments:
         main_vfo_size = 58
-        main_vfo_width = text_cache.font(main_vfo_size, bold=True, family=VFO_FONT_FAMILY).size(frequency_text)[0]
+        main_vfo_width = text_cache.font(main_vfo_size, bold=True, family=compact_frequency_font_family).size(frequency_text)[0]
         main_vfo_scale = min(1.0, 330.0 / max(1, main_vfo_width))
         if LCD_800_MODE:
             draw_band_context_chip(
-                text_cache, main_band_context_box(text_cache, freq_khz), freq_khz, mode
+                text_cache, main_band_context_box(text_cache, freq_khz, compact_frequency_font_family), freq_khz, mode
             )
         draw_text_scaled_x(
             text_cache, frequency_right_x(), 39, frequency_text, VFO_NEON_COLOR, main_vfo_size,
-            main_vfo_scale, bold=True, anchor="rm", family=VFO_FONT_FAMILY,
+            main_vfo_scale, bold=True, anchor="rm", family=compact_frequency_font_family,
         )
         draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
@@ -21305,6 +21343,7 @@ def main():
     frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
     frequency_entry_invalid = False
     frequency_entry_replace_on_digit = False
+    frequency_drawer_pressed = None
     station_scroll = 0
     saved_digital_mode = remembered_preferences.get("digital_mode")
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
@@ -21319,9 +21358,14 @@ def main():
     # The review pool is intentionally reset each launch, but the operator's
     # marked candidates are durable preferences so good options accumulate.
     compact_font_review_families = list(COMPACT_FONT_REVIEW_FAMILIES)
-    # The temporary font lab can still preview alternatives, but the live
-    # instrument always comes up in the unified Oxanium treatment.
-    compact_frequency_font_family = COMPACT_FREQUENCY_FONT_FAMILY
+    saved_frequency_font = remembered_preferences.get(
+        "compact_frequency_font_family", COMPACT_FREQUENCY_FONT_FAMILY
+    )
+    compact_frequency_font_family = (
+        saved_frequency_font
+        if saved_frequency_font in compact_font_review_families
+        else COMPACT_FREQUENCY_FONT_FAMILY
+    )
     compact_frequency_font_index = compact_font_review_families.index(compact_frequency_font_family)
     compact_font_review_open = False
     saved_compact_font_likes = remembered_preferences.get("compact_font_likes", ())
@@ -22886,6 +22930,7 @@ def main():
                                 gesture = "frequency_entry_outside"
                             elif frequency_drawer_open and contains(frequency_drawer_boxes()["panel"], x, y):
                                 gesture = "frequency_drawer"
+                                frequency_drawer_pressed = frequency_drawer_action_at(x, y)
                             elif deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y):
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
@@ -23051,7 +23096,9 @@ def main():
                                     is_frequency_readout_touch(
                                         x,
                                         y,
-                                        frequency_display_box(text_cache, display_freq),
+                                        frequency_display_box(
+                                            text_cache, display_freq, compact_frequency_font_family
+                                        ),
                                         instrument_layout == "compact",
                                     )
                                 )
@@ -23764,10 +23811,12 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action = frequency_drawer_action_at(x, y)
+                                if action != frequency_drawer_pressed:
+                                    action = None
                                 if action in ("down", "up"):
                                     _server, current_khz, current_zoom, _smeter, _gen, _server_gen = state.snapshot()
-                                    current_step_hz = receiver_tune_step_hz(
-                                        current_zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz
+                                    current_step_hz = configured_tune_step_hz(
+                                        state.receiver_type_snapshot(), tune_step_hz, fmdx_tune_step_hz
                                     )
                                     low_khz, high_khz = active_tuning_bounds()
                                     target_khz = frequency_step_target(
@@ -23790,14 +23839,22 @@ def main():
                                     frequency_drawer_open = False
                                     radio_setup_open = True
                                     radio_family_open = None
+                                elif action == "font":
+                                    frequency_drawer_open = False
+                                    compact_frequency_font_index = compact_font_review_families.index(
+                                        compact_frequency_font_family
+                                    )
+                                    compact_font_review_open = True
                                 elif action == "close":
                                     frequency_drawer_open = False
+                            frequency_drawer_pressed = None
                             wake_controls()
                         elif touch_started and gesture == "frequency_drawer_open":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 frequency_drawer_open = True
                                 frequency_entry_open = False
+                                frequency_drawer_pressed = None
                                 rc28_dial_mode = "TUNE"
                                 band_navigation_open = False
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
@@ -26183,7 +26240,7 @@ def main():
                     or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
                     or frequency_drawer_open or network_panel_open or tests_panel_open or picker_open or globe_open),
             )
-            if compact_font_review_open and instrument_layout == "compact":
+            if compact_font_review_open:
                 draw_compact_font_review(
                     text_cache,
                     compact_font_review_families[compact_frequency_font_index],
@@ -26276,9 +26333,11 @@ def main():
                 draw_frequency_drawer(
                     text_cache,
                     display_freq,
-                    receiver_tune_step_hz(
-                        _drawer_zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz
+                    configured_tune_step_hz(
+                        state.receiver_type_snapshot(), tune_step_hz, fmdx_tune_step_hz
                     ),
+                    compact_frequency_font_family,
+                    frequency_drawer_pressed,
                 )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
@@ -26519,6 +26578,7 @@ def main():
                     dual_vfo_profiles,
                     dual_match_status,
                     dual_best_vfo,
+                    compact_frequency_font_family,
                 )
                 if dual_vfo_mode_open:
                     draw_dual_vfo_mode_picker(
