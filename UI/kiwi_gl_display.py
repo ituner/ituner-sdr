@@ -23038,13 +23038,13 @@ def main():
                                 # Protect readable text from accidental tuning,
                                 # but do not move the fixed caption window.
                                 gesture = "caption_readonly"
+                            elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
+                                gesture = "frequency_drawer_open"
                             elif (
                                 LCD_800_MODE and instrument_layout == "compact"
                                 and contains(compact_frequency_touch_box(), x, y)
                             ):
                                 gesture = "compact_font_review_toggle"
-                            elif LCD_800_MODE and contains(frequency_display_box(text_cache, display_freq), x, y):
-                                gesture = "frequency_drawer_open"
                             elif contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
                             elif contains(audio_jitter_status_box(), x, y):

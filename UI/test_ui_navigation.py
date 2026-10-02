@@ -39,6 +39,7 @@ class MenuIconTests(unittest.TestCase):
             for name in required:
                 with Image.open(root / name) as image:
                     self.assertEqual(image.size, (64, 64))
+                    self.assertIsNotNone(image.convert("RGBA").getchannel("A").getbbox())
 
     def test_audio_icon_tracks_existing_muted_state(self):
         self.assertEqual(ui.menu_icon_filename("audio", muted=False), "audio.png")

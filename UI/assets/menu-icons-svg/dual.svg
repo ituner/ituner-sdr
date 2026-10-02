@@ -1,6 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <rect x="12" y="14" width="40" height="14" rx="3" fill="none" stroke="#eef6f7" stroke-width="3"/>
-  <path d="M17 23 L23 19 L29 24 L35 18 L41 23 L47 20" fill="none" stroke="#70e2bc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="12" y="36" width="40" height="14" rx="3" fill="none" stroke="#9bb7bc" stroke-width="3"/>
-  <path d="M17 45 L23 41 L29 46 L35 40 L41 45 L47 42" fill="none" stroke="#eef6f7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="12" y="14" width="40" height="3" rx="1.5" fill="#eef6f7"/>
+  <rect x="12" y="25" width="40" height="3" rx="1.5" fill="#eef6f7"/>
+  <rect x="12" y="17" width="3" height="8" fill="#eef6f7"/>
+  <rect x="49" y="17" width="3" height="8" fill="#eef6f7"/>
+  <path d="M17 23 L23 19 L29 24 L35 18 L41 23 L47 20 L47 23 L41 26 L35 21 L29 27 L23 22 L17 26 Z" fill="#70e2bc"/>
+  <rect x="12" y="36" width="40" height="3" rx="1.5" fill="#9bb7bc"/>
+  <rect x="12" y="47" width="40" height="3" rx="1.5" fill="#9bb7bc"/>
+  <rect x="12" y="39" width="3" height="8" fill="#9bb7bc"/>
+  <rect x="49" y="39" width="3" height="8" fill="#9bb7bc"/>
+  <path d="M17 45 L23 41 L29 46 L35 40 L41 45 L47 42 L47 45 L41 48 L35 43 L29 49 L23 44 L17 48 Z" fill="#eef6f7"/>
 </svg>
