@@ -444,11 +444,14 @@ SMETER_READOUT_INTERVAL_SECONDS = 0.30
 # cushion for a normal public-receiver arrival wobble.
 PIPEWIRE_AUDIO_LATENCY = "3072"
 SDR_AUDIO_JITTER_TARGET_PACKETS = 6
-# Temporary A/B listener backend. The USB DAC exposes only 44.1/48 kHz stereo,
-# so the ALSA plug layer performs the unavoidable 12 kHz mono conversion while
-# PipeWire/WirePlumber is deliberately stopped for an isolated comparison.
+# Direct ALSA supports the original USB comparison path and the opt-in CM5
+# codec profile. Its plug layer converts receiver PCM to the hardware format.
+# The CM5 profile explicitly selects the high-quality libsamplerate converter.
 AUDIO_BACKENDS = ("pipewire", "alsa")
-ALSA_DIRECT_DEVICE = "plughw:2,0"
+CM5_AUDIO = None
+if os.environ.get("ITUNER_CM5_AUDIO") == "1":
+    import cm5_audio_control as CM5_AUDIO
+ALSA_DIRECT_DEVICE = "cm5_speaker" if CM5_AUDIO else "plughw:2,0"
 ALSA_DIRECT_PERIOD_FRAMES = 512
 ALSA_DIRECT_BUFFER_FRAMES = 1536
 # The reserve may grow only after a real late-packet/underflow observation.
@@ -4765,6 +4768,8 @@ class SharedState:
 
     def set_audio_controls(self, **changes):
         """Apply a small audio control change and notify the active SND worker."""
+        if CM5_AUDIO and "audio_mute" in changes:
+            CM5_AUDIO.set_mute(changes["audio_mute"])
         allowed = {
             "squelch_level", "squelch_tail", "audio_mute", "agc_enabled", "agc_hang",
             "agc_threshold", "agc_slope", "agc_decay", "agc_manual_gain", "deemphasis",
@@ -15666,10 +15671,11 @@ def start_audio_player(args, channels=1):
             return None
     try:
         if backend == "alsa":
-            # ``plughw`` is still direct ALSA: its in-process plug converter
-            # adapts our 12 kHz mono stream to this USB DAC's 48 kHz/stereo
-            # hardware format without re-entering PipeWire.
+            # The plug converter adapts receiver PCM to the USB DAC or CM5
+            # codec hardware format without re-entering PipeWire.
             set_pipewire_listener_services(False)
+            if CM5_AUDIO:
+                CM5_AUDIO.prepare()
             command = [
                 "aplay", "--quiet", "--device", ALSA_DIRECT_DEVICE,
                 "--format", "S16_LE", "--channels", str(channels),
@@ -15697,14 +15703,21 @@ def start_audio_player(args, channels=1):
             bufsize=0,
         )
         player.ituner_backend = backend
+        if CM5_AUDIO and backend == "alsa":
+            time.sleep(0.08)
+            CM5_AUDIO.ready(player.poll() is None)
         print(f"gl audio backend {backend} opened", flush=True)
         return player
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
+        if CM5_AUDIO and backend == "alsa":
+            CM5_AUDIO.ready(False)
         print(f"gl audio {backend} player {exc}", flush=True)
         return None
 
 
 def stop_audio_player(player):
+    if CM5_AUDIO and getattr(player, "ituner_backend", None) == "alsa":
+        CM5_AUDIO.ready(False)
     if not player:
         return
     if isinstance(player, BufferedAudioPlayer):
@@ -18420,7 +18433,9 @@ def set_pipewire_default_volume(volume):
 
 
 def alsa_direct_volume():
-    """Read the USB speaker's hardware control used by the direct A/B path."""
+    """Read the active direct-audio output volume."""
+    if CM5_AUDIO:
+        return CM5_AUDIO.get_volume()
     try:
         result = subprocess.run(
             ["amixer", "-c", "2", "get", "Speaker"],
@@ -18436,7 +18451,9 @@ def alsa_direct_volume():
 
 
 def set_alsa_direct_volume(volume):
-    """Set USB hardware gain while PipeWire is intentionally absent."""
+    """Set the active direct-audio output gain."""
+    if CM5_AUDIO:
+        return CM5_AUDIO.set_volume(volume)
     volume = clamp(float(volume), 0.0, 1.0)
     try:
         result = subprocess.run(
@@ -19503,7 +19520,7 @@ def main():
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
     parser.add_argument("--user", default="Codex OpenGL SDR display")
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the selected local audio backend")
-    parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="pipewire", help=argparse.SUPPRESS)
+    parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="alsa" if CM5_AUDIO else "pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
     remembered_radio_mode = None

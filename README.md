@@ -18,6 +18,12 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
+For the custom CM5 carrier's **ES8316 codec / Class-D speaker amplifier**, add
+`--cm5-audio` to that command. This opt-in profile includes the verified audio
+driver/overlay setup, high-quality sample-rate conversion, volume/mute controls
+and automatic speaker shutdown when headphones are inserted. It preserves the
+working display/touch drivers. See [CM5 audio setup and required board repairs](docs/cm5-audio.md).
+
 The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet
 and HF-enhancement models automatically, using fixed versions and verified
 checksums. It requires 64-bit Raspberry Pi OS Trixie / Python 3.13. See

@@ -4,7 +4,8 @@ set -Eeuo pipefail
 # Hardware changes must be explicitly selected. The CM5 path preserves drivers.
 case "${1:-}" in
   --cm5-existing-display)
-    exec bash "$(dirname -- "${BASH_SOURCE[0]}")/install-cm5-app-only.sh"
+    shift
+    exec bash "$(dirname -- "${BASH_SOURCE[0]}")/install-cm5-app-only.sh" "$@"
     ;;
   --legacy-display) shift ;;
   *)

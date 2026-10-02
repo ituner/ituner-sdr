@@ -1,0 +1,17 @@
+[Unit]
+Description=CM5 ES8316 headphone insertion monitor
+After=systemd-modules-load.service
+Before=ituner-sdr.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/ituner-sdr/cm5-jack-monitor.py
+RuntimeDirectory=cm5-headphone
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target
