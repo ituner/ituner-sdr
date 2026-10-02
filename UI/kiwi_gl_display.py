@@ -13882,20 +13882,18 @@ def draw_band_navigation(text_cache, freq_khz, mode):
 
 
 def compact_font_review_boxes():
-    """Temporary opaque rail workspace for evaluating compact VFO typefaces."""
+    """Full-height right-rail workspace for choosing the VFO typeface."""
     x0, x1 = LCD_NAV_X0 + 8, LOGICAL_W - 8
-    y0 = 99
-    y1 = lcd_nav_top(len(MENU_ITEMS)) - 8
     gap = 8
     half = (x1 - x0 - gap) / 2
     return {
-        "panel": (LCD_NAV_X0, y0, LOGICAL_W, y1),
-        "previous": (x0, y0 + 58, x0 + half, y0 + 124),
-        "next": (x0 + half + gap, y0 + 58, x1, y0 + 124),
-        "like": (x0, y0 + 138, x0 + half, y0 + 204),
-        "delete": (x0 + half + gap, y0 + 138, x1, y0 + 204),
-        "use": (x0, y0 + 218, x1, y0 + 274),
-        "exit": (x0, y1 - 64, x1, y1 - 10),
+        "panel": (LCD_NAV_X0, 0, LOGICAL_W, lcd_rail_bottom()),
+        "previous": (x0, 142, x0 + half, 210),
+        "next": (x0 + half + gap, 142, x1, 210),
+        "like": (x0, 228, x0 + half, 296),
+        "delete": (x0 + half + gap, 228, x1, 296),
+        "use": (x0, 314, x1, 382),
+        "exit": lcd_drawer_back_box(),
     }
 
 
@@ -13907,14 +13905,13 @@ def compact_font_review_action_at(x, y):
 
 
 def draw_compact_font_review(text_cache, family, index, families, liked_fonts, active_family):
-    """Opaque temporary controls so font testing never competes with Home UI."""
+    """Draw the dedicated font drawer over the complete Home rail."""
     boxes = compact_font_review_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 255))
-    draw_logical_line(x0, y0, x1, y0, (100, 149, 155, 178), 1)
-    draw_text(text_cache, x0 + 16, y0 + 20, "FONT REVIEW", (215, 231, 234), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 16, y0 + 20, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 42, family.upper(), (170, 198, 202), 16, True, False, "cm", family="Liberation Sans")
+    draw_sidebar_header(text_cache, "FREQUENCY FONT")
+    draw_text(text_cache, x1 - 16, 91, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, 116, family.upper(), (170, 198, 202), 16, True, False, "cm", family="Liberation Sans")
 
     def button(box, label, active=False, destructive=False):
         bx0, by0, bx1, by1 = box
@@ -13932,7 +13929,7 @@ def draw_compact_font_review(text_cache, family, index, families, liked_fonts, a
     button(boxes["like"], "LIKED" if family in liked_fonts else "LIKE", family in liked_fonts)
     button(boxes["delete"], "DELETE", destructive=True)
     button(boxes["use"], "USING" if family == active_family else "USE", family == active_family)
-    button(boxes["exit"], "BACK TO HOME")
+    draw_radio_close_button(text_cache, boxes["exit"])
 
 
 def lcd_home_volume_box(show_compact_readouts=True):
@@ -22872,7 +22869,7 @@ def main():
                             _server, freq_khz, _zoom, _smeter, _gen, _server_gen = state.snapshot()
                             drawer_waterfall_touch = (
                                 LCD_800_MODE
-                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or frequency_drawer_open)
+                                and (radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open or frequency_drawer_open or compact_font_review_open)
                                 # Drawers occupy only the right rail. Route
                                 # every remaining point in the left waterfall
                                 # band to live tuning; explicit Zoom/Filter/
@@ -23010,14 +23007,11 @@ def main():
                                 gesture = "wspr_cpu_detail"
                             elif wspr_panel_open:
                                 gesture = "wspr_workspace"
-                            elif compact_font_review_open and contains(HOME_BOX, x, y):
-                                gesture = "compact_font_review_exit"
-                            elif compact_font_review_open and contains(compact_frequency_touch_box(), x, y):
-                                gesture = "compact_font_review_toggle"
+                            elif compact_font_review_open and drawer_waterfall_touch:
+                                gesture = "waterfall"
                             elif compact_font_review_open:
-                                # The temporary review panel deliberately owns
-                                # the entire rail section it covers, so no
-                                # mode/volume action leaks through it.
+                                # The full-height font drawer owns the rail so
+                                # no retained Home action can leak through it.
                                 gesture = "compact_font_review"
                             elif (
                                 LCD_800_MODE
@@ -23881,16 +23875,6 @@ def main():
                                     f"gl frequency identity tune {scheduled_frequency_khz:.3f} kHz",
                                     flush=True,
                                 )
-                            wake_controls()
-                        elif touch_started and gesture == "compact_font_review_toggle":
-                            moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
-                                compact_font_review_open = not compact_font_review_open
-                            wake_controls()
-                        elif touch_started and gesture == "compact_font_review_exit":
-                            moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
-                                compact_font_review_open = False
                             wake_controls()
                         elif touch_started and gesture == "compact_font_review":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -25549,7 +25533,7 @@ def main():
             if (
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
-                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
+                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -25560,6 +25544,7 @@ def main():
                 filter_drawer_width_hz = None
                 frequency_drawer_open = False
                 frequency_entry_open = False
+                compact_font_review_open = False
                 receiver_home_panel_open = False
                 fan_curve_panel_open = False
                 audio_panel_open = False
@@ -26238,7 +26223,8 @@ def main():
                 ruler_center_khz=view_center_khz,
                 sidebar_open=(radio_setup_open or display_setup_open or audio_panel_open
                     or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
-                    or frequency_drawer_open or network_panel_open or tests_panel_open or picker_open or globe_open),
+                    or frequency_drawer_open or compact_font_review_open
+                    or network_panel_open or tests_panel_open or picker_open or globe_open),
             )
             if compact_font_review_open:
                 draw_compact_font_review(

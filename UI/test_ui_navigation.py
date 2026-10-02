@@ -81,6 +81,18 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.lcd_filter_drawer_boxes()["close"], expected)
         self.assertEqual(ui.receiver_home_drawer_boxes()["close"], expected)
         self.assertEqual(ui.fan_curve_drawer_boxes()["close"], expected)
+        self.assertEqual(ui.compact_font_review_boxes()["exit"], expected)
+
+    def test_font_review_owns_the_full_rail_without_covering_back(self):
+        boxes = ui.compact_font_review_boxes()
+        self.assertEqual(
+            boxes["panel"],
+            (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H),
+        )
+        back = boxes["exit"]
+        for name in ("previous", "next", "like", "delete", "use"):
+            control = boxes[name]
+            self.assertLessEqual(control[3], back[1])
 
     def test_settings_back_tile_uses_shared_back_target(self):
         last = len(ui.SETTINGS_MENU_ITEMS) - 1
