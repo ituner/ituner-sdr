@@ -1,0 +1,5 @@
+<!-- Merge this touch element into the existing labwc_config/openbox_config root in
+     ~/.config/labwc/rc.xml. This is a fragment, not a complete rc.xml.
+     Replace DSI-2 with the actual output reported by wlr-randr if different. -->
+<touch deviceName="0-005d Goodix Capacitive TouchScreen"
+       mapToOutput="DSI-2" mouseEmulation="yes" />

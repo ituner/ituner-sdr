@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "receivers": [
+    {
+      "id": "openwebrx:oh6ah",
+      "protocol": "openwebrx",
+      "source_group": "openwebrx",
+      "endpoint": "owrxs://rx.oh6ah.fi/",
+      "name": "OH6AH OpenWebRX",
+      "location": "Finland",
+      "control_scope": "per_session"
+    },
+    {
+      "id": "local:kiwisdr",
+      "protocol": "kiwi",
+      "source_group": "local",
+      "endpoint": "http://kiwisdr.local:8073",
+      "name": "Local KiwiSDR",
+      "location": "Local network",
+      "control_scope": "per_session"
+    }
+  ]
+}
