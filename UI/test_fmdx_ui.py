@@ -106,27 +106,33 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         self.assertIn("mp3", command)
         self.assertEqual(command[-3:], ["-ac", "2", "pipe:1"])
 
-    def test_fmdx_mode_family_is_server_controlled_but_step_remains_available(self):
+    def test_fmdx_read_only_offers_only_shared_control_opt_in(self):
         previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         self.addCleanup(setattr, ui, "LCD_RADIO_DRAWER_PROGRESS", previous_progress)
-        _action, mode_box = next(iter(ui.fmdx_control_layout(())))
-        mode_x = (mode_box[0] + mode_box[2]) / 2
-        mode_y = (mode_box[1] + mode_box[3]) / 2
+        stations = ({"frequency_khz": 99_500.0, "name": "A"},)
+        controls = list(ui.fmdx_control_layout(stations, scan_active=False, shared_control=False))
+        self.assertEqual([control[0] for control in controls], ["enable_shared"])
+        action, box = controls[0]
+        x = (box[0] + box[2]) / 2
+        y = (box[1] + box[3]) / 2
+        self.assertEqual(
+            ui.radio_option_at(x, y, receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=False),
+            ("fmdx_action", "enable_shared"),
+        )
+        # A read-only shared tuner has no tuning step, but keeps it once opted in.
         step_hz, step_box = next(iter(ui.radio_step_options("fmdx")))
         step_x = (step_box[0] + step_box[2]) / 2
         step_y = (step_box[1] + step_box[3]) / 2
-
-        self.assertEqual(
-            ui.radio_option_at(mode_x, mode_y, receiver_type="fmdx"),
-            ("fmdx_action", "scan_start"),
+        self.assertIsNone(
+            ui.radio_option_at(step_x, step_y, receiver_type="fmdx", fmdx_shared_control=False)
         )
         self.assertEqual(
-            ui.radio_option_at(step_x, step_y, receiver_type="fmdx"),
+            ui.radio_option_at(step_x, step_y, receiver_type="fmdx", fmdx_shared_control=True),
             ("step", step_hz),
         )
 
-    def test_fmdx_drawer_exposes_bounded_preset_and_scan_actions(self):
+    def test_fmdx_drawer_exposes_presets_without_scan(self):
         previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         self.addCleanup(setattr, ui, "LCD_RADIO_DRAWER_PROGRESS", previous_progress)
@@ -136,7 +142,8 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         )
         controls = list(ui.fmdx_control_layout(stations, scan_active=False))
 
-        self.assertEqual([control[0] for control in controls], ["preset_previous", "preset_next", "scan_start"])
+        self.assertEqual([control[0] for control in controls], ["preset_previous", "preset_next"])
+        self.assertNotIn("scan_start", [control[0] for control in controls])
         for expected, box in controls:
             x = (box[0] + box[2]) / 2
             y = (box[1] + box[3]) / 2
@@ -144,6 +151,39 @@ class FmdxUiIntegrationTests(unittest.TestCase):
                 ui.radio_option_at(x, y, receiver_type="fmdx", fmdx_stations=stations),
                 ("fmdx_action", expected),
             )
+
+    def test_fmdx_scan_is_absent_in_read_only_mode(self):
+        actions = [
+            action for action, _box in
+            ui.fmdx_control_layout(({"frequency_khz": 99_500.0, "name": "A"},), False, shared_control=False)
+        ]
+        self.assertNotIn("scan_start", actions)
+        self.assertEqual(actions, ["enable_shared"])
+
+    def test_shared_control_prompt_and_acknowledgement_are_session_scoped(self):
+        previous = ui.FMDX_SHARED_CONTROL
+        ui.FMDX_SHARED_CONTROL = fmdx.FmdxControlPolicy()
+        self.addCleanup(setattr, ui, "FMDX_SHARED_CONTROL", previous)
+        server = "https://fm.example/radio"
+        self.assertFalse(ui.fmdx_shared_control_acknowledged(server))
+        self.assertEqual(ui.request_fmdx_shared_control(server)["confirm"], "ENABLE FOR THIS SESSION")
+        self.assertTrue(ui.acknowledge_fmdx_shared_control(server))
+        self.assertTrue(ui.fmdx_shared_control_acknowledged(server))
+        self.assertIsNone(ui.request_fmdx_shared_control(server))
+        # A different server is still read-only.
+        self.assertFalse(ui.fmdx_shared_control_acknowledged("https://fm.example/other"))
+
+    def test_read_only_adopts_server_frequency_without_a_user_tune(self):
+        server = self.register_fmdx()
+        state = self.state()
+        state.set_server(server, receiver_type="fmdx")
+        generation = state.snapshot()[-1]
+        before_generation = state.snapshot()[4]
+
+        state.adopt_fmdx_frequency(99_500.0, generation)
+
+        self.assertEqual(state.snapshot()[1], 99_500.0)
+        self.assertEqual(state.snapshot()[4], before_generation)
 
     def test_fmdx_scan_request_is_generation_scoped(self):
         server = self.register_fmdx()

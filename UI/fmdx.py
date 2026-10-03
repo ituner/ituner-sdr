@@ -713,6 +713,61 @@ def signal_dbm(payload):
     return value - 120.0 if value >= 0.0 else value
 
 
+READ_ONLY = "read_only"
+SHARED_ACKNOWLEDGED = "shared_acknowledged"
+
+
+class FmdxControlPolicy:
+    """Session-only policy for FM-DX's shared tuner.
+
+    FM-DX servers are shared: changing the frequency changes the station for
+    every connected listener. iTuner therefore listens read-only by default.
+    Shared control requires an explicit acknowledgement for the active server
+    and is never persisted, so leaving the receiver or restarting the app
+    always returns to read-only.
+    """
+
+    READ_ONLY = READ_ONLY
+    SHARED_ACKNOWLEDGED = SHARED_ACKNOWLEDGED
+
+    def __init__(self):
+        self._mode = READ_ONLY
+        self._server = None
+
+    @property
+    def mode(self):
+        return self._mode
+
+    @property
+    def acknowledged_server(self):
+        return self._server
+
+    def acknowledge(self, server):
+        """Grant shared control for exactly one server, in memory only."""
+        server = normalize_server_url(server)
+        if not server:
+            return False
+        self._server = server
+        self._mode = SHARED_ACKNOWLEDGED
+        return True
+
+    def revoke(self):
+        """Return to read-only; called whenever the receiver changes."""
+        self._mode = READ_ONLY
+        self._server = None
+
+    def can_tune(self, server=None):
+        if self._mode != SHARED_ACKNOWLEDGED:
+            return False
+        if server is None:
+            return True
+        return normalize_server_url(server) == self._server
+
+    def serialize(self):
+        """Never persist an acknowledgement; there is nothing to save."""
+        return {}
+
+
 def tune_command(freq_khz):
     return f"T{int(round(float(freq_khz)))}"
 

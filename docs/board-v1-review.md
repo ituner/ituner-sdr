@@ -67,3 +67,84 @@ compact readouts, immediate mode engagement, actual waterfall texture-strip
 mapping above 30 MHz, and generation-safe landing/scan behavior. OpenGL renders
 at the CM5's 1280x800 logical resolution are inspected for sidebar layout.
 Physical touch and live server behavior still require a CM5 trial before PR.
+
+## Unified receiver browser and capability contract
+
+The receiver directory is one catalog rather than separate list and map paths.
+`UI/receiver_catalog.py` defines a protocol-neutral `ReceiverRecord` and a
+`ReceiverCapabilities` contract; KiwiSDR, OpenWebRX, local devices, and FM-DX
+all feed one collection. A receiver's transport (`protocol`) is kept separate
+from its browser segment (`source_group`), so a LAN Kiwi is `protocol="kiwi"`
+but appears under `LOCAL` and never enters the USB local-device worker.
+
+Source segments are ordered `KIWI`, `OPENWEBRX`, `LOCAL`, `FM-DX`, `ALL` and
+render as one single-select row across the top of the 1024 px content canvas.
+The right rail keeps only global commands: the `MAP` toggle, `SEARCH`, `SORT`,
+`FAVORITES`, and `BACK`. Opening Receivers selects `KIWI`, and the `ALL` view
+always sorts Kiwi first, OpenWebRX second, Local third, and FM-DX last. The list
+and map views read the same filtered record collection so a source filter,
+query, sort, favorites toggle, and selected receiver survive switching views.
+
+Every radio and waterfall control is checked against the active capability
+contract. Controls stay visible across receiver types; a fixed or unsupported
+control renders disabled and explains itself when pressed instead of silently
+ignoring input. Waterfall captions distinguish an RF waterfall from FM-DX's
+derived audio spectrum.
+
+### Shared FM-DX tuner
+
+FM-DX servers are shared: changing the frequency changes the station for every
+connected listener. iTuner therefore listens read-only by default. It does not
+send a tune command on connect, does not expose band scan, and does not send a
+frequency command while read-only. Shared frequency control requires an
+explicit acknowledgement for the active server, held only in memory for that
+session; leaving the server or restarting the app always returns to read-only.
+The acknowledgement is never persisted.
+
+Product rules, verbatim:
+
+```text
+KiwiSDR is the default and most complete receiver type. OpenWebRX uses the
+same browser and adapts controls to the active server profile. Local receivers
+show only controls implemented by the connected hardware. FM-DX servers use a
+shared tuner: iTuner listens without retuning by default, and any shared
+frequency control requires an explicit acknowledgement for that session.
+```
+
+### Implementation status
+
+The catalog, capability contract, source-segment header, protocol-aware health
+records, persisted stable receiver identity (`receiver_id`/`protocol`, version 4
+with legacy `receiver_type` migration), `OpenWebRxSession.negotiated_capabilities()`,
+and the session-only `FmdxControlPolicy` are implemented and covered by the UI
+test suite. The FM-DX drawer is read-only by default: it shows the shared-tuner
+explanation and a single `ENABLE SHARED CONTROL` action, presents the
+session-only confirmation, omits band scan entirely, hides the tuning step
+while read-only, and never sends a tune command on connect. Leaving the drawer
+or switching receivers revokes the acknowledgement, so a fresh launch always
+starts read-only.
+
+The receivers Globe draws every server as a single filled disc coloured by its
+source group (Kiwi, OpenWebRX, Local, FM-DX) with a matching colour legend.
+Tapping a legend chip toggles that group: its dots disappear from the globe and
+leave the tap/hover surface until the chip is tapped again (session-only).
+
+```mermaid
+flowchart LR
+  H[Home] --> R[Receivers]
+  R --> L[List]
+  R --> G[Globe]
+  G --> C[Colour legend chips]
+  C -->|tap| F[Hide / show that source group\'s dots]
+```
+
+The browser only returns to the main screen after a real receiver change:
+re-selecting the already-live endpoint (and switching source while a pick is
+still settling) keeps the browser open, so the LOCAL tab no longer dismisses
+itself under the operator. An empty source shows the shared
+`NO RECEIVERS IN THIS SOURCE` text instead of a blank list.
+
+The remaining work is the renderer pass that routes the Home mode, passband,
+frequency, and waterfall controls through `decide()` notices and replaces the
+remaining split map/list state (`picker_map_open`, the `DIRECT`/`PROXY` route
+badges, and the fixed OpenWebRX test restore) with the shared browser state.

@@ -30,6 +30,7 @@ from openwebrx_recorder import (
     SyncedImaAdpcmDecoder,
     WebSocket,
 )
+from receiver_catalog import ReceiverCapabilities
 
 
 class OpenWebRxError(RuntimeError):
@@ -151,6 +152,38 @@ class OpenWebRxSession:
             return float(self.config["samp_rate"])
         except (KeyError, TypeError, ValueError):
             return None
+
+    def advertised_modes(self) -> tuple:
+        """Map the server's advertised demodulators onto implemented modes."""
+        advertised = self.config.get("modes")
+        if isinstance(advertised, (list, tuple)):
+            mapped = tuple(
+                str(mode).lower() for mode in advertised
+                if str(mode).lower() in DEFAULT_FILTERS
+            )
+            if mapped:
+                return mapped
+        return tuple(sorted(DEFAULT_FILTERS))
+
+    def negotiated_capabilities(self) -> ReceiverCapabilities:
+        """Describe what this OpenWebRX server actually negotiated.
+
+        The profile window (``center_freq`` +/- ``samp_rate``/2) bounds tuning
+        and the waterfall pan; passband stays per-session. Until the config
+        arrives the range is empty rather than guessed.
+        """
+        center = self.center_frequency_hz
+        sample_rate = self.sample_rate_hz or 0.0
+        if center is None or sample_rate <= 0:
+            ranges = ()
+        else:
+            ranges = (((center - sample_rate / 2.0) / 1000.0,
+                       (center + sample_rate / 2.0) / 1000.0),)
+        return ReceiverCapabilities.openwebrx(
+            modes=self.advertised_modes(),
+            frequency_ranges_khz=ranges,
+            source_span_khz=sample_rate / 1000.0,
+        )
 
     def connect(self) -> None:
         self.close()

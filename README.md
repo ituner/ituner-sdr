@@ -184,6 +184,18 @@ It draws a green circle that follows your finger. Press `Ctrl+C` to exit, then r
 sudo systemctl restart ituner-sdr.service
 ```
 
+## Receivers
+
+The receiver browser is one catalog of KiwiSDR, OpenWebRX, local, and FM-DX
+receivers with a single source segment row (`KIWI`, `OPENWEBRX`, `LOCAL`,
+`FM-DX`, `ALL`). KiwiSDR is the default and most complete receiver type.
+OpenWebRX uses the same browser and adapts its controls to the active server
+profile. Local receivers show only controls implemented by the connected
+hardware. FM-DX servers use a shared tuner: iTuner listens without retuning by
+default, and any shared frequency control requires an explicit acknowledgement
+for the current session only. See the [board_v1 changelog](docs/board-v1-changelog.md)
+for the full list of browser and interface changes.
+
 ## Uninstall
 
 The uninstall is explicit and restores the saved display kernel module for the current kernel, removes this package's marked boot-config block and overlays, then disables/removes its services and installed files:

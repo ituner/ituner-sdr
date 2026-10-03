@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parent))
 import kiwi_live_display_fb as kiwi
 import fmdx
+import receiver_catalog
 
 CACHE = Path.home() / ".local/state/kiwi-gl-public-directory.json"
 FMDX_CACHE = Path.home() / ".local/state/ituner-fmdx-directory.json"
@@ -166,9 +167,14 @@ def refresh_station_health(
         return False
     server = station[2]
     receiver_type = station[7] if len(station) > 7 else "kiwi"
-    if receiver_type == "fmdx":
+    record = receiver_catalog.normalize_receiver({
+        "server": server, "protocol": receiver_type,
+    })
+    if str(receiver_type).casefold() == "fmdx":
         audio = fmdx_audio_probe(server)
         health.setdefault("stations", {})[server] = {
+            "receiver_id": record.id,
+            "protocol": "fmdx",
             "status": "ok" if audio else "failed",
             "waterfall": False,
             "audio": audio,
@@ -180,6 +186,8 @@ def refresh_station_health(
     audio = audio_probe(server)
     previous = health.setdefault("stations", {}).get(server, {})
     entry = {
+        "receiver_id": record.id,
+        "protocol": record.protocol,
         "status": "ok" if waterfall or audio else "failed",
         "waterfall": waterfall,
         "audio": audio,
@@ -197,18 +205,74 @@ def refresh_station_health(
     return True
 
 
+def probe_station_list(cached_stations, fmdx_cache_payload, static_records=()):
+    """Build the rotating probe list: directory, FM-DX, and the LAN Kiwi.
+
+    The LAN Kiwi is a configured local instrument rather than a public
+    directory entry, so without this it would never receive a health record
+    and could never be confirmed reachable by the browser's LOCAL segment.
+    """
+    stations = list(cached_stations or [])
+    try:
+        stations += fmdx.stations_from_receivers(
+            fmdx.normalize_directory(fmdx_cache_payload or {})
+        )
+    except (TypeError, ValueError):
+        pass
+    seen = {
+        str(row[2]).rstrip("/")
+        for row in stations
+        if isinstance(row, (list, tuple)) and len(row) > 2
+    }
+    for record in static_records or ():
+        if getattr(record, "source_group", None) != "local":
+            continue
+        row = receiver_catalog.legacy_station_row(record)
+        if str(row[2]).rstrip("/") in seen:
+            continue
+        seen.add(str(row[2]).rstrip("/"))
+        stations.append(row)
+    return stations
+
+
+# The operator's own LAN receiver is confirmed on a faster cadence than the
+# twelve-hour public-directory rotation, so LOCAL can list it promptly.
+LOCAL_PROBE_INTERVAL_SECONDS = 300.0
+
+
+def local_station_rows(stations, static_records=()):
+    """Return the built-in LOCAL (non-directory) receiver rows."""
+    servers = {
+        str(record.endpoint).rstrip("/")
+        for record in static_records or ()
+        if getattr(record, "source_group", None) == "local"
+    }
+    return [
+        row for row in stations
+        if isinstance(row, (list, tuple)) and len(row) > 2
+        and str(row[2]).rstrip("/") in servers
+    ]
+
+
 def main():
+    last_local_probe = 0.0
     while True:
         started = time.monotonic()
-        stations = load_json(CACHE, [])
-        try:
-            stations += fmdx.stations_from_receivers(
-                fmdx.normalize_directory(load_json(FMDX_CACHE, {}))
-            )
-        except (TypeError, ValueError):
-            pass
+        static_records = receiver_catalog.load_static_sources()
+        stations = probe_station_list(
+            load_json(CACHE, []),
+            load_json(FMDX_CACHE, {}),
+            static_records,
+        )
         health = load_json(HEALTH, {"cursor": 0, "stations": {}})
         interval = scan_interval_seconds(len(stations))
+        if stations and started - last_local_probe >= LOCAL_PROBE_INTERVAL_SECONDS:
+            # Confirm the operator's own LAN receiver before the slow rotation
+            # reaches it; otherwise LOCAL could stay empty for hours.
+            for row in local_station_rows(stations, static_records):
+                refresh_station_health(health, row)
+            last_local_probe = started
+            save_health(health)
         if stations:
             cursor = int(health.get("cursor", 0)) % len(stations)
             station = stations[cursor]
