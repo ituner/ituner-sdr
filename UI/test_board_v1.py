@@ -267,7 +267,7 @@ class BoardLayoutTests(unittest.TestCase):
     def test_mode_hit_selects_before_drawer(self):
         for compact in (True,False):
             for label, box in ui.lcd_home_mode_boxes(compact):
-                expected = 'NBFM' if label=='NFM' else label
+                expected = 'NBFM' if label=='FMDX' else label
                 state=ui.SharedState('http://kiwi.test',7075,8,-95,-125,-15,3,'lsb',True)
                 selected=ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,compact)
                 self.assertEqual(selected,expected)

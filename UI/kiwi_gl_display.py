@@ -244,16 +244,17 @@ DESKTOP_1280_TOP_H = 96
 # The wide layout's radio-status control deliberately shares the exact outer
 # bounds of the two-column navigation rail beneath it. It is one touch target.
 DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
-# NFM is the familiar compact panel label; Kiwi's wire-mode remains NBFM.
-DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "NFM", "IQ")
+# FMDX is the shared mode-button label; Kiwi's wire-mode remains NBFM.
+DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "FMDX", "IQ")
 
 
 def mode_annunciator_active(label, active_mode, digital):
     """Map compact panel labels onto Kiwi's internal demodulator names."""
     return (
         label == active_mode
-        or (label == "NFM" and active_mode == "NBFM")
-        or (label == "IQ" and str(digital).upper() == "IQ")
+        or (label == "FMDX" and active_mode == "NBFM")
+        or (label == "FMDX" and active_mode == fmdx.MODE_LABEL)
+        or (label == "IQ" and active_mode != fmdx.MODE_LABEL and str(digital).upper() == "IQ")
     )
 
 
@@ -1100,8 +1101,8 @@ FMDX_TUNE_STEPS_HZ = (50_000, 100_000, 200_000)
 def radio_step_options(receiver_type="kiwi"):
     if receiver_type == "fmdx":
         for index, step in enumerate(FMDX_TUNE_STEPS_HZ):
-            y = 460 + index * 66
-            yield step, (LCD_NAV_X0 + 17, y, LOGICAL_W - 17, y + 54)
+            y = 364 + index * 74
+            yield step, (LCD_NAV_X0 + 10, y, LOGICAL_W - 10, y + 62)
         return
     if LCD_800_MODE:
         x0, _y0, x1, _y1 = radio_panel_box()
@@ -4136,7 +4137,7 @@ def configure_output(desktop=False):
     inner_margin = 8
     control_h = 78
     zoom_button_w = 94
-    zoom_group_w = 304
+    zoom_group_w = 2 * zoom_button_w + 2 * inner_margin + 12
     zoom_x0 = edge_margin
     zoom_x1 = zoom_x0 + zoom_group_w
     zoom_y0 = zoom_bottom - control_h
@@ -8226,10 +8227,10 @@ def fmdx_control_layout(stations, scan_active=False, shared_control=True):
     repeatedly retunes the shared receiver. In read-only mode the only action
     is the explicit shared-control acknowledgement.
     """
-    left, right = LCD_NAV_X0 + 17, LOGICAL_W - 17
+    left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
     middle = (left + right) / 2
     if not shared_control:
-        yield "enable_shared", (left, 248, right, 314)
+        yield "enable_shared", (left, 248, right, 316)
         return
     if stations:
         yield "preset_previous", (left, 248, middle - 4, 310)
@@ -8470,6 +8471,40 @@ def draw_radio_variant_option(text_cache, box, mode, active):
     )
 
 
+def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
+                         shared_control, reveal_y):
+    """FM-DX instruments in the same bounded rail layout as other drawers."""
+    left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
+    mode_box = (left, lcd_radio_mode_grid_y0(), right, lcd_radio_mode_grid_y0() + 62)
+    if reveal_y >= mode_box[3]:
+        draw_lcd_audio_tile(text_cache, mode_box, "FMDX", "ON · FM RECEIVER", True)
+    frequency = fmdx.status_frequency_khz(status)
+    station = str((status or {}).get("ps") or "Waiting for RDS").strip()
+    lines = (
+        (181, station, 18, (229, 243, 246)),
+        (207, f"{frequency / 1000.0:.1f} MHz" if frequency else "Waiting for frequency", 14, (153, 185, 191)),
+        (229, "SHARED CONTROL" if shared_control else "LISTEN ONLY · SHARED TUNER", 12, (112, 223, 169) if shared_control else (153, 185, 191)),
+    )
+    for y, label, size, color in lines:
+        if reveal_y >= y + size:
+            label = fit_station_text(text_cache, label, right - left - 20, size, True, False, family="Liberation Sans")
+            draw_text(text_cache, left + 10, y, label, color, size, True, False, "lm", family="Liberation Sans")
+    labels = {
+        "enable_shared": ("SHARED CONTROL", "ENABLE"),
+        "preset_previous": ("PREVIOUS", "PRESET"),
+        "preset_next": ("NEXT", "PRESET"),
+    }
+    for action, box in fmdx_control_layout(stations, scan_active, shared_control):
+        if reveal_y >= box[3]:
+            draw_lcd_audio_tile(text_cache, box, *labels[action])
+    if shared_control:
+        if reveal_y >= 349:
+            draw_lcd_drawer_heading(text_cache, left + 10, 349, "TUNING STEP")
+        for option, box in radio_step_options("fmdx"):
+            if reveal_y >= box[3]:
+                draw_lcd_audio_tile(text_cache, box, "TUNING STEP", f"{option // 1000} kHz", option == step_hz)
+
+
 def draw_radio_setup_panel(
     text_cache, mode, digital, step_hz, family_open=None,
     mode_families=KIWI_MODE_FAMILIES,
@@ -8486,7 +8521,7 @@ def draw_radio_setup_panel(
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, (6, 13, 19, 255))
-        draw_sidebar_header(text_cache, "FM-DX" if receiver_type == "fmdx" else "MODES")
+        draw_sidebar_header(text_cache, "MODES")
         if reveal_y < y0 + 44:
             return
         close_x0, close_y0, close_x1, close_y1 = lcd_radio_drawer_close_box()
@@ -8494,43 +8529,25 @@ def draw_radio_setup_panel(
             draw_radio_close_button(text_cache, (close_x0, close_y0, close_x1, close_y1))
         active_mode = effective_receiver_mode(receiver_type, mode)
         if receiver_worker_protocol(receiver_type) == "fmdx":
-            if not fmdx_shared_control:
-                # Read-only: the shared tuner must be explained before it is
-                # ever moved, and the only action is the explicit opt-in.
-                listening_khz = fmdx.status_frequency_khz(fmdx_status)
-                listening = f"{listening_khz / 1000.0:.1f} MHz" if listening_khz else "the server frequency"
-                draw_text(text_cache, x0 + 12, y0 + 86, "FM-DX · SHARED TUNER", (244, 178, 91), 20, True, False, "lm", family="Liberation Sans")
-                draw_text(text_cache, x0 + 12, y0 + 137, f"Listening at {listening}", (229, 243, 246), 15, True, False, "lm", family="Liberation Sans")
-                draw_text(text_cache, x0 + 12, y0 + 158, "Frequency changes affect every listener.", (145, 183, 190), 11, False, False, "lm", family="Liberation Sans")
-                for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active, False):
-                    if reveal_y >= box[3]:
-                        draw_radio_option(text_cache, box, "ENABLE SHARED CONTROL", False)
-            else:
-                ps = str((fmdx_status or {}).get("ps") or "Waiting for RDS").strip()
-                draw_text(text_cache, x0 + 12, y0 + 86, "FM-FMDX", (244, 178, 91), 20, True, False, "lm", family="Liberation Sans")
-                draw_text(text_cache, x0 + 12, y0 + 108, "SHARED CONTROL · THIS SESSION", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
-                draw_text(text_cache, x0 + 12, y0 + 137, ps[:24], (229, 243, 246), 15, True, False, "lm", family="Liberation Sans")
-                draw_text(text_cache, x0 + 12, y0 + 158, f"{len(fmdx_stations)} station presets", (145, 183, 190), 11, False, False, "lm", family="Liberation Sans")
-                labels = {"preset_previous": "PREV", "preset_next": "NEXT"}
-                for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active, True):
-                    if reveal_y >= box[3]:
-                        draw_radio_option(text_cache, box, labels[action], False)
-        else:
-            for family, modes, box in radio_mode_layout(mode_families):
-                if reveal_y >= box[3]:
-                    draw_radio_family_option(text_cache, box, family, modes, active_mode)
-        read_only_shared = receiver_worker_protocol(receiver_type) == "fmdx" and not fmdx_shared_control
-        step_y0 = 460 if receiver_type == "fmdx" else lcd_radio_step_y0(len(mode_families))
-        if not read_only_shared and reveal_y >= step_y0:
+            draw_lcd_fmdx_drawer(
+                text_cache, step_hz, fmdx_status, fmdx_stations,
+                fmdx_scan_active, fmdx_shared_control, reveal_y,
+            )
+            if fmdx_shared_prompt:
+                draw_fmdx_shared_prompt(text_cache)
+            return
+        for family, modes, box in radio_mode_layout(mode_families):
+            if reveal_y >= box[3]:
+                draw_radio_family_option(text_cache, box, family, modes, active_mode)
+        step_y0 = lcd_radio_step_y0(len(mode_families))
+        if reveal_y >= step_y0:
             draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
-        for option, box in (() if read_only_shared else radio_step_options(receiver_type)):
+        for option, box in radio_step_options(receiver_type):
             if reveal_y >= box[3]:
                 label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
                 draw_radio_option(text_cache, box, label, option == step_hz)
         if receiver_worker_protocol(receiver_type) == "kiwi" and reveal_y >= radio_wspr_box()[3]:
             draw_radio_option(text_cache, radio_wspr_box(), "WSPR", False)
-        if fmdx_shared_prompt and receiver_worker_protocol(receiver_type) == "fmdx":
-            draw_fmdx_shared_prompt(text_cache)
         return
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
@@ -14401,13 +14418,18 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     return grid_y0, compact_cell_h, gap
 
 
-def lcd_home_mode_boxes(show_compact_readouts=True):
+def home_mode_labels(mode=None):
+    """Use the same mode-button labels for every receiver and screen."""
+    return DESKTOP_1280_MODE_ANNUNCIATORS
+
+
+def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
     grid_w = (x1 - x0 - 12) * 0.85
     grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
     cell_w = (grid_w - 3 * gap) / 4
-    for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+    for index, label in enumerate(home_mode_labels(mode)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
         top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
         yield label, (left, top, left + cell_w, top + cell_h)
@@ -14419,7 +14441,7 @@ def engage_home_mode(state, x, y, compact=True, local_receiver=None):
         return None
     for label, box in lcd_home_mode_boxes(compact):
         if contains(box, x, y):
-            mode = "NBFM" if label == "NFM" else label
+            mode = "NBFM" if label == "FMDX" else label
             if local_receiver is not None:
                 if not local_receiver.set_home_mode(mode):
                     return None
@@ -15125,7 +15147,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         grid_w = (width - 12) * 0.85
         grid_x0 = (width - grid_w) / 2
         cell_w = (grid_w - 3 * gap) / 4
-        for index, label in enumerate(DESKTOP_1280_MODE_ANNUNCIATORS):
+        for index, label in enumerate(home_mode_labels(mode)):
             col, row = index % 4, index // 4
             left = grid_x0 + col * (cell_w + gap)
             top = grid_y0 + row * (cell_h + gap)
@@ -15196,7 +15218,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
             draw_text(text_cache, lx, meter_y1 - 8, label, color, 12, True, False, "cm", family="Liberation Sans")
 
-    for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts):
+    for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts, mode):
         active = mode_annunciator_active(label, active_mode, digital)
         if active:
             label_w, label_h = text_cache.font(14, bold=True, family="Liberation Sans").size(label)
