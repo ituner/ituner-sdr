@@ -105,7 +105,69 @@ macOS test host). KiwiSDR remains the default and most complete receiver type.
   MODES drawer: the `radio_toggle` handler now hit-tests `lcd_home_mode_boxes()`
   before engaging a mode or toggling `radio_setup_open`.
 
-## 6. Files
+## 6. Globe polish pass (follow-up)
+
+- **VIEW CLEAN removed, SAT+borders is the default.** The borderless `CLEAN`
+  presentation hid the receiver constellation's geographic context. It is gone
+  from `MAP_VIEWS` / `MAP_VIEW_LABELS`, and the Globe now opens in `SAT`
+  (satellite imagery with country borders); the `VIEW` tile cycles `SAT ONLY`,
+  `BORDERS`, `ATLAS`, `SAT`.
+- **Legend chips name the action.** A lit chip now reads `HIDE KIWI` / `HIDE FM-DX`
+  and flips to `SHOW KIWI` / `SHOW FM-DX` when its group is switched off
+  (`receiver_map_legend_label`). The labels draw larger than the old 15 px row
+  text (`RECEIVER_MAP_LEGEND_FONT_SIZE = 18`), so the action reads at a glance.
+- **Globe dots grow and shrink with the ZOOM +/- tiles.** Each stationary
+  receiver is one crisp point in its full legend colour (`draw_logical_points`).
+  The base size is 2 px; every `ZOOM +` tap adds a pixel and every `ZOOM -` tap
+  removes one (`receiver_map_step_dot_pixels`, clamped to
+  `GLOBE_DOT_MIN_PIXELS`–`GLOBE_DOT_MAX_PIXELS`), reset to 2 px each time the
+  Globe opens. Colour never changes with zoom. Only the transient "connecting"
+  dot stays a pulsing disc.
+- **Coastlines are gone from every view; country borders are the only geographic
+  layer.** The `CLEAN` coastline lines no longer show through `BORDERS` or
+  `ATLAS` either, and the country outlines render at every zoom instead of only
+  past the old clutter threshold.
+- **Home mode placeholders are inert under Settings/MODES.** The Settings and
+  MODES pages draw their title over the Home annunciator placeholders. The Home
+  mode grid, passband, and volume hit-tests now require
+  `home_rail_controls_available()` (no browser, no Settings, no MODES open), so a
+  tap on the covered mode buttons no longer picks a hidden mode.
+
+## 7. Waterfall control cleanups
+
+- **Waterfall DISPLAY button removed.** It duplicated the Settings DISPLAY
+  page, so it (and its empty pill) is gone from the waterfall. The spectrum
+  on/off control remains in the DISPLAY drawer.
+- **Scope drag moved into the DISPLAY drawer.** The removed waterfall button's
+  only action was to reveal the scope drag rail, so the drawer gained a
+  `SCOPE / DRAG` launcher beside `INSTRUMENTS` that does the same thing
+  (`display_option_at` -> `"scope"`).
+- **Waterfall zoom is two bordered glyph tiles with a pressed state.** The shared
+  ZOOM pill and its centre `ZOOM` label were removed, leaving standalone `+` and
+  `-` tiles. Each tile now draws its own square border and lights a neon accent
+  while pressed (`draw_zoom_button(..., active=True)`), so a knob or finger can
+  land on it; a tap keeps it lit briefly (`zoom_flash_*`).
+- **The DISPLAY drawer is compacted.** Shorter tiles and tighter gaps keep every
+  option inside the 256 px rail, and the overflowing `INSTRUMENTS` label became
+  `LAYOUT` (`AUTO SCALE` also shortened to `AUTO`), sharing its row with the new
+  `SCOPE / DRAG` launcher.
+
+## 8. Globe resting view: the operator's location
+
+- **The receiver browser opens on your own location.** The Globe no longer flies
+  in from the tuned receiver. Every entry returns to one resting view: `SAT`
+  satellite imagery with country borders (`GLOBE_DEFAULT_VIEW`), centred on the
+  operator's own point from `receiver_home_profile` (`focus_receiver_map_on_home`
+  and the pure `receiver_map_home_center` helper).
+- **The resting zoom is a regional 2.2x close-up.** `GLOBE_DEFAULT_SCALE = 2.2`
+  replaces the old global-then-fly-in framing, so the directory opens on the
+  part of the world it belongs to.
+- **The pending-receiver fly-in is gone.** `picker_map_focus_server`,
+  `focus_receiver_map_on_server`, and the now-unused
+  `receiver_map_receiver_for_server` were removed; the entry transition no
+  longer waits on the live directory load.
+
+## 9. Files
 
 | File | Change |
 | --- | --- |
@@ -122,9 +184,9 @@ macOS test host). KiwiSDR remains the default and most complete receiver type.
 | [`README.md`](../README.md) | Receivers section |
 | [`docs/board-v1-review.md`](board-v1-review.md) | Receiver-browser rules and status |
 
-## 7. Verification
+## 10. Verification
 
-- UI suite: 144 tests pass
+- UI suite: 165 tests pass
   (`cd UI && ./.venv/bin/python -m unittest discover -s . -p 'test_*.py'`).
 - Installer suite: 13 tests pass
   (`./UI/.venv/bin/python -m unittest discover -s tests`).
@@ -133,4 +195,7 @@ macOS test host). KiwiSDR remains the default and most complete receiver type.
 - Live OpenGL frames on the 1280x800 logical resolution confirm: an empty rail
   tap does not open MODES; the rail legend chips render and toggle their source
   group; and the zoom buttons draw the `+` / `−` glyph only.
+- A live OpenGL frame on the 1280x800 logical resolution confirms the Globe's
+  resting view: opening `RECEIVERS` → `GLOBE` animates to the saved home point
+  (yaw 28.06, pitch 46.67) at scale 2.2 in `SAT` with 2 px dots.
 - Physical touch behaviour on the CM5 panel still requires a device trial.

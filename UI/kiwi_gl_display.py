@@ -417,6 +417,9 @@ RADIOGARDEN_ZOOM_MAX = 768.0
 # Six taps traverse the complete map scale from the global overview to the
 # regional maximum. A geometric step makes each tap feel consistent.
 RADIOGARDEN_ZOOM_TAP_FACTOR = (RADIOGARDEN_ZOOM_MAX / RADIOGARDEN_ZOOM_MIN) ** (1.0 / 6.0)
+# The Globe's resting entry view is a regional satellite close-up of the
+# operator's own location, not a stale or arbitrary part of the world.
+GLOBE_DEFAULT_SCALE = 2.2
 SPECTRUM_PEAK_HOLD_SECONDS = 10.0
 # A slow, respectful long-form survey: four probes are sampled together every
 # 172.8 seconds, yielding roughly 1,000 individual receiver samples in twelve
@@ -1177,6 +1180,7 @@ DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
+DISPLAY_SCOPE_BOX = (0, 0, 0, 0)
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -1698,7 +1702,7 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
-    global DISPLAY_RESET_BOX, DISPLAY_INSTRUMENTS_BOX
+    global DISPLAY_RESET_BOX, DISPLAY_INSTRUMENTS_BOX, DISPLAY_SCOPE_BOX
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1737,6 +1741,7 @@ def configure_popup_layout():
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
     DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
+    DISPLAY_SCOPE_BOX = (0, 0, 0, 0)
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
@@ -1747,21 +1752,23 @@ def configure_popup_layout():
         display_y0, display_y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
         inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
-        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 150)
-        column_gap, tile_h, adjust_h = 7, 72, 64
+        # A compact, evenly spaced stack: shorter tiles and tighter gaps keep
+        # every option inside the 256 px rail with readable labels.
+        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 142)
+        column_gap, tile_h, adjust_h = 7, 64, 56
         # Every LCD drawer is top-justified: instruments begin together
         # beneath the header and leave a quiet lane to the bottom Back button.
-        toggle_y0 = 168
+        toggle_y0 = 158
         toggle_y1 = toggle_y0 + tile_h
-        floor_y0 = toggle_y1 + 16
+        floor_y0 = toggle_y1 + 14
         floor_y1 = floor_y0 + adjust_h
-        ceiling_y0 = floor_y1 + 16
+        ceiling_y0 = floor_y1 + 14
         ceiling_y1 = ceiling_y0 + adjust_h
-        rate_y0 = ceiling_y1 + 16
+        rate_y0 = ceiling_y1 + 14
         rate_y1 = rate_y0 + tile_h
-        palette_y0 = rate_y1 + 16
+        palette_y0 = rate_y1 + 14
         palette_y1 = palette_y0 + tile_h
-        instruments_y0 = palette_y1 + 16
+        instruments_y0 = palette_y1 + 14
         instruments_y1 = instruments_y0 + tile_h
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
@@ -1785,7 +1792,10 @@ def configure_popup_layout():
                     inner_x0 + index * (palette_w + column_gap) + palette_w, palette_y1), label)
             for index, (name, _box, label) in enumerate(base_palettes)
         )
-        DISPLAY_INSTRUMENTS_BOX = (inner_x0, instruments_y0, inner_x1, instruments_y1)
+        # The Instruments toggle shares its row with a SCOPE drag launcher that
+        # used to live on the waterfall's removed DISPLAY button.
+        DISPLAY_INSTRUMENTS_BOX = (inner_x0, instruments_y0, inner_x0 + half_w, instruments_y1)
+        DISPLAY_SCOPE_BOX = (inner_x0 + half_w + column_gap, instruments_y0, inner_x1, instruments_y1)
 
     dy = offset("filter")
     (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
@@ -7589,11 +7599,11 @@ def draw_control_group_background(text_cache, box, key, separators, alpha=1.0, s
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
-def draw_zoom_button(text_cache, box, label, alpha=1.0):
+def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
-    key = f"zoom_sign_group_v4_{label}"
+    key = f"zoom_sign_tile_v1_{label}_{int(active)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -7604,9 +7614,18 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
+        # A bordered square tile makes each zoom button a visible, hittable
+        # target the knob focus can land on. Pressing it fills a neon accent.
+        tile = pygame.Rect(p(3), p(3), p(w - 6), p(h - 6))
+        if active:
+            pygame.draw.rect(hi, (43, 121, 81, 210), tile, border_radius=p(4))
+            border, icon = (119, 255, 162, 245), (255, 255, 255, 255)
+        else:
+            pygame.draw.rect(hi, (13, 21, 28, 122), tile, border_radius=p(4))
+            border, icon = (150, 178, 186, 176), (244, 250, 252, 222)
+        pygame.draw.rect(hi, border, tile, p(max(1.6, min(w, h) * 0.022)), border_radius=p(4))
         cx = w / 2
         cy = h / 2
-        icon = (244, 250, 252, 222)
         sign_w = max(15, round(min(w, h) * (0.27 if label == "-" else 0.29)))
         stroke = max(2.4, min(w, h) * 0.043)
         pygame.draw.line(hi, icon, (p(cx - sign_w), p(cy)), (p(cx + sign_w), p(cy)), p(stroke))
@@ -7685,31 +7704,21 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
-def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0):
+def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, pressed=None):
     """Draw the controls that must remain above movable text overlays."""
-    zoom_separator_left = ZOOM_MINUS_BOX[2] - ZOOM_GROUP_BOX[0] + 10
-    zoom_separator_right = ZOOM_PLUS_BOX[0] - ZOOM_GROUP_BOX[0] - 10
-    draw_control_group_background(text_cache, ZOOM_GROUP_BOX, "zoom_group_pill_v8", (zoom_separator_left, zoom_separator_right), alpha)
-    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha)
-    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha)
-    draw_text(
-        text_cache,
-        (ZOOM_MINUS_BOX[2] + ZOOM_PLUS_BOX[0]) / 2,
-        (ZOOM_GROUP_BOX[1] + ZOOM_GROUP_BOX[3]) / 2,
-        "ZOOM",
-        (211, 227, 231),
-        20,
-        True,
-        True,
-        "cm",
-        alpha,
-    )
+    # Zoom is two standalone bordered + / - tiles; the shared pill background
+    # and its centre "ZOOM" label were removed. ``pressed`` names the zoom
+    # gesture in progress so a knob or finger press lights the tile.
+    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus")
+    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus")
     if LCD_800_MODE:
-        draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_scope_only_v1", (), alpha)
-    else:
-        view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
-        draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
-        draw_filter_toggle_button(text_cache, alpha)
+        # The waterfall no longer carries a DISPLAY button. Its only action
+        # (reveal the scope drag rail) and the spectrum on/off both live in the
+        # Settings DISPLAY drawer now.
+        return
+    view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
+    draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
+    draw_filter_toggle_button(text_cache, alpha)
     draw_spectrum_toggle_button(text_cache, spectrum_enabled, alpha)
 
 
@@ -8030,6 +8039,17 @@ def radio_toggle_box(text_cache, freq_khz):
     if LCD_800_MODE:
         return LCD_ANNUNCIATOR_BOX
     return top_instrument_layout(text_cache, freq_khz)[1]
+
+
+def home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open):
+    """Whether the Home rail controls may react to a touch.
+
+    Settings and MODES are full right-rail pages whose title and icons are
+    drawn over the Home annunciator placeholders. While either is open (or the
+    receiver browser owns the screen), the covered Home mode grid, passband,
+    and volume must stay inert instead of reacting under the visible page.
+    """
+    return not picker_open and not settings_menu_open and not digital_menu_open
 
 
 def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BOX):
@@ -8546,6 +8566,8 @@ def display_option_at(x, y):
         return "reset", None
     if LCD_800_MODE and contains(DISPLAY_INSTRUMENTS_BOX, x, y):
         return "instruments", None
+    if LCD_800_MODE and contains(DISPLAY_SCOPE_BOX, x, y):
+        return "scope", None
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -12716,22 +12738,17 @@ def receiver_map_center_candidate(receivers, center_lon, center_lat):
     return min(visible, key=lambda receiver: globe_haversine_km(focus, receiver))
 
 
-def receiver_map_receiver_for_server(receivers, server):
-    """Find the map record for an active receiver, tolerating URL formatting."""
-    if not server:
+def receiver_map_home_center(profile):
+    """Return the (yaw, pitch) radians that frame a home profile, or None.
+
+    The Globe is a north-up projection, so the operator's own latitude and
+    longitude map straight onto the pitch and yaw that put them under the
+    reticle at the centre of the map.
+    """
+    profile = valid_receiver_home_profile(profile)
+    if not profile:
         return None
-    for receiver in receivers:
-        if receiver.get("server") == server:
-            return receiver
-    current = urlparse(server if "://" in server else "http://" + server)
-    host = (current.hostname or "").casefold()
-    if not host:
-        return None
-    for receiver in receivers:
-        mapped = urlparse(receiver.get("server", ""))
-        if (mapped.hostname or "").casefold() == host:
-            return receiver
-    return None
+    return math.radians(profile["lon"]), math.radians(profile["lat"])
 
 
 def receiver_map_zoom_boxes():
@@ -12763,6 +12780,9 @@ RECEIVER_MAP_HIDDEN_GROUPS = set()
 RECEIVER_MAP_LEGEND_RAIL_TOP = 88
 RECEIVER_MAP_LEGEND_RAIL_H = 46
 RECEIVER_MAP_LEGEND_GAP = 8
+# The HIDE / SHOW labels are the legend's primary readout, so they use a
+# larger caption than the old 15 px row text.
+RECEIVER_MAP_LEGEND_FONT_SIZE = 18
 
 
 def receiver_map_group(receiver):
@@ -12816,6 +12836,11 @@ def receiver_map_legend_boxes(receivers, box=None):
     return tuple(boxes)
 
 
+def receiver_map_legend_label(group, active):
+    """Name the action, not the state: HIDE a visible group, SHOW a hidden one."""
+    return f"{'HIDE' if active else 'SHOW'} {RECEIVER_MAP_GROUP_LABELS[group]}"
+
+
 def receiver_map_legend_at(x, y, receivers, box=None):
     """Return the legend group under a point, or None."""
     for group, rect in receiver_map_legend_boxes(receivers, box):
@@ -12824,10 +12849,13 @@ def receiver_map_legend_at(x, y, receivers, box=None):
     return None
 
 
-MAP_VIEWS = ("satellite_only", "clean", "borders", "atlas", "satellite")
+# The CLEAN (borderless) presentation was removed: it hid the receiver
+# constellation's geographic context and read as an empty globe.
+MAP_VIEWS = ("satellite_only", "borders", "atlas", "satellite")
+# Satellite imagery with country borders is the receiver browser's entry view.
+GLOBE_DEFAULT_VIEW = "satellite"
 MAP_VIEW_LABELS = {
     "satellite_only": "SAT ONLY",
-    "clean": "CLEAN",
     "borders": "BORDERS",
     "atlas": "ATLAS",
     "satellite": "SAT",
@@ -12961,10 +12989,28 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     return True
 
 
+# Globe server dots. The ZOOM + / ZOOM - tiles step the point size by one
+# pixel, so the operator enlarges the constellation as they zoom in and shrinks
+# it again as they zoom out. Colour never changes.
+GLOBE_DOT_BASE_PIXELS = 2
+GLOBE_DOT_MIN_PIXELS = 1
+GLOBE_DOT_MAX_PIXELS = 10
+
+
+def receiver_map_dot_pixels(size):
+    """Clamp the operator's server-dot size to the allowed pixel range."""
+    return int(clamp(size, GLOBE_DOT_MIN_PIXELS, GLOBE_DOT_MAX_PIXELS))
+
+
+def receiver_map_step_dot_pixels(size, zooming_in):
+    """One ZOOM + / - tap adds or removes a pixel from the server dots."""
+    return receiver_map_dot_pixels(size + (1 if zooming_in else -1))
+
+
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False,
+    map_view="borders", interactive=False, dot_pixels=GLOBE_DOT_BASE_PIXELS,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -12990,41 +13036,15 @@ def draw_receiver_map(
     draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
     if map_view == "atlas":
         draw_receiver_map_graticule(center_lon, center_lat, box, scale)
-    # Full-detail coastlines are projected on the sphere, split cleanly at
-    # the limb. This stays smooth when a region fills the display.
-    if not satellite_drawn:
-        # The 50 m layer has ~10× as many vertices as the whole-world layer.
-        # It is attractive on the desktop but leaves the Pi's Python OpenGL
-        # path below ten fps while a finger moves the map.
-        coastlines = (
-            GLOBE_COASTLINES_FINE if DESKTOP_MODE and scale >= 2.0
-            else GLOBE_COASTLINES_DETAIL if DESKTOP_MODE
-            else GLOBE_COASTLINES_OVERVIEW if interactive or scale < 0.85
-            else GLOBE_COASTLINES
-        )
-        for coastline in coastlines:
-            segment = []
-            for lat, lon in coastline:
-                point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
-                if point is None:
-                    draw_logical_polyline(
-                        segment,
-                        (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                        1,
-                    )
-                    segment = []
-                else:
-                    segment.append((point[0], point[1]))
-            draw_logical_polyline(
-                segment,
-                (86, 180, 176, 156) if map_view == "clean" else (94, 204, 188, 182),
-                1,
-            )
+    # The old CLEAN coastline layer is gone from every presentation: it read as
+    # a second, conflicting set of borders over the political outlines. Country
+    # boundaries are now the only geographic layer.
     # At broad view, a few substantial political boundaries are enough. Once
     # the user zooms toward a region, change to complete country exteriors.
     # The source boundary-line dataset is segmented, and those loose segments
-    # look exactly like rivers over the Blue Marble texture.
-    if not interactive and map_view not in ("clean", "satellite_only") and scale >= (0.75 if satellite_drawn else 1.15):
+    # look exactly like rivers over the Blue Marble texture. Country outlines
+    # draw at every zoom; only SAT ONLY (pure imagery) omits them.
+    if not interactive and map_view != "satellite_only":
         if scale < 1.5:
             for border in GLOBE_COUNTRY_BORDERS:
                 segment = []
@@ -13063,45 +13083,38 @@ def draw_receiver_map(
                     draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
                     draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
     center_candidate = receiver_map_center_candidate(receivers, math.degrees(center_lon), math.degrees(center_lat))
-    now = time.time()
     receiver_point_groups = defaultdict(list)
     for receiver in receivers:
         group = receiver_map_group(receiver)
         if not receiver_map_group_visible(group):
             continue
-        entry = station_health.get(receiver["server"], {})
-        ready = (
-            now - entry.get("checked", 0) <= 86400
-            and entry.get("audio") is True
-            and entry.get("waterfall") is True
-        )
         point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
         if not point:
             continue
-        is_selected = receiver["server"] == selected_server
         is_pending = receiver["server"] == pending_server
         is_failed = is_pending and connection_status == "failed"
-        is_hovered = receiver["server"] == hover_server
         group_color = RECEIVER_MAP_GROUP_COLORS[group]
-        # Each receiver is exactly one filled disc. The legend's colour is the
-        # station's identity, and health only deepens or dims that same hue;
-        # nothing draws a second halo or ring over the dot any more.
+        # Each receiver is exactly one filled disc painted in its legend
+        # colour. That colour stays at full brightness at every zoom level, so
+        # zooming the globe never changes how a station reads. Every stationary
+        # receiver is a compact point that gains one pixel once the globe is
+        # zoomed in (see receiver_map_dot_pixels).
         if is_failed:
             color = (255, 81, 96, 255)
         elif is_pending:
             color = (94, 236, 183, 255)
         else:
-            color = (*group_color[:3], group_color[3] if ready else 150)
-        dot_radius = 7.2 if is_pending else (6.2 if is_hovered or is_selected else (3.4 if ready else 2.9))
+            color = group_color
         if is_pending:
             # A single pulsing disc communicates "connecting" without adding a
             # ring the operator has to look past.
             pulse = 2.4 + (math.sin(time.monotonic() * 9.0) + 1.0) * 2.0
-            draw_logical_circle(point[0], point[1], dot_radius + pulse, color, 22)
+            draw_logical_circle(point[0], point[1], 7.2 + pulse, color, 22)
         else:
-            receiver_point_groups[(color, dot_radius)].append(point)
-    for (color, dot_radius), points in receiver_point_groups.items():
-        draw_logical_disc_points(points, color, dot_radius)
+            receiver_point_groups[color].append(point)
+    dot_size = receiver_map_dot_pixels(dot_pixels)
+    for color, points in receiver_point_groups.items():
+        draw_logical_points(points, color, dot_size)
     selected = next((receiver for receiver in receivers if receiver["server"] == selected_server), None)
     state_label = {
         "connecting": "CONNECTING",
@@ -13159,8 +13172,10 @@ def draw_receiver_map(
     # tapping it removes every dot of that source group from the globe.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
-        legend_label = RECEIVER_MAP_GROUP_LABELS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
+        # The chip names the action, not the state: a lit chip offers to HIDE
+        # its group, and a hidden chip offers to SHOW it again.
+        legend_label = receiver_map_legend_label(legend_group, legend_active)
         draw_logical_rect(
             lx0, ly0, lx1, ly1,
             (12, 34, 42, 226) if legend_active else (18, 21, 25, 214),
@@ -13178,7 +13193,7 @@ def draw_receiver_map(
         draw_text(
             text_cache, lx0 + 40, swatch_y, legend_label,
             (232, 246, 247) if legend_active else (126, 138, 146),
-            15, True, False, "lm", family="Cantarell",
+            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "lm", family="Cantarell",
         )
 
     def draw_globe_tile_border(command_box):
@@ -13532,17 +13547,20 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
             text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS", False,
             title_size=20, detail_size=16,
         )
+        # Short labels so a 50%-width tile stays legible: INSTRUMENTS -> LAYOUT.
         draw_lcd_audio_tile(
-            text_cache, DISPLAY_INSTRUMENTS_BOX, "INSTRUMENTS",
+            text_cache, DISPLAY_INSTRUMENTS_BOX, "LAYOUT",
             str(instrument_layout).upper(), instrument_layout == "expanded",
-            title_size=19, detail_size=17,
         )
+        # The waterfall's old DISPLAY button only revealed the scope drag rail;
+        # that property now lives in this drawer as its own launcher.
+        draw_lcd_audio_tile(text_cache, DISPLAY_SCOPE_BOX, "SCOPE", "DRAG", False)
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
         )
         draw_lcd_audio_tile(
-            text_cache, DISPLAY_AUTO_BOX, "AUTO SCALE",
+            text_cache, DISPLAY_AUTO_BOX, "AUTO",
             "ON" if auto else "OFF", auto,
         )
 
@@ -16818,6 +16836,7 @@ def draw_ui(
     status_y0=None,
     ruler_center_khz=None,
     sidebar_open=False,
+    zoom_pressed=None,
 ):
     # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
     # deliberately pure black until a requested visual comparison restores it.
@@ -16908,7 +16927,7 @@ def draw_ui(
             input_power_ok=input_power_ok,
             alpha=instrument_alpha,
         )
-    draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha)
+    draw_waterfall_operating_controls(text_cache, spectrum_enabled, controls_alpha, zoom_pressed)
     draw_connection_annunciator(text_cache, connection_status, connection_timeout_seconds, connection_retry_seconds)
     draw_squelch_closed_annunciator(text_cache, squelch_closed)
     draw_lcd_navigation(
@@ -21571,7 +21590,8 @@ def main():
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
     picker_map_garden_mode = True
-    picker_map_view = "satellite_only"
+    picker_map_view = "satellite"
+    picker_map_dot_pixels = GLOBE_DOT_BASE_PIXELS
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -21588,10 +21608,6 @@ def main():
     picker_map_drag_velocity_yaw = 0.0
     picker_map_drag_velocity_pitch = 0.0
     picker_map_drag_motion_at = picker_map_motion_at
-    # Entering RadioGarden is a destination transition, not a reset to an
-    # arbitrary part of the world. Keep a pending server while the live map
-    # feed is loading, then fly the globe to the receiver the SDR is tuned to.
-    picker_map_focus_server = None
     search_open = False
     keyboard_mode = "lower"
     radio_setup_open = False
@@ -22096,6 +22112,10 @@ def main():
     filter_custom_width = bool(remembered_preferences.get("filter_custom_width", False))
     frequency_drawer_open = args.frequency_keypad_preview
     frequency_entry_open = args.frequency_keypad_preview
+    # A short-lived highlight for the waterfall zoom tiles: a tap keeps the
+    # pressed tile lit briefly, while a held press stays lit for the gesture.
+    zoom_flash_gesture = None
+    zoom_flash_until = 0.0
     frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
     frequency_entry_invalid = False
     frequency_entry_replace_on_digit = False
@@ -23402,25 +23422,25 @@ def main():
         print(f"gl map select {selected['name']}: {selected['server']}", flush=True)
         return True
 
-    def focus_receiver_map_on_server(server):
-        """Smoothly frame the active RX when RadioGarden is entered."""
-        nonlocal picker_map_selected_server, picker_map_hover_server
+    def focus_receiver_map_on_home():
+        """Frame the Globe on the operator's own location at the resting view.
+
+        The receiver browser opens on the operator, not on whichever receiver
+        happens to be tuned, so the first thing the directory shows is the
+        part of the world it belongs to.
+        """
         nonlocal picker_map_lock_target, picker_map_zoom_target
         nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch, picker_map_motion_at
         nonlocal picker_map_notice, picker_map_notice_until
-        receiver = receiver_map_receiver_for_server(globe_receivers, server)
-        if receiver is None:
+        profile = valid_receiver_home_profile(receiver_home_profile)
+        center = receiver_map_home_center(profile)
+        if center is None:
             return False
-        picker_map_selected_server = receiver["server"]
-        picker_map_hover_server = receiver["server"]
-        # A 3.8x destination makes the entry transition feel like arriving at
-        # the tuned receiver's region, while still preserving enough coast
-        # context for a useful next drag.
-        picker_map_lock_target = (math.radians(receiver["lon"]), math.radians(receiver["lat"]))
-        picker_map_zoom_target = 3.8
+        picker_map_lock_target = center
+        picker_map_zoom_target = GLOBE_DEFAULT_SCALE
         picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
         picker_map_motion_at = time.monotonic()
-        picker_map_notice = f"FLYING TO  {bottom_station_title(receiver['name'], receiver['location'])}"
+        picker_map_notice = f"LOCATING  {profile['name']}"
         picker_map_notice_until = picker_map_motion_at + 2.8
         return True
 
@@ -23869,7 +23889,7 @@ def main():
                             # waterfall so resizing never becomes a tune.
                             elif not picker_open and scope_adjust_box and contains(scope_adjust_box, x, y):
                                 gesture = "scope_height_adjust"
-                            elif not picker_open and contains(SPECTRUM_TOGGLE_BOX, x, y):
+                            elif not picker_open and not LCD_800_MODE and contains(SPECTRUM_TOGGLE_BOX, x, y):
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
@@ -23976,19 +23996,24 @@ def main():
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
-                            elif not picker_open and LCD_800_MODE and not settings_menu_open and not digital_menu_open and contains(
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
                                 lcd_home_bandwidth_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_passband"
-                            elif not picker_open and LCD_800_MODE and contains(
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
                                 lcd_home_volume_mute_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_volume_mute"
-                            elif not picker_open and LCD_800_MODE and contains(
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
                                 lcd_home_volume_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_volume"
-                            elif contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            # Settings and MODES are full right-rail pages whose
+                            # title sits exactly over the Home annunciator
+                            # placeholders. While either is open, that region
+                            # must not fall through to the covered Home mode
+                            # grid and pick a hidden mode.
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -24125,7 +24150,7 @@ def main():
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
                                 gesture = "zoom_minus"
-                            elif not picker_open and contains(SPECTRUM_TOGGLE_BOX, x, y):
+                            elif not picker_open and not LCD_800_MODE and contains(SPECTRUM_TOGGLE_BOX, x, y):
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
@@ -25738,6 +25763,11 @@ def main():
                                             preferences_dirty = True
                                             write_remembered_view(force=True)
                                             print(f"gl instruments {instrument_layout}", flush=True)
+                                        elif kind == "scope":
+                                            if not state.spectrum_snapshot()[0]:
+                                                state.set_spectrum_enabled(True)
+                                            scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
+                                            print("gl display scope drag", flush=True)
                                         elif kind == "spectrum":
                                             state.set_spectrum_enabled(not state.spectrum_snapshot()[0])
                                         elif kind == "auto":
@@ -25752,7 +25782,7 @@ def main():
                                             speed = value
                                         else:
                                             palette = value
-                                        if kind != "instruments":
+                                        if kind not in ("instruments", "scope"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -25845,6 +25875,8 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 change_zoom(1 if gesture == "zoom_plus" else -1)
+                                zoom_flash_gesture = gesture
+                                zoom_flash_until = time.monotonic() + 0.28
                         elif touch_started and gesture == "waterfall_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -26193,15 +26225,13 @@ def main():
                             if moved <= args.tap_px:
                                 picker_map_open = True
                                 picker_map_garden_mode = True
-                                # Every entry begins in the pure satellite
-                                # presentation, then performs a visible fly-in
-                                # to the active receiver rather than reusing a
-                                # stale close-up from a previous visit.
-                                picker_map_view = "satellite_only"
-                                picker_map_scale = 0.72
-                                picker_map_focus_server = state.snapshot()[0]
-                                if focus_receiver_map_on_server(picker_map_focus_server):
-                                    picker_map_focus_server = None
+                                # Every entry returns to the resting view:
+                                # satellite imagery with country borders,
+                                # framed on the operator's own location rather
+                                # than a stale close-up or the tuned receiver.
+                                picker_map_view = GLOBE_DEFAULT_VIEW
+                                picker_map_dot_pixels = GLOBE_DOT_BASE_PIXELS
+                                focus_receiver_map_on_home()
                                 search_open = False
                                 if not globe_fetch_started:
                                     globe_fetch_started = True
@@ -26240,7 +26270,13 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 zoom_in_box, zoom_out_box = receiver_map_zoom_boxes()
-                                factor = RADIOGARDEN_ZOOM_TAP_FACTOR if contains(zoom_in_box, x, y) else 1.0 / RADIOGARDEN_ZOOM_TAP_FACTOR
+                                zooming_in = contains(zoom_in_box, x, y)
+                                factor = RADIOGARDEN_ZOOM_TAP_FACTOR if zooming_in else 1.0 / RADIOGARDEN_ZOOM_TAP_FACTOR
+                                # Each + / - tap adds or removes one pixel from
+                                # the server dots, clamped to a readable range.
+                                picker_map_dot_pixels = receiver_map_step_dot_pixels(
+                                    picker_map_dot_pixels, zooming_in
+                                )
                                 picker_map_lock_target = None
                                 picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
                                 picker_map_zoom_target = clamp(
@@ -26646,9 +26682,6 @@ def main():
                     stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
                     station_scroll = clamp(station_scroll, 0, station_page_max(stations))
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
-                    if picker_open and picker_map_open and picker_map_focus_server:
-                        if focus_receiver_map_on_server(picker_map_focus_server):
-                            picker_map_focus_server = None
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"
             while True:
@@ -27038,6 +27071,10 @@ def main():
                 digital_mode,
                 receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz),
                 controls_alpha=control_alpha,
+                zoom_pressed=(
+                    gesture if touch_started and gesture in ("zoom_plus", "zoom_minus")
+                    else (zoom_flash_gesture if time.monotonic() < zoom_flash_until else None)
+                ),
                 focus_progress=focus_progress,
                 ruler_y0=ruler_y0,
                 ruler_height=ruler_height,
@@ -27202,6 +27239,7 @@ def main():
                         picker_map_garden_mode, picker_map_hover_server, picker_map_view,
                         (touch_started and gesture == "picker_map")
                         or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
+                        picker_map_dot_pixels,
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
