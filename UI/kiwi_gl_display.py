@@ -5041,6 +5041,8 @@ class SharedState:
                 return False
             self.connection_streams[stream] = False
             self.connection_stream_failures[stream] = self.connection_stream_failures.get(stream, 0) + 1
+            if self.connection_status == "access_blocked":
+                return True
             if self.connection_status == "server_timeout" and time.monotonic() < self.connection_timeout_until:
                 return True
             if self.connection_streams.get("audio"):
@@ -5058,6 +5060,22 @@ class SharedState:
             self.connection_status = "retrying"
             self.connection_status_until = 0.0
             return True
+
+    def connection_access_denied(self, generation):
+        """Hold a receiver-owner policy failure until the operator switches."""
+        with self.lock:
+            if generation != self.server_generation:
+                return False
+            self.connection_announce = True
+            self.connection_streams = {"audio": False, "waterfall": False}
+            self.connection_status = "access_blocked"
+            self.connection_status_until = 0.0
+            self.connection_retry_at = 0.0
+            return True
+
+    def connection_access_denied_snapshot(self, generation):
+        with self.lock:
+            return generation == self.server_generation and self.connection_status == "access_blocked"
 
     def connection_retry_scheduled(self, generation, stream, delay_seconds):
         """Expose the already-scheduled worker retry as a live UI countdown."""
@@ -6561,6 +6579,7 @@ class WSPRAudioFallback:
                 message = ws.recv()
                 if message[:3] == b"MSG":
                     params = kiwi.parse_msg_params(message)
+                    kiwi.raise_for_kiwi_server_message(params)
                     if "badp" in params:
                         if str(params["badp"]) != "0":
                             raise RuntimeError(f"audio stream refused ({params['badp']})")
@@ -13258,6 +13277,7 @@ def draw_receiver_map(
         "no_waterfall": "NO WATERFALL",
         "waterfall_audio_retry": "AUDIO RETRY",
         "failed": "UNAVAILABLE",
+        "access_blocked": "APP ACCESS BLOCKED",
     }.get(connection_status, "SELECTED") if selected else "TAP A SQUARE TO SELECT"
     detail = bottom_station_title(selected["name"], selected["location"]) if selected else f"{len(receivers)} GPS RECEIVERS"
     draw_logical_rect(box[0] + 14, box[1] + 14, min(box[2] - 14, box[0] + 604), box[1] + 66, (3, 13, 19, 202))
@@ -16952,6 +16972,7 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
         "waterfall_audio_retry": "WF OK · AUDIO RETRY",
         "no_waterfall": "NO WATERFALL AVAILABLE",
         "failed": "CONNECTION FAILED",
+        "access_blocked": "RECEIVER DOES NOT ALLOW APP ACCESS",
         "paused": "STREAM PAUSED",
     }
     colors = {
@@ -16963,6 +16984,7 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
         "waterfall_audio_retry": (112, 222, 160, 255),
         "no_waterfall": (255, 184, 105, 255),
         "failed": (246, 144, 100, 255),
+        "access_blocked": (246, 144, 100, 255),
         "paused": (105, 211, 244, 255),
     }
     label = labels.get(status)
@@ -16977,7 +16999,7 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
     # The old top/bottom rules made this read like two extra UI lines; the
     # single calm dark lane is more legible at a distance.
     x0, y0, x1, y1 = 454, 132, 864, 176
-    alert = status in ("failed", "no_waterfall", "server_timeout", "paused")
+    alert = status in ("failed", "access_blocked", "no_waterfall", "server_timeout", "paused")
     draw_logical_rect(x0, y0, x1, y1, (4, 17, 13, 228) if not alert else (32, 12, 9, 230))
     if status == "connected":
         draw_logical_line(x0 + 15, y0 + 22, x0 + 23, y0 + 30, color, 4)
@@ -16987,7 +17009,7 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
         draw_logical_line(x0 + 34, y0 + 11, x0 + 16, y0 + 31, color, 3)
     else:
         draw_logical_rect(x0 + 16, y0 + 15, x0 + 30, y0 + 29, color)
-    label_size = 18 if status == "server_timeout" else (21 if retry_seconds is not None else 24)
+    label_size = 17 if status == "access_blocked" else (18 if status == "server_timeout" else (21 if retry_seconds is not None else 24))
     draw_text(text_cache, x0 + 54, (y0 + y1) / 2, label, color[:3], label_size, True, True, "lm")
 
 
@@ -20814,6 +20836,7 @@ def snd_meter_worker(
                     continue
                 if message[:3] == b"MSG":
                     params = kiwi.parse_msg_params(message)
+                    kiwi.raise_for_kiwi_server_message(params)
                     if "badp" in params:
                         if str(params["badp"]) != "0":
                             raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
@@ -20973,6 +20996,11 @@ def snd_meter_worker(
             # failure and must not create a retry/backoff cycle or a scary log.
             if state.stream_paused_snapshot():
                 continue
+            if state.connection_access_denied_snapshot(server_generation):
+                while not stop_event.wait(0.25):
+                    if state.snapshot()[5] != server_generation:
+                        break
+                continue
             # The retry delay is a known transport outage. Tell the clock
             # before waiting so an exhausted queue re-primes quietly instead
             # of being learned and displayed as network jitter.
@@ -20984,6 +21012,14 @@ def snd_meter_worker(
             ):
                 player.suspend_for_reconnect()
             print(f"gl SND {exc}", flush=True)
+            if isinstance(exc, kiwi.KiwiExternalApiDisabledError):
+                state.connection_access_denied(server_generation)
+                persist_live_station_health(server, "audio", False)
+                print("gl SND stopped: choose a receiver that permits external app connections", flush=True)
+                while not stop_event.wait(0.25):
+                    if state.snapshot()[5] != server_generation:
+                        break
+                continue
             if state.connection_failed(server_generation, "audio"):
                 persist_live_station_health(server, "audio", False)
             retry_failures += 1
@@ -21364,6 +21400,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     continue
                 if message[:3] == b"MSG":
                     params = kiwi.parse_msg_params(message)
+                    kiwi.raise_for_kiwi_server_message(params)
                     if "badp" in params:
                         if str(params["badp"]) != "0":
                             raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
@@ -21415,7 +21452,23 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
             # purpose. Resume starts a completely fresh W/F session.
             if state.stream_paused_snapshot():
                 continue
+            # SND receives the owner's external-client refusal first and the
+            # Kiwi then closes its paired W/F socket. Preserve the precise
+            # access status instead of reporting that secondary close as a
+            # retryable waterfall failure.
+            if state.connection_access_denied_snapshot(seen_server_generation):
+                while not stop_event.wait(0.25):
+                    if state.snapshot()[5] != seen_server_generation:
+                        break
+                continue
             print(f"gl WF {exc}", flush=True)
+            if isinstance(exc, kiwi.KiwiExternalApiDisabledError):
+                state.connection_access_denied(seen_server_generation)
+                persist_live_station_health(server, "waterfall", False)
+                while not stop_event.wait(0.25):
+                    if state.snapshot()[5] != seen_server_generation:
+                        break
+                continue
             if state.connection_failed(seen_server_generation, "waterfall"):
                 persist_live_station_health(server, "waterfall", False)
             retry_failures += 1

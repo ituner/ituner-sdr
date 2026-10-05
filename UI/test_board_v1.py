@@ -7,6 +7,19 @@ import kiwi_gl_display as ui
 
 
 class AudioJitterBufferTests(unittest.TestCase):
+    def test_access_policy_failure_does_not_enter_reconnect_loop(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        generation = state.snapshot()[5]
+
+        self.assertTrue(state.connection_access_denied(generation))
+        self.assertEqual(state.connection_snapshot(), 'access_blocked')
+        self.assertTrue(state.connection_failed(generation, 'waterfall'))
+        self.assertEqual(state.connection_snapshot(), 'access_blocked')
+        self.assertIsNone(state.connection_retry_snapshot())
+
     def test_reserve_duration_is_preserved_at_fmdx_sample_rate(self):
         kiwi_target, kiwi_max = ui.audio_jitter_packet_limits(12_000)
         fmdx_target, fmdx_max = ui.audio_jitter_packet_limits(48_000)

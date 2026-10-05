@@ -478,6 +478,35 @@ WEBSOCKET_MAX_FRAME_BYTES = 16 * 1024 * 1024
 WEBSOCKET_PARTIAL_FRAME_TIMEOUT_SECONDS = 8.0
 
 
+class KiwiServerBusyError(RuntimeError):
+    """The receiver rejected this listener because its allowed slots are full."""
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        super().__init__(f"receiver busy (external app capacity {capacity})")
+
+
+class KiwiExternalApiDisabledError(KiwiServerBusyError):
+    """The owner has configured this receiver to reject non-browser clients."""
+
+    def __init__(self):
+        super().__init__(0)
+        self.args = ("external app access disabled by receiver",)
+
+
+def raise_for_kiwi_server_message(params):
+    """Raise the precise access error represented by a Kiwi ``MSG`` packet."""
+    if "too_busy" not in params:
+        return
+    try:
+        capacity = int(params["too_busy"])
+    except (TypeError, ValueError):
+        capacity = -1
+    if capacity == 0:
+        raise KiwiExternalApiDisabledError()
+    raise KiwiServerBusyError(capacity)
+
+
 def recv_exact(sock, count):
     """Read one frame segment without losing bytes across socket timeouts."""
     data = bytearray()
@@ -898,12 +927,11 @@ def snd_worker(args, state, stop_event):
                     continue
                 if message[:3] == b"MSG":
                     params = parse_msg_params(message)
+                    raise_for_kiwi_server_message(params)
                     if "audio_rate" in params:
                         ws.send_text(f"SET AR OK in={int(float(params['audio_rate']))} out=44100")
                     if "badp" in params and params["badp"] != "0":
                         raise RuntimeError(f"badp={params['badp']}")
-                    if "too_busy" in params:
-                        raise RuntimeError(f"too_busy={params['too_busy']}")
                     if "sample_rate" in params and not configured:
                         send_snd_setup(ws, current_freq, args.mode, args.low_cut, args.high_cut)
                         configured = True

@@ -17,6 +17,18 @@ class ScriptedSocket:
 
 
 class KiwiTransportTests(unittest.TestCase):
+    def test_zero_external_capacity_is_a_permanent_access_policy_error(self):
+        with self.assertRaises(kiwi.KiwiExternalApiDisabledError):
+            kiwi.raise_for_kiwi_server_message({'too_busy': '0'})
+
+    def test_positive_external_capacity_is_a_temporary_busy_error(self):
+        with self.assertRaises(kiwi.KiwiServerBusyError) as raised:
+            kiwi.raise_for_kiwi_server_message({'too_busy': '4'})
+        self.assertEqual(raised.exception.capacity, 4)
+
+    def test_unrelated_server_message_is_ignored(self):
+        self.assertIsNone(kiwi.raise_for_kiwi_server_message({'sample_rate': '12000'}))
+
     def test_partial_frame_read_survives_socket_timeout(self):
         sock = ScriptedSocket((b'ab', socket.timeout(), b'cd'))
         self.assertEqual(kiwi.recv_exact(sock, 4), b'abcd')
