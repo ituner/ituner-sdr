@@ -1,15 +1,17 @@
 # SSTV decoders and image galleries
 
 Open **Digital tools → SSTV → Add decoder**. Select a Kiwi receiver and a
-frequency, then **Start decoder**. Each card has Start/Stop and Delete. Home
-returns to the radio while decoding continues. Removing a decoder keeps its
+frequency, then **Start decoder**. Open **Decoders** for Start/Stop, Delete and
+View images on each receiver card. Home returns to the radio while decoding continues. Removing a decoder keeps its
 saved images. At most six decoders can run, each consuming one receiver audio
 slot. WSPR and the main radio consume their own slots too.
 
 The local gallery is drawn at the existing **1280 × 800 logical resolution**
 (the physical 800 × 1280 panel is rotated by the existing display setup).
-It shows four images per page next to six receiver cards. Tap a receiver to
-filter its images, All images to clear the filter, or an image to enlarge it.
+It shows **15 images per page in a compact 5 × 3 grid**, using the full screen
+width. Receiver cards are on the separate **Decoders** page. Choose View images
+on a decoder to filter its images, All images to clear the filter, or tap any
+image to enlarge it.
 Images retain their aspect ratio; display/touch drivers and orientation are
 unchanged.
 

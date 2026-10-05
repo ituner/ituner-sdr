@@ -5,11 +5,17 @@ import socket
 from sstv_monitor import PRESETS
 
 
+GALLERY_COLUMNS = 5
+GALLERY_ROWS = 3
+GALLERY_PAGE_SIZE = GALLERY_COLUMNS * GALLERY_ROWS
+
+
 class SSTVWorkspace:
     def __init__(self, ui, manager):
         self.ui, self.manager = ui, manager
         self.open = False
         self.add_open = False
+        self.decoders_open = False
         self.receiver_page = 0
         self.selected_server = ''
         self.preset = PRESETS[4]
@@ -24,6 +30,8 @@ class SSTVWorkspace:
 
     def show(self, server, frequency, mode):
         self.open = True
+        self.decoders_open = False
+        self.delete_armed = None
         self.current = ('Current dial', frequency, mode.lower())
         self.selected_server = self.ui.LOCAL_KIWI_SERVER or server
         self.manager.ensure_web()
@@ -65,7 +73,7 @@ class SSTVWorkspace:
                                   ui.GL.GL_RGBA, ui.GL.GL_UNSIGNED_BYTE, ui.pygame.image.tostring(surface, 'RGBA', False))
                 cached = stamp, tex, width, height
                 self.textures[key] = cached
-                while len(self.textures) > 12:
+                while len(self.textures) > 2 * GALLERY_PAGE_SIZE + 1:
                     _, old = self.textures.popitem(last=False)
                     ui.GL.glDeleteTextures([old[1]])
             self.textures.move_to_end(key)
@@ -94,63 +102,70 @@ class SSTVWorkspace:
                 self.button(cache, (1060, 16, 1258, 76), 'BACK', ('back_image', None))
                 return
             self.enlarged = None
-        self.text(cache, 24, 36, 'SSTV', 32, (104, 234, 194))
-        self.text(cache, 142, 36, 'Continuous image decoders', 23)
-        self.button(cache, (822, 12, 1088, 72), '+ ADD DECODER', ('add', None))
-        self.button(cache, (1104, 12, 1258, 72), 'HOME', ('home', None))
-        self.text(cache, 24, 103, 'RECEIVERS', 16, (134, 165, 174))
+        self.text(cache, 20, 37, 'SSTV', 30, (104, 234, 194))
+        self.text(cache, 138, 37, 'Decoders' if self.decoders_open else 'Image gallery', 24)
+        self.button(cache, (654, 14, 842, 70), 'GALLERY' if self.decoders_open else 'DECODERS',
+                    ('gallery' if self.decoders_open else 'decoders', None))
+        self.button(cache, (854, 14, 1090, 70), '+ ADD DECODER', ('add', None))
+        self.button(cache, (1102, 14, 1258, 70), 'HOME', ('home', None))
+        if self.decoders_open:
+            self.draw_decoders(cache)
+            return
+        images = self.manager.gallery.snapshot(self.filter_id)
+        pages = max(1, math.ceil(len(images) / GALLERY_PAGE_SIZE))
+        self.page = min(self.page, pages - 1)
+        self.text(cache, 330, 37, f'{len(images)} images · newest first', 16, width=305)
+        if not images:
+            self.text(cache, 330, 350, 'Waiting for an SSTV transmission', 28)
+            self.text(cache, 330, 394, 'Images appear here automatically.', 21)
+            self.text(cache, 330, 428, 'Listening continues when you return Home.', 18)
+        offset = self.page * GALLERY_PAGE_SIZE
+        for index, item in enumerate(images[offset:offset + GALLERY_PAGE_SIZE]):
+            x = 16 + (index % GALLERY_COLUMNS) * 250
+            y = 88 + (index // GALLERY_COLUMNS) * 210
+            box = (x, y, x+242, y+202)
+            ui.draw_logical_rect(*box, (17, 34, 42, 255))
+            self.image(item['id'], (x+4, y+4, x+238, y+164))
+            self.text(cache, x+8, y+178, f"{item['mode']} · {item['band']} · {item['progress_pct']}%", 15, width=226)
+            self.text(cache, x+8, y+194, item['capture_utc'].replace('T', ' ').replace('Z', ' UTC'), 13, width=226)
+            self.actions.append((box, ('image', item['id'])))
+        self.button(cache, (16, 730, 168, 786), '< PREV', ('page', -1))
+        self.text(cache, 188, 758, f'{self.page+1} / {pages}', 19)
+        self.button(cache, (282, 730, 434, 786), 'NEXT >', ('page', 1))
+        self.button(cache, (450, 730, 690, 786), 'ALL IMAGES', ('filter', None), active=self.filter_id is None)
+        notice = self.message or self.manager.web_error
+        if notice:
+            self.text(cache, 712, 758, notice, 16, width=546)
+        else:
+            self.text(cache, 712, 744, 'Tap an image to enlarge' if not self.filter_id else 'Showing selected decoder · tap All images to clear', 15, width=546)
+            self.text(cache, 712, 772, f"Browser: {socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 15, width=546)
+
+    def draw_decoders(self, cache):
+        """Keep receiver operation on its own page, leaving gallery space for images."""
+        ui = self.ui
         rows = self.manager.snapshot()
         if not rows:
-            self.text(cache, 24, 150, 'No decoders yet', 23)
-            self.text(cache, 24, 185, 'Choose Add decoder', 19)
-            self.text(cache, 24, 215, 'to select a receiver', 19)
-            self.text(cache, 24, 245, 'and SSTV frequency.', 19)
+            self.text(cache, 330, 340, 'No decoders yet', 28)
+            self.text(cache, 330, 384, 'Choose Add decoder to select a receiver and frequency.', 21)
         for index, row in enumerate(rows):
-            y = 124 + index*91
-            ui.draw_logical_rect(16, y, 326, y+83, (25, 66, 57, 255) if row['id'] == self.filter_id else (17, 40, 47, 255))
-            self.text(cache, 26, y+18, f"{row['band']} · {row['freq_khz']/1000:.3f} {row['mode'].upper()}", 17, width=290)
-            self.text(cache, 26, y+41, row['name'], 15, width=162)
-            self.text(cache, 26, y+65, row['status'], 14, (104, 234, 194), width=157)
-            self.actions.append(((16, y, 186, y+83), ('filter', row['id'])))
+            x = 16 + (index % 2) * 630
+            y = 96 + (index // 2) * 202
+            ui.draw_logical_rect(x, y, x+612, y+188, (17, 40, 47, 255))
+            self.text(cache, x+16, y+24, f"{row['band']} · {row['freq_khz']/1000:.3f} MHz {row['mode'].upper()}", 21, width=580)
+            self.text(cache, x+16, y+54, row['name'], 18, width=580)
+            self.text(cache, x+16, y+83, row['status'], 17, (104, 234, 194), width=580)
+            self.text(cache, x+16, y+109, row.get('detail') or row.get('last_decode') or '', 15, width=580)
             running = row['status'] not in ('STOPPED', 'NO AUDIO', 'DEPENDENCY MISSING', 'QUEUED')
-            self.button(cache, (188, y+28, 270, y+80), 'STOP' if running else 'START', ('toggle', row['id']))
-            self.button(cache, (274, y+28, 324, y+80), 'X', ('delete', row['id']))
-        images = self.manager.gallery.snapshot(self.filter_id)
-        self.page = min(self.page, max(0, math.ceil(len(images)/4)-1))
-        label = 'ALL IMAGES' if not self.filter_id else 'SELECTED RECEIVER'
-        self.button(cache, (354, 88, 674, 140), label, ('filter', None), active=self.filter_id is None)
-        self.text(cache, 700, 114, f'{len(images)} saved · tap image to enlarge', 17)
-        if not images:
-            self.text(cache, 410, 350, 'Waiting for an SSTV transmission', 28)
-            self.text(cache, 410, 394, 'Images appear here automatically.', 21)
-            self.text(cache, 410, 428, 'Listening continues when you return Home.', 18)
-        for index, item in enumerate(images[self.page*4:self.page*4+4]):
-            x = 350 + (index % 2)*458
-            y = 150 + (index // 2)*276
-            box = (x, y, x+442, y+262)
-            ui.draw_logical_rect(*box, (17, 34, 42, 255))
-            self.image(item['id'], (x+6, y+6, x+436, y+203))
-            self.text(cache, x+12, y+221, f"{item['mode']} · {item['band']} · {item['progress_pct']}%", 18, width=418)
-            self.text(cache, x+12, y+246, item['capture_utc'].replace('T', ' ').replace('Z', ' UTC'), 15)
-            self.actions.append((box, ('image', item['id'])))
-        self.button(cache, (354, 715, 506, 769), '< PREV', ('page', -1))
-        self.text(cache, 526, 743, f'{self.page+1} / {max(1, math.ceil(len(images)/4))}', 19)
-        self.button(cache, (658, 715, 810, 769), 'NEXT >', ('page', 1))
-        self.text(cache, 834, 734, 'Browser gallery', 17)
-        self.text(cache, 834, 760, f"{socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 16, width=425)
+            self.button(cache, (x+16, y+128, x+154, y+180), 'STOP' if running else 'START', ('toggle', row['id']))
+            self.button(cache, (x+166, y+128, x+410, y+180), 'VIEW IMAGES', ('filter', row['id']))
+            self.button(cache, (x+422, y+128, x+596, y+180), 'DELETE', ('delete', row['id']))
         if self.delete_armed:
-            ui.draw_logical_rect(8, 670, 338, 790, (49, 30, 28, 255))
-            self.text(cache, 20, 691, 'Delete decoder? Images are kept.', 16)
-            self.button(cache, (18, 710, 168, 776), 'DELETE', ('confirm_delete', self.delete_armed))
-            self.button(cache, (180, 710, 328, 776), 'CANCEL', ('cancel_delete', None))
+            ui.draw_logical_rect(16, 714, 1258, 792, (49, 30, 28, 255))
+            self.text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
+            self.button(cache, (814, 726, 1018, 782), 'DELETE', ('confirm_delete', self.delete_armed))
+            self.button(cache, (1030, 726, 1242, 782), 'CANCEL', ('cancel_delete', None))
         else:
-            notice = self.message or self.manager.web_error
-            if not notice and self.filter_id:
-                row = next((row for row in rows if row['id'] == self.filter_id), {})
-                notice = row.get('detail') or row.get('last_decode')
-            self.text(cache, 20, 700, notice or 'Tap a receiver to filter images.', 15, width=310)
-            self.text(cache, 20, 740, 'Martin · Scottie · Robot', 15, width=310)
-            self.text(cache, 20, 773, 'Latest 300 images kept', 14, (134, 165, 174))
+            self.text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=1220)
 
     def draw_add(self, cache, receivers):
         self.text(cache, 30, 38, 'ADD SSTV DECODER', 29, (104, 234, 194))
@@ -186,7 +201,13 @@ class SSTVWorkspace:
         self.message = ''
         try:
             if kind == 'home': self.open = False
-            elif kind == 'add': self.add_open = True
+            elif kind == 'decoders': self.decoders_open = True
+            elif kind == 'gallery':
+                self.decoders_open = False
+                self.delete_armed = None
+            elif kind == 'add':
+                self.add_open = True
+                self.delete_armed = None
             elif kind == 'cancel_add': self.add_open = False
             elif kind == 'receiver': self.selected_server = value
             elif kind == 'rxpage': self.receiver_page = max(0, self.receiver_page+value)
@@ -197,6 +218,8 @@ class SSTVWorkspace:
                 self.manager.add(name, server, self.preset)
                 self.add_open = False
                 self.filter_id = None
+                self.decoders_open = False
+                self.page = 0
             elif kind == 'toggle': self.manager.toggle(value)
             elif kind == 'delete': self.delete_armed = value
             elif kind == 'cancel_delete': self.delete_armed = None
@@ -204,7 +227,10 @@ class SSTVWorkspace:
                 self.manager.delete(value)
                 self.delete_armed = None
                 if self.filter_id == value: self.filter_id = None
-            elif kind == 'filter': self.filter_id, self.page = value, 0
+            elif kind == 'filter':
+                self.filter_id, self.page = value, 0
+                self.decoders_open = False
+                self.delete_armed = None
             elif kind == 'image': self.enlarged = value
             elif kind == 'back_image': self.enlarged = None
             elif kind == 'page': self.page = max(0, self.page+value)

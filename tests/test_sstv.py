@@ -207,24 +207,28 @@ class WorkspaceTests(unittest.TestCase):
             rows=[('Local Kiwi','LAN','kiwisdr.local:8073')]
             manager.configs=[dict(id=str(i),name='Local Kiwi',server=rows[0][2],band=preset[0],
                                   freq_khz=preset[1],mode=preset[2],paused=True) for i,preset in enumerate(PRESETS[:6])]
-            for i in range(5):
+            for i in range(17):
                 png=Path(tmp)/'tmp.png';Image.new('RGB',(320,256),'red').save(png)
                 manager.gallery.publish(png,dict(id=f'{i:032x}',session_id='0',mode='Martin 2',band='20 m',
                     capture_utc=str(i),progress_pct=100,kind='full',receiver='RX',freq_khz=14230))
             try:
                 workspace.show(rows[0][2],14230,'usb')
-                for view in ('gallery','add','enlarged'):
+                for view in ('gallery','decoders','add','enlarged'):
+                    workspace.decoders_open=view=='decoders'
                     workspace.add_open=view=='add';workspace.enlarged='0'*32 if view=='enlarged' else None
                     workspace.draw(None,rows)
                     for box,action in workspace.actions:
                         x0,y0,x1,y1=box
                         self.assertTrue(0<=x0<x1<=1280 and 0<=y0<y1<=800,(view,action,box))
                         self.assertGreaterEqual(y1-y0,48,(view,action))
+                    if view=='decoders':
+                        self.assertEqual(sum(a[0]=='toggle' for _,a in workspace.actions),6)
                     if view=='gallery':
-                        self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),4)
-                        workspace.tap(750,740,rows);self.assertEqual(workspace.page,1)
+                        self.assertFalse(any(a[0] in ('toggle','delete') for _,a in workspace.actions))
+                        self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),15)
+                        workspace.tap(350,755,rows);self.assertEqual(workspace.page,1)
                         workspace.draw(None,rows)
-                        self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),1)
+                        self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),2)
                 workspace.tap(1140,40,rows);self.assertIsNone(workspace.enlarged)
             finally: manager.stop()
 
