@@ -183,3 +183,8 @@ sudo reboot
 - `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.
 - `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.
+
+## SSTV
+
+Digital tools → SSTV adds continuous receiver decoders, a 1280 × 800 touch
+gallery and a LAN browser gallery. See [SSTV setup and supported modes](docs/sstv.md).

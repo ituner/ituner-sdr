@@ -2379,6 +2379,7 @@ SETTINGS_MENU_ITEMS = (
 )
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
+    ("sstv", "SSTV"),
     ("digital_back", "HOME"),
 )
 WATERFALL_TUNE_X0 = 88
@@ -12992,6 +12993,10 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
             node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
             pygame.draw.line(surface, mono, (node_x, bus_y), (node_x, node.top - 3), stroke)
             pygame.draw.rect(surface, mono, node, stroke, border_radius=4)
+    elif kind == "sstv":
+        pygame.draw.rect(surface, color, (cx-29, cy-23, 58, 43), 3, border_radius=4)
+        pygame.draw.circle(surface, dim, (cx+15, cy-11), 5)
+        pygame.draw.lines(surface, color, False, ((cx-25, cy+14), (cx-10, cy-5), (cx+1, cy+7), (cx+10, cy-2), (cx+25, cy+14)), 3)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
@@ -13098,7 +13103,10 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("local_rx", "network"):
+        if kind == "sstv":
+            draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
+                           (232, 248, 250, 232), (82, 235, 231, 150))
+        elif kind in ("local_rx", "network"):
             # Network is the configuration side of the same local-LAN path
             # represented by LOCAL RX, so reuse that exact hub glyph.
             draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
@@ -20227,6 +20235,10 @@ def main():
     # sidecar retains personal best hourly decode rates across reboots.
     wspr_decode_rates = WSPRDecodeRateTracker(args.wspr_log_file)
     wspr_decode_rates.start()
+    from sstv_monitor import SSTVManager
+    from sstv_workspace import SSTVWorkspace
+    sstv_manager = SSTVManager(kiwi, args.user)
+    sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
@@ -21061,6 +21073,7 @@ def main():
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
+        sstv_workspace.open = False
         wake_controls()
         menu_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
@@ -21233,6 +21246,13 @@ def main():
                 dual_vfo_sources["A"] = dict(live_source)
                 dual_vfo_profiles["A"] = dict(carried_profile)
             start_dual_vfo_clients()
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "sstv":
+            settings_menu_open = digital_menu_open = False
+            active_server, active_freq, *_ = state.snapshot()
+            active_mode, *_ = state.radio_snapshot()
+            sstv_workspace.show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
@@ -21858,7 +21878,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if waterfall_focus_progress() > 0.01 and not (
+                            if sstv_workspace.open:
+                                gesture = "sstv_workspace"
+                            elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
                                 or globe_open
                                 or rtl_lab_open
@@ -23168,6 +23190,10 @@ def main():
                                     write_remembered_view(force=True)
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "sstv_workspace":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                sstv_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "wspr_add":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -25235,6 +25261,7 @@ def main():
             # after a reboot even if the operator is currently on the radio
             # screen, then keep their slow W/F or audio-FFT rows advancing
             # while the workspace is hidden.
+            sstv_manager.tick()
             if wspr_tiles or wspr_monitor.sessions:
                 refresh_wspr_waterfalls()
             if wspr_panel_open:
@@ -25428,6 +25455,8 @@ def main():
                 or filter_panel_open or frequency_entry_open or dual_vfo_open
             ):
                 draw_utc_clock(text_cache)
+            if sstv_workspace.open:
+                sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -25458,6 +25487,8 @@ def main():
         scout_probe.stop()
         rtl_lab.stop()
         stop_dual_vfo_clients()
+        sstv_manager.stop()
+        sstv_workspace.close()
         wspr_monitor.stop()
         for texture in wspr_mini_textures.values():
             texture.close()
