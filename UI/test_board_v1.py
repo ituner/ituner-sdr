@@ -106,6 +106,13 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(calls[ui.ZOOM_MINUS_BOX])   # pressed tile is active
         self.assertFalse(calls[ui.ZOOM_PLUS_BOX])   # the other stays idle
 
+    def test_waterfall_zoom_pressed_palette_is_opaque_shared_feedback(self):
+        fill, border, icon = ui.zoom_button_palette(active=True, pressed=True)
+        self.assertEqual(fill, ui.UI_PRESSED_FILL)
+        self.assertEqual(fill[3], 255)
+        self.assertEqual(border, ui.UI_PRESSED_EDGE)
+        self.assertEqual(icon, (*ui.UI_PRESSED_TEXT, 255))
+
     def test_display_drawer_exposes_the_scope_drag_action(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
@@ -819,6 +826,23 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
             ui.draw_radio_close_button(None, box)
 
         self.assertTrue(primitive_colors)
+
+
+class PassbandDrawerInteractionTests(unittest.TestCase):
+    def setUp(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+
+    def test_entire_visible_shift_and_width_controls_are_interactive(self):
+        boxes = ui.lcd_filter_drawer_boxes()
+        for name in ('shift', 'width'):
+            x0, y0, x1, y1 = boxes[name]
+            for point in (
+                ((x0 + x1) / 2, y0 + 8),
+                ((x0 + x1) / 2, (y0 + y1) / 2),
+                ((x0 + x1) / 2, y1 - 8),
+            ):
+                self.assertEqual(ui.lcd_filter_drawer_action_at(*point), name)
 
 
 class HomeRailInstrumentTests(unittest.TestCase):

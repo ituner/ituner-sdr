@@ -7625,13 +7625,22 @@ def draw_control_group_background(text_cache, box, key, separators, alpha=1.0, s
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
+def zoom_button_palette(active=False, pressed=False):
+    """Return the waterfall zoom tile colors for one interaction state."""
+    if pressed:
+        return UI_PRESSED_FILL, UI_PRESSED_EDGE, (*UI_PRESSED_TEXT, 255)
+    if active:
+        return (43, 121, 81, 210), (119, 255, 162, 245), (255, 255, 255, 255)
+    return (13, 21, 28, 122), (150, 178, 186, 176), (244, 250, 252, 222)
+
+
 def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
     pressed = ui_button_pressed(box)
     active = active or pressed
-    key = f"zoom_sign_tile_v1_{label}_{int(active)}"
+    key = f"zoom_sign_tile_v2_{label}_{int(active)}_{int(pressed)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -7645,15 +7654,8 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         # A bordered square tile makes each zoom button a visible, hittable
         # target the knob focus can land on. Pressing it fills a neon accent.
         tile = pygame.Rect(p(3), p(3), p(w - 6), p(h - 6))
-        if active:
-            pygame.draw.rect(hi, (43, 121, 81, 210), tile, border_radius=p(4))
-            border, icon = (
-                (UI_PRESSED_EDGE, (*UI_PRESSED_TEXT, 255))
-                if pressed else ((119, 255, 162, 245), (255, 255, 255, 255))
-            )
-        else:
-            pygame.draw.rect(hi, (13, 21, 28, 122), tile, border_radius=p(4))
-            border, icon = (150, 178, 186, 176), (244, 250, 252, 222)
+        fill, border, icon = zoom_button_palette(active, pressed)
+        pygame.draw.rect(hi, fill, tile, border_radius=p(4))
         pygame.draw.rect(hi, border, tile, p(max(1.6, min(w, h) * 0.022)), border_radius=p(4))
         cx = w / 2
         cy = h / 2
@@ -15100,9 +15102,16 @@ def lcd_filter_drawer_boxes():
     }
 
 
-def lcd_filter_slider_track_box(box, lower_slop=0):
-    """Only a rail and its immediate finger margin are interactive."""
-    return box[0], box[3] - 34, box[2], box[3] + lower_slop
+def lcd_filter_drawer_action_at(x, y):
+    """Map the complete visible passband controls to their drag actions."""
+    boxes = lcd_filter_drawer_boxes()
+    if not contains(boxes["panel"], x, y):
+        return None
+    if contains(boxes["shift"], x, y):
+        return "shift"
+    if contains(boxes["width"], x, y):
+        return "width"
+    return "drawer"
 
 
 def next_lcd_filter_preset_width(name, current_width_hz, preset_width_hz):
@@ -24281,14 +24290,12 @@ def main():
                                 gesture = "tests_panel"
                             elif tests_panel_open and not LCD_800_MODE:
                                 gesture = "tests_panel_outside"
-                            elif filter_drawer_open and LCD_800_MODE and contains(lcd_filter_drawer_boxes()["panel"], x, y):
-                                filter_boxes = lcd_filter_drawer_boxes()
-                                # The Shift rail gets the 12 px gap beneath
-                                # it as a forgiving finger landing zone. It
-                                # stops before the Width label begins.
-                                if contains(lcd_filter_slider_track_box(filter_boxes["shift"], lower_slop=12), x, y):
+                            elif filter_drawer_open and LCD_800_MODE and (filter_action := lcd_filter_drawer_action_at(x, y)):
+                                # The whole visible instrument accepts touch;
+                                # users do not have to find its narrow rail.
+                                if filter_action == "shift":
                                     gesture = "lcd_filter_shift"
-                                elif contains(lcd_filter_slider_track_box(filter_boxes["width"]), x, y):
+                                elif filter_action == "width":
                                     gesture = "lcd_filter_width"
                                 else:
                                     gesture = "lcd_filter_drawer"

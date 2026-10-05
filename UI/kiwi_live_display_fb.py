@@ -185,6 +185,8 @@ class KiwiWebSocket:
                 length = struct.unpack(">H", recv_exact(self.sock, 2))[0]
             elif length == 127:
                 length = struct.unpack(">Q", recv_exact(self.sock, 8))[0]
+            if length > WEBSOCKET_MAX_FRAME_BYTES:
+                raise ValueError(f"websocket frame too large: {length} bytes")
 
             mask = recv_exact(self.sock, 4) if masked else None
             payload = recv_exact(self.sock, length) if length else b""
@@ -472,10 +474,26 @@ def read_http_header(sock):
     return bytes(data)
 
 
+WEBSOCKET_MAX_FRAME_BYTES = 16 * 1024 * 1024
+WEBSOCKET_PARTIAL_FRAME_TIMEOUT_SECONDS = 8.0
+
+
 def recv_exact(sock, count):
+    """Read one frame segment without losing bytes across socket timeouts."""
     data = bytearray()
+    started_at = time.monotonic()
     while len(data) < count:
-        chunk = sock.recv(count - len(data))
+        try:
+            chunk = sock.recv(count - len(data))
+        except socket.timeout:
+            # At a frame boundary the worker may safely poll again. Once any
+            # bytes have arrived, returning would lose framing permanently:
+            # the next recv() would mistake payload bytes for a new header.
+            if not data:
+                raise
+            if time.monotonic() - started_at >= WEBSOCKET_PARTIAL_FRAME_TIMEOUT_SECONDS:
+                raise TimeoutError("websocket partial frame timed out")
+            continue
         if not chunk:
             raise EOFError("socket closed")
         data += chunk
