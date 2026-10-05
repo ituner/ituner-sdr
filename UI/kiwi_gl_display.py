@@ -513,9 +513,6 @@ KIWI_RAW_AUDIO_QUANTUM_FRAMES = 512
 # A gap concealment packet must not step abruptly from arbitrary PCM to zero
 # (or back again): that discontinuity is heard as a click even at low volume.
 SDR_AUDIO_CONCEALMENT_FADE_SECONDS = 0.006
-# A one-packet (43 ms at 12 kHz) miss is already audible. Keep sub-underflow
-# deadline slips in the in-RAM trace, but do not journal them continuously.
-SDR_AUDIO_TRACE_LATE_SECONDS = 0.005
 # A tiny noise bridge can hide a single late packet from an already-playing
 # station, but it must never become a synthetic "radio" while a stream is
 # starting or retrying. After this many audio quanta, rebuffering is silent.
@@ -18749,42 +18746,16 @@ class BufferedAudioPlayer:
         self.output_was_comfort_noise = False
         self.last_underflow_log_at = 0.0
         self.last_clock_late_log_at = 0.0
-        # Keep a short event timeline in RAM. It is intentionally emitted only
-        # around a real underrun, so normal reception stays log- and CPU-light.
-        self.buffer_trace = deque(maxlen=320)
         self.comfort_noise_state = 0x6D2B79F5
         self.comfort_noise_packets = 0
         self.primed = False
         self.target_packets = self.base_target_packets
         self.rebuffering = False
+        self.transport_reconnecting = False
         self.closed = False
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="sdr-audio-clock", daemon=True)
         self.thread.start()
-
-    def _trace_locked(self, event, arrival_gap=None, clock_late=None):
-        """Retain enough timing context to explain the next real underrun."""
-        self.buffer_trace.append((
-            time.monotonic(),
-            event,
-            len(self.packets),
-            self.target_packets,
-            None if arrival_gap is None else max(0.0, float(arrival_gap)),
-            None if clock_late is None else max(0.0, float(clock_late)),
-        ))
-
-    def _underflow_trace_locked(self):
-        """Compact FIFO/clock trace for journalctl after a buffer starvation."""
-        recent = tuple(self.buffer_trace)[-80:]
-        if not recent:
-            return "none"
-        origin = recent[0][0]
-        return " ".join(
-            f"{event}{now - origin:+.3f}s/q{depth}/t{target}"
-            + (f"/a{arrival * 1000:.0f}" if arrival is not None else "")
-            + (f"/l{late * 1000:.0f}" if late is not None else "")
-            for now, event, depth, target, arrival, late in recent
-        )
 
     def _publish_locked(self, arrival_gap=None, output_gap=False):
         if self.state is not None:
@@ -18815,6 +18786,12 @@ class BufferedAudioPlayer:
             audio = audio[:usable_bytes]
         with self.condition:
             now = time.monotonic()
+            # The first PCM after a short reconnect can continue immediately
+            # while queued audio is still available. If playback already
+            # entered rebuffering, keep the transport gap suppressed until a
+            # full reserve has accumulated and normal output resumes.
+            if self.transport_reconnecting and not self.rebuffering:
+                self.transport_reconnecting = False
             arrival_gap = None
             if self.last_submit_at and self.period:
                 arrival_gap = now - self.last_submit_at
@@ -18861,7 +18838,6 @@ class BufferedAudioPlayer:
                 self.packets.append((packet, self.pending_silence))
             if not self.pending_audio:
                 self.pending_silence = None
-            self._trace_locked("A", arrival_gap=arrival_gap)
             self._publish_locked(arrival_gap)
             self.condition.notify_all()
 
@@ -18881,29 +18857,33 @@ class BufferedAudioPlayer:
             self.primed = False
             self.target_packets = self.base_target_packets
             self.rebuffering = False
+            self.transport_reconnecting = False
             self._publish_locked()
             self.condition.notify_all()
 
-    def reconnect_same_station(self):
-        """Keep the earned reserve across a transient SND reconnect.
+    def suspend_for_reconnect(self):
+        """Keep the earned reserve while a transient SND reconnect is pending.
 
-        A public Kiwi can briefly close and reopen its SND socket without the
-        listener changing stations.  Throwing away queued PCM in that case
-        converts a short transport interruption into an avoidable audible
-        gap, and also forces the adaptive reserve back to its smallest value.
-        Forget only the inter-arrival clock: the close interval is not a
-        normal packet-arrival sample and must not be mistaken for one.
+        A closed socket is a transport outage, not evidence that the active
+        jitter reserve was too small. Continue playing any queued PCM, then
+        fade to the existing concealment path and re-prime at the same target.
         """
         with self.condition:
             self.last_submit_at = 0.0
             self.stable_since = None
-            print(
-                "gl audio reconnect retaining reserve "
-                f"{self.target_packets} packets, queued {len(self.packets)}",
-                flush=True,
-            )
+            self.transport_reconnecting = True
             self._publish_locked()
             self.condition.notify_all()
+
+    def _begin_output_gap_locked(self):
+        """Enter rebuffering, growing reserve only for a live transport gap."""
+        previous_target = self.target_packets
+        if not self.transport_reconnecting:
+            self.target_packets = min(self.max_packets, self.target_packets + 1)
+            self.last_reserve_change_at = time.monotonic()
+        self.stable_since = None
+        self.rebuffering = True
+        return self.target_packets != previous_target
 
     def _smooth_concealment_edge(self, audio, silence, comfort_noise=False):
         """Crossfade packet-gap silence so late audio cannot click the USB DAC."""
@@ -18986,7 +18966,6 @@ class BufferedAudioPlayer:
         configure_realtime_audio_path(self.player)
         deadline = 0.0
         while not self.stop_event.is_set():
-            now = time.monotonic()
             with self.condition:
                 while not self.closed and (not self.packet_bytes or not self.primed):
                     if self.packet_bytes and len(self.packets) >= self.target_packets:
@@ -19003,13 +18982,13 @@ class BufferedAudioPlayer:
                 if self.rebuffering:
                     if len(self.packets) >= self.target_packets:
                         self.rebuffering = False
+                        self.transport_reconnecting = False
                         self.comfort_noise_packets = 0
                         audio, silence = self.packets.popleft()
-                        self._trace_locked("R")
                     else:
                         # A short bridge only: an unresponsive receiver must
                         # become quiet, not sound like it is still live.
-                        output_gap = True
+                        output_gap = not self.transport_reconnecting
                         if self.comfort_noise_packets < SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS:
                             audio = self._comfort_noise_packet(packet_bytes)
                             self.comfort_noise_packets += 1
@@ -19021,23 +19000,18 @@ class BufferedAudioPlayer:
                 elif self.packets:
                     self.comfort_noise_packets = 0
                     audio, silence = self.packets.popleft()
-                    self._trace_locked("O")
                 else:
                     previous_target = self.target_packets
-                    self.target_packets = min(self.max_packets, self.target_packets + 1)
-                    self.stable_since = None
-                    self.last_reserve_change_at = time.monotonic()
-                    self.rebuffering = True
-                    if self.target_packets != previous_target:
+                    reserve_grew = self._begin_output_gap_locked()
+                    if reserve_grew:
                         print(
                             f"gl audio jitter reserve {previous_target}->{self.target_packets} packets",
                             flush=True,
                         )
-                        print(
-                            "gl audio underrun trace " + self._underflow_trace_locked(),
-                            flush=True,
-                        )
-                    elif time.monotonic() - self.last_underflow_log_at >= 5.0:
+                    elif (
+                        not self.transport_reconnecting
+                        and time.monotonic() - self.last_underflow_log_at >= 5.0
+                    ):
                         # A cap hit must remain visible in the service log;
                         # otherwise repeated long-haul starvation looks like
                         # a healthy fixed BUFFER reading.
@@ -19047,7 +19021,7 @@ class BufferedAudioPlayer:
                             flush=True,
                         )
                         self.last_underflow_log_at = time.monotonic()
-                    output_gap = True
+                    output_gap = not self.transport_reconnecting
                     if self.comfort_noise_packets < SDR_AUDIO_COMFORT_NOISE_MAX_PACKETS:
                         audio = self._comfort_noise_packet(packet_bytes)
                         self.comfort_noise_packets += 1
@@ -19064,9 +19038,6 @@ class BufferedAudioPlayer:
                 self.stop_event.wait(delay)
             elif delay < 0.0:
                 late_seconds = -delay
-                if late_seconds >= SDR_AUDIO_TRACE_LATE_SECONDS:
-                    with self.condition:
-                        self._trace_locked("L", clock_late=late_seconds)
                 if delay >= -period * 2:
                     continue
                 # A delayed write must not accumulate a permanently stale
@@ -20702,7 +20673,7 @@ def snd_meter_worker(
                     player.reset()
                     player_server_generation = server_generation
                 else:
-                    player.reconnect_same_station()
+                    player.suspend_for_reconnect()
             audio_controls, audio_generation = state.audio_controls_snapshot()
             session_timestamp = state.kiwi_session_timestamp_snapshot(server_generation)
             if session_timestamp is None:
@@ -21002,6 +20973,16 @@ def snd_meter_worker(
             # failure and must not create a retry/backoff cycle or a scary log.
             if state.stream_paused_snapshot():
                 continue
+            # The retry delay is a known transport outage. Tell the clock
+            # before waiting so an exhausted queue re-primes quietly instead
+            # of being learned and displayed as network jitter.
+            current_server, _freq, _zoom, _smeter, _view_generation, current_generation = state.snapshot()
+            if (
+                player is not None
+                and current_server == server
+                and current_generation == server_generation
+            ):
+                player.suspend_for_reconnect()
             print(f"gl SND {exc}", flush=True)
             if state.connection_failed(server_generation, "audio"):
                 persist_live_station_health(server, "audio", False)

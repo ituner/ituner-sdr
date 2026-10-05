@@ -16,6 +16,40 @@ class AudioJitterBufferTests(unittest.TestCase):
         self.assertAlmostEqual(kiwi_target * 512 / 12_000, fmdx_target * 512 / 48_000)
         self.assertAlmostEqual(kiwi_max * 512 / 12_000, fmdx_max * 512 / 48_000)
 
+    @staticmethod
+    def player_stub():
+        player = ui.BufferedAudioPlayer.__new__(ui.BufferedAudioPlayer)
+        player.condition = ui.threading.Condition()
+        player.state = None
+        player.packets = ui.deque()
+        player.last_submit_at = 1.0
+        player.stable_since = 1.0
+        player.last_reserve_change_at = 0.0
+        player.target_packets = 6
+        player.max_packets = 24
+        player.rebuffering = False
+        player.transport_reconnecting = False
+        return player
+
+    def test_socket_reconnect_rebuffers_without_learning_false_jitter(self):
+        player = self.player_stub()
+
+        player.suspend_for_reconnect()
+        reserve_grew = player._begin_output_gap_locked()
+
+        self.assertTrue(player.transport_reconnecting)
+        self.assertTrue(player.rebuffering)
+        self.assertFalse(reserve_grew)
+        self.assertEqual(player.target_packets, 6)
+
+    def test_live_stream_underflow_still_grows_the_reserve(self):
+        player = self.player_stub()
+
+        reserve_grew = player._begin_output_gap_locked()
+
+        self.assertTrue(reserve_grew)
+        self.assertEqual(player.target_packets, 7)
+
 class BoardLayoutTests(unittest.TestCase):
     def test_settings_back_has_an_isolated_target(self):
         items = ui.SETTINGS_MENU_ITEMS
