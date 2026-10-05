@@ -398,6 +398,40 @@ class ReceiverHandoffTests(unittest.TestCase):
         self.assertEqual(state.snapshot()[1],101700)
 
 class WaterfallPresentationTests(unittest.TestCase):
+    def test_presenter_builds_reserve_then_releases_at_source_cadence(self):
+        rows = ui.queue.Queue()
+        presenter = ui.WaterfallPresenter(reserve_seconds=0.26)
+        for value in range(5):
+            rows.put(value)
+
+        # 23 fps needs six rows for the 260 ms reserve.
+        self.assertEqual(presenter.take(rows, 10.0, 23.0, "stream"), ())
+        rows.put(5)
+        self.assertEqual(presenter.take(rows, 10.0, 23.0, "stream"), (0,))
+        self.assertEqual(presenter.take(rows, 10.02, 23.0, "stream"), ())
+        self.assertEqual(presenter.take(rows, 10.05, 23.0, "stream"), (1,))
+
+    def test_presenter_rebuffers_after_a_real_underrun(self):
+        rows = ui.queue.Queue()
+        presenter = ui.WaterfallPresenter(reserve_seconds=0.10)
+        for value in range(3):
+            rows.put(value)
+        self.assertEqual(presenter.take(rows, 1.0, 23.0, "stream"), (0,))
+        self.assertEqual(presenter.take(rows, 1.1, 23.0, "stream"), (1, 2))
+        self.assertEqual(presenter.take(rows, 1.2, 23.0, "stream"), ())
+        rows.put(3)
+        rows.put(4)
+        self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), ())
+        rows.put(5)
+        self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), (3,))
+
+    def test_fmdx_presenter_uses_audio_fft_cadence(self):
+        self.assertAlmostEqual(
+            ui.waterfall_presentation_fps("fmdx", 1),
+            ui.fmdx.AUDIO_SAMPLE_RATE / 2048.0,
+        )
+        self.assertEqual(ui.waterfall_presentation_fps("kiwi", 4), 23.0)
+
     def test_fm_rows_reach_visible_texture_strip(self):
         # Exercise the real renderer: HF-clamping this view makes all rows
         # fall outside the viewport and yields no textured strips.

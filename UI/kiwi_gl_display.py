@@ -561,6 +561,13 @@ WATERFALL_DEFAULT_PALETTE = "kiwi"
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
+# Kiwi sends speed-4 waterfall rows at roughly 23 fps, just below the 24 fps
+# display clock. Presenting each row immediately drains the queue between
+# ordinary network bursts and exposes sub-second packet gaps as a frozen
+# waterfall. Keep about a quarter-second of rows and release them on the
+# source cadence, like the browser client's waterfall dequeue timer.
+WATERFALL_PRESENTATION_RESERVE_SECONDS = 0.26
+WATERFALL_SOURCE_FPS = {1: 1.0, 2: 5.0, 3: 13.0, 4: 23.0}
 # The frequency ruler now separates scope and waterfall instead of consuming
 # the bottom edge. Keep the old name at zero so existing geometry helpers
 # reserve only the enlarged status strip below.
@@ -17215,6 +17222,58 @@ def drain_queue(line_queue):
             return
 
 
+class WaterfallPresenter:
+    """Smooth bursty waterfall arrivals without delaying the audio path."""
+
+    def __init__(self, reserve_seconds=WATERFALL_PRESENTATION_RESERVE_SECONDS):
+        self.reserve_seconds = max(0.0, float(reserve_seconds))
+        self.stream_key = None
+        self.started = False
+        self.next_row_at = 0.0
+
+    def reset(self, stream_key=None):
+        self.stream_key = stream_key
+        self.started = False
+        self.next_row_at = 0.0
+
+    def take(self, line_queue, now, source_fps, stream_key):
+        """Return rows due at *now*, after a small startup/rebuffer reserve."""
+        source_fps = max(0.01, float(source_fps))
+        if stream_key != self.stream_key:
+            self.reset(stream_key)
+        reserve_rows = max(1, int(math.ceil(source_fps * self.reserve_seconds)))
+        if not self.started:
+            if line_queue.qsize() < reserve_rows:
+                return ()
+            self.started = True
+            self.next_row_at = float(now)
+        if now + 1e-9 < self.next_row_at:
+            return ()
+        due = 1 + int(max(0.0, now - self.next_row_at) * source_fps)
+        # Two rows per render catches up after a delayed display frame without
+        # turning a short scheduling hiccup into a visible waterfall jump.
+        due = min(2, due)
+        rows = []
+        for _ in range(due):
+            try:
+                rows.append(line_queue.get_nowait())
+            except queue.Empty:
+                self.started = False
+                self.next_row_at = 0.0
+                break
+        if rows and self.started:
+            self.next_row_at += len(rows) / source_fps
+        return tuple(rows)
+
+
+def waterfall_presentation_fps(receiver_type, speed, row_pixels=1):
+    """Return the real row cadence for Kiwi and decoded FM-DX sources."""
+    multiplier = max(1, int(row_pixels))
+    if str(receiver_type).lower() == "fmdx":
+        return (fmdx.AUDIO_SAMPLE_RATE / 2048.0) * multiplier
+    return WATERFALL_SOURCE_FPS.get(clamp(int(speed), 1, WATERFALL_MAX_SPEED), 23.0) * multiplier
+
+
 def kiwi_mode_filter(mode):
     """Return Kiwi's native default passband for every selectable mode."""
     mode = mode.lower()
@@ -21624,6 +21683,7 @@ def main():
     )
     text_cache = TextCache()
     wf_texture = WaterfallTexture()
+    wf_presenter = WaterfallPresenter()
     spectrum_layer = SpectrumLayerCache()
     line_queue = queue.Queue(maxsize=96)
     transcript_queue = queue.Queue(maxsize=24)
@@ -21733,6 +21793,7 @@ def main():
     )
     dual_b_line_queue = queue.Queue(maxsize=96)
     dual_b_wf_texture = WaterfallTexture()
+    dual_b_wf_presenter = WaterfallPresenter()
     dual_b_stop_event = None
     dual_b_snd_thread = None
     dual_b_wf_thread = None
@@ -27231,42 +27292,43 @@ def main():
                 temp_c = read_cpu_temp_c()
                 input_power_ok = read_input_power_ok()
 
-            consumed = 0
-            max_consume = 2 if line_queue.qsize() > 30 else 1
-            while consumed < max_consume:
-                try:
-                    item = line_queue.get_nowait()
-                    if isinstance(item, tuple):
-                        line, row_center_khz, row_span_khz = item
-                    else:
-                        line = item
-                        row_center_khz = display_freq
-                        row_span_khz = display_span
-                    wf_texture.push_line(line, row_center_khz, row_span_khz)
-                    consumed += 1
-                except queue.Empty:
-                    break
+            _server, _frequency, _zoom, _smeter, view_generation, server_generation = state.snapshot()
+            _floor, _ceiling, presentation_speed, _auto, _palette, wf_generation = state.waterfall_snapshot()
+            receiver_type = state.receiver_type_snapshot(server_generation)
+            presentation_key = (
+                server_generation, view_generation, wf_generation, receiver_type,
+                state.external_waterfall_snapshot(),
+            )
+            presentation_fps = waterfall_presentation_fps(
+                receiver_type, presentation_speed, args.wf_row_pixels,
+            )
+            for item in wf_presenter.take(line_queue, now, presentation_fps, presentation_key):
+                if isinstance(item, tuple):
+                    line, row_center_khz, row_span_khz = item
+                else:
+                    line = item
+                    row_center_khz = display_freq
+                    row_span_khz = display_span
+                wf_texture.push_line(line, row_center_khz, row_span_khz)
 
             # B has its own W/F socket in Dual mode. Limit consumption to the
             # same bounded amount as the main pane so rendering stays smooth
             # if a server bursts several queued waterfall rows at once.
             if dual_vfo_open:
-                consumed_b = 0
-                max_consume_b = 2 if dual_b_line_queue.qsize() > 30 else 1
-                while consumed_b < max_consume_b:
-                    try:
-                        item = dual_b_line_queue.get_nowait()
-                        if isinstance(item, tuple):
-                            line, row_center_khz, row_span_khz = item
-                        else:
-                            b_profile = dual_vfo_profiles.get("B", {})
-                            line = item
-                            row_center_khz = float(b_profile.get("freq_khz", display_freq))
-                            row_span_khz = kiwi.zoom_to_span_khz(int(b_profile.get("zoom", zoom)))
-                        dual_b_wf_texture.push_line(line, row_center_khz, row_span_khz)
-                        consumed_b += 1
-                    except queue.Empty:
-                        break
+                _b_server, _b_frequency, _b_zoom, _b_smeter, b_view_generation, b_server_generation = dual_b_state.snapshot()
+                _b_floor, _b_ceiling, b_speed, _b_auto, _b_palette, b_wf_generation = dual_b_state.waterfall_snapshot()
+                b_receiver_type = dual_b_state.receiver_type_snapshot(b_server_generation)
+                b_key = (b_server_generation, b_view_generation, b_wf_generation, b_receiver_type, False)
+                b_fps = waterfall_presentation_fps(b_receiver_type, b_speed, args.wf_row_pixels)
+                for item in dual_b_wf_presenter.take(dual_b_line_queue, now, b_fps, b_key):
+                    if isinstance(item, tuple):
+                        line, row_center_khz, row_span_khz = item
+                    else:
+                        b_profile = dual_vfo_profiles.get("B", {})
+                        line = item
+                        row_center_khz = float(b_profile.get("freq_khz", display_freq))
+                        row_span_khz = kiwi.zoom_to_span_khz(int(b_profile.get("zoom", zoom)))
+                    dual_b_wf_texture.push_line(line, row_center_khz, row_span_khz)
 
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
