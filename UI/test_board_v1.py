@@ -555,11 +555,19 @@ class ReceiverMapLegendTests(unittest.TestCase):
         return drawn
 
     def test_dot_size_follows_actual_globe_scale(self):
-        self.assertEqual(ui.receiver_map_dot_pixels(ui.GLOBE_DEFAULT_SCALE), ui.GLOBE_DOT_BASE_PIXELS)
-        sizes = [ui.receiver_map_dot_pixels(scale) for scale in (0.55, 1.0, 2.2, 4.0, 12.0, 80.0)]
-        self.assertEqual(sizes, sorted(sizes))
-        self.assertGreater(ui.receiver_map_dot_pixels(4.0), ui.receiver_map_dot_pixels(2.2))
-        self.assertEqual(ui.receiver_map_dot_pixels(0), ui.GLOBE_DOT_MIN_PIXELS)
+        overview_scales = (0, 0.55, 1.0, 2.2, 4.0, 12.0, 20.49)
+        self.assertTrue(all(
+            ui.receiver_map_dot_pixels(scale) == ui.GLOBE_DOT_BASE_PIXELS
+            for scale in overview_scales
+        ))
+        self.assertEqual(
+            ui.receiver_map_dot_pixels(20.5),
+            ui.GLOBE_DOT_GROW_START_PIXELS,
+        )
+        self.assertGreater(
+            ui.receiver_map_dot_pixels(68.8),
+            ui.receiver_map_dot_pixels(20.5),
+        )
         self.assertEqual(ui.receiver_map_dot_pixels(999999), ui.GLOBE_DOT_MAX_PIXELS)
 
     def test_render_uses_scale_derived_dot_size(self):
@@ -567,7 +575,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
             tuple(ui.RECEIVER_MAP_GROUP_COLORS[group])
             for group in ('kiwi', 'openwebrx', 'local', 'fmdx')
         )
-        for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0):
+        for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0, 20.5, 68.8):
             drawn = self._draw_dots(scale)
             self.assertEqual(sorted(color for color, _size in drawn), expected)
             expected_size = ui.receiver_map_dot_pixels(scale)

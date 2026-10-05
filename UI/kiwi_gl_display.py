@@ -13103,20 +13103,31 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     return True
 
 
-# Globe server dots grow from the actual view scale. This makes button, wheel
-# and pinch zoom behave identically and keeps the constellation readable.
+# Globe server dots stay compact throughout the overview and regional views.
+# The third + button stop is about 20.5x; only close inspection views enlarge
+# them, using the same scale rule for button, wheel and pinch zoom.
 GLOBE_DOT_BASE_PIXELS = 4
-GLOBE_DOT_MIN_PIXELS = 2
 GLOBE_DOT_MAX_PIXELS = 16
-GLOBE_DOT_SCALE_STEP = 1.6
+GLOBE_DOT_GROW_START_SCALE = 20.5
+GLOBE_DOT_GROW_START_PIXELS = 6
+GLOBE_DOT_GROWTH_PIXELS = 2
+GLOBE_DOT_SCALE_STEP = RADIOGARDEN_ZOOM_TAP_FACTOR
 
 
 def receiver_map_dot_pixels(scale):
-    """Grow receiver dots monotonically as the Globe view zooms in."""
+    """Keep overview dots small, then enlarge them from the 20.5x view."""
     safe_scale = max(RADIOGARDEN_ZOOM_MIN, float(scale))
-    steps = math.log(safe_scale / GLOBE_DEFAULT_SCALE, GLOBE_DOT_SCALE_STEP)
-    offset = math.ceil(steps) if steps > 0 else math.floor(steps)
-    return int(clamp(GLOBE_DOT_BASE_PIXELS + offset, GLOBE_DOT_MIN_PIXELS, GLOBE_DOT_MAX_PIXELS))
+    if safe_scale < GLOBE_DOT_GROW_START_SCALE:
+        return GLOBE_DOT_BASE_PIXELS
+    growth_steps = math.floor(
+        math.log(safe_scale / GLOBE_DOT_GROW_START_SCALE, GLOBE_DOT_SCALE_STEP)
+        + 1e-9
+    )
+    return int(clamp(
+        GLOBE_DOT_GROW_START_PIXELS + growth_steps * GLOBE_DOT_GROWTH_PIXELS,
+        GLOBE_DOT_GROW_START_PIXELS,
+        GLOBE_DOT_MAX_PIXELS,
+    ))
 
 
 def draw_receiver_map(
