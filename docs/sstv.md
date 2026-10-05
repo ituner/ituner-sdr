@@ -122,3 +122,10 @@ receiver PCM byte order and gaps, stop, persisted sessions/images, retention,
 and HTTP image/API/path validation. Local OpenGL views and browser image
 opening were also exercised with generated fixtures. Real over-the-air
 reception and performance on CM5 still require on-device validation.
+
+## CM5 deployment with PR #12
+
+The current CM5 combines this feature with PR #12. On that build, open
+**Modes → SSTV**, beside WSPR. See the [recorded compatibility patch and
+deployment checks](../hardware/cm5/sstv/README.md) before reinstalling from
+main, so the newer PR #12 features are retained.
