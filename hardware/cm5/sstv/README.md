@@ -91,3 +91,37 @@ No WSPR receivers were configured on CM5 during deployment; WSPR control
 behavior was tested with session fixtures. Display/touch/audio startup
 configuration checksums were preserved; the service is active with no
 automatic restarts.
+
+## Receiver selection and image enlargement (2026-10-05)
+
+Both browser pages now have Add decoder and Edit receiver / band controls,
+using the local Kiwi/current receiver/directory list and the same band
+presets as the touchscreen. Search covers receiver name, location and URL.
+Start/Stop and Remove use the same live and persisted configurations.
+Editing preserves paused state; adding can either start or save stopped.
+SSTV's local Decoders page also gains Edit. Gallery images and receiver
+thumbnails open a large, aspect-preserving browser image viewer.
+
+For PR #12, apply `digital-editor-ui.patch` after `pr12-ui.patch` and
+`digital-web-ui.patch`, and install the current SSTV modules plus
+`digital_web.py`, `digital_controls.js` and both web HTML files.
+The main-based branch's main UI is still not a replacement for PR #12's UI.
+
+Installed UI SHA-256: `40069f295b11faba159c97898678e5b54e86f71b9760c2a818a0bf5fa996733e`.
+Backup: `/var/backups/ituner-sdr/before-digital-editor-20261005-123004/`.
+Staging: `/home/ituner/digital-editor-stage/`.
+
+Ten control/editor tests passed locally and on CM5 (staged tests use
+`PYTHONPATH=UI:/opt/ituner-sdr/UI` for unchanged dependencies). Seventeen
+SSTV tests passed locally, with two optional encoder tests skipped. Browser
+checks covered Add, receiver/band choice, Start, Stop, Edit and Remove in
+both modes, both image enlargement entry points, and mobile dialog sizing.
+The local Decoders and Edit views were rendered at 1280 × 800.
+
+Live CM5 browser testing created temporary stopped decoders, started them,
+changed their bands while stopped and removed them. WSPR reached LIVE/ARMED;
+SSTV reached LISTENING. The picker contained 1,377 receivers at validation.
+Original decoder IDs, source addresses, frequencies and paused states were
+verified unchanged afterward. The service remained active with zero
+automatic restarts; protected display, touch and audio setup checksums were
+unchanged. No successful over-the-air WSPR decode is claimed by this test.

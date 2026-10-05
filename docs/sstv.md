@@ -20,15 +20,22 @@ unchanged.
 The LAN gallery is available at **http://cm5.local:8073/sstv** (or the
 hostname/IP of the machine running the app). It uses the same images and
 metadata as the local gallery, refreshes every five seconds, and provides
-full-size viewing and PNG downloads. Each configured decoder has **Start**
-and **Stop** controls that update the same saved state as the touchscreen.
+enlarged viewing and PNG downloads. Both gallery images and the small receiver
+previews are clickable; the viewer scales the image to fit the screen without
+changing its aspect ratio. Use **Add decoder** to choose a KiwiSDR receiver and band, or **Edit receiver /
+band** to change an existing decoder. **Start**, **Stop** and **Remove decoder**
+use the same saved state as the touchscreen. The picker includes receiver
+search by name, location or address and the same band presets as the local UI.
+Edits preserve the running/stopped state; new decoders can start immediately
+or be saved stopped.
 Stopping a decoder releases its receiver connection; saved images remain.
 The receiver filter only changes which images the browser shows.
 
 The companion **http://cm5.local:8073/wspr** page shows WSPR receiver status,
 two-minute capture progress, and up to 96 recent spots per receiver, with a
-receiver filter and the same Start/Stop controls. Receivers are still added
-and configured on the local display. Both pages link to one another.
+receiver filter and the same Add/Edit/Start/Stop/Remove controls. Both pages
+link to one another. On the touchscreen, use SSTV → Decoders → Edit to select
+a different receiver or band; WSPR retains its existing per-receiver settings.
 
 These controls are for a trusted LAN: there is no login. POST requests require
 a per-process token and same-origin browser requests, and execute on the UI

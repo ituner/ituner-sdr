@@ -16,6 +16,7 @@ class SSTVWorkspace:
         self.ui, self.manager = ui, manager
         self.open = False
         self.add_open = False
+        self.edit_id = None
         self.decoders_open = False
         self.receiver_page = 0
         self.selected_server = ''
@@ -179,10 +180,11 @@ class SSTVWorkspace:
                 box = (x+412, y+8, x+596, y+118)
                 self.preview(cache, item, box)
                 self.actions.append((box, ('image', item['id'])))
-            running = row['status'] not in ('STOPPED', 'NO AUDIO', 'DEPENDENCY MISSING', 'QUEUED')
-            self.button(cache, (x+16, y+128, x+154, y+180), 'STOP' if running else 'START', ('toggle', row['id']))
-            self.button(cache, (x+166, y+128, x+410, y+180), 'VIEW IMAGES', ('filter', row['id']))
-            self.button(cache, (x+422, y+128, x+596, y+180), 'DELETE', ('delete', row['id']))
+            running = row.get('running', False)
+            self.button(cache, (x+16, y+128, x+130, y+180), 'STOP' if running else 'START', ('toggle', row['id']))
+            self.button(cache, (x+142, y+128, x+256, y+180), 'EDIT', ('edit', row['id']))
+            self.button(cache, (x+268, y+128, x+424, y+180), 'IMAGES', ('filter', row['id']))
+            self.button(cache, (x+436, y+128, x+596, y+180), 'DELETE', ('delete', row['id']))
         if self.delete_armed:
             ui.draw_logical_rect(16, 714, 1258, 792, (49, 30, 28, 255))
             self.text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
@@ -192,7 +194,7 @@ class SSTVWorkspace:
             self.text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=1220)
 
     def draw_add(self, cache, receivers):
-        self.text(cache, 30, 38, 'ADD SSTV DECODER', 29, (104, 234, 194))
+        self.text(cache, 30, 38, 'EDIT SSTV DECODER' if self.edit_id else 'ADD SSTV DECODER', 29, (104, 234, 194))
         self.text(cache, 30, 72, 'Choose receiver and frequency · one audio slot per decoder', 19)
         self.receiver_page = min(self.receiver_page, max(0, math.ceil(len(receivers)/3)-1))
         for index, station in enumerate(receivers[self.receiver_page*3:self.receiver_page*3+3]):
@@ -215,7 +217,7 @@ class SSTVWorkspace:
         self.text(cache, 470, 673, f'{MODE_COUNT} analog modes · automatic detection · Kiwi: 0–30 MHz.', 17)
         self.button(cache, (30, 716, 242, 782), 'CANCEL', ('cancel_add', None))
         self.text(cache, 270, 750, self.message, 17, width=680)
-        self.button(cache, (994, 716, 1250, 782), 'START DECODER', ('create', None), active=True)
+        self.button(cache, (994, 716, 1250, 782), 'SAVE CHANGES' if self.edit_id else 'START DECODER', ('create', None), active=True)
 
     def tap(self, x, y, receivers):
         action = next((a for box, a in reversed(self.actions) if self.ui.contains(box, x, y)), None)
@@ -229,7 +231,16 @@ class SSTVWorkspace:
             elif kind == 'gallery':
                 self.decoders_open = False
                 self.delete_armed = None
+            elif kind == 'edit':
+                row = next(row for row in self.manager.configs if row['id'] == value)
+                self.edit_id = value
+                self.selected_server = row['server']
+                self.preset = (row['band'], row['freq_khz'], row['mode'])
+                self.receiver_page = next((i//3 for i, r in enumerate(receivers) if self.ui.station_fields(r)[2] == row['server']), 0)
+                self.add_open = True
+                self.delete_armed = None
             elif kind == 'add':
+                self.edit_id = None
                 self.add_open = True
                 self.delete_armed = None
             elif kind == 'cancel_add': self.add_open = False
@@ -237,12 +248,22 @@ class SSTVWorkspace:
             elif kind == 'rxpage': self.receiver_page = max(0, self.receiver_page+value)
             elif kind == 'preset': self.preset = value
             elif kind == 'create':
-                station = next(row for row in receivers if self.ui.station_fields(row)[2] == self.selected_server)
-                name, _, server, _, _ = self.ui.station_fields(station)
-                self.manager.add(name, server, self.preset)
+                station = next((row for row in receivers if self.ui.station_fields(row)[2] == self.selected_server), None)
+                if station is not None:
+                    name, _, server, _, _ = self.ui.station_fields(station)
+                elif self.edit_id:
+                    saved = next(row for row in self.manager.configs if row['id'] == self.edit_id and row['server'] == self.selected_server)
+                    name, server = saved['name'], saved['server']
+                else:
+                    raise ValueError('Please select a receiver')
+                if self.edit_id:
+                    self.manager.update(self.edit_id, name, server, self.preset)
+                else:
+                    self.manager.add(name, server, self.preset)
                 self.add_open = False
                 self.filter_id = None
-                self.decoders_open = False
+                self.decoders_open = True
+                self.edit_id = None
                 self.page = 0
             elif kind == 'toggle': self.manager.toggle(value)
             elif kind == 'delete': self.delete_armed = value

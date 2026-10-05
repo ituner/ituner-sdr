@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'UI'))
-from digital_web import ControlError, DigitalWebBridge, wspr_snapshot, set_wspr_running
+from digital_web import ControlError, DigitalWebBridge, wspr_snapshot, set_wspr_running, receiver_options, ReceiverController
 from sstv_monitor import Gallery, GalleryServer, SSTVManager
 
 
@@ -33,7 +33,8 @@ class WebControlTests(unittest.TestCase):
         self.owner = threading.Thread(target=owner, daemon=True)
         self.owner.start()
 
-    def apply(self, mode, key, running):
+    def apply(self, mode, key, action, config):
+        running = action == "start"
         if key != 'rx':
             raise KeyError(key)
         self.applied.append((mode, key, running))
@@ -65,7 +66,7 @@ class WebControlTests(unittest.TestCase):
 
     def test_reject_cross_site_missing_token_invalid_action_and_unknown_receiver(self):
         for kwargs,code in [({'token':False},403),({'origin':'http://foreign.example'},403),
-                ({'data':{'id':'rx','action':'delete'}},400),({'data':{'id':'missing','action':'stop'}},404),
+                ({'data':{'id':'rx','action':'reset'}},400),({'data':{'id':'missing','action':'stop'}},404),
                 ({'data':[]},400)]:
             with self.assertRaises(HTTPError) as ctx: self.post(**kwargs)
             self.assertEqual(ctx.exception.code,code)
@@ -120,5 +121,84 @@ class ReceiverControlTests(unittest.TestCase):
         row=wspr_snapshot([tile],manager)[0]
         self.assertEqual(row['decode_status'],'STOPPED');self.assertEqual(len(row['spots']),96)
         self.assertFalse(row['running'])
+
+
+class ReceiverEditingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.sstv = SSTVManager(None, 'test', root=self.temp.name, web_port=-1)
+        self.tiles = []
+        self.wspr = SimpleNamespace(sessions={}, start_at={}, sync=Mock())
+        self.options = receiver_options([('Local', 'LAN', 'http://kiwi.local'), ('Remote', 'Romania', 'http://remote')],
+            [('20', 14095.6), ('40', 7038.6)], [('20 m', 14230, 'usb'), ('40 m EU', 7165, 'lsb')])
+        self.controller = ReceiverController(self.sstv, self.tiles, self.wspr, lambda:self.options)
+        self.config = dict(server='http://kiwi.local', preset='14230:usb', start=False)
+
+    def tearDown(self):
+        self.sstv.stop(); self.temp.cleanup()
+
+    def test_sstv_create_edit_delete_persist_and_preserve_stopped_state(self):
+        self.controller.apply('sstv','new','add',self.config)
+        self.controller.apply('sstv','new','add',self.config)
+        self.assertEqual(len(self.sstv.configs),1)
+        self.controller.apply('sstv','new','edit',dict(server='http://remote',preset='7165:lsb'))
+        row=json.loads(self.sstv.config_path.read_text())[0]
+        self.assertEqual((row['server'],row['mode'],row['freq_khz']),('http://remote','lsb',7165))
+        self.assertTrue(row['paused']);self.assertFalse(self.sstv.sessions)
+        self.controller.apply('sstv','new','delete',{})
+        self.assertEqual(json.loads(self.sstv.config_path.read_text()),[])
+
+    def test_wspr_create_edit_discards_previous_band_session_and_preserves_pause(self):
+        self.controller.apply('wspr','w','add',dict(server='http://kiwi.local',preset='20',start=False))
+        old=Mock();self.wspr.sessions['w']=old
+        self.controller.apply('wspr','w','edit',dict(server='http://remote',preset='40'))
+        old.stop.assert_called_once();self.assertNotIn('w',self.wspr.sessions)
+        self.assertEqual(self.tiles[0]['freq_khz'],7038.6);self.assertTrue(self.tiles[0]['paused'])
+        self.controller.apply('wspr','w','delete',{})
+        self.assertEqual(self.tiles,[])
+
+    def test_invalid_source_preset_limit_and_id_collision_do_not_change_settings(self):
+        for payload in [dict(server='file:///tmp/x',preset='20'),dict(server='http://kiwi.local',preset='invalid')]:
+            with self.assertRaises(ControlError):self.controller.apply('wspr','w','add',payload)
+        self.assertEqual(self.tiles,[])
+        for i in range(6):self.controller.apply('sstv',str(i),'add',self.config)
+        with self.assertRaises(ControlError) as ctx:self.controller.apply('sstv','seventh','add',self.config)
+        self.assertEqual(ctx.exception.status,409)
+        with self.assertRaises(ControlError):self.controller.apply('sstv','0','add',dict(server='http://remote',preset='7165:lsb'))
+        self.assertEqual(len(self.sstv.configs),6)
+
+    def test_local_sstv_editor_uses_same_saved_configuration(self):
+        from sstv_workspace import SSTVWorkspace
+        self.controller.apply('sstv','new','add',self.config)
+        ui=SimpleNamespace(draw_logical_rect=Mock(),draw_text=Mock(),
+            fit_station_text=lambda cache,value,*args:str(value),
+            station_fields=lambda row:(row[0],row[1],row[2],None,None),
+            contains=lambda box,x,y:box[0]<=x<=box[2] and box[1]<=y<=box[3],LOCAL_KIWI_SERVER='http://kiwi.local')
+        w=SSTVWorkspace(ui,self.sstv);w.decoders_open=True
+        receivers=[('Local','LAN','http://kiwi.local'),('Remote','Romania','http://remote')]
+        w.draw(None,receivers)
+        box=next(box for box,action in w.actions if action==('edit','new'))
+        w.tap((box[0]+box[2])/2,(box[1]+box[3])/2,receivers)
+        self.assertTrue(w.add_open);self.assertEqual(w.edit_id,'new')
+        w.draw(None,receivers)
+        for box,action in w.actions:
+            self.assertTrue(0<=box[0]<box[2]<=1280 and 0<=box[1]<box[3]<=800)
+        w.selected_server='http://remote';w.preset=('40 m EU',7165,'lsb')
+        box=next(box for box,action in w.actions if action[0]=='create')
+        w.tap((box[0]+box[2])/2,(box[1]+box[3])/2,receivers)
+        self.assertEqual(self.sstv.configs[0]['server'],'http://remote')
+        self.assertTrue(self.sstv.configs[0]['paused']);self.assertTrue(w.decoders_open)
+
+    def test_live_sstv_edit_restarts_only_changed_stream(self):
+        class Session:
+            def __init__(self,config,*args):self.config=dict(config);self.stop=Mock();self.start=Mock()
+        with patch('sstv_monitor.Session',Session):
+            self.sstv.add('Local','http://kiwi.local',('20 m',14230,'usb'),key='live')
+            first=self.sstv.sessions['live']
+            self.sstv.update('live','Local','http://kiwi.local',('20 m',14230,'usb'))
+            self.assertIs(self.sstv.sessions['live'],first)
+            self.sstv.update('live','Remote','http://remote',('40 m EU',7165,'lsb'))
+            first.stop.assert_called_once();self.assertIsNot(self.sstv.sessions['live'],first)
+            self.sstv.sessions['live'].start.assert_called_once()
 
 if __name__=='__main__': unittest.main()

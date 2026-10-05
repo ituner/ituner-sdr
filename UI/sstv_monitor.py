@@ -383,17 +383,18 @@ class SSTVManager:
     def save(self):
         atomic_json(self.config_path, self.configs)
 
-    def add(self, name, server, preset):
+    def add(self, name, server, preset, key=None, running=True):
         if len(self.configs) >= MAX_SESSIONS:
             raise ValueError('Six decoders maximum; delete a stopped decoder first')
         band, freq, mode = preset
-        config = dict(id=uuid.uuid4().hex, name=name, server=server, band=band,
-                      freq_khz=freq, mode=mode, paused=False)
+        config = dict(id=key or uuid.uuid4().hex, name=name, server=server, band=band,
+                      freq_khz=freq, mode=mode, paused=not running)
         self.validate(config)
         self.configs.append(config)
         self.save()
         self.ensure_web()
-        self.start(config)
+        if running:
+            self.start(config)
         return config['id']
 
     def start(self, config):
@@ -403,6 +404,21 @@ class SSTVManager:
         session = Session(config, self.kiwi, self.queue, self.user)
         self.sessions[config['id']] = session
         session.start()
+
+    def update(self, key, name, server, preset):
+        config = next(row for row in self.configs if row['id'] == key)
+        band, freq, mode = preset
+        updated = dict(config, name=name, server=server, band=band, freq_khz=freq, mode=mode)
+        self.validate(updated)
+        changed = any(config.get(k) != updated[k] for k in ('server', 'freq_khz', 'mode'))
+        if changed:
+            session = self.sessions.pop(key, None)
+            if session:
+                session.stop()
+        config.update(updated)
+        self.save()
+        if changed and not config.get('paused'):
+            self.start(config)
 
     def set_running(self, key, running):
         config = next(row for row in self.configs if row['id'] == key)
@@ -439,6 +455,7 @@ class SSTVManager:
             session = self.sessions.get(config['id'])
             row = session.snapshot() if session else dict(config,
                 status='STOPPED' if config.get('paused') else 'QUEUED', detail='', last_decode='')
+            row.update(config)
             row['paused'] = bool(config.get('paused'))
             row['running'] = bool(not row['paused'] and (session is None or
                 (session.thread and session.thread.is_alive() and not session.stop_event.is_set())))
@@ -490,6 +507,15 @@ class GalleryHandler(BaseHTTPRequestHandler):
             elif path.path in ('/wspr', '/wspr/'):
                 data = Path(__file__).with_name('wspr_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path == '/digital-controls.js':
+                data = Path(__file__).with_name('digital_controls.js').read_bytes()
+                content_type = 'text/javascript; charset=utf-8'
+            elif path.path == '/api/digital/options':
+                if self.server.bridge is None:
+                    self.send_error(503)
+                    return
+                data = json.dumps(self.server.bridge.options_snapshot()).encode()
+                content_type = 'application/json'
             elif path.path == '/api/wspr':
                 if self.server.bridge is None:
                     self.send_error(503)
@@ -518,7 +544,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
         self.end_headers()
@@ -552,7 +578,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 raise ControlError(400, 'Invalid control request')
             if self.server.bridge is None:
                 raise ControlError(503, 'Receiver controls unavailable')
-            result = self.server.bridge.request(path.split('/')[2], payload.get('id'), payload.get('action'))
+            result = self.server.bridge.request(path.split('/')[2], payload.get('id'), payload.get('action'), config=payload.get('config'))
             status = 200
         except ControlError as exc:
             status, result = exc.status, {'error': str(exc)}
