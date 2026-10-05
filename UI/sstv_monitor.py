@@ -1,10 +1,12 @@
-"""Independent SSTV receiver sessions, durable gallery and read-only web access."""
+"""Independent SSTV receiver sessions, durable gallery and LAN web access."""
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import select
+import secrets
+from digital_web import ControlError
 import socket
 import struct
 import subprocess
@@ -402,18 +404,20 @@ class SSTVManager:
         self.sessions[config['id']] = session
         session.start()
 
-    def toggle(self, key):
+    def set_running(self, key, running):
         config = next(row for row in self.configs if row['id'] == key)
         session = self.sessions.get(key)
-        # A refused/dead stream can be retried explicitly using Start.
-        running = session and session.thread and session.thread.is_alive() and not session.stop_event.is_set()
-        config['paused'] = bool(running)
-        if running:
-            session.stop()
-        else:
-            config['paused'] = False
+        live = bool(session and session.thread and session.thread.is_alive() and not session.stop_event.is_set())
+        config['paused'] = not running
+        if running and not live:
             self.start(config)
+        elif not running and session:
+            session.stop()
         self.save()
+
+    def toggle(self, key):
+        row = next(row for row in self.snapshot() if row['id'] == key)
+        self.set_running(key, not row['running'])
 
     def delete(self, key):
         session = self.sessions.pop(key, None)
@@ -433,8 +437,12 @@ class SSTVManager:
         rows = []
         for config in tuple(self.configs):
             session = self.sessions.get(config['id'])
-            rows.append(session.snapshot() if session else dict(config,
-                status='STOPPED' if config.get('paused') else 'QUEUED', detail='', last_decode=''))
+            row = session.snapshot() if session else dict(config,
+                status='STOPPED' if config.get('paused') else 'QUEUED', detail='', last_decode='')
+            row['paused'] = bool(config.get('paused'))
+            row['running'] = bool(not row['paused'] and (session is None or
+                (session.thread and session.thread.is_alive() and not session.stop_event.is_set())))
+            rows.append(row)
         return rows
 
     def image_snapshot(self, session_id=None):
@@ -464,6 +472,8 @@ class GalleryServer(ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, gallery, sessions, address):
         self.gallery, self.sessions = gallery, sessions
+        self.bridge = None
+        self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
 
 
@@ -477,11 +487,24 @@ class GalleryHandler(BaseHTTPRequestHandler):
             if path.path in ('/', '/sstv', '/sstv/'):
                 data = Path(__file__).with_name('sstv_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path in ('/wspr', '/wspr/'):
+                data = Path(__file__).with_name('wspr_gallery.html').read_bytes()
+                content_type = 'text/html; charset=utf-8'
+            elif path.path == '/api/wspr':
+                if self.server.bridge is None:
+                    self.send_error(503)
+                    return
+                state = self.server.bridge.snapshot('wspr')
+                state['control_token'] = self.server.control_token
+                data = json.dumps(state).encode()
+                content_type = 'application/json'
             elif path.path == '/api/sstv':
                 session = parse_qs(path.query).get('session', [None])[0]
-                decoders = self.server.sessions()
+                decoders = (self.server.bridge.snapshot('sstv')['decoders']
+                            if self.server.bridge else self.server.sessions())
                 data = json.dumps({'images': image_snapshot(self.server.gallery, decoders, session),
-                                   'decoders': decoders}).encode()
+                                   'decoders': decoders,
+                                   'control_token': self.server.control_token if self.server.bridge else None}).encode()
                 content_type = 'application/json'
             elif path.path.startswith('/images/') and path.path.endswith('.png'):
                 data = self.server.gallery.image_path(path.path[8:-4]).read_bytes()
@@ -498,5 +521,45 @@ class GalleryHandler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        try:
+            path = urlsplit(self.path).path
+            if path not in ('/api/sstv/control', '/api/wspr/control'):
+                raise ControlError(404, 'Unknown control endpoint')
+            origin = self.headers.get('Origin')
+            if origin and origin != 'http://' + self.headers.get('Host', ''):
+                raise ControlError(403, 'Use the controls on this SDR page')
+            token = self.headers.get('X-SDR-Control', '')
+            if not secrets.compare_digest(token, self.server.control_token):
+                raise ControlError(403, 'Refresh the page before using controls')
+            if self.headers.get_content_type() != 'application/json':
+                raise ControlError(415, 'Expected JSON')
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                raise ControlError(400, 'Invalid request length')
+            if not 0 < length <= 2048:
+                raise ControlError(413, 'Invalid request size')
+            self.connection.settimeout(5)
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except (ValueError, UnicodeError, OSError):
+                raise ControlError(400, 'Invalid JSON')
+            if not isinstance(payload, dict):
+                raise ControlError(400, 'Invalid control request')
+            if self.server.bridge is None:
+                raise ControlError(503, 'Receiver controls unavailable')
+            result = self.server.bridge.request(path.split('/')[2], payload.get('id'), payload.get('action'))
+            status = 200
+        except ControlError as exc:
+            status, result = exc.status, {'error': str(exc)}
+        data = json.dumps(result).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(data)

@@ -1,0 +1,59 @@
+diff --git a/UI/kiwi_gl_display.py b/UI/kiwi_gl_display.py
+index 3404a53..d519e53 100644
+--- a/UI/kiwi_gl_display.py
++++ b/UI/kiwi_gl_display.py
+@@ -20238,6 +20238,12 @@ def main():
+     from sstv_monitor import SSTVManager
+     from sstv_workspace import SSTVWorkspace
+     sstv_manager = SSTVManager(kiwi, args.user)
++    from digital_web import DigitalWebBridge, wspr_snapshot, set_wspr_running
++    digital_web = DigitalWebBridge()
++    sstv_manager.ensure_web()
++    if sstv_manager.web:
++        sstv_manager.web.bridge = digital_web
++    digital_web_next_snapshot = 0.0
+     sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+     wspr_mini_textures = {}
+     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
+@@ -21048,6 +21054,21 @@ def main():
+         drain_queue(line_queue)
+         wf_texture.clear()
+ 
++    def apply_web_receiver_control(mode, key, running):
++        nonlocal preferences_dirty, digital_web_next_snapshot
++        if mode == 'sstv':
++            sstv_manager.set_running(key, running)
++        else:
++            tile = set_wspr_running(wspr_tiles, wspr_monitor, key, running)
++            write_wspr_local_log(
++                'monitor_session_started' if running else 'monitor_session_stopped',
++                band_m=tile.get('band'), receiver=tile.get('name'), server=tile.get('server'),
++            )
++            preferences_dirty = True
++            write_remembered_view(force=True)
++        digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor))
++        digital_web_next_snapshot = time.monotonic() + 1
++
+     def refresh_wspr_waterfalls():
+         """Keep active WSPR cards current even while their workspace is hidden."""
+         wspr_monitor.sync(wspr_tiles)
+@@ -25261,7 +25282,11 @@ def main():
+             # after a reboot even if the operator is currently on the radio
+             # screen, then keep their slow W/F or audio-FFT rows advancing
+             # while the workspace is hidden.
++            digital_web.drain(apply_web_receiver_control)
+             sstv_manager.tick()
++            if time.monotonic() >= digital_web_next_snapshot:
++                digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor))
++                digital_web_next_snapshot = time.monotonic() + 1
+             if wspr_tiles or wspr_monitor.sessions:
+                 refresh_wspr_waterfalls()
+             if wspr_panel_open:
+@@ -25487,6 +25512,7 @@ def main():
+         scout_probe.stop()
+         rtl_lab.stop()
+         stop_dual_vfo_clients()
++        digital_web.close()
+         sstv_manager.stop()
+         sstv_workspace.close()
+         wspr_monitor.stop()

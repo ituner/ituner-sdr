@@ -187,4 +187,4 @@ sudo reboot
 ## SSTV
 
 Digital tools → SSTV adds continuous receiver decoders, a 1280 × 800 touch
-gallery and a LAN browser gallery. See [SSTV setup and supported modes](docs/sstv.md).
+gallery and LAN SSTV/WSPR pages with receiver Start/Stop controls. See [SSTV setup and supported modes](docs/sstv.md).

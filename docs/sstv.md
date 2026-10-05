@@ -17,13 +17,24 @@ unchanged.
 
 ![Decoder cards with in-progress images, generated test fixture](images/sstv-decoders.png)
 
-A read-only gallery is available on the LAN at **http://cm5.local:8073/sstv**
-(or the hostname/IP of the machine running the app). It uses the same PNG
-images and metadata as the local gallery, refreshes every five seconds, and
-provides full-size viewing and PNG downloads. Receiver selection is local to
-each browser; it does not retune the hardware. This endpoint has no remote
-radio controls or authentication and is intended for the local network.
-Do not expose it directly to the Internet.
+The LAN gallery is available at **http://cm5.local:8073/sstv** (or the
+hostname/IP of the machine running the app). It uses the same images and
+metadata as the local gallery, refreshes every five seconds, and provides
+full-size viewing and PNG downloads. Each configured decoder has **Start**
+and **Stop** controls that update the same saved state as the touchscreen.
+Stopping a decoder releases its receiver connection; saved images remain.
+The receiver filter only changes which images the browser shows.
+
+The companion **http://cm5.local:8073/wspr** page shows WSPR receiver status,
+two-minute capture progress, and up to 96 recent spots per receiver, with a
+receiver filter and the same Start/Stop controls. Receivers are still added
+and configured on the local display. Both pages link to one another.
+
+These controls are for a trusted LAN: there is no login. POST requests require
+a per-process token and same-origin browser requests, and execute on the UI
+thread rather than mutating receiver state from HTTP workers. This prevents
+cross-site form controls but is not user authentication. Do not expose this
+port directly to the Internet.
 
 ![1280 × 800 local gallery, rendered with generated test transmissions](images/sstv-workspace.png)
 
@@ -116,9 +127,9 @@ Optional environment variables in the application's service configuration:
 - `ITUNER_SSTV_BIND`: listening address, default `0.0.0.0`; use `127.0.0.1`
   for access only through a local reverse proxy.
 
-The web server starts when SSTV is opened, or at startup when saved sessions
-or images exist. A port conflict is shown in the local gallery; change the
-port and restart the app. The server ends when the SDR app exits.
+The shared web server starts with the app, even without saved sessions. A port
+conflict is shown in the local gallery; change the port and restart the app.
+The server ends when the SDR app exits.
 
 ## Installation and dependencies
 

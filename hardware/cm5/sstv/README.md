@@ -62,3 +62,32 @@ The three user's Kiwi sessions and their frequencies were retained. Short
 18-second samples from 14.230, 18.117 and 21.340 MHz had nonzero PCM and no
 clipping, but no valid SSTV headers; the 20 m spectrogram showed broadband
 noise. No successful over-the-air image is claimed from these checks.
+
+## WSPR browser and shared receiver controls (2026-10-05)
+
+Both `/sstv` and `/wspr` now offer Start/Stop for configured receivers.
+WSPR includes receiver status, capture progress, filtering and recent spots.
+Commands execute on the UI thread and persist through the existing settings.
+The shared server starts even when no SSTV sessions have been configured.
+
+For the PR #12 installation above, apply `digital-web-ui.patch` **after**
+`pr12-ui.patch`, and install `UI/digital_web.py`, `UI/wspr_gallery.html` and
+the current `UI/sstv_monitor.py` / `UI/sstv_gallery.html` from this branch.
+Do not replace the PR #12 main UI with this branch's main-based version.
+
+Installed combined UI SHA-256: `59f0f2d1538f95cbed571dbaca6e62db5bec501a0e1369241d457f56da48df16`.
+Backup: `/var/backups/ituner-sdr/before-digital-web-20261005-121554/`.
+Staging: `/home/ituner/digital-web-stage/` (manifest and guarded installer).
+The backup's `restore.json` records which files existed before installation;
+restore those files and remove only the newly added files to roll back, with
+the service stopped, then restart it.
+
+Validation: five new control/API tests passed both locally and on CM5;
+17 existing SSTV tests and 13 audio/bootstrap tests passed locally (two
+optional SSTV encoder cases skipped). Browser checks covered both pages,
+Stop/Start round trips, cross-links and phone-width layout. Live SSTV
+Stop/Start was confirmed on CM5 and its original running state restored.
+No WSPR receivers were configured on CM5 during deployment; WSPR control
+behavior was tested with session fixtures. Display/touch/audio startup
+configuration checksums were preserved; the service is active with no
+automatic restarts.
