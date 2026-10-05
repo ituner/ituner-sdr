@@ -3,6 +3,7 @@ from collections import OrderedDict
 import math
 import socket
 from sstv_monitor import PRESETS
+from sstv_modes import MODE_COUNT
 
 
 GALLERY_COLUMNS = 5
@@ -86,6 +87,22 @@ class SSTVWorkspace:
         except (OSError, ValueError, ui.pygame.error):
             pass  # An image may be pruned between snapshot and paint.
 
+    def preview(self, cache, item, box):
+        x0, y0, x1, y1 = box
+        live = item['kind'] in ('receiving', 'processing')
+        if item.get('has_image', True):
+            self.image(item['id'], box)
+        else:
+            self.ui.draw_logical_rect(*box, (10, 25, 32, 255))
+            self.text(cache, x0+8, (y0+y1)/2-10, item['mode'], 17, width=x1-x0-16)
+            self.text(cache, x0+8, (y0+y1)/2+13, 'Waiting for first lines…', 14, width=x1-x0-16)
+        if live:
+            label = 'Processing…' if item['kind'] == 'processing' else f"Receiving · {item['progress_pct']}%"
+            self.ui.draw_logical_rect(x0, y0, x1, y0+25, (15, 67, 55, 255))
+            self.text(cache, x0+6, y0+13, label, 15, (126, 255, 212), width=x1-x0-12)
+            self.ui.draw_logical_rect(x0, y1-5, x1, y1, (31, 69, 72, 255))
+            self.ui.draw_logical_rect(x0, y1-5, x0+(x1-x0)*item['progress_pct']/100, y1, (104, 234, 194, 255))
+
     def draw(self, cache, receivers):
         self.actions = []
         ui = self.ui
@@ -94,11 +111,11 @@ class SSTVWorkspace:
             self.draw_add(cache, receivers)
             return
         if self.enlarged:
-            item = next((row for row in self.manager.gallery.snapshot() if row['id'] == self.enlarged), None)
+            item = next((row for row in self.manager.image_snapshot() if row['id'] == self.enlarged), None)
             if item:
                 self.text(cache, 24, 34, f"{item['mode']} · {item['band']} · {item['freq_khz']/1000:.3f} MHz", 25)
                 self.text(cache, 24, 66, f"{item['receiver']} · {item['capture_utc']} · {item['kind']}", 17, width=990)
-                self.image(item['id'], (20, 90, 1260, 778))
+                self.preview(cache, item, (20, 90, 1260, 778))
                 self.button(cache, (1060, 16, 1258, 76), 'BACK', ('back_image', None))
                 return
             self.enlarged = None
@@ -111,7 +128,7 @@ class SSTVWorkspace:
         if self.decoders_open:
             self.draw_decoders(cache)
             return
-        images = self.manager.gallery.snapshot(self.filter_id)
+        images = self.manager.image_snapshot(self.filter_id)
         pages = max(1, math.ceil(len(images) / GALLERY_PAGE_SIZE))
         self.page = min(self.page, pages - 1)
         self.text(cache, 330, 37, f'{len(images)} images · newest first', 16, width=305)
@@ -125,7 +142,7 @@ class SSTVWorkspace:
             y = 88 + (index // GALLERY_COLUMNS) * 210
             box = (x, y, x+242, y+202)
             ui.draw_logical_rect(*box, (17, 34, 42, 255))
-            self.image(item['id'], (x+4, y+4, x+238, y+164))
+            self.preview(cache, item, (x+4, y+4, x+238, y+164))
             self.text(cache, x+8, y+178, f"{item['mode']} · {item['band']} · {item['progress_pct']}%", 15, width=226)
             self.text(cache, x+8, y+194, item['capture_utc'].replace('T', ' ').replace('Z', ' UTC'), 13, width=226)
             self.actions.append((box, ('image', item['id'])))
@@ -144,6 +161,7 @@ class SSTVWorkspace:
         """Keep receiver operation on its own page, leaving gallery space for images."""
         ui = self.ui
         rows = self.manager.snapshot()
+        images = self.manager.image_snapshot()
         if not rows:
             self.text(cache, 330, 340, 'No decoders yet', 28)
             self.text(cache, 330, 384, 'Choose Add decoder to select a receiver and frequency.', 21)
@@ -151,10 +169,16 @@ class SSTVWorkspace:
             x = 16 + (index % 2) * 630
             y = 96 + (index // 2) * 202
             ui.draw_logical_rect(x, y, x+612, y+188, (17, 40, 47, 255))
-            self.text(cache, x+16, y+24, f"{row['band']} · {row['freq_khz']/1000:.3f} MHz {row['mode'].upper()}", 21, width=580)
-            self.text(cache, x+16, y+54, row['name'], 18, width=580)
-            self.text(cache, x+16, y+83, row['status'], 17, (104, 234, 194), width=580)
-            self.text(cache, x+16, y+109, row.get('detail') or row.get('last_decode') or '', 15, width=580)
+            item = next((item for item in images if item['session_id'] == row['id']), None)
+            width = 370 if item else 580
+            self.text(cache, x+16, y+24, f"{row['band']} · {row['freq_khz']/1000:.3f} MHz {row['mode'].upper()}", 21, width=width)
+            self.text(cache, x+16, y+54, row['name'], 18, width=width)
+            self.text(cache, x+16, y+83, row['status'], 17, (104, 234, 194), width=width)
+            self.text(cache, x+16, y+109, row.get('detail') or row.get('last_decode') or '', 15, width=width)
+            if item:
+                box = (x+412, y+8, x+596, y+118)
+                self.preview(cache, item, box)
+                self.actions.append((box, ('image', item['id'])))
             running = row['status'] not in ('STOPPED', 'NO AUDIO', 'DEPENDENCY MISSING', 'QUEUED')
             self.button(cache, (x+16, y+128, x+154, y+180), 'STOP' if running else 'START', ('toggle', row['id']))
             self.button(cache, (x+166, y+128, x+410, y+180), 'VIEW IMAGES', ('filter', row['id']))
@@ -188,7 +212,7 @@ class SSTVWorkspace:
             self.button(cache, (30, 618, 440, 678), 'USE CURRENT RADIO DIAL', ('preset', self.current),
                         f'{self.current[1]/1000:.3f} MHz {self.current[2].upper()}', self.preset == self.current)
         self.text(cache, 470, 644, 'Regional activity varies; presets are receive-only.', 18)
-        self.text(cache, 470, 673, '30 m narrowband modes unsupported. Kiwi: 0–30 MHz.', 17)
+        self.text(cache, 470, 673, f'{MODE_COUNT} analog modes · automatic detection · Kiwi: 0–30 MHz.', 17)
         self.button(cache, (30, 716, 242, 782), 'CANCEL', ('cancel_add', None))
         self.text(cache, 270, 750, self.message, 17, width=680)
         self.button(cache, (994, 716, 1250, 782), 'START DECODER', ('create', None), active=True)

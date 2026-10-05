@@ -29,6 +29,20 @@ GALLERY_LIMIT = 300
 RATE = 12000
 
 
+def image_snapshot(gallery, sessions, session_id=None):
+    """Merge transient captures with saved previews without duplicate tiles."""
+    saved = {item['id']: dict(item, has_image=True) for item in gallery.snapshot(session_id)}
+    live = []
+    for session in sessions:
+        if session_id and session['id'] != session_id:
+            continue
+        for capture in session.get('in_progress', []):
+            previous = saved.pop(capture['id'], {})
+            live.append(dict(previous, **capture, has_image=bool(previous)))
+    live.sort(key=lambda item: item['capture_utc'], reverse=True)
+    return live + list(saved.values())
+
+
 def atomic_json(path, data):
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -99,6 +113,8 @@ class DecodeQueue:
                     del self.pending[partial]
                 else:
                     session.note('Image queue full; this decode was skipped')
+                    if meta['kind'] == 'full':
+                        session.finish_capture(meta['id'])
                     return
             self.pending[key] = (session, pcm, dict(meta))
             self.condition.notify()
@@ -144,9 +160,13 @@ class DecodeQueue:
                             'sideband': session.config['mode'], 'updated_ns': time.time_ns()}
                     self.gallery.publish(png, item)
                     session.note(f"Saved {meta['mode']} · {meta['progress_pct']}%")
+                    if meta['kind'] == 'full':
+                        session.finish_capture(meta['id'])
             except Exception as exc:
                 if not session.stop_event.is_set():
                     session.note(str(exc)[:120])
+                if meta['kind'] == 'full':
+                    session.finish_capture(meta['id'])
             finally:
                 self.process = None
 
@@ -167,6 +187,7 @@ class Session:
         self.thread = None
         self.ws = None
         self.capture_times = {}
+        self.captures = {}
 
     def report(self, status, detail=''):
         with self.lock:
@@ -178,7 +199,27 @@ class Session:
 
     def snapshot(self):
         with self.lock:
-            return dict(self.config, status=self.status, detail=self.detail, last_decode=self.last_decode)
+            return dict(self.config, status=self.status, detail=self.detail, last_decode=self.last_decode,
+                        in_progress=[dict(item) for item in self.captures.values()])
+
+    def progress(self, meta):
+        with self.lock:
+            if meta is None:
+                self.captures = {key: item for key, item in self.captures.items() if item['kind'] == 'processing'}
+                return
+            if self.stop_event.is_set():
+                return
+            key = meta['id']
+            if key not in self.capture_times:
+                self.capture_times[key] = time.strftime('%Y-%m-%dT%H:%M:%SZ',
+                    time.gmtime(time.time()-meta['elapsed_seconds']))
+            self.captures[key] = dict(meta, capture_utc=self.capture_times[key],
+                session_id=self.config['id'], receiver=self.config['name'], server=self.config['server'],
+                band=self.config['band'], freq_khz=self.config['freq_khz'], sideband=self.config['mode'])
+
+    def finish_capture(self, key):
+        with self.lock:
+            self.captures.pop(key, None)
 
     def start(self):
         self.thread = threading.Thread(target=self.run, name='sstv-'+self.config['id'], daemon=True)
@@ -186,6 +227,8 @@ class Session:
 
     def stop(self):
         self.stop_event.set()
+        with self.lock:
+            self.captures.clear()
         # Closing the socket also interrupts startup/read timeouts.
         if self.ws:
             try:
@@ -206,7 +249,7 @@ class Session:
     def run(self):
         try:
             from sstv_decoder import FrameAssembler
-            assembler = FrameAssembler(self.emit, self.report)
+            assembler = FrameAssembler(self.emit, self.report, self.progress)
         except ImportError as exc:
             self.report('DEPENDENCY MISSING', str(exc))
             return
@@ -290,6 +333,7 @@ class Session:
                 if self.stop_event.wait(delay):
                     break
             finally:
+                self.progress(None)
                 self.ws = None
                 if ws:
                     try:
@@ -393,6 +437,9 @@ class SSTVManager:
                 status='STOPPED' if config.get('paused') else 'QUEUED', detail='', last_decode=''))
         return rows
 
+    def image_snapshot(self, session_id=None):
+        return image_snapshot(self.gallery, self.snapshot(), session_id)
+
     def ensure_web(self):
         if self.web or self.web_port < 0:
             return
@@ -432,8 +479,9 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 content_type = 'text/html; charset=utf-8'
             elif path.path == '/api/sstv':
                 session = parse_qs(path.query).get('session', [None])[0]
-                data = json.dumps({'images': self.server.gallery.snapshot(session),
-                                   'decoders': self.server.sessions()}).encode()
+                decoders = self.server.sessions()
+                data = json.dumps({'images': image_snapshot(self.server.gallery, decoders, session),
+                                   'decoders': decoders}).encode()
                 content_type = 'application/json'
             elif path.path.startswith('/images/') and path.path.endswith('.png'):
                 data = self.server.gallery.image_path(path.path[8:-4]).read_bytes()

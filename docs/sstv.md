@@ -15,6 +15,8 @@ image to enlarge it.
 Images retain their aspect ratio; display/touch drivers and orientation are
 unchanged.
 
+![Decoder cards with in-progress images, generated test fixture](images/sstv-decoders.png)
+
 A read-only gallery is available on the LAN at **http://cm5.local:8073/sstv**
 (or the hostname/IP of the machine running the app). It uses the same PNG
 images and metadata as the local gallery, refreshes every five seconds, and
@@ -27,11 +29,29 @@ Do not expose it directly to the Internet.
 
 ## Modes and frequency presets
 
-Supported: **Martin M1/M2, Scottie S1/S2/DX, Robot 36/72**. These are the trusted
-modes in the earlier P4 `ft8hub_decode_sstv_daemon.py`. A valid VIS header is
-required. Unsupported VIS codes are reported rather than guessed. PD modes,
-MMSSTV extended/narrowband modes and EasyPal digital pictures are not decoded.
-A receiver joining halfway through a picture waits for the next header.
+Automatic detection now covers **48 analog SSTV modes**:
+
+- Martin M1/M2/M3/M4; Scottie S1/S2/S3/S4/DX.
+- Robot 24/36/72 colour and 8/12/24/36 B/W.
+- PD50/90/120/160/180/240/290.
+- Pasokon P3/P5/P7 and Wraase SC2-60/120/180.
+- MMSSTV MP73/115/140/175, MR73/90/115/140/175, ML180/240/280/320.
+- Narrowband MP73-N/110-N/140-N and MC110-N/140-N/180-N.
+
+A valid standard, extended, or narrowband VIS header is required. Leaders,
+VIS tones, standard parity/stop bits and narrowband checksums are validated
+before reporting a mode; a noise candidate does not mean a real unsupported
+transmission was received. An unsupported valid header is reported while
+listening continues. Joining halfway through a picture waits for the next header.
+This is not universal support: AVT, Robot 12 colour, legacy Wraase SC1,
+proprietary variants, fax and EasyPal/DRM digital pictures remain unsupported.
+
+Mode timing references:
+- [MMSSTV author's mode specifications](https://github.com/n5ac/mmsstv/blob/8060b5f1e9727b0052d74108081c6db7b26babad/mode.txt),
+  with [implementation timing](https://github.com/n5ac/mmsstv/blob/8060b5f1e9727b0052d74108081c6db7b26babad/sstv.cpp)
+  for MC110-N (140 ms scans; the prose's 143 ms is inconsistent).
+- [QSSTV mode table](https://github.com/ON4QZ/QSSTV/blob/8c27d6d169d8c6c197eb47c2089870e39bc06a02/src/sstv/sstvparam.cpp).
+- [Independent PySSTV encoder](https://github.com/dnet/pysstv).
 
 | Band/preset | Dial frequency, MHz | Mode |
 | --- | ---: | --- |
@@ -50,12 +70,14 @@ These are starting points for receiving, not an exclusive or universal band
 plan. Regional activity differs. The less-used WARC frequencies are activity
 suggestions, not standardized calling channels. For another frequency, first
 tune the main radio in USB or LSB, then choose **Use current radio dial** in
-Add decoder. This also permits region-specific choices on 60 m. There is no
-30 m preset because its narrowband SSTV modes are unsupported here. VHF/UHF
+Add decoder. This also permits region-specific choices on 60 m. Narrowband modes can use a custom dial; no 30 m calling-frequency preset is assumed. VHF/UHF
 presets are excluded because this integration uses Kiwi's 0–30 MHz range;
 it cannot receive ISS SSTV at 145.800 MHz.
 
 Sources used for presets:
+- [IARU Region 1 band plan](https://www.iaru-r1.org/wp-content/uploads/2019/08/hf_r1_bandplan.pdf):
+  Romania uses Region 1; 7.165 MHz is its 40 m image activity centre versus
+  ARRL's US 7.171 MHz. These are activity conventions, not different codecs.
 - [ARRL band plan](https://www.arrl.org/band-plan): 7.171 and 14.230 MHz.
 - [Russian Digital Radio Club SSTV operating guide](https://www.rdrclub.ru/sstv):
   common European 80/40/20/15/10 m activity frequencies.
@@ -66,8 +88,14 @@ Sources used for presets:
 
 Session configuration and images live in `~/.local/share/ituner-sdr/sstv/` for
 the application user. The newest 300 image records are kept. Each capture has
-one ID, so a partial preview is replaced by its completed image. Partials are
-attempted every 30 seconds. Poor/noise-like images are rejected using P4's
+one ID, so a partial preview is replaced by its completed image. A **Receiving** tile appears immediately after a valid header, with progress
+on both the 15-tile gallery and the decoder card. Before the first pixels are
+ready it shows a placeholder; a first preview is attempted after 10 seconds,
+then every 30 seconds. At the end it says **Processing** until the final PNG
+is published. The web gallery and receiver cards show the same live state.
+A stopped or disconnected capture loses its live badge; an already saved
+partial remains available. In-progress tiles are transient and never become
+fake saved images. They are merged with their previews by capture ID. Poor/noise-like images are rejected using P4's
 adjacent-row correlation threshold (0.08); weak or flat images may be rejected.
 PNG files and JSON sidecars are written atomically. No audio recordings are
 retained after image processing.
@@ -113,15 +141,20 @@ Validation (Python 3.13, matching the app runtime):
 python3 -m unittest discover -s tests -v
 ```
 
-For the independent Martin M2 / Robot 36 waveform round trips, also install
+For the independent waveform round trips (including PD, Pasokon, Wraase and B/W), also install
 `PySSTV==0.5.7` in a development environment. This is a **test-only encoder**;
-it is not required on the Pi. The test suite otherwise skips that round-trip
-test explicitly. Tests cover VIS/parity, all supported headers across packet
+it is not required on the Pi. The test suite otherwise skips those round-trip
+tests explicitly. Additional MMSSTV image fixtures follow the author's published
+protocol. Tests cover live placeholders, progress, completion, interrupted
+captures, filtering, VIS/parity/checksums, all supported headers across packet
 boundaries, sequential frames, long modes, queue/subprocess publication,
 receiver PCM byte order and gaps, stop, persisted sessions/images, retention,
 and HTTP image/API/path validation. Local OpenGL views and browser image
 opening were also exercised with generated fixtures. Real over-the-air
-reception and performance on CM5 still require on-device validation.
+reception still needs a suitable signal. The new on-device suite passed with
+17 tests and two optional encoder skips; a separately generated PD120
+waveform was also used for the CM5 decoding check. The development suite
+passed all 19 SSTV tests plus 13 existing audio/bootstrap tests.
 
 ## CM5 deployment with PR #12
 

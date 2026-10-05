@@ -40,3 +40,25 @@ Validation on CM5:
 No live SSTV transmission was needed for these checks. Over-the-air reception
 still needs a receiver tuned to an active transmission. No test images or
 sample decoder sessions were added to the user's gallery.
+
+## Progress and additional modes update (2026-10-05)
+
+Updated only `sstv_decoder.py`, `sstv_modes.py`, `sstv_monitor.py`,
+`sstv_workspace.py` and `sstv_gallery.html`. The PR #12-compatible main UI
+above is unchanged. The five-file update adds 48 analog modes and live
+receiving/processing previews, with no new production dependencies.
+
+Backup: `/var/backups/ituner-sdr/before-sstv-progress-20261005-040023/`.
+Staging and manifest: `/home/ituner/sstv-progress-stage/`.
+
+Validation: 17 on-device tests passed, with two test-only encoder cases
+skipped. A separately generated PD120 waveform decoded successfully on CM5
+(row correlation 0.9732). Development validation passed all 19 SSTV tests,
+including the independent encoder cases, plus 13 audio/bootstrap regressions.
+Rendered both OpenGL views at 1280 × 800 and exercised browser placeholders,
+preview replacement, completion and live enlarged-image updates.
+
+The three user's Kiwi sessions and their frequencies were retained. Short
+18-second samples from 14.230, 18.117 and 21.340 MHz had nonzero PCM and no
+clipping, but no valid SSTV headers; the 20 m spectrogram showed broadband
+noise. No successful over-the-air image is claimed from these checks.
