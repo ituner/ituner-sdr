@@ -78,6 +78,7 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertFalse(ui.home_rail_controls_available(False, True, False))
         self.assertFalse(ui.home_rail_controls_available(False, False, True))
         self.assertFalse(ui.home_rail_controls_available(True, False, False))
+        self.assertFalse(ui.home_rail_controls_available(False, False, False, True))
 
     def test_waterfall_zoom_is_glyph_only_and_display_button_is_gone(self):
         ui.configure_output(True)

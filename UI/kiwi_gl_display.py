@@ -8095,7 +8095,9 @@ def radio_toggle_box(text_cache, freq_khz):
     return top_instrument_layout(text_cache, freq_khz)[1]
 
 
-def home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open):
+def home_rail_controls_available(
+    picker_open, settings_menu_open, digital_menu_open, sidebar_open=False,
+):
     """Whether the Home rail controls may react to a touch.
 
     Settings and MODES are full right-rail pages whose title and icons are
@@ -8103,7 +8105,7 @@ def home_rail_controls_available(picker_open, settings_menu_open, digital_menu_o
     receiver browser owns the screen), the covered Home mode grid, passband,
     and volume must stay inert instead of reacting under the visible page.
     """
-    return not picker_open and not settings_menu_open and not digital_menu_open
+    return not picker_open and not settings_menu_open and not digital_menu_open and not sidebar_open
 
 
 def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BOX):
@@ -23905,6 +23907,17 @@ def main():
                                 # can be mistaken for a drawer "outside" tap.
                                 and is_lcd_drawer_waterfall_touch(x, y)
                             )
+                            home_sidebar_open = (
+                                menu_open or radio_setup_open or audio_panel_open
+                                or display_setup_open or filter_drawer_open
+                                or receiver_home_panel_open or fan_curve_panel_open
+                                or frequency_drawer_open or compact_font_review_open
+                                or network_panel_open or tests_panel_open
+                                or asr_panel_open or deepgram_setup_open
+                                or band_navigation_open or wspr_panel_open
+                                or wspr_identity_open or globe_open or dj_tune_open
+                                or rtl_lab_open or font_lab_open
+                            )
                             start_freq = display_freq if (
                                 drawer_waterfall_touch
                                 or (
@@ -23926,6 +23939,7 @@ def main():
                                 font_lab_open
                                 or globe_open
                                 or rtl_lab_open
+                                or home_sidebar_open
                                 or wspr_panel_open
                                 or wspr_add_open
                                 # The receiver browser (list, globe, and the
@@ -24221,15 +24235,25 @@ def main():
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
+                            elif filter_drawer_open and LCD_800_MODE and (filter_action := lcd_filter_drawer_action_at(x, y)):
+                                # The open PASSBAND rail owns every visible
+                                # control before hidden Home instruments get a
+                                # chance to inspect the same coordinates.
+                                if filter_action == "shift":
+                                    gesture = "lcd_filter_shift"
+                                elif filter_action == "width":
+                                    gesture = "lcd_filter_width"
+                                else:
+                                    gesture = "lcd_filter_drawer"
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_bandwidth_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_passband"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_volume_mute_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_volume_mute"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_volume_box(instrument_layout == "compact"), x, y
                             ):
                                 gesture = "home_volume"
@@ -24238,7 +24262,7 @@ def main():
                             # placeholders. While either is open, that region
                             # must not fall through to the covered Home mode
                             # grid and pick a hidden mode.
-                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -24290,15 +24314,6 @@ def main():
                                 gesture = "tests_panel"
                             elif tests_panel_open and not LCD_800_MODE:
                                 gesture = "tests_panel_outside"
-                            elif filter_drawer_open and LCD_800_MODE and (filter_action := lcd_filter_drawer_action_at(x, y)):
-                                # The whole visible instrument accepts touch;
-                                # users do not have to find its narrow rail.
-                                if filter_action == "shift":
-                                    gesture = "lcd_filter_shift"
-                                elif filter_action == "width":
-                                    gesture = "lcd_filter_width"
-                                else:
-                                    gesture = "lcd_filter_drawer"
                             elif filter_panel_open and contains(FILTER_EDIT_BOX, x, y):
                                 _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                                 # Filter edits are expressed directly in the VFO's
