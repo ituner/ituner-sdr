@@ -235,6 +235,16 @@ class ParentNavigationTests(unittest.TestCase):
         self.assertEqual(ui.navigation_back_surface("home"), "home")
         self.assertEqual(ui.navigation_back_surface("unexpected"), "home")
 
+    def test_nested_back_returns_to_the_immediate_previous_screen(self):
+        self.assertEqual(ui.navigation_previous_surface("receiver_map", "home"), "receivers")
+        self.assertEqual(ui.navigation_previous_surface("fan_curve", "settings"), "info")
+        self.assertEqual(ui.navigation_previous_surface("font_review", "frequency"), "frequency")
+        self.assertEqual(ui.navigation_previous_surface("display", "settings"), "settings")
+
+    def test_known_leaf_surfaces_can_be_restored(self):
+        for surface in ("settings", "receivers", "info", "apps", "audio", "frequency", "modes", "wspr"):
+            self.assertEqual(ui.navigation_back_surface(surface), surface)
+
     def test_stats_keeps_settings_surface_when_launched_from_settings(self):
         self.assertTrue(ui.stats_keeps_settings_sidebar("settings"))
         self.assertFalse(ui.stats_keeps_settings_sidebar("home"))

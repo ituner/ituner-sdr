@@ -14911,9 +14911,32 @@ def navigation_parent(items, kind):
     return "home"
 
 
+NAVIGATION_SURFACES = frozenset({
+    "home",
+    "settings",
+    "receivers",
+    "info",
+    "apps",
+    "audio",
+    "frequency",
+    "modes",
+    "wspr",
+})
+
+NESTED_NAVIGATION_PARENTS = {
+    "receiver_map": "receivers",
+    "fan_curve": "info",
+}
+
+
 def navigation_back_surface(parent):
-    """Normalize stored leaf parents so invalid state always returns Home."""
-    return "settings" if parent == "settings" else "home"
+    """Normalize a stored parent to a restorable app surface."""
+    return parent if parent in NAVIGATION_SURFACES else "home"
+
+
+def navigation_previous_surface(current, parent="home"):
+    """Return the screen immediately beneath the current screen."""
+    return NESTED_NAVIGATION_PARENTS.get(current, navigation_back_surface(parent))
 
 
 def stats_keeps_settings_sidebar(parent):
@@ -23083,10 +23106,22 @@ def main():
             session.drain_rows(texture)
 
     def restore_navigation_parent(parent):
-        """Close a leaf back to its recorded rail surface."""
+        """Close a leaf and restore the screen that opened it."""
         nonlocal settings_menu_open, digital_menu_open
-        settings_menu_open = navigation_back_surface(parent) == "settings"
+        nonlocal picker_open, picker_map_open, receiver_home_panel_open, tests_panel_open
+        nonlocal audio_panel_open, frequency_drawer_open, radio_setup_open, wspr_panel_open
+        target = navigation_back_surface(parent)
+        settings_menu_open = target == "settings"
         digital_menu_open = False
+        picker_open = target == "receivers"
+        if picker_open:
+            picker_map_open = False
+        receiver_home_panel_open = target == "info"
+        tests_panel_open = target == "apps"
+        audio_panel_open = target == "audio"
+        frequency_drawer_open = target == "frequency"
+        radio_setup_open = target == "modes"
+        wspr_panel_open = target == "wspr"
 
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
@@ -26072,7 +26107,7 @@ def main():
                                 elif contains(home_boxes["fan"], x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
-                                    fan_curve_parent = receiver_home_parent
+                                    fan_curve_parent = navigation_previous_surface("fan_curve", receiver_home_parent)
                                 elif contains(home_boxes["fallback"], x, y):
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
@@ -26568,14 +26603,23 @@ def main():
                         elif touch_started and gesture == "picker_exit":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                picker_open = False
-                                picker_map_open = False
-                                search_open = False
-                                fmdx_disclaimer_open = False
-                                station_scroll = 0
-                                station_pending_server = None
-                                station_connected_at = 0.0
-                                restore_navigation_parent(picker_parent)
+                                back_target = navigation_previous_surface(
+                                    "receiver_map" if picker_map_open else "receivers",
+                                    picker_parent,
+                                )
+                                if back_target == "receivers":
+                                    picker_map_open = False
+                                    picker_map_hover_server = None
+                                    search_open = False
+                                else:
+                                    picker_open = False
+                                    picker_map_open = False
+                                    search_open = False
+                                    fmdx_disclaimer_open = False
+                                    station_scroll = 0
+                                    station_pending_server = None
+                                    station_connected_at = 0.0
+                                    restore_navigation_parent(back_target)
                                 wake_controls()
                         elif touch_started and gesture == "picker_search":
                             moved = max(abs(x - start_x), abs(y - start_y))
