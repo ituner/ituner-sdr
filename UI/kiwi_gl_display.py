@@ -7624,7 +7624,8 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
-    active = active or ui_button_pressed(box)
+    pressed = ui_button_pressed(box)
+    active = active or pressed
     key = f"zoom_sign_tile_v1_{label}_{int(active)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -7641,7 +7642,10 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         tile = pygame.Rect(p(3), p(3), p(w - 6), p(h - 6))
         if active:
             pygame.draw.rect(hi, (43, 121, 81, 210), tile, border_radius=p(4))
-            border, icon = (119, 255, 162, 245), (255, 255, 255, 255)
+            border, icon = (
+                (UI_PRESSED_EDGE, (*UI_PRESSED_TEXT, 255))
+                if pressed else ((119, 255, 162, 245), (255, 255, 255, 255))
+            )
         else:
             pygame.draw.rect(hi, (13, 21, 28, 122), tile, border_radius=p(4))
             border, icon = (150, 178, 186, 176), (244, 250, 252, 222)
@@ -7663,9 +7667,10 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = SPECTRUM_TOGGLE_BOX
-    if ui_button_pressed(SPECTRUM_TOGGLE_BOX):
+    pressed = ui_button_pressed(SPECTRUM_TOGGLE_BOX)
+    if pressed:
         draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
-    key = f"spectrum_toggle_display_v1_{int(enabled)}"
+    key = f"spectrum_toggle_display_v1_{int(enabled)}_{int(pressed)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -7676,7 +7681,7 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (218, 223, 225, 234) if enabled else (220, 224, 226, 170)
+        color = (*UI_PRESSED_TEXT, 255) if pressed else ((218, 223, 225, 234) if enabled else (220, 224, 226, 170))
         label_size = max(16, round(h * 0.24))
         screen_w = min(w - 30, round(h * 0.84))
         screen_h = round(h * 0.38)
@@ -7696,9 +7701,10 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = FILTER_TOGGLE_BOX
-    if ui_button_pressed(FILTER_TOGGLE_BOX):
+    pressed = ui_button_pressed(FILTER_TOGGLE_BOX)
+    if pressed:
         draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
-    key = "filter_toggle_v3"
+    key = f"filter_toggle_v3_{int(pressed)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -7709,8 +7715,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (219, 223, 225, 178)
-        dim = (174, 180, 184, 54)
+        color = (*UI_PRESSED_TEXT, 255) if pressed else (219, 223, 225, 178)
+        dim = (*UI_PRESSED_TEXT, 150) if pressed else (174, 180, 184, 54)
         label_size = max(16, round(h * 0.24))
         baseline = h * 0.46
         icon_w = min(w - 22, round(h * 0.88))
@@ -7804,6 +7810,7 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     pressed = ui_button_pressed((x0, y0, x1, y1))
     fill = UI_PRESSED_FILL if pressed else ((8, 37, 52, 190) if paused else (4, 17, 22, 122))
     edge = UI_PRESSED_EDGE if pressed else ((104, 218, 246, 238) if paused else (105, 230, 168, 190))
+    icon_color = UI_PRESSED_TEXT if pressed else (234, 251, 252, 250)
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in (
         (x0, y0, x1, y0), (x0, y1, x1, y1),
@@ -7812,19 +7819,19 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     if paused:
-        draw_logical_line(cx - 12, cy - 20, cx - 12, cy + 20, (234, 251, 252, 250), 4)
-        draw_logical_line(cx - 12, cy - 20, cx + 20, cy, (234, 251, 252, 250), 4)
-        draw_logical_line(cx + 20, cy, cx - 12, cy + 20, (234, 251, 252, 250), 4)
+        draw_logical_line(cx - 12, cy - 20, cx - 12, cy + 20, icon_color, 4)
+        draw_logical_line(cx - 12, cy - 20, cx + 20, cy, icon_color, 4)
+        draw_logical_line(cx + 20, cy, cx - 12, cy + 20, icon_color, 4)
     else:
-        draw_logical_rect(cx - 17, cy - 20, cx - 7, cy + 20, (234, 251, 252, 238))
-        draw_logical_rect(cx + 7, cy - 20, cx + 17, cy + 20, (234, 251, 252, 238))
+        draw_logical_rect(cx - 17, cy - 20, cx - 7, cy + 20, icon_color)
+        draw_logical_rect(cx + 7, cy - 20, cx + 17, cy + 20, icon_color)
 
 
 def draw_favorite_waterfall_button(favorited):
     """Transparent outlined/filled star: a durable receiver bookmark."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
-    edge = UI_PRESSED_EDGE if pressed else ((248, 207, 104, 248) if favorited else (151, 193, 200, 204))
+    edge = UI_PRESSED_TEXT if pressed else ((248, 207, 104, 248) if favorited else (151, 193, 200, 204))
     draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else ((42, 33, 10, 178) if favorited else (4, 17, 22, 110)))
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
@@ -7975,8 +7982,9 @@ def draw_gear_button(text_cache):
     draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if ui_button_pressed(GEAR_BOX) else (3, 9, 14, 58))
     cx = (x0 + x1) / 2
     cy = (y0 + y1) / 2
-    ring = (206, 238, 242, 128)
-    color = (226, 246, 249, 210)
+    pressed = ui_button_pressed(GEAR_BOX)
+    ring = UI_PRESSED_TEXT if pressed else (206, 238, 242, 128)
+    color = UI_PRESSED_TEXT if pressed else (226, 246, 249, 210)
     for ox, oy in ((0, 0), (1, 0), (0, 1)):
         draw_logical_line(x0 + 8 + ox, y0 + 6 + oy, x1 - 8 + ox, y0 + 6 + oy, ring, 1)
         draw_logical_line(x0 + 8 + ox, y1 - 6 + oy, x1 - 8 + ox, y1 - 6 + oy, ring, 1)
@@ -8009,7 +8017,8 @@ def draw_home_button(text_cache, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = HOME_BOX
-    if ui_button_pressed(HOME_BOX):
+    pressed = ui_button_pressed(HOME_BOX)
+    if pressed:
         draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
     w, h = int(x1 - x0), int(y1 - y0)
     surface = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -8019,8 +8028,16 @@ def draw_home_button(text_cache, alpha=1.0):
         icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
         surface.blit(icon, ((w - icon_size) // 2, (h - icon_size) // 2))
     except (pygame.error, OSError):
-        draw_menu_icon(surface, "home", w // 2, h // 2, (231, 235, 237, 238), (82, 235, 231, 150))
-    tex, tex_w, tex_h = text_cache.surface_texture("home_button_v12", surface)
+        draw_menu_icon(
+            surface, "home", w // 2, h // 2,
+            UI_PRESSED_TEXT if pressed else (231, 235, 237, 238),
+            UI_PRESSED_TEXT if pressed else (82, 235, 231, 150),
+        )
+    if pressed:
+        surface.fill((*UI_PRESSED_TEXT, 255), special_flags=pygame.BLEND_RGBA_MULT)
+    tex, tex_w, tex_h = text_cache.surface_texture(
+        f"home_button_v12_{'pressed' if pressed else 'normal'}", surface
+    )
     draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
 
 
@@ -8101,7 +8118,8 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
     if not DESKTOP_1280_MODE:
         return
     x0, y0, x1, y1 = DESKTOP_1280_ANNUNCIATOR_BOX
-    draw_native_rect(x0, y0, x1, y1, (15, 31, 39, 244))
+    pressed = ui_button_pressed(DESKTOP_1280_ANNUNCIATOR_BOX)
+    draw_native_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (15, 31, 39, 244))
     draw_native_line(x0, y0, x1, y0, (125, 147, 158, 168), 1)
     draw_native_line(x0, y0, x0, y1, (93, 120, 132, 155), 1)
     draw_native_line(x1, y0, x1, y1, (32, 50, 61, 215), 1)
@@ -8114,7 +8132,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         (x0 + x1) / 2,
         y0 + 13,
         context_label,
-        (214, 238, 233),
+        UI_PRESSED_TEXT if pressed else (214, 238, 233),
         11 if len(context_label) > 20 else 12,
         True,
         False,
@@ -8145,7 +8163,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
             bx0 + 7,
             (by0 + by1) / 2 + 1,
             label,
-            (235, 255, 239) if active else (130, 151, 157),
+            UI_PRESSED_TEXT if pressed else ((235, 255, 239) if active else (130, 151, 157)),
             12,
             True,
             False,
@@ -8154,8 +8172,9 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         )
     footer_y = y0 + 75
     draw_native_line(x0 + 9, footer_y, x1 - 9, footer_y, (64, 103, 112, 150), 1)
-    draw_native_text(text_cache, grid_x + 7, y1 - 9, f"BW  {format_filter_width(bandwidth_hz)}", (192, 218, 222), 12, True, False, "lm", family="Liberation Sans")
-    draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", (192, 218, 222), 12, True, False, "rm", family="Liberation Sans")
+    footer_color = UI_PRESSED_TEXT if pressed else (192, 218, 222)
+    draw_native_text(text_cache, grid_x + 7, y1 - 9, f"BW  {format_filter_width(bandwidth_hz)}", footer_color, 12, True, False, "lm", family="Liberation Sans")
+    draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", footer_color, 12, True, False, "rm", family="Liberation Sans")
 
 
 def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
@@ -8425,10 +8444,11 @@ def draw_radio_close_button(text_cache, box):
     ):
         draw_logical_line(ax0, ay0, ax1, ay1, UI_PRESSED_EDGE if pressed else (105, 222, 237, 230), 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    arrow_color = UI_PRESSED_TEXT if pressed else (232, 253, 255, 250)
     # A familiar, text-free back glyph: arrow head plus a generous stem.
-    draw_logical_line(cx + 11, cy, cx - 9, cy, (232, 253, 255, 250), 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy - 8, (232, 253, 255, 250), 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy + 8, (232, 253, 255, 250), 2)
+    draw_logical_line(cx + 11, cy, cx - 9, cy, arrow_color, 2)
+    draw_logical_line(cx - 9, cy, cx - 1, cy - 8, arrow_color, 2)
+    draw_logical_line(cx - 9, cy, cx - 1, cy + 8, arrow_color, 2)
 
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
@@ -8454,7 +8474,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
         (x0 + x1) / 2,
         (y0 + y1) / 2 - (3 if compact_lcd_drawer else 4),
         family,
-        (238, 252, 250) if active else (190, 211, 215),
+        UI_PRESSED_TEXT if pressed else ((238, 252, 250) if active else (190, 211, 215)),
         (15 if len(family) <= 6 else 12) if compact_lcd_drawer else (21 if len(family) <= 6 else 19),
         True,
         False,
@@ -8469,7 +8489,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
             (x0 + x1) / 2,
             y1 - (13 if compact_lcd_drawer else 16),
             active_label,
-            (174, 244, 228),
+            UI_PRESSED_TEXT if pressed else (174, 244, 228),
             active_size if compact_lcd_drawer else 14,
             True,
             False,
@@ -8495,7 +8515,7 @@ def draw_radio_variant_option(text_cache, box, mode, active):
         (x0 + x1) / 2,
         (y0 + y1) / 2,
         label,
-        (240, 254, 251) if active else (213, 231, 233),
+        UI_PRESSED_TEXT if pressed else ((240, 254, 251) if active else (213, 231, 233)),
         17 if len(label) <= 11 else 15,
         True,
         False,
@@ -10426,8 +10446,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_logical_line(bx1, by0, bx1, by1, line, 1)
         title_y = by0 + (20 if LCD_800_MODE else 17)
         detail_y = by0 + (48 if LCD_800_MODE else 39)
-        draw_text(text_cache, bx0 + 14, title_y, title, (230, 246, 247), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
-        draw_text(text_cache, bx0 + 14, detail_y, detail, (112, 223, 169) if active else (153, 185, 191), 14 if LCD_800_MODE else 13, False, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, title_y, title, UI_PRESSED_TEXT if pressed else (230, 246, 247), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, detail_y, detail, UI_PRESSED_TEXT if pressed else ((112, 223, 169) if active else (153, 185, 191)), 14 if LCD_800_MODE else 13, False, True, "lm", family="Liberation Sans")
 
     def panel_slider(box, title, value, maximum):
         bx0, by0, bx1, by1 = box
@@ -10584,8 +10604,8 @@ def draw_tests_button(text_cache, box, title, detail, active=False):
     draw_logical_line(x0, y1, x1, y1, line, 1)
     draw_logical_line(x0, y0, x0, y1, line, 1)
     draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, (237, 248, 248), 20, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, (255, 211, 151) if active else (154, 186, 192), 14, False, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, UI_PRESSED_TEXT if pressed else (237, 248, 248), 20, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, UI_PRESSED_TEXT if pressed else ((255, 211, 151) if active else (154, 186, 192)), 14, False, True, "lm", family="Liberation Sans")
 
 
 def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
@@ -10786,10 +10806,10 @@ def draw_wspr_button(text_cache, box, title, detail="", active=False, selected=F
     if active:
         draw_logical_line(x0 + 10, y1 - 4, x1 - 10, y1 - 4, (80, 255, 146, 210), 2)
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - (7 if detail else 0), title,
-              (235, 250, 246) if active or selected else (197, 217, 220), 17, True, True, "cm", family="Liberation Sans")
+              UI_PRESSED_TEXT if pressed else ((235, 250, 246) if active or selected else (197, 217, 220)), 17, True, True, "cm", family="Liberation Sans")
     if detail:
         draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 13, detail,
-                  (117, 238, 180) if active else (137, 171, 178), 12, True, True, "cm", family="Liberation Sans")
+                  UI_PRESSED_TEXT if pressed else ((117, 238, 180) if active else (137, 171, 178)), 12, True, True, "cm", family="Liberation Sans")
 
 
 def draw_wspr_mrtg_graph(text_cache, history, window_s, selected_band):
@@ -11751,8 +11771,9 @@ def wspr_card_distance_expand_hit_box(box):
 def draw_wspr_settings_button(text_cache, box):
     """A clear cog affordance instead of a tiny text-only settings target."""
     x0, y0, x1, y1 = box
+    pressed = ui_button_pressed(box)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    draw_logical_rect(x0, y0, x1, y1, (15, 37, 45, 235))
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (15, 37, 45, 235))
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (108, 166, 172, 160), 1)
     for index in range(8):
@@ -11761,32 +11782,35 @@ def draw_wspr_settings_button(text_cache, box):
         draw_logical_line(
             cx + inner * math.cos(angle), cy + inner * math.sin(angle),
             cx + outer * math.cos(angle), cy + outer * math.sin(angle),
-            (174, 220, 222, 232), 2,
+            UI_PRESSED_TEXT if pressed else (174, 220, 222, 232), 2,
         )
-    draw_logical_circle(cx, cy, 7, (193, 233, 234, 238), segments=20, outline=True)
-    draw_logical_circle(cx, cy, 2.5, (84, 229, 193, 245), segments=14, outline=True)
+    draw_logical_circle(cx, cy, 7, UI_PRESSED_TEXT if pressed else (193, 233, 234, 238), segments=20, outline=True)
+    draw_logical_circle(cx, cy, 2.5, UI_PRESSED_TEXT if pressed else (84, 229, 193, 245), segments=14, outline=True)
 
 
 def draw_wspr_log_expand_button(text_cache, box):
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (12, 42, 47, 226))
+    pressed = ui_button_pressed(box)
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (12, 42, 47, 226))
     draw_logical_line(x0, y0, x1, y0, (100, 218, 187, 184), 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "FULL", (209, 242, 235), 13, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "FULL", UI_PRESSED_TEXT if pressed else (209, 242, 235), 13, True, True, "cm", family="Liberation Sans")
 
 
 def draw_wspr_waterfall_expand_button(text_cache, box):
     """A visible but non-obscuring overlay on the live mini waterfall."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (12, 42, 47, 226))
+    pressed = ui_button_pressed(box)
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (12, 42, 47, 226))
     draw_logical_line(x0, y0, x1, y0, (100, 218, 187, 184), 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "W/F FULL", (209, 242, 235), 12, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "W/F FULL", UI_PRESSED_TEXT if pressed else (209, 242, 235), 12, True, True, "cm", family="Liberation Sans")
 
 
 def draw_wspr_distance_expand_button(text_cache, box):
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (12, 42, 47, 226))
+    pressed = ui_button_pressed(box)
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (12, 42, 47, 226))
     draw_logical_line(x0, y0, x1, y0, (100, 218, 187, 184), 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "GRAPH", (209, 242, 235), 13, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, "GRAPH", UI_PRESSED_TEXT if pressed else (209, 242, 235), 13, True, True, "cm", family="Liberation Sans")
 
 
 def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=None, settings_box=None, expand_box=None,
@@ -12340,7 +12364,7 @@ def draw_wspr_danger_button(text_cache, box, label, armed=False):
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (255, 232, 234), 16, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, UI_PRESSED_TEXT if pressed else (255, 232, 234), 16, True, True, "cm", family="Liberation Sans")
 
 
 def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_page, receiver_picker_open=False, band_picker_open=False, delete_armed=False):
@@ -12856,18 +12880,10 @@ RECEIVER_MAP_GROUP_COLORS = {
 }
 # Session-only visibility; groups the operator has switched off in the legend.
 RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters are compact square buttons. Four fit in one row inside the
-# rail, leaving the map unobstructed and preserving the normal button type size.
+# Legend filters use the same 94×94 two-column launcher grid as LIST, VIEW and
+# zoom. Their full source names remain visible at the normal launcher size.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 88
-RECEIVER_MAP_LEGEND_BUTTON_SIZE = 50
-RECEIVER_MAP_LEGEND_GAP = 8
-RECEIVER_MAP_LEGEND_FONT_SIZE = 18
-RECEIVER_MAP_LEGEND_SHORT_LABELS = {
-    "kiwi": "K",
-    "openwebrx": "O",
-    "local": "L",
-    "fmdx": "FM",
-}
+RECEIVER_MAP_LEGEND_FONT_SIZE = 15
 
 
 def receiver_map_group(receiver):
@@ -12908,18 +12924,18 @@ def receiver_map_legend_entries(receivers):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """50×50 touch targets for the legend filters in the Globe rail."""
+    """Launcher-sized touch targets for the legend filters in the Globe rail."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    size = RECEIVER_MAP_LEGEND_BUTTON_SIZE
-    total_width = len(entries) * size + max(0, len(entries) - 1) * RECEIVER_MAP_LEGEND_GAP
-    x = LCD_NAV_X0 + ((LOGICAL_W - LCD_NAV_X0) - total_width) / 2
-    y = RECEIVER_MAP_LEGEND_RAIL_TOP
+    grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
+    grid_x0 = LCD_NAV_X0 + ((LOGICAL_W - LCD_NAV_X0) - grid_width) / 2
     boxes = []
-    for group, _label, _color in entries:
-        boxes.append((group, (x, y, x + size, y + size)))
-        x += size + RECEIVER_MAP_LEGEND_GAP
+    for index, (group, _label, _color) in enumerate(entries):
+        col, row = index % 2, index // 2
+        x = grid_x0 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+        y = RECEIVER_MAP_LEGEND_RAIL_TOP + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+        boxes.append((group, (x, y, x + LCD_NAV_TILE_W, y + LCD_NAV_TILE_H)))
     return tuple(boxes)
 
 
@@ -13259,7 +13275,7 @@ def draw_receiver_map(
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
-        legend_label = RECEIVER_MAP_LEGEND_SHORT_LABELS[legend_group]
+        legend_label = RECEIVER_MAP_GROUP_LABELS[legend_group]
         draw_logical_rect(
             lx0, ly0, lx1, ly1,
             UI_PRESSED_FILL if pressed else ((12, 34, 42, 226) if legend_active else (18, 21, 25, 214)),
@@ -13269,13 +13285,15 @@ def draw_receiver_map(
         draw_logical_line(lx0, ly1, lx1, ly1, border, 1)
         draw_logical_line(lx0, ly0, lx0, ly1, border, 1)
         draw_logical_line(lx1, ly0, lx1, ly1, border, 1)
-        swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 13
-        if legend_active:
+        swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 31
+        if pressed:
+            draw_logical_circle(swatch_x, swatch_y, 9, UI_PRESSED_TEXT, 18)
+        elif legend_active:
             draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         else:
             draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
         draw_text(
-            text_cache, swatch_x, ly1 - 13, legend_label,
+            text_cache, swatch_x, ly1 - 23, legend_label,
             UI_PRESSED_TEXT if pressed else ((232, 246, 247) if legend_active else (126, 138, 146)),
             RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Cantarell",
         )
@@ -13291,14 +13309,23 @@ def draw_receiver_map(
 
     def draw_globe_icon_tile(command_box, icon, label):
         bx0, by0, bx1, by1 = command_box
+        pressed = ui_button_pressed(command_box)
         draw_globe_tile_border(command_box)
-        tile, _tile_w, _tile_h = menu_icon_texture(text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8))
+        tile, _tile_w, _tile_h = menu_icon_texture(
+            text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8),
+            pressed=pressed,
+        )
         draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
 
     def draw_globe_zoom_tile(command_box, glyph):
         bx0, by0, bx1, by1 = command_box
+        pressed = ui_button_pressed(command_box)
         draw_globe_tile_border(command_box)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, glyph, (231, 254, 249), 46, True, False, "cm", family="Liberation Sans")
+        draw_text(
+            text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, glyph,
+            UI_PRESSED_TEXT if pressed else (231, 254, 249),
+            46, True, False, "cm", family="Liberation Sans",
+        )
 
     draw_globe_icon_tile(RADIOGARDEN_LIST_BOX, "rx", "LIST")
     draw_picker_two_line_button(
@@ -14232,9 +14259,9 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         pygame.draw.circle(surface, color, (cx, cy - 20), 3)
 
 
-def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False):
+def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False, pressed=False):
     """Build a menu tile at its eventual raster size to avoid texture blur."""
-    key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}"
+    key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}_{'pressed' if pressed else 'normal'}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -14259,8 +14286,14 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         color = (232, 248, 250, 232)
         dim = (82, 235, 231, 150)
         draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12), color, dim)
-    label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(label, True, (207, 221, 224))
+    label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(
+        label, True, UI_PRESSED_TEXT if pressed else (207, 221, 224)
+    )
     surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - 26))
+    if pressed:
+        # Preserve the asset alpha while turning every visible icon pixel into
+        # the same dark ink used by pressed text on the cyan button surface.
+        surface.fill((*UI_PRESSED_TEXT, 255), special_flags=pygame.BLEND_RGBA_MULT)
     return text_cache.surface_texture(key, surface)
 
 
@@ -14280,7 +14313,12 @@ def draw_main_menu(text_cache, scroll):
         target_h = min(92, by1 - by0 - 4)
         target_x = bx0 + ((bx1 - bx0) - target_w) / 2
         target_y = by0 + ((by1 - by0) - target_h) / 2
-        tex, tex_w, tex_h = menu_icon_texture(text_cache, kind, label, int(target_w), int(target_h))
+        pressed = ui_button_pressed(box)
+        if pressed:
+            draw_logical_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL)
+        tex, tex_w, tex_h = menu_icon_texture(
+            text_cache, kind, label, int(target_w), int(target_h), pressed=pressed
+        )
         draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
@@ -14300,14 +14338,17 @@ def draw_desktop_1280_navigation(text_cache):
     draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
-        draw_native_rect(bx0, by0, bx1, by1, (17, 29, 38, 218))
+        pressed = ui_button_pressed((bx0, by0, bx1, by1))
+        draw_native_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL if pressed else (17, 29, 38, 218))
         draw_native_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
         draw_native_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
         draw_native_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
         draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
         tile_w = bx1 - bx0 - 8
         tile_h = by1 - by0 - 8
-        tex, _tex_w, _tex_h = menu_icon_texture(text_cache, kind, label, tile_w, tile_h)
+        tex, _tex_w, _tex_h = menu_icon_texture(
+            text_cache, kind, label, tile_w, tile_h, pressed=pressed
+        )
         draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
 
 
@@ -14653,12 +14694,14 @@ def draw_band_navigation(text_cache, freq_khz, mode):
     context, _kind = frequency_band_context(freq_khz, mode)
     draw_text(text_cache, x0 + 232, y0 + 24, context, (126, 187, 196), 15, True, False, "lm", family="Liberation Sans")
     close = boxes["close"]
-    draw_logical_rect(*close, (25, 53, 66, 232))
+    close_pressed = ui_button_pressed(close)
+    draw_logical_rect(*close, UI_PRESSED_FILL if close_pressed else (25, 53, 66, 232))
     for ax0, ay0, ax1, ay1 in ((close[0], close[1], close[2], close[1]), (close[0], close[3], close[2], close[3]), (close[0], close[1], close[0], close[3]), (close[2], close[1], close[2], close[3])):
         draw_logical_line(ax0, ay0, ax1, ay1, (115, 215, 229, 216), 1)
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[2] - 17, (close[1] + close[3]) / 2, (235, 250, 251, 255), 2)
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[1] + 13, (235, 250, 251, 255), 2)
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[3] - 13, (235, 250, 251, 255), 2)
+    close_icon = UI_PRESSED_TEXT if close_pressed else (235, 250, 251, 255)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[2] - 17, (close[1] + close[3]) / 2, close_icon, 2)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[1] + 13, close_icon, 2)
+    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[3] - 13, close_icon, 2)
     active_context, _active_kind = frequency_band_context(freq_khz, mode)
     for preset, box in boxes["cells"]:
         label, _target_khz, kind = preset
@@ -14672,6 +14715,9 @@ def draw_band_navigation(text_cache, freq_khz, mode):
             edge, accent = (75, 205, 234, 225), (162, 232, 247)
             group = "HAM"
         bx0, by0, bx1, by1 = box
+        pressed = ui_button_pressed(box)
+        if pressed:
+            fill, edge, accent = UI_PRESSED_FILL, UI_PRESSED_EDGE, UI_PRESSED_TEXT
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
             draw_logical_line(ax0, ay0, ax1, ay1, edge if is_active else (*edge[:3], 105), 1)
@@ -14739,14 +14785,15 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
 
     def button(box, label, active=False, destructive=False):
         bx0, by0, bx1, by1 = box
-        fill = (24, 67, 49, 255) if active else ((61, 25, 26, 255) if destructive else (17, 32, 40, 255))
-        edge = (112, 234, 176, 228) if active else ((228, 112, 106, 198) if destructive else (103, 141, 149, 172))
+        pressed = ui_button_pressed(box)
+        fill = UI_PRESSED_FILL if pressed else ((24, 67, 49, 255) if active else ((61, 25, 26, 255) if destructive else (17, 32, 40, 255)))
+        edge = UI_PRESSED_EDGE if pressed else ((112, 234, 176, 228) if active else ((228, 112, 106, 198) if destructive else (103, 141, 149, 172)))
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         draw_logical_line(bx0, by0, bx1, by0, edge, 1)
         draw_logical_line(bx0, by1, bx1, by1, edge, 1)
         draw_logical_line(bx0, by0, bx0, by1, edge, 1)
         draw_logical_line(bx1, by0, bx1, by1, edge, 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (238, 246, 247), 20, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, UI_PRESSED_TEXT if pressed else (238, 246, 247), 20, True, False, "cm", family="Liberation Sans")
 
     button(boxes["previous"], "<")
     button(boxes["next"], ">")
@@ -15184,9 +15231,11 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         else:
             tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
             draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
+        pressed = ui_button_pressed(nav_box)
         tex, _tex_w, _tex_h = menu_icon_texture(
             text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
             muted=muted and kind == "audio",
+            pressed=pressed,
         )
         draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
 
@@ -15333,10 +15382,11 @@ def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=1
     """Draw a picker command with a stable action name and changing value."""
     x0, y0, x1, y1 = box
     draw_picker_button(text_cache, box, "", size, selected)
+    pressed = ui_button_pressed(box)
     center_x = (x0 + x1) / 2
     center_y = (y0 + y1) / 2
-    draw_text(text_cache, center_x, center_y - 12, first_line, (238, 240, 242), size, True, False, "cm")
-    draw_text(text_cache, center_x, center_y + 13, second_line, (168, 211, 214), max(11, size - 3), True, False, "cm")
+    draw_text(text_cache, center_x, center_y - 12, first_line, UI_PRESSED_TEXT if pressed else (238, 240, 242), size, True, False, "cm")
+    draw_text(text_cache, center_x, center_y + 13, second_line, UI_PRESSED_TEXT if pressed else (168, 211, 214), max(11, size - 3), True, False, "cm")
 
 
 def deepgram_keyboard_rows(mode):
@@ -16040,6 +16090,9 @@ def draw_station_picker(
         else:
             fill = (20, 23, 26, 205)
             outline = (83, 88, 92, 135)
+        pressed = ui_button_pressed(box)
+        if pressed:
+            fill, outline = UI_PRESSED_FILL, UI_PRESSED_EDGE
         draw_logical_rect(*box, fill)
         draw_logical_line(box[0], box[1], box[2], box[1], outline, 1)
         draw_logical_line(box[0], box[3], box[2], box[3], outline, 1)
@@ -16065,6 +16118,8 @@ def draw_station_picker(
         title_color = (232, 255, 243) if pending else ((157, 249, 214) if local_receiver else ((238, 240, 242) if active or selected else (202, 209, 213)))
         host_color = (156, 226, 197) if pending else ((108, 209, 186) if local_receiver else ((129, 134, 138) if active or selected else (115, 124, 130)))
         capacity_color = (211, 255, 232) if pending else ((164, 237, 211) if local_receiver else ((198, 202, 205) if active or selected else (158, 167, 172)))
+        if pressed:
+            title_color = host_color = capacity_color = UI_PRESSED_TEXT
         # Reserve a fixed, generously padded glyph lane. This prevents long
         # station titles from ever colliding with the audio/waterfall symbols.
         single_column_lcd = LCD_800_MODE and PICKER_COLS == 1

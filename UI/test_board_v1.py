@@ -493,13 +493,15 @@ class ReceiverMapLegendTests(unittest.TestCase):
             )
         return texts
 
-    def test_legend_square_uses_compact_source_labels(self):
+    def test_legend_tiles_show_full_source_names(self):
         texts = self._legend_texts()
-        self.assertIn('K', texts)
-        self.assertIn('FM', texts)
+        self.assertIn('KIWI', texts)
+        self.assertIn('OPENWEBRX', texts)
+        self.assertIn('LOCAL', texts)
+        self.assertIn('FM-DX', texts)
         ui.receiver_map_toggle_group('kiwi')
         texts = self._legend_texts()
-        self.assertIn('K', texts)
+        self.assertIn('KIWI', texts)
 
     def _legend_text_sizes(self):
         sizes = []
@@ -525,11 +527,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
     def test_legend_square_keeps_the_normal_button_font_size(self):
         sizes = [
             size for text, size in self._legend_text_sizes()
-            if text in ui.RECEIVER_MAP_LEGEND_SHORT_LABELS.values()
+            if text in ui.RECEIVER_MAP_GROUP_LABELS.values()
         ]
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_MAP_LEGEND_FONT_SIZE for size in sizes))
-        self.assertGreater(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 15)
+        self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 15)
 
     def _draw_dots(self, scale):
         drawn = []
@@ -622,8 +624,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual(box[2] - box[0], 50)
-            self.assertEqual(box[3] - box[1], 50)
+            self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
+            self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.receiver_map_legend_at(*center, receivers), group)
         for index, (_group, first) in enumerate(boxes):
@@ -783,6 +785,15 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
             ui.draw_picker_button(None, box, 'TEST')
         self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
         self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
+
+    def test_two_line_button_inverts_both_labels_while_pressed(self):
+        box = (10, 20, 104, 114)
+        colors = []
+        ui.set_ui_press_point(40, 50)
+        with patch.object(ui, 'draw_picker_button'), \
+             patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
+            ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
+        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
 
 
 class HomeRailInstrumentTests(unittest.TestCase):
