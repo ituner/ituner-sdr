@@ -5,6 +5,17 @@ import unittest
 from unittest.mock import patch
 import kiwi_gl_display as ui
 
+
+class AudioJitterBufferTests(unittest.TestCase):
+    def test_reserve_duration_is_preserved_at_fmdx_sample_rate(self):
+        kiwi_target, kiwi_max = ui.audio_jitter_packet_limits(12_000)
+        fmdx_target, fmdx_max = ui.audio_jitter_packet_limits(48_000)
+
+        self.assertEqual((kiwi_target, kiwi_max), (6, 24))
+        self.assertEqual((fmdx_target, fmdx_max), (24, 96))
+        self.assertAlmostEqual(kiwi_target * 512 / 12_000, fmdx_target * 512 / 48_000)
+        self.assertAlmostEqual(kiwi_max * 512 / 12_000, fmdx_max * 512 / 48_000)
+
 class BoardLayoutTests(unittest.TestCase):
     def test_settings_back_has_an_isolated_target(self):
         items = ui.SETTINGS_MENU_ITEMS

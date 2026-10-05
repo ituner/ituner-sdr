@@ -456,10 +456,11 @@ SMETER_PEAK_DECAY_DB_PER_SECOND = 9.0
 SMETER_READOUT_INTERVAL_SECONDS = 0.30
 # A 512-frame Kiwi packet lasts 42.7 ms at 12 kHz. Six packets of local
 # reserve plus the 3072-frame PipeWire buffer is about 0.51 s before network
-# transport latency. It stays responsive when tuning while retaining a useful
-# cushion for a normal public-receiver arrival wobble.
+# transport latency. FM-DX is decoded at 48 kHz, so its packet count must be
+# scaled to preserve this duration instead of shrinking the reserve to 64 ms.
 PIPEWIRE_AUDIO_LATENCY = "3072"
 SDR_AUDIO_JITTER_TARGET_PACKETS = 6
+SDR_AUDIO_JITTER_REFERENCE_RATE = 12_000
 # Direct ALSA supports the original USB comparison path and the opt-in CM5
 # codec profile. Its plug layer converts receiver PCM to the hardware format.
 # The CM5 profile explicitly selects the high-quality libsamplerate converter.
@@ -474,6 +475,17 @@ ALSA_DIRECT_BUFFER_FRAMES = 1536
 # Twenty-four packets is a 1.02 s bounded recovery ceiling, not the normal
 # listening delay.
 SDR_AUDIO_JITTER_MAX_PACKETS = 24
+
+
+def audio_jitter_packet_limits(rate):
+    """Return duration-equivalent queue limits for an output sample rate."""
+    scale = max(1, int(rate)) / SDR_AUDIO_JITTER_REFERENCE_RATE
+    return (
+        max(1, math.ceil(SDR_AUDIO_JITTER_TARGET_PACKETS * scale)),
+        max(1, math.ceil(SDR_AUDIO_JITTER_MAX_PACKETS * scale)),
+    )
+
+
 # A transient outage may lift the reserve. After clean packet timing resumes,
 # walk it back one quantum at a time so a past fault cannot leave tuning
 # permanently sluggish.
@@ -18703,6 +18715,7 @@ class BufferedAudioPlayer:
         self.packets = deque()
         self.packet_bytes = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2 * self.channels
         self.period = KIWI_RAW_AUDIO_QUANTUM_FRAMES / self.rate
+        self.base_target_packets, self.max_packets = audio_jitter_packet_limits(self.rate)
         self.pending_audio = bytearray()
         self.pending_silence = None
         self.last_submit_at = 0.0
@@ -18719,7 +18732,7 @@ class BufferedAudioPlayer:
         self.comfort_noise_state = 0x6D2B79F5
         self.comfort_noise_packets = 0
         self.primed = False
-        self.target_packets = SDR_AUDIO_JITTER_TARGET_PACKETS
+        self.target_packets = self.base_target_packets
         self.rebuffering = False
         self.closed = False
         self.stop_event = threading.Event()
@@ -18752,9 +18765,13 @@ class BufferedAudioPlayer:
 
     def _publish_locked(self, arrival_gap=None, output_gap=False):
         if self.state is not None:
+            # UI telemetry remains in 12 kHz-equivalent quanta, so its graph
+            # and normal/warning threshold describe duration across Kiwi and
+            # 48 kHz FM-DX rather than source-dependent packet counts.
+            telemetry_scale = SDR_AUDIO_JITTER_REFERENCE_RATE / self.rate
             self.state.set_audio_jitter(
-                self.target_packets,
-                len(self.packets),
+                math.ceil(self.target_packets * telemetry_scale),
+                math.ceil(len(self.packets) * telemetry_scale),
                 arrival_gap,
                 output_gap,
             )
@@ -18790,7 +18807,7 @@ class BufferedAudioPlayer:
                 if self.stable_since is None:
                     self.stable_since = now
                 elif (
-                    self.target_packets > SDR_AUDIO_JITTER_TARGET_PACKETS
+                    self.target_packets > self.base_target_packets
                     and now - self.stable_since >= SDR_AUDIO_JITTER_STABLE_SECONDS
                     and now - self.last_reserve_change_at >= SDR_AUDIO_JITTER_DECAY_INTERVAL_SECONDS
                 ):
@@ -18816,7 +18833,7 @@ class BufferedAudioPlayer:
             while len(self.pending_audio) >= self.packet_bytes:
                 packet = bytes(self.pending_audio[:self.packet_bytes])
                 del self.pending_audio[:self.packet_bytes]
-                while len(self.packets) >= SDR_AUDIO_JITTER_MAX_PACKETS:
+                while len(self.packets) >= self.max_packets:
                     self.packets.popleft()
                 self.packets.append((packet, self.pending_silence))
             if not self.pending_audio:
@@ -18839,7 +18856,7 @@ class BufferedAudioPlayer:
             self.output_was_comfort_noise = False
             self.comfort_noise_packets = 0
             self.primed = False
-            self.target_packets = SDR_AUDIO_JITTER_TARGET_PACKETS
+            self.target_packets = self.base_target_packets
             self.rebuffering = False
             self._publish_locked()
             self.condition.notify_all()
@@ -18984,7 +19001,7 @@ class BufferedAudioPlayer:
                     self._trace_locked("O")
                 else:
                     previous_target = self.target_packets
-                    self.target_packets = min(SDR_AUDIO_JITTER_MAX_PACKETS, self.target_packets + 1)
+                    self.target_packets = min(self.max_packets, self.target_packets + 1)
                     self.stable_since = None
                     self.last_reserve_change_at = time.monotonic()
                     self.rebuffering = True
@@ -19000,7 +19017,7 @@ class BufferedAudioPlayer:
                     elif time.monotonic() - self.last_underflow_log_at >= 5.0:
                         # A cap hit must remain visible in the service log;
                         # otherwise repeated long-haul starvation looks like
-                        # a healthy fixed BUFFER 24/24 annunciator.
+                        # a healthy fixed BUFFER reading.
                         print(
                             f"gl audio jitter underflow at capped reserve "
                             f"{self.target_packets} packets",
