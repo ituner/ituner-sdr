@@ -7559,10 +7559,30 @@ class SpectrumLayerCache:
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
 
 
+# A single logical touch point gives every shared button renderer the same
+# immediate, high-contrast press feedback.  It is session-only display state;
+# actions still commit on release through the existing gesture handlers.
+UI_PRESS_POINT = None
+UI_PRESSED_FILL = (74, 205, 156, 255)
+UI_PRESSED_TEXT = (5, 26, 21)
+UI_PRESSED_EDGE = (224, 255, 242, 255)
+
+
+def set_ui_press_point(x=None, y=None):
+    global UI_PRESS_POINT
+    UI_PRESS_POINT = None if x is None or y is None else (float(x), float(y))
+
+
+def ui_button_pressed(box):
+    return UI_PRESS_POINT is not None and contains(box, *UI_PRESS_POINT)
+
+
 def draw_button(text_cache, x, y, w, h, label, active=False):
-    fill = (18, 72, 62, 245) if active else (18, 26, 35, 230)
+    box = (x, y, x + w, y + h)
+    pressed = ui_button_pressed(box)
+    fill = (74, 205, 156, 255) if pressed else ((18, 72, 62, 245) if active else (18, 26, 35, 230))
     draw_logical_rect(x, y, x + w, y + h, fill)
-    draw_text(text_cache, x + w / 2, y + h / 2, label, (226, 255, 246) if active else (157, 174, 188), 15, True, True, "cm")
+    draw_text(text_cache, x + w / 2, y + h / 2, label, (5, 26, 21) if pressed else ((226, 255, 246) if active else (157, 174, 188)), 15, True, True, "cm")
 
 
 def fade_color(color, alpha):
@@ -7604,6 +7624,7 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
+    active = active or ui_button_pressed(box)
     key = f"zoom_sign_tile_v1_{label}_{int(active)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -7642,6 +7663,8 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = SPECTRUM_TOGGLE_BOX
+    if ui_button_pressed(SPECTRUM_TOGGLE_BOX):
+        draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
     key = f"spectrum_toggle_display_v1_{int(enabled)}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -7673,6 +7696,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = FILTER_TOGGLE_BOX
+    if ui_button_pressed(FILTER_TOGGLE_BOX):
+        draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
     key = "filter_toggle_v3"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -7776,8 +7801,9 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     """Large transparent play/pause control for the retained receiver."""
     x0, y0, x1, y1 = stream_waterfall_box()
     paused = bool(stream_paused)
-    fill = (8, 37, 52, 190) if paused else (4, 17, 22, 122)
-    edge = (104, 218, 246, 238) if paused else (105, 230, 168, 190)
+    pressed = ui_button_pressed((x0, y0, x1, y1))
+    fill = UI_PRESSED_FILL if pressed else ((8, 37, 52, 190) if paused else (4, 17, 22, 122))
+    edge = UI_PRESSED_EDGE if pressed else ((104, 218, 246, 238) if paused else (105, 230, 168, 190))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in (
         (x0, y0, x1, y0), (x0, y1, x1, y1),
@@ -7797,8 +7823,9 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
 def draw_favorite_waterfall_button(favorited):
     """Transparent outlined/filled star: a durable receiver bookmark."""
     x0, y0, x1, y1 = favorite_waterfall_box()
-    edge = (248, 207, 104, 248) if favorited else (151, 193, 200, 204)
-    draw_logical_rect(x0, y0, x1, y1, (42, 33, 10, 178) if favorited else (4, 17, 22, 110))
+    pressed = ui_button_pressed((x0, y0, x1, y1))
+    edge = UI_PRESSED_EDGE if pressed else ((248, 207, 104, 248) if favorited else (151, 193, 200, 204))
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else ((42, 33, 10, 178) if favorited else (4, 17, 22, 110)))
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -7945,7 +7972,7 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
 
 def draw_gear_button(text_cache):
     x0, y0, x1, y1 = GEAR_BOX
-    draw_logical_rect(x0, y0, x1, y1, (3, 9, 14, 58))
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if ui_button_pressed(GEAR_BOX) else (3, 9, 14, 58))
     cx = (x0 + x1) / 2
     cy = (y0 + y1) / 2
     ring = (206, 238, 242, 128)
@@ -7982,6 +8009,8 @@ def draw_home_button(text_cache, alpha=1.0):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = HOME_BOX
+    if ui_button_pressed(HOME_BOX):
+        draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
     w, h = int(x1 - x0), int(y1 - y0)
     surface = pygame.Surface((w, h), pygame.SRCALPHA)
     try:
@@ -8370,9 +8399,10 @@ def next_radio_mode_variant(current_mode, modes):
 
 def draw_radio_option(text_cache, box, label, active):
     x0, y0, x1, y1 = box
-    fill = (32, 87, 89, 220) if active else (18, 29, 38, 184)
-    line = (94, 235, 225, 220) if active else (115, 140, 151, 78)
-    color = (238, 252, 250) if active else (173, 196, 201)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((32, 87, 89, 220) if active else (18, 29, 38, 184))
+    line = UI_PRESSED_EDGE if pressed else ((94, 235, 225, 220) if active else (115, 140, 151, 78))
+    color = UI_PRESSED_TEXT if pressed else ((238, 252, 250) if active else (173, 196, 201))
     draw_logical_rect(x0, y0, x1, y1, fill)
     draw_logical_line(x0, y0, x1, y0, line, 1)
     draw_logical_line(x0, y1, x1, y1, line, 1)
@@ -8387,12 +8417,13 @@ def draw_radio_option(text_cache, box, label, active):
 def draw_radio_close_button(text_cache, box):
     """A deliberately distinct, icon-led drawer return control."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (22, 54, 68, 238))
+    pressed = ui_button_pressed(box)
+    draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (22, 54, 68, 238))
     for ax0, ay0, ax1, ay1 in (
         (x0, y0, x1, y0), (x0, y1, x1, y1),
         (x0, y0, x0, y1), (x1, y0, x1, y1),
     ):
-        draw_logical_line(ax0, ay0, ax1, ay1, (105, 222, 237, 230), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, UI_PRESSED_EDGE if pressed else (105, 222, 237, 230), 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     # A familiar, text-free back glyph: arrow head plus a generous stem.
     draw_logical_line(cx + 11, cy, cx - 9, cy, (232, 253, 255, 250), 2)
@@ -8404,8 +8435,9 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     """Draw a large mode-family button without cramming its variants inside."""
     x0, y0, x1, y1 = box
     active = active_mode in modes
-    fill = (32, 87, 89, 220) if active else (18, 29, 38, 184)
-    line = (94, 235, 225, 220) if active else (115, 140, 151, 78)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((32, 87, 89, 220) if active else (18, 29, 38, 184))
+    line = UI_PRESSED_EDGE if pressed else ((94, 235, 225, 220) if active else (115, 140, 151, 78))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in (
         (x0, y0, x1, y0),
@@ -8449,8 +8481,9 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
 def draw_radio_variant_option(text_cache, box, mode, active):
     """Render one readable option in the compact second-level popover."""
     x0, y0, x1, y1 = box
-    fill = (32, 87, 89, 226) if active else (20, 34, 43, 226)
-    line = (94, 235, 225, 230) if active else (129, 157, 168, 150)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((32, 87, 89, 226) if active else (20, 34, 43, 226))
+    line = UI_PRESSED_EDGE if pressed else ((94, 235, 225, 230) if active else (129, 157, 168, 150))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, line, 1)
@@ -10189,15 +10222,16 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
                         title_size=None, detail_size=None):
     """Compact two-line control tile for the LCD audio drawer."""
     x0, y0, x1, y1 = box
-    fill = (28, 78, 67, 230) if active else (18, 29, 38, 216)
-    edge = accent if active else (115, 140, 151, 92)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((28, 78, 67, 230) if active else (18, 29, 38, 216))
+    edge = UI_PRESSED_EDGE if pressed else (accent if active else (115, 140, 151, 92))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
     title_size = title_size or (15 if len(title) <= 8 else 13)
     detail_size = detail_size or (13 if len(detail) <= 10 else 11)
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, (230, 246, 247), title_size, True, False, "cm", family="Liberation Sans")
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, (112, 223, 169) if active else (153, 185, 191), detail_size, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, UI_PRESSED_TEXT if pressed else (230, 246, 247), title_size, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, UI_PRESSED_TEXT if pressed else ((112, 223, 169) if active else (153, 185, 191)), detail_size, True, False, "cm", family="Liberation Sans")
 
 
 def draw_sidebar_header(text_cache, title):
@@ -10382,8 +10416,9 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 
     def panel_button(box, title, detail, active=False, accent=(92, 229, 174, 220)):
         bx0, by0, bx1, by1 = box
-        fill = (28, 78, 67, 230) if active else (18, 29, 38, 210)
-        line = accent if active else (115, 140, 151, 78)
+        pressed = ui_button_pressed(box)
+        fill = UI_PRESSED_FILL if pressed else ((28, 78, 67, 230) if active else (18, 29, 38, 210))
+        line = UI_PRESSED_EDGE if pressed else (accent if active else (115, 140, 151, 78))
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         draw_logical_line(bx0, by0, bx1, by0, line, 1)
         draw_logical_line(bx0, by1, bx1, by1, line, 1)
@@ -10541,8 +10576,9 @@ def rtl_lab_option_at(x, y):
 
 def draw_tests_button(text_cache, box, title, detail, active=False):
     x0, y0, x1, y1 = box
-    fill = (104, 53, 20, 204) if active else (18, 29, 38, 210)
-    line = (255, 184, 83, 220) if active else (115, 140, 151, 78)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((104, 53, 20, 204) if active else (18, 29, 38, 210))
+    line = UI_PRESSED_EDGE if pressed else ((255, 184, 83, 220) if active else (115, 140, 151, 78))
     draw_logical_rect(x0, y0, x1, y1, fill)
     draw_logical_line(x0, y0, x1, y0, line, 1)
     draw_logical_line(x0, y1, x1, y1, line, 1)
@@ -10737,10 +10773,13 @@ def wspr_option_at(x, y, page):
 
 def draw_wspr_button(text_cache, box, title, detail="", active=False, selected=False):
     x0, y0, x1, y1 = box
+    pressed = ui_button_pressed(box)
     fill = (26, 79, 67, 220) if active else (17, 29, 38, 218)
     line = (98, 234, 172, 226) if active else (105, 137, 148, 94)
     if selected:
         fill = (35, 93, 76, 232)
+    if pressed:
+        fill, line = UI_PRESSED_FILL, UI_PRESSED_EDGE
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, line, 1)
@@ -12295,8 +12334,9 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
 
 def draw_wspr_danger_button(text_cache, box, label, armed=False):
     x0, y0, x1, y1 = box
-    fill = (102, 31, 39, 244) if armed else (48, 25, 31, 232)
-    edge = (252, 103, 111, 236) if armed else (180, 78, 86, 174)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((102, 31, 39, 244) if armed else (48, 25, 31, 232))
+    edge = UI_PRESSED_EDGE if pressed else ((252, 103, 111, 236) if armed else (180, 78, 86, 174))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
@@ -12768,6 +12808,30 @@ def receiver_map_home_center(profile):
     return math.radians(profile["lon"]), math.radians(profile["lat"])
 
 
+def receiver_map_server_center(receivers, server):
+    """Return the selected receiver's Globe centre, independent of URL slash."""
+    wanted = str(server or "").rstrip("/")
+    if not wanted:
+        return None
+    receiver = next(
+        (
+            item for item in receivers
+            if str(item.get("server") or "").rstrip("/") == wanted
+        ),
+        None,
+    )
+    if receiver is None:
+        return None
+    try:
+        latitude = float(receiver["lat"])
+        longitude = float(receiver["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+        return None
+    return math.radians(longitude), math.radians(latitude)
+
+
 def receiver_map_zoom_boxes():
     """Globe zoom +/− targets, which live on the right rail with every
     other Globe command instead of floating over the map."""
@@ -12792,14 +12856,18 @@ RECEIVER_MAP_GROUP_COLORS = {
 }
 # Session-only visibility; groups the operator has switched off in the legend.
 RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend chips form a rail column, matching the Globe's other controls,
-# instead of floating over the map.
+# Legend filters are compact square buttons. Four fit in one row inside the
+# rail, leaving the map unobstructed and preserving the normal button type size.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 88
-RECEIVER_MAP_LEGEND_RAIL_H = 46
+RECEIVER_MAP_LEGEND_BUTTON_SIZE = 50
 RECEIVER_MAP_LEGEND_GAP = 8
-# The HIDE / SHOW labels are the legend's primary readout, so they use a
-# larger caption than the old 15 px row text.
 RECEIVER_MAP_LEGEND_FONT_SIZE = 18
+RECEIVER_MAP_LEGEND_SHORT_LABELS = {
+    "kiwi": "K",
+    "openwebrx": "O",
+    "local": "L",
+    "fmdx": "FM",
+}
 
 
 def receiver_map_group(receiver):
@@ -12840,16 +12908,18 @@ def receiver_map_legend_entries(receivers):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Touch targets for the legend chips in the Globe's right rail."""
+    """50×50 touch targets for the legend filters in the Globe rail."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    x0, x1 = LCD_NAV_X0 + 14, LOGICAL_W - 14
+    size = RECEIVER_MAP_LEGEND_BUTTON_SIZE
+    total_width = len(entries) * size + max(0, len(entries) - 1) * RECEIVER_MAP_LEGEND_GAP
+    x = LCD_NAV_X0 + ((LOGICAL_W - LCD_NAV_X0) - total_width) / 2
     y = RECEIVER_MAP_LEGEND_RAIL_TOP
     boxes = []
     for group, _label, _color in entries:
-        boxes.append((group, (x0, y, x1, y + RECEIVER_MAP_LEGEND_RAIL_H)))
-        y += RECEIVER_MAP_LEGEND_RAIL_H + RECEIVER_MAP_LEGEND_GAP
+        boxes.append((group, (x, y, x + size, y + size)))
+        x += size + RECEIVER_MAP_LEGEND_GAP
     return tuple(boxes)
 
 
@@ -13006,28 +13076,26 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     return True
 
 
-# Globe server dots. The ZOOM + / ZOOM - tiles step the point size by one
-# pixel, so the operator enlarges the constellation as they zoom in and shrinks
-# it again as they zoom out. Colour never changes.
-GLOBE_DOT_BASE_PIXELS = 2
-GLOBE_DOT_MIN_PIXELS = 1
-GLOBE_DOT_MAX_PIXELS = 10
+# Globe server dots grow from the actual view scale. This makes button, wheel
+# and pinch zoom behave identically and keeps the constellation readable.
+GLOBE_DOT_BASE_PIXELS = 4
+GLOBE_DOT_MIN_PIXELS = 2
+GLOBE_DOT_MAX_PIXELS = 16
+GLOBE_DOT_SCALE_STEP = 1.6
 
 
-def receiver_map_dot_pixels(size):
-    """Clamp the operator's server-dot size to the allowed pixel range."""
-    return int(clamp(size, GLOBE_DOT_MIN_PIXELS, GLOBE_DOT_MAX_PIXELS))
-
-
-def receiver_map_step_dot_pixels(size, zooming_in):
-    """One ZOOM + / - tap adds or removes a pixel from the server dots."""
-    return receiver_map_dot_pixels(size + (1 if zooming_in else -1))
+def receiver_map_dot_pixels(scale):
+    """Grow receiver dots monotonically as the Globe view zooms in."""
+    safe_scale = max(RADIOGARDEN_ZOOM_MIN, float(scale))
+    steps = math.log(safe_scale / GLOBE_DEFAULT_SCALE, GLOBE_DOT_SCALE_STEP)
+    offset = math.ceil(steps) if steps > 0 else math.floor(steps)
+    return int(clamp(GLOBE_DOT_BASE_PIXELS + offset, GLOBE_DOT_MIN_PIXELS, GLOBE_DOT_MAX_PIXELS))
 
 
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False, dot_pixels=GLOBE_DOT_BASE_PIXELS,
+    map_view="borders", interactive=False,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -13129,7 +13197,7 @@ def draw_receiver_map(
             draw_logical_circle(point[0], point[1], 7.2 + pulse, color, 22)
         else:
             receiver_point_groups[color].append(point)
-    dot_size = receiver_map_dot_pixels(dot_pixels)
+    dot_size = receiver_map_dot_pixels(scale)
     for color, points in receiver_point_groups.items():
         draw_logical_points(points, color, dot_size)
     selected = next((receiver for receiver in receivers if receiver["server"] == selected_server), None)
@@ -13190,33 +13258,33 @@ def draw_receiver_map(
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
-        # The chip names the action, not the state: a lit chip offers to HIDE
-        # its group, and a hidden chip offers to SHOW it again.
-        legend_label = receiver_map_legend_label(legend_group, legend_active)
+        pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
+        legend_label = RECEIVER_MAP_LEGEND_SHORT_LABELS[legend_group]
         draw_logical_rect(
             lx0, ly0, lx1, ly1,
-            (12, 34, 42, 226) if legend_active else (18, 21, 25, 214),
+            UI_PRESSED_FILL if pressed else ((12, 34, 42, 226) if legend_active else (18, 21, 25, 214)),
         )
-        border = (*legend_color[:3], 220) if legend_active else (92, 104, 112, 170)
+        border = UI_PRESSED_EDGE if pressed else ((*legend_color[:3], 220) if legend_active else (92, 104, 112, 170))
         draw_logical_line(lx0, ly0, lx1, ly0, border, 1)
         draw_logical_line(lx0, ly1, lx1, ly1, border, 1)
         draw_logical_line(lx0, ly0, lx0, ly1, border, 1)
         draw_logical_line(lx1, ly0, lx1, ly1, border, 1)
-        swatch_x, swatch_y = lx0 + 22, (ly0 + ly1) / 2
+        swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 13
         if legend_active:
             draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         else:
             draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
         draw_text(
-            text_cache, lx0 + 40, swatch_y, legend_label,
-            (232, 246, 247) if legend_active else (126, 138, 146),
-            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "lm", family="Cantarell",
+            text_cache, swatch_x, ly1 - 13, legend_label,
+            UI_PRESSED_TEXT if pressed else ((232, 246, 247) if legend_active else (126, 138, 146)),
+            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Cantarell",
         )
 
     def draw_globe_tile_border(command_box):
         bx0, by0, bx1, by1 = command_box
-        draw_logical_rect(bx0, by0, bx1, by1, (17, 29, 38, 232))
-        draw_logical_line(bx0, by0, bx1, by0, (125, 147, 158, 155), 1)
+        pressed = ui_button_pressed(command_box)
+        draw_logical_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL if pressed else (17, 29, 38, 232))
+        draw_logical_line(bx0, by0, bx1, by0, UI_PRESSED_EDGE if pressed else (125, 147, 158, 155), 1)
         draw_logical_line(bx0, by1, bx1, by1, (32, 50, 61, 190), 1)
         draw_logical_line(bx0, by0, bx0, by1, (66, 85, 96, 165), 1)
         draw_logical_line(bx1, by0, bx1, by1, (32, 50, 61, 190), 1)
@@ -15105,8 +15173,17 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
         if kind in ("settings_back", "digital_back"):
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
-        tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
-        draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
+        nav_box = (bx0, by0, bx1, by1)
+        if ui_button_pressed(nav_box):
+            draw_logical_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL)
+            for ax0, ay0, ax1, ay1 in (
+                (bx0, by0, bx1, by0), (bx0, by1, bx1, by1),
+                (bx0, by0, bx0, by1), (bx1, by0, bx1, by1),
+            ):
+                draw_logical_line(ax0, ay0, ax1, ay1, UI_PRESSED_EDGE, 1)
+        else:
+            tile_tex, _tile_w, _tile_h = lcd_nav_tile_background(text_cache)
+            draw_textured_quad(tile_tex, bx0, by0, bx1, by1, 0, 0, 1, 1)
         tex, _tex_w, _tex_h = menu_icon_texture(
             text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
             muted=muted and kind == "audio",
@@ -15220,7 +15297,11 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
 
     for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts, mode):
         active = mode_annunciator_active(label, active_mode, digital)
-        if active:
+        pressed = ui_button_pressed((bx0, by0, bx1, by1))
+        if pressed:
+            draw_logical_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL)
+            draw_logical_line(bx0, by0, bx1, by0, UI_PRESSED_EDGE, 1)
+        elif active:
             label_w, label_h = text_cache.font(14, bold=True, family="Liberation Sans").size(label)
             pill_pad_x, pill_pad_y = 7, 3
             pill_x0 = max(bx0 + 4, (bx0 + bx1 - label_w) / 2 - pill_pad_x)
@@ -15231,20 +15312,21 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             draw_logical_line(pill_x0, pill_y0, pill_x1, pill_y0, (105, 176, 250, 255), 1)
             draw_logical_line(pill_x0, pill_y1, pill_x1, pill_y1, (20, 74, 159, 255), 1)
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  (246, 248, 250) if active else (205, 211, 215), 14, True, False, "cm",
+                  UI_PRESSED_TEXT if pressed else ((246, 248, 250) if active else (205, 211, 215)), 14, True, False, "cm",
                   family="Liberation Sans")
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
     x0, y0, x1, y1 = box
-    fill = (72, 77, 81, 255) if selected else (38, 42, 46, 255)
-    outline = (220, 223, 225, 235) if selected else (150, 155, 159, 220)
+    pressed = ui_button_pressed(box)
+    fill = UI_PRESSED_FILL if pressed else ((72, 77, 81, 255) if selected else (38, 42, 46, 255))
+    outline = UI_PRESSED_EDGE if pressed else ((220, 223, 225, 235) if selected else (150, 155, 159, 220))
     draw_logical_rect(x0, y0, x1, y1, fill)
     draw_logical_line(x0, y0, x1, y0, outline, 1)
     draw_logical_line(x0, y1, x1, y1, outline, 1)
     draw_logical_line(x0, y0, x0, y1, outline, 1)
     draw_logical_line(x1, y0, x1, y1, outline, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (238, 240, 242), size, True, False, "cm")
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, UI_PRESSED_TEXT if pressed else (238, 240, 242), size, True, False, "cm")
 
 
 def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
@@ -15555,8 +15637,9 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
 
     def draw_key(box, label, size, active=False):
         bx0, by0, bx1, by1 = box
-        fill = (15, 38, 47, 238) if active else (13, 29, 37, 235)
-        top = (87, 205, 196, 195) if active else (109, 145, 153, 130)
+        pressed = ui_button_pressed(box)
+        fill = UI_PRESSED_FILL if pressed else ((15, 38, 47, 238) if active else (13, 29, 37, 235))
+        top = UI_PRESSED_EDGE if pressed else ((87, 205, 196, 195) if active else (109, 145, 153, 130))
         side = (42, 78, 88, 165)
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         draw_logical_line(bx0, by0, bx1, by0, top, 1)
@@ -15568,7 +15651,7 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
             (bx0 + bx1) / 2,
             (by0 + by1) / 2 + 1,
             label,
-            (223, 238, 240),
+            UI_PRESSED_TEXT if pressed else (223, 238, 240),
             size,
             True,
             False,
@@ -21613,7 +21696,7 @@ def main():
     picker_map_scale = 0.62
     picker_map_garden_mode = True
     picker_map_view = "satellite"
-    picker_map_dot_pixels = GLOBE_DOT_BASE_PIXELS
+    picker_map_has_opened = False
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -22804,10 +22887,12 @@ def main():
     def connect_to_station(station):
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
+        nonlocal picker_map_selected_server
         # Switching receivers always returns FM-DX to read-only; the shared
         # tuner acknowledgement is never carried across a receiver change.
         FMDX_SHARED_CONTROL.revoke()
         name, _location, target_server, _used, _total = station_fields(station)
+        picker_map_selected_server = target_server
         active_server = state.snapshot()[0]
         _server, frequency, zoom, _generation, _server_generation = state.set_server(
             target_server,
@@ -23466,6 +23551,29 @@ def main():
         picker_map_notice_until = picker_map_motion_at + 2.8
         return True
 
+    def focus_receiver_map_on_server(server):
+        """Frame later Globe opens on the receiver the operator selected."""
+        nonlocal picker_map_lock_target, picker_map_zoom_target
+        nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch, picker_map_motion_at
+        nonlocal picker_map_notice, picker_map_notice_until
+        center = receiver_map_server_center(globe_receivers, server)
+        if center is None:
+            return False
+        picker_map_lock_target = center
+        picker_map_zoom_target = GLOBE_DEFAULT_SCALE
+        picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
+        picker_map_motion_at = time.monotonic()
+        receiver = next(
+            (
+                item for item in globe_receivers
+                if str(item.get("server") or "").rstrip("/") == str(server or "").rstrip("/")
+            ),
+            None,
+        )
+        picker_map_notice = f"LOCATING  {receiver.get('name', 'SELECTED RECEIVER') if receiver else 'SELECTED RECEIVER'}"
+        picker_map_notice_until = picker_map_motion_at + 2.8
+        return True
+
 
     try:
         if dual_vfo_open:
@@ -23501,6 +23609,8 @@ def main():
                     desktop_window_drag_button = event.button
                 elif args.desktop and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     desktop_window_drag_button = None
+                    press_x, press_y = desktop_logical_point(event.pos)
+                    set_ui_press_point(press_x, press_y)
                     nav_index = desktop_navigation_item(event.pos)
                     if nav_index == "annunciators":
                         activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
@@ -23569,6 +23679,7 @@ def main():
                 ):
                     desktop_window_drag_button = None
                 elif args.desktop and event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    set_ui_press_point()
                     if desktop_map_press is not None:
                         map_x, map_y = desktop_logical_point(event.pos)
                         if desktop_map_dragged:
@@ -23647,6 +23758,10 @@ def main():
                             x, y = kiwi.transform_touch(raw_x, raw_y, args)
                     else:
                         x, y = points[0] if len(points) == 1 else kiwi.midpoint(points[:2])
+
+                    # Shared renderers read this point during the next frame
+                    # to give every visible button immediate press feedback.
+                    set_ui_press_point(x, y) if is_active else set_ui_press_point()
 
                     if is_active and picker_open and picker_map_open and picker_map_garden_mode and globe_receivers:
                         hovered_receiver = receiver_map_station_at(
@@ -26249,11 +26364,14 @@ def main():
                                 picker_map_garden_mode = True
                                 # Every entry returns to the resting view:
                                 # satellite imagery with country borders,
-                                # framed on the operator's own location rather
-                                # than a stale close-up or the tuned receiver.
+                                # framed first on the operator, then on the
+                                # receiver explicitly selected in this session.
                                 picker_map_view = GLOBE_DEFAULT_VIEW
-                                picker_map_dot_pixels = GLOBE_DOT_BASE_PIXELS
-                                focus_receiver_map_on_home()
+                                if not picker_map_has_opened:
+                                    focus_receiver_map_on_home()
+                                    picker_map_has_opened = True
+                                elif not focus_receiver_map_on_server(picker_map_selected_server):
+                                    focus_receiver_map_on_home()
                                 search_open = False
                                 if not globe_fetch_started:
                                     globe_fetch_started = True
@@ -26294,11 +26412,6 @@ def main():
                                 zoom_in_box, zoom_out_box = receiver_map_zoom_boxes()
                                 zooming_in = contains(zoom_in_box, x, y)
                                 factor = RADIOGARDEN_ZOOM_TAP_FACTOR if zooming_in else 1.0 / RADIOGARDEN_ZOOM_TAP_FACTOR
-                                # Each + / - tap adds or removes one pixel from
-                                # the server dots, clamped to a readable range.
-                                picker_map_dot_pixels = receiver_map_step_dot_pixels(
-                                    picker_map_dot_pixels, zooming_in
-                                )
                                 picker_map_lock_target = None
                                 picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
                                 picker_map_zoom_target = clamp(
@@ -27261,7 +27374,6 @@ def main():
                         picker_map_garden_mode, picker_map_hover_server, picker_map_view,
                         (touch_started and gesture == "picker_map")
                         or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
-                        picker_map_dot_pixels,
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)

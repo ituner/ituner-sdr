@@ -493,15 +493,13 @@ class ReceiverMapLegendTests(unittest.TestCase):
             )
         return texts
 
-    def test_legend_chip_text_flips_between_hide_and_show(self):
+    def test_legend_square_uses_compact_source_labels(self):
         texts = self._legend_texts()
-        self.assertIn('HIDE KIWI', texts)
-        self.assertIn('HIDE FM-DX', texts)
-        self.assertNotIn('SHOW KIWI', texts)
+        self.assertIn('K', texts)
+        self.assertIn('FM', texts)
         ui.receiver_map_toggle_group('kiwi')
         texts = self._legend_texts()
-        self.assertIn('SHOW KIWI', texts)
-        self.assertNotIn('HIDE KIWI', texts)
+        self.assertIn('K', texts)
 
     def _legend_text_sizes(self):
         sizes = []
@@ -524,13 +522,16 @@ class ReceiverMapLegendTests(unittest.TestCase):
             )
         return sizes
 
-    def test_legend_chip_text_is_larger_than_the_old_row_text(self):
-        sizes = [size for text, size in self._legend_text_sizes() if text.startswith(('HIDE ', 'SHOW '))]
+    def test_legend_square_keeps_the_normal_button_font_size(self):
+        sizes = [
+            size for text, size in self._legend_text_sizes()
+            if text in ui.RECEIVER_MAP_LEGEND_SHORT_LABELS.values()
+        ]
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_MAP_LEGEND_FONT_SIZE for size in sizes))
         self.assertGreater(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 15)
 
-    def _draw_dots(self, dot_pixels):
+    def _draw_dots(self, scale):
         drawn = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
@@ -545,35 +546,29 @@ class ReceiverMapLegendTests(unittest.TestCase):
              patch.object(ui, 'draw_logical_points',
                           side_effect=lambda points, color, size: drawn.append((tuple(color), size))):
             ui.draw_receiver_map(
-                None, self.receivers(), 0.0, 0.0, 1.0, '', None, 'idle', {},
-                map_view='satellite_only', dot_pixels=dot_pixels,
+                None, self.receivers(), 0.0, 0.0, scale, '', None, 'idle', {},
+                map_view='satellite_only',
             )
         return drawn
 
-    def test_dot_size_clamps_to_the_allowed_range(self):
+    def test_dot_size_follows_actual_globe_scale(self):
+        self.assertEqual(ui.receiver_map_dot_pixels(ui.GLOBE_DEFAULT_SCALE), ui.GLOBE_DOT_BASE_PIXELS)
+        sizes = [ui.receiver_map_dot_pixels(scale) for scale in (0.55, 1.0, 2.2, 4.0, 12.0, 80.0)]
+        self.assertEqual(sizes, sorted(sizes))
+        self.assertGreater(ui.receiver_map_dot_pixels(4.0), ui.receiver_map_dot_pixels(2.2))
         self.assertEqual(ui.receiver_map_dot_pixels(0), ui.GLOBE_DOT_MIN_PIXELS)
-        self.assertEqual(ui.receiver_map_dot_pixels(2), 2)
-        self.assertEqual(ui.receiver_map_dot_pixels(5), 5)
-        self.assertEqual(ui.receiver_map_dot_pixels(999), ui.GLOBE_DOT_MAX_PIXELS)
+        self.assertEqual(ui.receiver_map_dot_pixels(999999), ui.GLOBE_DOT_MAX_PIXELS)
 
-    def test_zoom_taps_step_the_dot_size(self):
-        # A ZOOM + tap adds a pixel, a ZOOM - tap removes one, clamped.
-        self.assertEqual(ui.receiver_map_step_dot_pixels(ui.GLOBE_DOT_BASE_PIXELS, True), 3)
-        self.assertEqual(ui.receiver_map_step_dot_pixels(3, False), 2)
-        self.assertEqual(ui.receiver_map_step_dot_pixels(ui.GLOBE_DOT_MIN_PIXELS, False), ui.GLOBE_DOT_MIN_PIXELS)
-        self.assertEqual(ui.receiver_map_step_dot_pixels(ui.GLOBE_DOT_MAX_PIXELS, True), ui.GLOBE_DOT_MAX_PIXELS)
-
-    def test_render_uses_the_operator_dot_size(self):
-        # The ZOOM +/- tiles step this value; the render must honour it exactly
-        # and keep the legend colours unchanged.
+    def test_render_uses_scale_derived_dot_size(self):
         expected = sorted(
             tuple(ui.RECEIVER_MAP_GROUP_COLORS[group])
             for group in ('kiwi', 'openwebrx', 'local', 'fmdx')
         )
-        for size in (1, 2, 4):
-            drawn = self._draw_dots(size)
+        for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0):
+            drawn = self._draw_dots(scale)
             self.assertEqual(sorted(color for color, _size in drawn), expected)
-            self.assertTrue(all(actual == size for _color, actual in drawn), size)
+            expected_size = ui.receiver_map_dot_pixels(scale)
+            self.assertTrue(all(actual == expected_size for _color, actual in drawn), scale)
 
     COASTLINE_COLOR = (94, 204, 188, 182)
 
@@ -627,6 +622,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
+            self.assertEqual(box[2] - box[0], 50)
+            self.assertEqual(box[3] - box[1], 50)
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.receiver_map_legend_at(*center, receivers), group)
         for index, (_group, first) in enumerate(boxes):
@@ -678,7 +675,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             )
         # One point per receiver -- every marker shares the same current size.
         self.assertEqual(sum(count for count, _size in drawn), len(receivers))
-        self.assertTrue(all(size == ui.GLOBE_DOT_BASE_PIXELS for _count, size in drawn))
+        expected_size = ui.receiver_map_dot_pixels(1.0)
+        self.assertTrue(all(size == expected_size for _count, size in drawn))
         # Each legend group has its own colour, so they batch into four calls.
         self.assertEqual(len(drawn), 4)
 
@@ -739,14 +737,52 @@ class GlobeDefaultViewTests(unittest.TestCase):
         self.assertIsNone(ui.receiver_map_home_center({'lat': 200.0, 'lon': 0.0}))
         self.assertIsNone(ui.receiver_map_home_center({'lat': 'north', 'lon': 0.0}))
 
-    def test_globe_no_longer_flies_to_the_tuned_receiver_on_open(self):
-        # The entry transition was replaced by the home framing helper; a
-        # stray reference would silently re-centre the Globe on the receiver.
+    def test_selected_server_center_accepts_normalized_urls(self):
+        receivers = [
+            {'server': 'https://example.test/', 'lat': 45.75, 'lon': 21.23},
+        ]
+        yaw, pitch = ui.receiver_map_server_center(receivers, 'https://example.test')
+        self.assertAlmostEqual(math.degrees(yaw), 21.23)
+        self.assertAlmostEqual(math.degrees(pitch), 45.75)
+
+    def test_selected_server_center_rejects_unknown_or_invalid_receivers(self):
+        self.assertIsNone(ui.receiver_map_server_center([], 'https://missing.test'))
+        self.assertIsNone(ui.receiver_map_server_center(
+            [{'server': 'https://bad.test', 'lat': 100, 'lon': 0}],
+            'https://bad.test',
+        ))
+
+    def test_globe_uses_home_once_then_selected_receiver(self):
         import inspect
         source = inspect.getsource(ui)
-        self.assertNotIn('focus_receiver_map_on_server', source)
-        self.assertNotIn('picker_map_focus_server', source)
         self.assertIn('def focus_receiver_map_on_home', source)
+        self.assertIn('def focus_receiver_map_on_server', source)
+        self.assertIn('picker_map_has_opened', source)
+        self.assertIn('picker_map_selected_server = target_server', source)
+
+
+class SharedButtonPressFeedbackTests(unittest.TestCase):
+    def tearDown(self):
+        ui.set_ui_press_point()
+
+    def test_press_point_only_activates_the_button_under_the_finger(self):
+        ui.set_ui_press_point(25, 35)
+        self.assertTrue(ui.ui_button_pressed((20, 30, 40, 50)))
+        self.assertFalse(ui.ui_button_pressed((50, 50, 80, 80)))
+        ui.set_ui_press_point()
+        self.assertFalse(ui.ui_button_pressed((20, 30, 40, 50)))
+
+    def test_shared_picker_button_uses_the_pressed_fill_and_text(self):
+        box = (10, 20, 70, 80)
+        fills = []
+        colors = []
+        ui.set_ui_press_point(40, 50)
+        with patch.object(ui, 'draw_logical_rect', side_effect=lambda *_args: fills.append(_args[-1])), \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
+            ui.draw_picker_button(None, box, 'TEST')
+        self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
+        self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
 
 
 class HomeRailInstrumentTests(unittest.TestCase):
