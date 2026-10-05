@@ -496,7 +496,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
     def test_legend_tiles_show_full_source_names(self):
         texts = self._legend_texts()
         self.assertIn('KIWI', texts)
-        self.assertIn('OPENWEBRX', texts)
+        self.assertIn('OPEN', texts)
+        self.assertIn('WEBRX', texts)
         self.assertIn('LOCAL', texts)
         self.assertIn('FM-DX', texts)
         ui.receiver_map_toggle_group('kiwi')
@@ -527,11 +528,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
     def test_legend_square_keeps_the_normal_button_font_size(self):
         sizes = [
             size for text, size in self._legend_text_sizes()
-            if text in ui.RECEIVER_MAP_GROUP_LABELS.values()
+            if any(text in lines for lines in ui.RECEIVER_MAP_LEGEND_TEXT_LINES.values())
         ]
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_MAP_LEGEND_FONT_SIZE for size in sizes))
-        self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 15)
+        self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 18)
 
     def _draw_dots(self, scale):
         drawn = []
@@ -794,6 +795,22 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
         self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
+
+    def test_pressed_close_button_supplies_rgba_to_opengl_primitives(self):
+        box = (10, 20, 104, 114)
+        primitive_colors = []
+        ui.set_ui_press_point(40, 50)
+
+        def record_line(_x0, _y0, _x1, _y1, color, _width):
+            primitive_colors.append(color)
+            if len(ui.rgba(color)) != 4:
+                raise TypeError("OpenGL color must contain RGBA")
+
+        with patch.object(ui, 'draw_logical_rect'), \
+             patch.object(ui, 'draw_logical_line', side_effect=record_line):
+            ui.draw_radio_close_button(None, box)
+
+        self.assertTrue(primitive_colors)
 
 
 class HomeRailInstrumentTests(unittest.TestCase):

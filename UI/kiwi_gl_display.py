@@ -4161,7 +4161,12 @@ def configure_output(desktop=False):
 
 
 def rgba(color):
-    return tuple(channel / 255.0 for channel in color)
+    channels = tuple(color)
+    if len(channels) == 3:
+        channels += (255,)
+    if len(channels) != 4:
+        raise ValueError(f"expected RGB or RGBA color, got {len(channels)} channels")
+    return tuple(channel / 255.0 for channel in channels)
 
 
 def clamp(value, low, high):
@@ -12883,7 +12888,13 @@ RECEIVER_MAP_HIDDEN_GROUPS = set()
 # Legend filters use the same 94×94 two-column launcher grid as LIST, VIEW and
 # zoom. Their full source names remain visible at the normal launcher size.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 88
-RECEIVER_MAP_LEGEND_FONT_SIZE = 15
+RECEIVER_MAP_LEGEND_FONT_SIZE = 18
+RECEIVER_MAP_LEGEND_TEXT_LINES = {
+    "kiwi": ("KIWI",),
+    "openwebrx": ("OPEN", "WEBRX"),
+    "local": ("LOCAL",),
+    "fmdx": ("FM-DX",),
+}
 
 
 def receiver_map_group(receiver):
@@ -13275,7 +13286,7 @@ def draw_receiver_map(
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
-        legend_label = RECEIVER_MAP_GROUP_LABELS[legend_group]
+        legend_lines = RECEIVER_MAP_LEGEND_TEXT_LINES[legend_group]
         draw_logical_rect(
             lx0, ly0, lx1, ly1,
             UI_PRESSED_FILL if pressed else ((12, 34, 42, 226) if legend_active else (18, 21, 25, 214)),
@@ -13292,11 +13303,13 @@ def draw_receiver_map(
             draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         else:
             draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
-        draw_text(
-            text_cache, swatch_x, ly1 - 23, legend_label,
-            UI_PRESSED_TEXT if pressed else ((232, 246, 247) if legend_active else (126, 138, 146)),
-            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Cantarell",
-        )
+        label_color = UI_PRESSED_TEXT if pressed else ((232, 246, 247) if legend_active else (126, 138, 146))
+        label_y = (ly1 - 24,) if len(legend_lines) == 1 else (ly1 - 36, ly1 - 16)
+        for line, line_y in zip(legend_lines, label_y):
+            draw_text(
+                text_cache, swatch_x, line_y, line, label_color,
+                RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Liberation Sans",
+            )
 
     def draw_globe_tile_border(command_box):
         bx0, by0, bx1, by1 = command_box
