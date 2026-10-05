@@ -7,6 +7,23 @@ import kiwi_gl_display as ui
 
 
 class AudioJitterBufferTests(unittest.TestCase):
+    def test_waterfall_close_waits_for_paired_audio_access_refusal(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        generation = state.snapshot()[5]
+
+        class RefusalDuringGrace:
+            def wait(self, _seconds):
+                state.connection_access_denied(generation)
+                return False
+
+        self.assertTrue(ui.paired_stream_access_denied_after_close(
+            state, generation, RefusalDuringGrace(),
+        ))
+        self.assertEqual(state.connection_snapshot(), 'access_blocked')
+
     def test_access_policy_failure_does_not_enter_reconnect_loop(self):
         state = ui.SharedState(
             'http://example.test:8073', 7075.0, 4, -95.0,

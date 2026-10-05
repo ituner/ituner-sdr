@@ -17274,6 +17274,19 @@ def waterfall_presentation_fps(receiver_type, speed, row_pixels=1):
     return WATERFALL_SOURCE_FPS.get(clamp(int(speed), 1, WATERFALL_MAX_SPEED), 23.0) * multiplier
 
 
+def paired_stream_access_denied_after_close(state, generation, stop_event, grace_seconds=0.12):
+    """Let the paired SND worker publish a receiver policy refusal first."""
+    if state.connection_access_denied_snapshot(generation):
+        return True
+    # Kiwi closes both sockets together. The W/F close can be scheduled in
+    # the few instructions between SND logging ``too_busy=0`` and publishing
+    # access_blocked. A short grace prevents one false waterfall retry while
+    # remaining imperceptible for a genuine network close.
+    if stop_event.wait(max(0.0, float(grace_seconds))):
+        return False
+    return state.connection_access_denied_snapshot(generation)
+
+
 def kiwi_mode_filter(mode):
     """Return Kiwi's native default passband for every selectable mode."""
     mode = mode.lower()
@@ -21515,7 +21528,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
             # Kiwi then closes its paired W/F socket. Preserve the precise
             # access status instead of reporting that secondary close as a
             # retryable waterfall failure.
-            if state.connection_access_denied_snapshot(seen_server_generation):
+            if paired_stream_access_denied_after_close(
+                state, seen_server_generation, stop_event,
+            ):
                 while not stop_event.wait(0.25):
                     if state.snapshot()[5] != seen_server_generation:
                         break
