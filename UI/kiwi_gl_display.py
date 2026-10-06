@@ -4326,15 +4326,23 @@ def configure_output(desktop=False):
     # canvas is 1024 px wide, ending immediately before the permanent drawer.
     edge_margin = 16
     inner_margin = 8
-    control_h = 78
-    zoom_button_w = 94
-    zoom_group_w = 2 * zoom_button_w + 2 * inner_margin + 12
+    # Waterfall zoom is part of the same Home action family as Favorite and
+    # Pause. Reuse the Home tile dimensions and gutter so all four controls
+    # have the same physical touch weight and visual rhythm.
+    control_h = HOME_BOX[3] - HOME_BOX[1]
+    zoom_button_w = HOME_BOX[2] - HOME_BOX[0]
+    zoom_button_gap = 10
     zoom_x0 = edge_margin
-    zoom_x1 = zoom_x0 + zoom_group_w
+    zoom_x1 = zoom_x0 + 2 * zoom_button_w + zoom_button_gap
     zoom_y0 = zoom_bottom - control_h
-    ZOOM_GROUP_BOX = (zoom_x0, zoom_y0 - 3, zoom_x1, zoom_bottom + 3)
-    ZOOM_MINUS_BOX = (zoom_x0 + inner_margin, zoom_y0, zoom_x0 + inner_margin + zoom_button_w, zoom_bottom)
-    ZOOM_PLUS_BOX = (zoom_x1 - inner_margin - zoom_button_w, zoom_y0, zoom_x1 - inner_margin, zoom_bottom)
+    ZOOM_GROUP_BOX = (zoom_x0 - 3, zoom_y0 - 3, zoom_x1 + 3, zoom_bottom + 3)
+    ZOOM_MINUS_BOX = (zoom_x0, zoom_y0, zoom_x0 + zoom_button_w, zoom_bottom)
+    ZOOM_PLUS_BOX = (
+        zoom_x0 + zoom_button_w + zoom_button_gap,
+        zoom_y0,
+        zoom_x1,
+        zoom_bottom,
+    )
 
     view_button_w = 116
     view_gap = 8
@@ -7906,35 +7914,12 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         return
     x0, y0, x1, y1 = box
     pressed = ui_button_pressed(box)
-    active = active or pressed
-    key = f"zoom_sign_tile_v2_{label}_{int(active)}_{int(pressed)}"
-    cached = text_cache.cache.get(("surface", key))
-    if cached is None:
-        w = int(x1 - x0)
-        h = int(y1 - y0)
-        scale = 3
-        hi = pygame.Surface((w * scale, h * scale), pygame.SRCALPHA)
-
-        def p(value):
-            return int(round(value * scale))
-
-        # A bordered square tile makes each zoom button a visible, hittable
-        # target the knob focus can land on. Pressing it fills a neon accent.
-        tile = pygame.Rect(p(3), p(3), p(w - 6), p(h - 6))
-        fill, border, icon = zoom_button_palette(active, pressed)
-        pygame.draw.rect(hi, fill, tile, border_radius=p(4))
-        pygame.draw.rect(hi, border, tile, p(max(1.6, min(w, h) * 0.022)), border_radius=p(4))
-        cx = w / 2
-        cy = h / 2
-        sign_w = max(15, round(min(w, h) * (0.27 if label == "-" else 0.29)))
-        stroke = max(2.4, min(w, h) * 0.043)
-        pygame.draw.line(hi, icon, (p(cx - sign_w), p(cy)), (p(cx + sign_w), p(cy)), p(stroke))
-        if label == "+":
-            pygame.draw.line(hi, icon, (p(cx), p(cy - sign_w)), (p(cx), p(cy + sign_w)), p(stroke))
-        surface = pygame.transform.smoothscale(hi, (w, h))
-        cached = text_cache.surface_texture(key, surface)
-    tex, tex_w, tex_h = cached
-    draw_textured_quad(tex, x0, y0, x0 + tex_w, y0 + tex_h, 0, 0, 1, 1, alpha)
+    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_sign = 16
+    draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, 4)
+    if label == "+":
+        draw_logical_line(cx, cy - half_sign, cx, cy + half_sign, visual.text, 4)
 
 
 def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):

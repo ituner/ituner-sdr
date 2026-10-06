@@ -190,6 +190,40 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(border, ui.UI_PRESSED_EDGE)
         self.assertEqual(icon, (*ui.UI_PRESSED_TEXT, 255))
 
+    def test_waterfall_zoom_matches_favorite_and_pause_size_and_spacing(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        favorite = ui.favorite_waterfall_box()
+        pause = ui.stream_waterfall_box()
+        expected_size = (pause[2] - pause[0], pause[3] - pause[1])
+        self.assertEqual(
+            (favorite[2] - favorite[0], favorite[3] - favorite[1]),
+            expected_size,
+        )
+        self.assertEqual(
+            (ui.ZOOM_MINUS_BOX[2] - ui.ZOOM_MINUS_BOX[0],
+             ui.ZOOM_MINUS_BOX[3] - ui.ZOOM_MINUS_BOX[1]),
+            expected_size,
+        )
+        self.assertEqual(
+            (ui.ZOOM_PLUS_BOX[2] - ui.ZOOM_PLUS_BOX[0],
+             ui.ZOOM_PLUS_BOX[3] - ui.ZOOM_PLUS_BOX[1]),
+            expected_size,
+        )
+        self.assertEqual(
+            ui.ZOOM_PLUS_BOX[0] - ui.ZOOM_MINUS_BOX[2],
+            pause[0] - favorite[2],
+        )
+
+    def test_waterfall_zoom_uses_the_shared_home_button_frame(self):
+        visual = ui.APP_UI_STYLE.button.resolve()
+        with patch.object(ui, 'ui_button_pressed', return_value=False), \
+             patch.object(ui, 'draw_styled_button_frame', return_value=visual) as frame, \
+             patch.object(ui, 'draw_logical_line') as line:
+            ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, '+')
+        frame.assert_called_once_with(ui.ZOOM_PLUS_BOX, active=False, pressed=False)
+        self.assertEqual(line.call_count, 2)
+
     def test_display_drawer_exposes_the_scope_drag_action(self):
         ui.configure_output(True)
         ui.configure_popup_layout()

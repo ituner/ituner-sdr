@@ -51,9 +51,14 @@ class FmdxRailRegressionTests(unittest.TestCase):
             self.assertNotIn("NFM", ui.home_mode_labels(mode))
         self.assertTrue(ui.mode_annunciator_active("FMDX", "NBFM", "DIG"))
 
-    def test_zoom_buttons_are_close_and_left_aligned(self):
-        self.assertEqual(ui.ZOOM_PLUS_BOX[0] - ui.ZOOM_MINUS_BOX[2], 12)
-        self.assertEqual(ui.ZOOM_MINUS_BOX[0], 24)
+    def test_zoom_buttons_match_home_action_spacing_and_stay_left_aligned(self):
+        favorite = ui.favorite_waterfall_box()
+        pause = ui.stream_waterfall_box()
+        self.assertEqual(
+            ui.ZOOM_PLUS_BOX[0] - ui.ZOOM_MINUS_BOX[2],
+            pause[0] - favorite[2],
+        )
+        self.assertEqual(ui.ZOOM_MINUS_BOX[0], 16)
         self.assertLess(ui.ZOOM_PLUS_BOX[2], ui.rf_canvas_width() / 4)
 
     def test_fmdx_drawer_uses_shared_tiles_and_matches_tap_targets(self):
