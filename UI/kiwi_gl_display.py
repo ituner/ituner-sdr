@@ -14408,16 +14408,19 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "local_rx":
-        # A minimal wired link identifies LAN without the heavy enclosure and
-        # contact grid of an Ethernet socket.
-        stroke = APP_ACTION_ICON_STROKE
-        left = pygame.Rect(cx - 29, cy - 9, 18, 18)
-        right = pygame.Rect(cx + 11, cy - 9, 18, 18)
-        pygame.draw.rect(surface, color, left, stroke, border_radius=4)
-        pygame.draw.rect(surface, color, right, stroke, border_radius=4)
-        pygame.draw.line(surface, color, (left.right, cy), (right.left, cy), stroke)
-        pygame.draw.line(surface, color, (left.left - 8, cy), (left.left, cy), stroke)
-        pygame.draw.line(surface, color, (right.right, cy), (right.right + 8, cy), stroke)
+        # Restore the original hub-and-spokes LAN symbol with a deliberately
+        # lighter one-pixel outline. It remains monochrome and distinct from
+        # the wireless Network settings mark.
+        stroke = 1
+        top = pygame.Rect(cx - 9, cy - 22, 18, 13)
+        pygame.draw.rect(surface, color, top, stroke, border_radius=5)
+        bus_y = cy - 2
+        pygame.draw.line(surface, color, (cx, top.bottom + 3), (cx, bus_y), stroke)
+        pygame.draw.line(surface, color, (cx - 20, bus_y), (cx + 20, bus_y), stroke)
+        for node_x in (cx - 20, cx, cx + 20):
+            node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
+            pygame.draw.line(surface, color, (node_x, bus_y), (node_x, node.top - 3), stroke)
+            pygame.draw.rect(surface, color, node, stroke, border_radius=4)
     elif kind == "network":
         # A compact two-wave wireless mark keeps the radio language of the
         # earlier icon while presenting fewer, tighter strokes at this size.

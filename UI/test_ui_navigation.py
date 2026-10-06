@@ -108,6 +108,8 @@ class DrawerGeometryTests(unittest.TestCase):
             )
             self.assertTrue(all(call.args[1] == monochrome for call in draw_line.call_args_list))
             self.assertTrue(all(call.args[1] == monochrome for call in draw_lines.call_args_list))
+            self.assertTrue(all(call.args[4] == 1 for call in draw_line.call_args_list))
+            self.assertTrue(all(call.args[3] == 1 for call in draw_rect.call_args_list))
             draw_rect.reset_mock()
             draw_line.reset_mock()
             draw_lines.reset_mock()
