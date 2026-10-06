@@ -429,7 +429,26 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(
             ui.lcd_annunciator_surface_bottom(False),
             ui.lcd_home_mode_grid_bottom(False) + ui.LCD_ANNUNCIATOR_EXPANDED_PAD)
-        self.assertEqual(ui.lcd_annunciator_surface_bottom(True), ui.LCD_ANNUNCIATOR_BOX[3])
+        self.assertEqual(
+            ui.lcd_annunciator_surface_bottom(True),
+            ui.lcd_home_mode_grid_bottom(True) + ui.LCD_ANNUNCIATOR_COMPACT_PAD,
+        )
+
+    def test_compact_home_reserves_the_full_volume_control(self):
+        compact_meter = ui.lcd_compact_smeter_box()
+        compact_modes = tuple(box for _label, box in ui.lcd_home_mode_boxes(True))
+        bandwidth = ui.lcd_home_bandwidth_box(True)
+        volume = ui.lcd_home_volume_box(True)
+        mute = ui.lcd_home_volume_mute_box(True)
+        track = ui.lcd_home_volume_track_box(True)
+        self.assertLess(compact_meter[3], min(box[1] for box in compact_modes))
+        self.assertLessEqual(max(box[3] for box in compact_modes), bandwidth[1])
+        self.assertEqual(volume[3] - volume[1], 72)
+        self.assertGreaterEqual(mute[1], volume[1])
+        self.assertLessEqual(mute[3], volume[3])
+        self.assertGreaterEqual(track[1], volume[1])
+        self.assertLessEqual(track[3], volume[3])
+        self.assertLess(volume[3], ui.lcd_nav_top())
 
     def test_mode_hit_selects_before_drawer(self):
         for compact in (True,False):

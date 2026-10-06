@@ -14617,6 +14617,13 @@ BIG_FREQUENCY_COLOR = VFO_NEON_COLOR
 SLIDER_STEM_HALF_HEIGHT = 3
 # Keep enough vertical space for a readable passband scale and silhouette.
 LCD_HOME_PASSBAND_HEIGHT = 89
+# Compact Home must fit VFO, S-meter, modes, passband and the complete Volume
+# control before the navigation grid. These constants keep that stack explicit
+# instead of allowing the final block to be silently squeezed.
+LCD_COMPACT_SMETER_TOP = 108
+LCD_COMPACT_SMETER_HEIGHT = 52
+LCD_COMPACT_MODE_GRID_TOP = 166
+LCD_COMPACT_INSTRUMENT_PAD = 10
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
@@ -14764,11 +14771,8 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     # These are status annunciators, not primary action buttons. A restrained
     # 15% reduction keeps the group calm without making the labels fussy.
     gap = 4
-    # Keep a distinct 17 px air gap beneath the compact S-meter scale. The
-    # mode annunciators are a separate control group, not its bottom label.
-    compact_grid_y0 = 190
     compact_cell_h = 31
-    grid_y0 = compact_grid_y0 if show_compact_readouts else 28
+    grid_y0 = LCD_COMPACT_MODE_GRID_TOP if show_compact_readouts else 28
     return grid_y0, compact_cell_h, gap
 
 
@@ -14811,22 +14815,22 @@ def lcd_home_mode_grid_bottom(show_compact_readouts=True):
     return LCD_ANNUNCIATOR_BOX[1] + grid_y0 + 2 * cell_h + gap
 
 
-# Small breathing strip under the expanded mode buttons before the passband.
+# Small breathing strip under the mode buttons before the passband.
+LCD_ANNUNCIATOR_COMPACT_PAD = 10
 LCD_ANNUNCIATOR_EXPANDED_PAD = 10
 
 
 def lcd_annunciator_surface_bottom(show_compact_readouts=True):
     """Bottom edge of the opaque mode surface for the current Home layout.
 
-    The compact surface owns the whole reserved annunciator block because it
-    also carries the VFO readout and meter. The expanded surface is only as
-    tall as its mode buttons, so it no longer leaves a long empty panel that
-    pushed the passband and volume down the rail.
+    Both surfaces end after their real mode grid. This prevents an obsolete
+    reserved height from pushing Passband and Volume below the usable rail.
     """
-    _x0, y0, _x1, y1 = LCD_ANNUNCIATOR_BOX
-    if show_compact_readouts:
-        return y1
+    _x0, y0, _x1, _y1 = LCD_ANNUNCIATOR_BOX
     grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(False)
+    if show_compact_readouts:
+        grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(True)
+        return y0 + grid_y0 + 2 * cell_h + gap + LCD_ANNUNCIATOR_COMPACT_PAD
     return y0 + grid_y0 + 2 * cell_h + gap + LCD_ANNUNCIATOR_EXPANDED_PAD
 
 
@@ -15068,8 +15072,17 @@ def lcd_home_bandwidth_box(show_compact_readouts=True):
     # The mode surface is only as tall as its buttons and the Home instruments
     # are drawn after it (see draw_ui), so no opaque panel can cover them and
     # no long empty strip pushes them down the rail any more.
-    y0 = lcd_home_mode_grid_bottom(show_compact_readouts) + 20
+    y0 = lcd_home_mode_grid_bottom(show_compact_readouts) + (
+        LCD_COMPACT_INSTRUMENT_PAD if show_compact_readouts else 20
+    )
     return x0, y0, x1, y0 + LCD_HOME_PASSBAND_HEIGHT
+
+
+def lcd_compact_smeter_box():
+    """Short S-meter strip that leaves room for the full Home Volume block."""
+    x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
+    top = y0 + LCD_COMPACT_SMETER_TOP
+    return x0 + 6, top, x1 - 6, top + LCD_COMPACT_SMETER_HEIGHT
 
 
 def lcd_nav_box(index, item_count=None, has_back=False):
@@ -15563,7 +15576,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # rather than a thin status decoration beside the VFO.
         # Reserve quiet air around the meter so it reads as its own small
         # instrument rather than touching either the band tag or mode grid.
-        meter_x0, meter_y0, meter_x1, meter_y1 = x0 + 6, y0 + 108, x1 - 6, y0 + 178
+        meter_x0, meter_y0, meter_x1, meter_y1 = lcd_compact_smeter_box()
         meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
         meter_level = smeter_segment_position(meter_value)
         draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
@@ -15571,7 +15584,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         draw_text(text_cache, meter_x0 + 9, meter_y0 + 12, "S-METER", (165, 199, 207), 13, True, False, "lm", family="Liberation Sans")
         draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 17, True, False, "rm", family="Liberation Sans")
         meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-        meter_track_y = meter_y0 + 37
+        meter_track_y = meter_y0 + 31
         segment_w = (meter_track_x1 - meter_track_x0) / 36
         for index in range(36):
             sx0 = meter_track_x0 + index * segment_w + 1
@@ -15580,15 +15593,15 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
             draw_logical_rect(
                 sx0,
-                meter_track_y - SMETER_HOME_RAIL_BAR_HALF_HEIGHT,
+                meter_track_y - 6,
                 sx1,
-                meter_track_y + SMETER_HOME_RAIL_BAR_HALF_HEIGHT,
+                meter_track_y + 6,
                 color if active else (31, 52, 61, 208),
             )
         for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
             lx = meter_track_x0 + (meter_track_x1 - meter_track_x0) * position / 36.0
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
-            draw_text(text_cache, lx, meter_y1 - 8, label, color, 12, True, False, "cm", family="Liberation Sans")
+            draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
     for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts, mode):
         active = mode_annunciator_active(label, active_mode, digital)
