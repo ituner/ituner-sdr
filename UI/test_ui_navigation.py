@@ -48,6 +48,9 @@ class MenuIconTests(unittest.TestCase):
         self.assertEqual(ui.menu_icon_filename("tests", muted=True), "apps.png")
         self.assertEqual(ui.menu_icon_filename("dual"), "dual.png")
 
+    def test_receiver_globe_action_reuses_the_navigation_globe_asset(self):
+        self.assertEqual(ui.RECEIVER_GLOBE_ICON, ui.menu_icon_filename("rx"))
+
     def test_dual_icon_has_requested_wide_low_profile(self):
         icon = Path(__file__).resolve().parent / "assets/menu-icons/dual.png"
         with Image.open(icon).convert("RGBA") as image:
@@ -321,6 +324,18 @@ class ReceiverBrowserTests(unittest.TestCase):
         rows = ui.filtered_stations(ui.STATIONS, "", "name", "openwebrx", set())
         self.assertTrue(rows)
 
+    def test_globe_refresh_cannot_erase_openwebrx_catalog_rows(self):
+        globe_only = ((
+            "Globe Kiwi", "London", "http://kiwi-map.test:8073",
+            1, 8, 51.5, -0.1, "kiwi",
+        ),)
+        combined = ui.merge_station_rows(globe_only, ui.STATIONS)
+        openwebrx = ui.filtered_stations(
+            combined, "", "name", "openwebrx", set(), {},
+        )
+        self.assertTrue(openwebrx)
+        self.assertTrue(all(ui.station_receiver_type(row) == "openwebrx" for row in openwebrx))
+
     def test_kiwi_and_local_segments_are_exclusive(self):
         kiwi = ui.filtered_stations(ui.STATIONS, "", "name", "kiwi", set())
         local = ui.filtered_stations(ui.STATIONS, "", "name", "local", set())
@@ -482,6 +497,7 @@ class BigFrequencyStyleTests(unittest.TestCase):
         with mock.patch.object(ui, "draw_big_frequency", side_effect=lambda *a, **k: calls.append((a, k))), \
                 mock.patch.object(ui, "draw_logical_rect"), \
                 mock.patch.object(ui, "draw_logical_line"), \
+                mock.patch.object(ui, "draw_logical_rounded_rect"), \
                 mock.patch.object(ui, "draw_sidebar_header"), \
                 mock.patch.object(ui, "draw_text"), \
                 mock.patch.object(ui, "draw_picker_button"), \
@@ -596,9 +612,53 @@ class ReceiverListStyleTests(unittest.TestCase):
         with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 mock.patch.object(ui, "draw_text") as text:
             ui.draw_receiver_filter_button(self.Cache(), box, "LAN", True)
-        rounded.assert_called_once_with(*box, 7, ui.RECEIVER_LIST_THEME.focus,
-                                        ui.RECEIVER_LIST_THEME.focus, 2)
+        rounded.assert_called_once_with(
+            *box, ui.APP_UI_STYLE.button.radius,
+            ui.RECEIVER_LIST_THEME.focus, ui.RECEIVER_LIST_THEME.focus, 2,
+        )
         self.assertEqual(text.call_args.args[4], (18, 18, 18))
+
+    def test_receiver_rows_are_compact_and_keep_five_visible(self):
+        boxes = [ui.station_tile(index, 0) for index in range(5)]
+        self.assertTrue(all(box is not None for box in boxes))
+        self.assertTrue(all(box[3] - box[1] == ui.RECEIVER_PICKER_ROW_HEIGHT for box in boxes))
+        self.assertLess(boxes[-1][3], ui.LOGICAL_H)
+
+    def test_shared_button_style_uses_cyan_active_state_everywhere(self):
+        normal = ui.APP_UI_STYLE.button.resolve()
+        active = ui.APP_UI_STYLE.button.resolve(active=True)
+        pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
+        self.assertEqual(normal.fill, (38, 38, 38, 255))
+        self.assertEqual(active.fill, (0, 229, 255, 255))
+        self.assertEqual(active.text, (18, 18, 18))
+        self.assertEqual(pressed, active)
+
+    def test_distance_follows_the_badges_under_the_server_name(self):
+        station = ("Receiver", "Location", "owrx://example.test", None, None, 1.0, 2.0, "openwebrx")
+        drawn_text = []
+        badge_calls = []
+
+        def badge(_cache, x, y, badge, _theme):
+            badge_calls.append((x, y, badge.label))
+            return 70
+
+        with mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_logical_rounded_rect"), \
+                mock.patch.object(ui, "draw_receiver_action_button"), \
+                mock.patch.object(ui, "draw_receiver_filter_button"), \
+                mock.patch.object(ui, "draw_receiver_sidebar_header"), \
+                mock.patch.object(ui, "draw_receiver_back_button"), \
+                mock.patch.object(ui, "draw_receiver_badge", side_effect=badge), \
+                mock.patch.object(ui, "draw_text", side_effect=lambda *args, **_kwargs: drawn_text.append(args)):
+            ui.draw_station_picker(
+                self.Cache(), [station], 0, "", "", "name", {},
+                route_filter="openwebrx", home_profile={"latitude": 0.0, "longitude": 0.0},
+            )
+
+        name_call = next(call for call in drawn_text if call[3] == "Receiver · Location")
+        distance_call = next(call for call in drawn_text if str(call[3]).startswith("DISTANCE:"))
+        self.assertGreater(badge_calls[0][1], name_call[2])
+        self.assertGreater(distance_call[1], badge_calls[-1][0])
 
 
 if __name__ == "__main__":

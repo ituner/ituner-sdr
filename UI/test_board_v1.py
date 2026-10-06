@@ -115,6 +115,7 @@ class BoardLayoutTests(unittest.TestCase):
         texts = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text',
                           side_effect=lambda _c, _x, _y, text, *_a, **_k: texts.append(str(text))), \
@@ -295,6 +296,7 @@ class BoardLayoutTests(unittest.TestCase):
     def test_receiver_browser_opens_the_globe_not_a_map(self):
         labels = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_receiver_action_button',
                           side_effect=lambda _c, _b, label, *_a, **_k: labels.append(str(label))), \
              patch.object(ui, 'draw_receiver_filter_button'), \
@@ -331,6 +333,7 @@ class BoardLayoutTests(unittest.TestCase):
     def test_frequency_drawer_lists_steps_without_up_down_captions(self):
         texts = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'frequency_chevron_texture', return_value=(1, 10, 10)), \
@@ -494,6 +497,7 @@ class WaterfallPresentationTests(unittest.TestCase):
 
     def test_settings_back_uses_shared_renderer(self):
         with patch.object(ui,'draw_sidebar_header'), patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'), \
+             patch.object(ui,'draw_logical_rounded_rect'), \
              patch.object(ui,'lcd_nav_tile_background',return_value=(1,1,1)), \
              patch.object(ui,'menu_icon_texture',return_value=(1,1,1)), \
              patch.object(ui,'draw_textured_quad'), patch.object(ui,'draw_radio_close_button') as back:
@@ -613,6 +617,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         texts = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text',
                           side_effect=lambda _c, _x, _y, text, *_a, **_k: texts.append(str(text))), \
@@ -645,6 +650,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         sizes = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text',
                           side_effect=lambda _c, _x, _y, text, _color, size, *_a, **_k: sizes.append((str(text), size))), \
@@ -675,6 +681,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         drawn = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text'), patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
@@ -724,6 +731,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         colors = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline',
                           side_effect=lambda _points, color, *_a, **_k: colors.append(tuple(color))), \
              patch.object(ui, 'draw_logical_circle'), \
@@ -808,6 +816,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text'), patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
@@ -836,6 +845,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         drawn = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
              patch.object(ui, 'draw_text'), patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
@@ -925,8 +935,7 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         fills = []
         colors = []
         ui.set_ui_press_point(40, 50)
-        with patch.object(ui, 'draw_logical_rect', side_effect=lambda *_args: fills.append(_args[-1])), \
-             patch.object(ui, 'draw_logical_line'), \
+        with patch.object(ui, 'draw_logical_rounded_rect', side_effect=lambda *_args: fills.append(_args[5])), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_button(None, box, 'TEST')
         self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
@@ -936,8 +945,7 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         box = (10, 20, 246, 72)
         fills = []
         colors = []
-        with patch.object(ui, 'draw_logical_rect', side_effect=lambda *_args: fills.append(_args[-1])), \
-             patch.object(ui, 'draw_logical_line'), \
+        with patch.object(ui, 'draw_logical_rounded_rect', side_effect=lambda *_args: fills.append(_args[5])), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_button(None, box, 'KIWI', selected=True)
         self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
@@ -963,6 +971,7 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
                 raise TypeError("OpenGL color must contain RGBA")
 
         with patch.object(ui, 'draw_logical_rect'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_line', side_effect=record_line):
             ui.draw_radio_close_button(None, box)
 
@@ -996,6 +1005,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         # annunciators. If the rail renderer drew them first, the mode surface
         # would cover the expanded instruments sitting under the mode buttons.
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'lcd_nav_tile_background', return_value=(1, 1, 1)), \
              patch.object(ui, 'menu_icon_texture', return_value=(1, 1, 1)), \
