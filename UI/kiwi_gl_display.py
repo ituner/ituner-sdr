@@ -14408,38 +14408,30 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "local_rx":
-        # A light, open Ethernet plug identifies the nearby wired receiver.
-        # Four contacts keep the small glyph readable without the visual
-        # weight of the previous boxed socket.
+        # A minimal wired link identifies LAN without the heavy enclosure and
+        # contact grid of an Ethernet socket.
         stroke = APP_ACTION_ICON_STROKE
-        pygame.draw.lines(
-            surface,
-            color,
-            True,
-            ((cx - 21, cy - 19), (cx + 21, cy - 19),
-             (cx + 21, cy + 9), (cx + 12, cy + 9),
-             (cx + 12, cy + 18), (cx - 12, cy + 18),
-             (cx - 12, cy + 9), (cx - 21, cy + 9)),
-            stroke,
-        )
-        for contact_x in (cx - 12, cx - 4, cx + 4, cx + 12):
-            pygame.draw.line(
-                surface, color,
-                (contact_x, cy - 12), (contact_x, cy - 4), stroke,
-            )
-        pygame.draw.line(surface, color, (cx, cy + 18), (cx, cy + 29), stroke)
+        left = pygame.Rect(cx - 29, cy - 9, 18, 18)
+        right = pygame.Rect(cx + 11, cy - 9, 18, 18)
+        pygame.draw.rect(surface, color, left, stroke, border_radius=4)
+        pygame.draw.rect(surface, color, right, stroke, border_radius=4)
+        pygame.draw.line(surface, color, (left.right, cy), (right.left, cy), stroke)
+        pygame.draw.line(surface, color, (left.left - 8, cy), (left.left, cy), stroke)
+        pygame.draw.line(surface, color, (right.right, cy), (right.right + 8, cy), stroke)
     elif kind == "network":
-        # Three connected peers distinguish general Network settings from the
-        # physical Ethernet plug while retaining the same line weight.
+        # A compact two-wave wireless mark keeps the radio language of the
+        # earlier icon while presenting fewer, tighter strokes at this size.
         stroke = APP_ACTION_ICON_STROKE
-        top = (cx, cy - 22)
-        lower_left = (cx - 24, cy + 18)
-        lower_right = (cx + 24, cy + 18)
-        pygame.draw.line(surface, color, (cx - 4, cy - 15), (cx - 19, cy + 10), stroke)
-        pygame.draw.line(surface, color, (cx + 4, cy - 15), (cx + 19, cy + 10), stroke)
-        pygame.draw.line(surface, color, (cx - 15, cy + 18), (cx + 15, cy + 18), stroke)
-        for node in (top, lower_left, lower_right):
-            pygame.draw.circle(surface, color, node, 8, stroke)
+        for radius in (20, 34):
+            points = []
+            for degree in range(218, 323, 8):
+                radians = math.radians(degree)
+                points.append((
+                    cx + round(math.cos(radians) * radius),
+                    cy + 10 + round(math.sin(radians) * radius),
+                ))
+            pygame.draw.lines(surface, color, False, points, stroke)
+        pygame.draw.circle(surface, color, (cx, cy + 13), 6)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
