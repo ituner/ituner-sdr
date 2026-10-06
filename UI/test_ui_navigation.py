@@ -20,8 +20,10 @@ class MenuIconTests(unittest.TestCase):
             "display.png",
             "dual.png",
             "frequency-chevron.png",
+            "globe-network.png",
             "home.png",
             "info.png",
+            "lan-home.png",
             "receivers.png",
             "rf.png",
             "settings.png",
@@ -49,7 +51,11 @@ class MenuIconTests(unittest.TestCase):
         self.assertEqual(ui.menu_icon_filename("dual"), "dual.png")
 
     def test_receiver_globe_action_reuses_the_navigation_globe_asset(self):
-        self.assertEqual(ui.RECEIVER_GLOBE_ICON, ui.menu_icon_filename("rx"))
+        self.assertEqual(ui.RECEIVER_GLOBE_ICON, "globe-network.png")
+        self.assertNotEqual(ui.RECEIVER_GLOBE_ICON, ui.menu_icon_filename("rx"))
+
+    def test_lan_uses_the_requested_home_network_asset(self):
+        self.assertEqual(ui.menu_icon_filename("local_rx"), "lan-home.png")
 
     def test_dual_icon_has_requested_wide_low_profile(self):
         icon = Path(__file__).resolve().parent / "assets/menu-icons/dual.png"

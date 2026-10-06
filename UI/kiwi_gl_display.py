@@ -386,6 +386,7 @@ class HamCallsignBook:
 
 
 MENU_ICON_FILENAMES = {
+    "local_rx": "lan-home.png",
     "rx": "receivers.png",
     "digital": "digi.png",
     "dual": "dual.png",
@@ -402,7 +403,7 @@ def menu_icon_filename(kind, muted=False):
     return MENU_ICON_FILENAMES.get(kind, f"{kind}.png")
 
 
-RECEIVER_GLOBE_ICON = menu_icon_filename("rx")
+RECEIVER_GLOBE_ICON = "globe-network.png"
 SPECTRUM_H = 70
 LCD_SPECTRUM_H = 240
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
@@ -14555,7 +14556,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("local_rx", "network"):
+        if kind == "network":
             draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
