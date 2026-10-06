@@ -318,6 +318,7 @@ class BoardLayoutTests(unittest.TestCase):
         commands = [ui.PICKER_MAP_MODE_BOX, ui.PICKER_SEARCH_BOX,
                     ui.PICKER_SORT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX]
         back = ui.PICKER_EXIT_BOX
+        self.assertEqual(commands, [ui.lcd_nav_box(index, 5, True) for index in range(4)])
         self.assertTrue(all(box[0] == tabs[0][0] and box[2] == tabs[0][2] for box in tabs))
         self.assertTrue(all(box[2] - box[0] > box[3] - box[1] for box in tabs))
         self.assertLess(tabs[-1][3], min(box[1] for box in commands))

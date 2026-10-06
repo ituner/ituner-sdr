@@ -1950,8 +1950,8 @@ def configure_popup_layout():
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
         # Source selectors lead the rail as full-width horizontal tabs. The
-        # four secondary commands retain the familiar square 2-column grid
-        # immediately beneath them, with Back anchored at the bottom.
+        # four secondary commands retain their original square 2-column grid
+        # directly above the bottom-anchored Back button.
         (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
          PICKER_SORT_BOX, PICKER_ROUTE_FAVORITES_BOX) = receiver_picker_command_boxes()
         PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
@@ -2492,7 +2492,6 @@ class ReceiverBrowserState:
 RECEIVER_RAIL_TAB_TOP_GAP = 12
 RECEIVER_RAIL_TAB_HEIGHT = 52
 RECEIVER_RAIL_TAB_GAP = 8
-RECEIVER_RAIL_COMMAND_GAP = 20
 
 
 def receiver_source_segments():
@@ -2522,24 +2521,8 @@ def receiver_source_segments():
 
 
 def receiver_picker_command_boxes():
-    """Place receiver actions directly below the source-tab stack."""
-    tab_boxes = receiver_source_segments()
-    top = tab_boxes[-1][1][3] + RECEIVER_RAIL_COMMAND_GAP
-    rail_x0 = globals().get("LCD_NAV_X0", 1024)
-    logical_w = globals().get("LOGICAL_W", 1280)
-    tile_w = globals().get("LCD_NAV_TILE_W", 94)
-    tile_h = globals().get("LCD_NAV_TILE_H", 94)
-    gap = globals().get("LCD_NAV_GAP", 20)
-    grid_width = 2 * tile_w + gap
-    left = rail_x0 + (logical_w - rail_x0 - grid_width) / 2
-    boxes = []
-    for index in range(4):
-        column = index % 2
-        row = index // 2
-        x0 = left + column * (tile_w + gap)
-        y0 = top + row * (tile_h + gap)
-        boxes.append((x0, y0, x0 + tile_w, y0 + tile_h))
-    return tuple(boxes)
+    """Keep receiver actions in their original grid immediately above Back."""
+    return tuple(lcd_nav_box(index, 5, True) for index in range(4))
 
 
 def boxes_overlap(a, b):
