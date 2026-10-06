@@ -1964,11 +1964,14 @@ def configure_popup_layout():
         PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
         PICKER_SOURCE_SEGMENT_BOXES = receiver_source_segments()
         PICKER_EXIT_BOX = RECEIVER_PICKER_BACK_BOX
-        # The Globe uses the exact same lower 2x2 grid and Back geometry as
-        # Receivers, rather than independently recreating equivalent boxes.
-        (RADIOGARDEN_LIST_BOX, RADIOGARDEN_VIEW_BOX,
-         RADIOGARDEN_ZOOM_IN_BOX, RADIOGARDEN_ZOOM_OUT_BOX) = receiver_picker_command_boxes()
-        RADIOGARDEN_EXIT_BOX = RECEIVER_PICKER_BACK_BOX
+        # The Globe reuses the Receiver command boxes themselves. Keeping one
+        # authoritative set of tuples prevents either screen from drifting by
+        # even a gutter when the shared rail geometry changes.
+        RADIOGARDEN_LIST_BOX = PICKER_MAP_MODE_BOX
+        RADIOGARDEN_VIEW_BOX = PICKER_SEARCH_BOX
+        RADIOGARDEN_ZOOM_IN_BOX = PICKER_SORT_BOX
+        RADIOGARDEN_ZOOM_OUT_BOX = PICKER_ROUTE_FAVORITES_BOX
+        RADIOGARDEN_EXIT_BOX = PICKER_EXIT_BOX
     else:
         PICKER_BOX = (0, 0, 790, LOGICAL_H)
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -13538,9 +13541,9 @@ def draw_receiver_map(
         swatch_x, swatch_y = lx0 + 24, (ly0 + ly1) / 2
         draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         draw_text(
-            text_cache, (lx0 + lx1) / 2, swatch_y,
+            text_cache, swatch_x + 22, swatch_y,
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
-            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Liberation Sans",
+            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "lm", family="Liberation Sans",
         )
 
     def draw_globe_tile_border(command_box):

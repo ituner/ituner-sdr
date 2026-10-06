@@ -278,6 +278,10 @@ class BoardLayoutTests(unittest.TestCase):
             ),
             ui.receiver_picker_command_boxes(),
         )
+        self.assertIs(ui.RADIOGARDEN_LIST_BOX, ui.PICKER_MAP_MODE_BOX)
+        self.assertIs(ui.RADIOGARDEN_VIEW_BOX, ui.PICKER_SEARCH_BOX)
+        self.assertIs(ui.RADIOGARDEN_ZOOM_IN_BOX, ui.PICKER_SORT_BOX)
+        self.assertIs(ui.RADIOGARDEN_ZOOM_OUT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX)
         self.assertEqual(
             min(ui.RADIOGARDEN_LIST_BOX[0], ui.RADIOGARDEN_VIEW_BOX[0]),
             ui.RADIOGARDEN_EXIT_BOX[0],
@@ -724,6 +728,35 @@ class ReceiverMapLegendTests(unittest.TestCase):
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_MAP_LEGEND_FONT_SIZE for size in sizes))
         self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, ui.RECEIVER_LIST_THEME.label_size)
+
+    def test_legend_text_is_left_aligned_after_the_source_dot(self):
+        labels = []
+        with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
+             patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
+             patch.object(ui, 'draw_logical_polyline'), patch.object(ui, 'draw_logical_circle'), \
+             patch.object(
+                 ui, 'draw_text',
+                 side_effect=lambda *args, **_kwargs: labels.append(args),
+             ), patch.object(ui, 'draw_sidebar_header'), \
+             patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
+             patch.object(ui, 'menu_icon_texture', return_value=(1, 1, 1)), \
+             patch.object(ui, 'draw_textured_quad'), \
+             patch.object(ui, 'draw_picker_two_line_button'), \
+             patch.object(ui, 'draw_radio_close_button'), \
+             patch.object(ui, 'radiogarden_project', return_value=(300.0, 200.0, 1.0)), \
+             patch.object(ui, 'draw_logical_points'):
+            ui.draw_receiver_map(
+                None, self.receivers(), 0.0, 0.0, 1.0, '', None, 'idle', {},
+                map_view='satellite_only',
+            )
+        legend_boxes = dict(ui.receiver_map_legend_boxes(self.receivers()))
+        for group, label in ui.RECEIVER_MAP_GROUP_LABELS.items():
+            if group not in legend_boxes:
+                continue
+            call = next(args for args in labels if args[3] == label)
+            self.assertEqual(call[8], 'lm')
+            self.assertEqual(call[1], legend_boxes[group][0] + 46)
 
     def _draw_dots(self, scale):
         drawn = []
