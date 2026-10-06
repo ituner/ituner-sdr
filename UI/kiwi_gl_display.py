@@ -2502,7 +2502,11 @@ RECEIVER_PICKER_MARGIN = 10
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
 RECEIVER_PICKER_ACTION_TOP = 478
-RECEIVER_ACTION_ICON_SIZE = 46
+# Shared action-icon metrics. Code-drawn icons and raster assets use this same
+# canvas and stroke so switching screens never changes their visual weight.
+APP_ACTION_ICON_SIZE = 46
+APP_ACTION_ICON_STROKE = 3
+RECEIVER_ACTION_ICON_SIZE = APP_ACTION_ICON_SIZE
 RECEIVER_ACTION_ICON_CENTER_Y = 42
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
@@ -6052,9 +6056,11 @@ def draw_logical_area(points, baseline_y, color):
     GL.glEnable(GL.GL_TEXTURE_2D)
 
 
-def draw_logical_circle(cx, cy, radius, color, segments=72, outline=False):
+def draw_logical_circle(cx, cy, radius, color, segments=72, outline=False, width=1):
     GL.glDisable(GL.GL_TEXTURE_2D)
     GL.glColor4f(*rgba(color))
+    if outline:
+        GL.glLineWidth(width)
     GL.glBegin(GL.GL_LINE_LOOP if outline else GL.GL_TRIANGLE_FAN)
     if not outline:
         GL.glVertex2f(*logical_to_native(cx, cy))
@@ -14501,9 +14507,9 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         else:
             asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)
             icon = pygame.image.load(str(asset_path)).convert_alpha()
-            # Keep the supplied vector-derived art deliberately understated in the
-            # compact menu. Its transparent alpha allows one clean 30% reduction.
-            icon_size = round(icon.get_width() * 0.70)
+            # All main navigation assets share the same icon canvas as the
+            # code-drawn action glyphs.
+            icon_size = APP_ACTION_ICON_SIZE
             icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
             icon_y = max(0, (height - 26 - icon_size) // 2)
             surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
@@ -16346,17 +16352,28 @@ def draw_receiver_action_icon(text_cache, box, kind, color):
     if kind == "globe":
         draw_receiver_globe_icon(text_cache, box, color)
     elif kind == "search":
-        draw_logical_circle(cx - 4, cy - 4, 14, color, 32, True)
-        draw_logical_line(cx + 6, cy + 6, cx + 20, cy + 20, color, 4)
+        # Lucide-style search: one balanced lens and a tangent handle.
+        draw_logical_circle(
+            cx - 5, cy - 5, 15, color, 40, True,
+            width=APP_ACTION_ICON_STROKE,
+        )
+        draw_logical_line(
+            cx + 6, cy + 6, cx + 20, cy + 20,
+            color, APP_ACTION_ICON_STROKE,
+        )
     elif kind == "sort":
-        draw_logical_line(cx - 13, cy - 18, cx - 13, cy + 18, color, 4)
-        draw_logical_line(cx - 21, cy - 10, cx - 13, cy - 18, color, 4)
-        draw_logical_line(cx - 5, cy - 10, cx - 13, cy - 18, color, 4)
-        draw_logical_line(cx + 13, cy - 18, cx + 13, cy + 18, color, 4)
-        draw_logical_line(cx + 5, cy + 10, cx + 13, cy + 18, color, 4)
-        draw_logical_line(cx + 21, cy + 10, cx + 13, cy + 18, color, 4)
+        # Lucide list-filter silhouette: descending rows read as ordering at a
+        # glance without implying that only one direction is available.
+        for half_width, offset_y in ((21, -19), (14, 0), (7, 19)):
+            draw_logical_line(
+                cx - half_width, cy + offset_y,
+                cx + half_width, cy + offset_y,
+                color, APP_ACTION_ICON_STROKE,
+            )
     else:
-        draw_logical_polyline(regular_star_points(cx, cy, 22), color, 3)
+        draw_logical_polyline(
+            regular_star_points(cx, cy, 22), color, APP_ACTION_ICON_STROKE,
+        )
 
 
 def draw_receiver_action_button(text_cache, box, label, kind, selected=False,

@@ -736,15 +736,27 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(back[1] - max(box[3] for box in boxes), ui.RECEIVER_PICKER_ACTION_GAP)
 
     def test_receiver_action_icons_match_home_menu_scale(self):
-        # Home assets start at 64 px and are rendered at 70% (45 px). The
-        # receiver action glyphs should carry the same visual weight.
-        self.assertGreaterEqual(ui.RECEIVER_ACTION_ICON_SIZE, round(64 * 0.70))
+        self.assertEqual(ui.RECEIVER_ACTION_ICON_SIZE, ui.APP_ACTION_ICON_SIZE)
         with mock.patch.object(ui, "draw_logical_circle") as circle, \
-                mock.patch.object(ui, "draw_logical_line"):
+                mock.patch.object(ui, "draw_logical_line") as line:
             ui.draw_receiver_action_icon(
                 self.Cache(), ui.PICKER_SEARCH_BOX, "search", (255, 255, 255, 255),
             )
-        self.assertEqual(circle.call_args.args[2], 14)
+        self.assertEqual(circle.call_args.args[2], 15)
+        self.assertEqual(circle.call_args.kwargs["width"], ui.APP_ACTION_ICON_STROKE)
+        self.assertEqual(line.call_args.args[5], ui.APP_ACTION_ICON_STROKE)
+
+    def test_sort_icon_uses_three_balanced_lines_with_shared_stroke(self):
+        lines = []
+        with mock.patch.object(
+            ui, "draw_logical_line", side_effect=lambda *args: lines.append(args),
+        ):
+            ui.draw_receiver_action_icon(
+                self.Cache(), ui.PICKER_SORT_BOX, "sort", (255, 255, 255, 255),
+            )
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([line[2] - line[0] for line in lines], [42, 28, 14])
+        self.assertTrue(all(line[5] == ui.APP_ACTION_ICON_STROKE for line in lines))
 
     def test_receiver_back_label_is_centered_plain_text(self):
         with mock.patch.object(ui, "draw_styled_text_button") as draw:
