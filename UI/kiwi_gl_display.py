@@ -14408,30 +14408,33 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "local_rx":
-        # Home plus a compact wireless signal communicates the nearby LAN
-        # receiver without repeating the standalone Network settings mark.
+        # A compact smart-home mark: the house is anchored below a separate
+        # wireless signal, keeping both shapes legible at navigation size.
         stroke = APP_ACTION_ICON_STROKE
+        roof_peak_y = cy - 3
+        roof_base_y = cy + 15
         pygame.draw.lines(
             surface, color, False,
-            ((cx - 26, cy - 5), (cx, cy - 28), (cx + 26, cy - 5)),
+            ((cx - 24, roof_base_y), (cx, roof_peak_y), (cx + 24, roof_base_y)),
             stroke,
         )
         pygame.draw.lines(
             surface, color, False,
-            ((cx - 21, cy - 6), (cx - 21, cy + 25),
-             (cx + 21, cy + 25), (cx + 21, cy - 6)),
+            ((cx - 19, cy + 12), (cx - 19, cy + 29),
+             (cx + 19, cy + 29), (cx + 19, cy + 12)),
             stroke,
         )
-        for radius in (10, 18):
+        signal_y = cy - 11
+        for radius in (9, 16):
             points = []
             for degree in range(220, 321, 10):
                 radians = math.radians(degree)
                 points.append((
                     cx + round(math.cos(radians) * radius),
-                    cy + 19 + round(math.sin(radians) * radius),
+                    signal_y + round(math.sin(radians) * radius),
                 ))
             pygame.draw.lines(surface, color, False, points, stroke)
-        pygame.draw.circle(surface, color, (cx, cy + 20), 4)
+        pygame.draw.circle(surface, color, (cx, signal_y + 1), 4)
     elif kind == "network":
         # A compact two-wave wireless mark keeps the radio language of the
         # earlier icon while presenting fewer, tighter strokes at this size.
