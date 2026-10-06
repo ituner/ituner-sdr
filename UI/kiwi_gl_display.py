@@ -14408,19 +14408,30 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "local_rx":
-        # Restore the original hub-and-spokes LAN symbol with a deliberately
-        # lighter one-pixel outline. It remains monochrome and distinct from
-        # the wireless Network settings mark.
-        stroke = 1
-        top = pygame.Rect(cx - 9, cy - 22, 18, 13)
-        pygame.draw.rect(surface, color, top, stroke, border_radius=5)
-        bus_y = cy - 2
-        pygame.draw.line(surface, color, (cx, top.bottom + 3), (cx, bus_y), stroke)
-        pygame.draw.line(surface, color, (cx - 20, bus_y), (cx + 20, bus_y), stroke)
-        for node_x in (cx - 20, cx, cx + 20):
-            node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
-            pygame.draw.line(surface, color, (node_x, bus_y), (node_x, node.top - 3), stroke)
-            pygame.draw.rect(surface, color, node, stroke, border_radius=4)
+        # Home plus a compact wireless signal communicates the nearby LAN
+        # receiver without repeating the standalone Network settings mark.
+        stroke = APP_ACTION_ICON_STROKE
+        pygame.draw.lines(
+            surface, color, False,
+            ((cx - 26, cy - 5), (cx, cy - 28), (cx + 26, cy - 5)),
+            stroke,
+        )
+        pygame.draw.lines(
+            surface, color, False,
+            ((cx - 21, cy - 6), (cx - 21, cy + 25),
+             (cx + 21, cy + 25), (cx + 21, cy - 6)),
+            stroke,
+        )
+        for radius in (10, 18):
+            points = []
+            for degree in range(220, 321, 10):
+                radians = math.radians(degree)
+                points.append((
+                    cx + round(math.cos(radians) * radius),
+                    cy + 19 + round(math.sin(radians) * radius),
+                ))
+            pygame.draw.lines(surface, color, False, points, stroke)
+        pygame.draw.circle(surface, color, (cx, cy + 20), 4)
     elif kind == "network":
         # A compact two-wave wireless mark keeps the radio language of the
         # earlier icon while presenting fewer, tighter strokes at this size.
