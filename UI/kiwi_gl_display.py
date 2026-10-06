@@ -2602,11 +2602,47 @@ def station_selection_changes_receiver(target_server, active_server):
     case) is a no-op, so the browser stays put instead of closing under the
     operator.
     """
-    target = str(target_server or "").rstrip("/")
-    active = str(active_server or "").rstrip("/")
+    target = receiver_server_key(target_server)
+    active = receiver_server_key(active_server)
     if not target or not active:
         return False
     return target != active
+
+
+def receiver_server_key(server):
+    """Canonical receiver identity shared by LIST and GLOBE selections."""
+    return receiver_catalog.canonical_endpoint(server)
+
+
+def receiver_servers_match(left, right):
+    left_key = receiver_server_key(left)
+    return bool(left_key and left_key == receiver_server_key(right))
+
+
+def active_receiver_source(stations, active_server, receiver_type="kiwi"):
+    """Return the source tab that owns the live receiver."""
+    for station in stations or ():
+        if receiver_servers_match(station_fields(station)[2], active_server):
+            return receiver_source_group(station)
+    if receiver_servers_match(active_server, LOCAL_KIWI_SERVER):
+        return "local"
+    receiver_type = str(receiver_type or "kiwi").casefold()
+    return receiver_type if receiver_type in ("openwebrx", "fmdx") else "kiwi"
+
+
+def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row=2):
+    """Place the active receiver near the list's visual centre when possible."""
+    selected_index = next(
+        (
+            index for index, station in enumerate(stations or ())
+            if receiver_servers_match(station_fields(station)[2], active_server)
+        ),
+        None,
+    )
+    if selected_index is None:
+        return 0
+    target = max(0, selected_index + max(0, int(leading_rows)) - int(center_row))
+    return clamp(target, 0, station_page_max(stations, leading_rows))
 
 
 def connect_to_receiver(state, record):
@@ -3737,6 +3773,48 @@ def stations_from_globe_receivers(receivers):
         receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
         stations.append((name, location, server, used, total, lat, lon, receiver_type))
     return prioritize_local_station(stations)
+
+
+def merge_receiver_map_stations(receivers, stations):
+    """Add every catalog receiver with GPS coordinates to the Globe.
+
+    The public Kiwi map is only one directory. OpenWebRX and static catalog
+    records can also carry reliable coordinates, so keeping the Globe limited
+    to the Kiwi feed made the active OpenWebRX receiver impossible to select.
+    """
+    merged = []
+    seen = set()
+    for receiver in receivers or ():
+        if not isinstance(receiver, dict):
+            continue
+        key = receiver_server_key(receiver.get("server"))
+        if not key or key in seen:
+            continue
+        merged.append(dict(receiver))
+        seen.add(key)
+    for station in stations or ():
+        name, location, server, used, total = station_fields(station)
+        key = receiver_server_key(server)
+        if not key or key in seen or len(station) < 7:
+            continue
+        try:
+            latitude, longitude = float(station[5]), float(station[6])
+        except (TypeError, ValueError):
+            continue
+        if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+            continue
+        merged.append({
+            "name": name,
+            "location": location,
+            "server": server,
+            "lat": latitude,
+            "lon": longitude,
+            "used": used,
+            "total": total,
+            "receiver_type": station_receiver_type(station),
+        })
+        seen.add(key)
+    return merged
 
 
 def globe_haversine_km(a, b):
@@ -12917,13 +12995,13 @@ def receiver_map_home_center(profile):
 
 def receiver_map_server_center(receivers, server):
     """Return the selected receiver's Globe centre, independent of URL slash."""
-    wanted = str(server or "").rstrip("/")
+    wanted = receiver_server_key(server)
     if not wanted:
         return None
     receiver = next(
         (
             item for item in receivers
-            if str(item.get("server") or "").rstrip("/") == wanted
+            if receiver_server_key(item.get("server")) == wanted
         ),
         None,
     )
@@ -13285,6 +13363,8 @@ def draw_receiver_map(
                     draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
     center_candidate = receiver_map_center_candidate(receivers, math.degrees(center_lon), math.degrees(center_lat))
     receiver_point_groups = defaultdict(list)
+    selected_point = None
+    selected_color = None
     for receiver in receivers:
         group = receiver_map_group(receiver)
         if not receiver_map_group_visible(group):
@@ -13292,7 +13372,8 @@ def draw_receiver_map(
         point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
         if not point:
             continue
-        is_pending = receiver["server"] == pending_server
+        is_pending = receiver_servers_match(receiver["server"], pending_server)
+        is_selected = receiver_servers_match(receiver["server"], selected_server)
         is_failed = is_pending and connection_status == "failed"
         group_color = RECEIVER_MAP_GROUP_COLORS[group]
         # Each receiver is exactly one filled disc painted in its legend
@@ -13311,12 +13392,37 @@ def draw_receiver_map(
             # ring the operator has to look past.
             pulse = 2.4 + (math.sin(time.monotonic() * 9.0) + 1.0) * 2.0
             draw_logical_circle(point[0], point[1], 7.2 + pulse, color, 22)
+        elif is_selected:
+            selected_point = point
+            selected_color = group_color
         else:
             receiver_point_groups[color].append(point)
     dot_size = receiver_map_dot_pixels(scale)
     for color, points in receiver_point_groups.items():
         draw_logical_points(points, color, dot_size)
-    selected = next((receiver for receiver in receivers if receiver["server"] == selected_server), None)
+    if selected_point is not None:
+        # Keep the live receiver unmistakable after the connection pulse has
+        # ended: a cyan target surrounds its normal source-colour dot.
+        selected_radius = max(6.0, dot_size + 4.0)
+        draw_logical_circle(
+            selected_point[0], selected_point[1], selected_radius,
+            RECEIVER_LIST_THEME.focus, 24,
+        )
+        draw_logical_circle(
+            selected_point[0], selected_point[1], selected_radius - 2.0,
+            (10, 22, 26, 255), 24,
+        )
+        draw_logical_circle(
+            selected_point[0], selected_point[1], max(2.0, dot_size),
+            selected_color, 24,
+        )
+    selected = next(
+        (
+            receiver for receiver in receivers
+            if receiver_servers_match(receiver["server"], selected_server)
+        ),
+        None,
+    )
     state_label = {
         "connecting": "CONNECTING",
         "retrying": "RETRYING",
@@ -16302,8 +16408,8 @@ def draw_station_picker(
         if not box:
             continue
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
-        selected = server == selected_server
-        pending = server == pending_server
+        selected = receiver_servers_match(server, selected_server)
+        pending = receiver_servers_match(server, pending_server)
         entry_health = station_health.get(server, {})
         receiver_type = station_receiver_type(station)
         displayed_health = dict(entry_health)
@@ -22040,7 +22146,6 @@ def main():
     picker_map_scale = 0.62
     picker_map_garden_mode = True
     picker_map_view = "satellite"
-    picker_map_has_opened = False
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -22512,7 +22617,7 @@ def main():
     wspr_identity_field = "reporter"
     wspr_identity_error = ""
     globe_open = False
-    globe_receivers = load_globe_receivers()
+    globe_receivers = merge_receiver_map_stations(load_globe_receivers(), catalog_stations)
     if globe_receivers:
         # The map feed is the current worldwide directory. Use its cached
         # entries immediately instead of limiting the station browser to the
@@ -23330,6 +23435,35 @@ def main():
                 wspr_mini_textures[key] = texture
             session.drain_rows(texture)
 
+    def sync_receiver_browser_to_active():
+        """Select the live receiver's tab and centre its row in RECEIVERS."""
+        nonlocal station_route_filter, station_query, stations, station_scroll
+        nonlocal fmdx_disclaimer_open, fmdx_disclaimer_shown
+        nonlocal picker_map_selected_server
+        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        station_query = ""
+        station_route_filter = active_receiver_source(
+            all_stations, active_server, receiver_type,
+        )
+        fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
+            station_route_filter,
+            fmdx_disclaimer_open,
+            fmdx_disclaimer_shown,
+        )
+        stations = filtered_stations(
+            all_stations, station_query, station_sort,
+            station_route_filter, favorite_servers, station_health,
+        )
+        visible_stations = health_prioritized_stations(
+            stations, station_health, station_sort,
+        )
+        station_scroll = centered_receiver_scroll(
+            visible_stations, active_server, int(fmdx_disclaimer_open),
+        )
+        picker_map_selected_server = active_server
+        return active_server
+
     def restore_navigation_parent(parent):
         """Close a leaf and restore the screen that opened it."""
         nonlocal settings_menu_open, digital_menu_open
@@ -23407,11 +23541,8 @@ def main():
             picker_open = True
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-            station_scroll = 0
-            station_query = ""
             station_sort = "location"
-            station_route_filter = "kiwi"
-            stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+            sync_receiver_browser_to_active()
             search_open = False
             picker_map_open = False
             picker_map_garden_mode = True
@@ -23933,13 +24064,30 @@ def main():
         receiver = next(
             (
                 item for item in globe_receivers
-                if str(item.get("server") or "").rstrip("/") == str(server or "").rstrip("/")
+                if receiver_servers_match(item.get("server"), server)
             ),
             None,
         )
         picker_map_notice = f"LOCATING  {receiver.get('name', 'SELECTED RECEIVER') if receiver else 'SELECTED RECEIVER'}"
         picker_map_notice_until = picker_map_motion_at + 2.8
         return True
+
+    def focus_receiver_map_on_active():
+        """Select, reveal, and centre the receiver currently feeding Home."""
+        nonlocal picker_map_selected_server, picker_map_hover_server
+        active_server, _frequency, _zoom, _smeter, _view, _generation = state.snapshot()
+        picker_map_selected_server = active_server
+        picker_map_hover_server = active_server
+        receiver = next(
+            (
+                item for item in globe_receivers
+                if receiver_servers_match(item.get("server"), active_server)
+            ),
+            None,
+        )
+        if receiver is not None:
+            RECEIVER_MAP_HIDDEN_GROUPS.discard(receiver_map_group(receiver))
+        return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
 
 
     try:
@@ -26754,16 +26902,10 @@ def main():
                             if moved <= args.tap_px:
                                 picker_map_open = True
                                 picker_map_garden_mode = True
-                                # Every entry returns to the resting view:
-                                # satellite imagery with country borders,
-                                # framed first on the operator, then on the
-                                # receiver explicitly selected in this session.
+                                # Every entry returns to the resting satellite
+                                # view and selects the receiver feeding Home.
                                 picker_map_view = GLOBE_DEFAULT_VIEW
-                                if not picker_map_has_opened:
-                                    focus_receiver_map_on_home()
-                                    picker_map_has_opened = True
-                                elif not focus_receiver_map_on_server(picker_map_selected_server):
-                                    focus_receiver_map_on_home()
+                                focus_receiver_map_on_active()
                                 search_open = False
                                 if not globe_fetch_started:
                                     globe_fetch_started = True
@@ -26777,6 +26919,7 @@ def main():
                             if moved <= args.tap_px:
                                 picker_map_open = False
                                 picker_map_hover_server = None
+                                sync_receiver_browser_to_active()
                             wake_controls()
                         elif touch_started and gesture == "picker_map_view":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -27167,7 +27310,10 @@ def main():
                             # A map selection is intentionally persistent: the
                             # square stays marked after a successful connect.
                             selected_map_receiver = next(
-                                (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
+                                (
+                                    receiver for receiver in globe_receivers
+                                    if receiver_servers_match(receiver["server"], station_pending_server)
+                                ),
                                 None,
                             )
                             if selected_map_receiver:
@@ -27188,7 +27334,10 @@ def main():
                     station_connected_at = 0.0
                     if picker_map_open:
                         selected_map_receiver = next(
-                            (receiver for receiver in globe_receivers if receiver["server"] == station_pending_server),
+                            (
+                                receiver for receiver in globe_receivers
+                                if receiver_servers_match(receiver["server"], station_pending_server)
+                            ),
                             None,
                         )
                         if selected_map_receiver and not picker_map_notice.startswith("UNAVAILABLE"):
@@ -27228,6 +27377,9 @@ def main():
                     break
                 if openwebrx_result == "ready":
                     catalog_stations = merge_station_rows(openwebrx_payload, catalog_stations)
+                    globe_receivers = merge_receiver_map_stations(
+                        globe_receivers, catalog_stations,
+                    )
                     all_stations = merge_station_rows(
                         stations_from_globe_receivers(globe_receivers), catalog_stations,
                     )
@@ -27251,7 +27403,9 @@ def main():
                 except queue.Empty:
                     break
                 if globe_result == "ready":
-                    globe_receivers = globe_payload
+                    globe_receivers = merge_receiver_map_stations(
+                        globe_payload, catalog_stations,
+                    )
                     all_stations = merge_station_rows(
                         stations_from_globe_receivers(globe_receivers), catalog_stations,
                     )

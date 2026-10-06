@@ -910,12 +910,13 @@ class GlobeDefaultViewTests(unittest.TestCase):
             'https://bad.test',
         ))
 
-    def test_globe_uses_home_once_then_selected_receiver(self):
+    def test_globe_uses_the_live_receiver_and_home_only_as_fallback(self):
         import inspect
         source = inspect.getsource(ui)
         self.assertIn('def focus_receiver_map_on_home', source)
         self.assertIn('def focus_receiver_map_on_server', source)
-        self.assertIn('picker_map_has_opened', source)
+        self.assertIn('def focus_receiver_map_on_active', source)
+        self.assertIn('focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()', source)
         self.assertIn('picker_map_selected_server = target_server', source)
 
 

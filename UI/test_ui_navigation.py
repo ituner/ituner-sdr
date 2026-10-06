@@ -638,6 +638,44 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertLess(boxes[-1][1], ui.LOGICAL_H)
         self.assertGreater(boxes[-1][3], ui.LOGICAL_H)
 
+    def test_active_receiver_selects_its_source_tab(self):
+        stations = (
+            ("Kiwi", "NL", "http://kiwi.test:8073", 0, 4, 1.0, 2.0, "kiwi"),
+            ("OpenWebRX", "DE", "owrxs://owrx.test", 0, 4, 3.0, 4.0, "openwebrx"),
+            ("FM-DX", "FR", "http://fmdx.test", 0, 4, 5.0, 6.0, "fmdx"),
+        )
+        self.assertEqual(
+            ui.active_receiver_source(stations, "owrxs://owrx.test/", "kiwi"),
+            "openwebrx",
+        )
+        self.assertEqual(
+            ui.active_receiver_source(stations, "http://fmdx.test", "fmdx"),
+            "fmdx",
+        )
+
+    def test_active_receiver_is_scrolled_to_the_middle_row(self):
+        stations = tuple(
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        )
+        scroll = ui.centered_receiver_scroll(stations, "http://rx4.test/")
+        self.assertEqual(scroll, 2)
+        selected_box = ui.station_tile(4, scroll)
+        middle_box = ui.station_tile(2, 0)
+        self.assertEqual(selected_box[1:], middle_box[1:])
+
+    def test_openwebrx_catalog_coordinates_become_globe_points(self):
+        stations = (
+            ("OWRX", "Berlin", "owrxs://owrx.test", 1, 4, 52.52, 13.405, "openwebrx"),
+        )
+        points = ui.merge_receiver_map_stations([], stations)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["receiver_type"], "openwebrx")
+        self.assertEqual(
+            ui.receiver_map_server_center(points, "owrxs://owrx.test/"),
+            (ui.math.radians(13.405), ui.math.radians(52.52)),
+        )
+
     def test_receiver_actions_use_the_lower_wide_rail_grid(self):
         boxes = ui.receiver_picker_command_boxes()
         self.assertEqual(len(boxes), 4)
