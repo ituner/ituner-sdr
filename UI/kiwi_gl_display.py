@@ -2512,6 +2512,9 @@ RECEIVER_PICKER_ACTION_TOP = 478
 APP_ACTION_ICON_SIZE = 46
 APP_ACTION_ICON_STROKE = 3
 RECEIVER_ACTION_ICON_SIZE = APP_ACTION_ICON_SIZE
+# The detailed globe asset benefits from a larger canvas than the simpler
+# line icons while remaining comfortably inside the shared 114 px tile.
+RECEIVER_GLOBE_ICON_SIZE = 58
 RECEIVER_ACTION_ICON_CENTER_Y = 42
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
@@ -16388,7 +16391,7 @@ def draw_receiver_sidebar_header(text_cache, theme=RECEIVER_LIST_THEME):
 
 def draw_receiver_globe_icon(text_cache, box, color):
     """Use the exact globe asset used by the RECEIVERS navigation screen."""
-    size = RECEIVER_ACTION_ICON_SIZE
+    size = RECEIVER_GLOBE_ICON_SIZE
     key = f"receiver_globe_{color}_{size}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:

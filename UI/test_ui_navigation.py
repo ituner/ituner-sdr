@@ -882,6 +882,10 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(circle.call_args.kwargs["width"], ui.APP_ACTION_ICON_STROKE)
         self.assertEqual(line.call_args.args[5], ui.APP_ACTION_ICON_STROKE)
 
+    def test_receiver_globe_icon_is_larger_than_other_action_icons(self):
+        self.assertGreater(ui.RECEIVER_GLOBE_ICON_SIZE, ui.RECEIVER_ACTION_ICON_SIZE)
+        self.assertLess(ui.RECEIVER_GLOBE_ICON_SIZE, ui.RECEIVER_PICKER_ACTION_SIZE)
+
     def test_sort_icon_uses_three_balanced_lines_with_shared_stroke(self):
         lines = []
         with mock.patch.object(
