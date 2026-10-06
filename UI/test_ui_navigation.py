@@ -519,6 +519,22 @@ class FmdxDisclaimerTests(unittest.TestCase):
         notice_center = ((notice[0] + notice[2]) / 2, (notice[1] + notice[3]) / 2)
         self.assertIsNone(ui.station_at(*notice_center, stations, 0, leading_rows=1))
 
+    def test_notice_reuses_server_row_frame_and_free_slot_lane_for_ok(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        boxes = ui.fmdx_disclaimer_boxes()
+        cache = object()
+        with mock.patch.object(ui, "draw_station_list_frame") as frame, \
+                mock.patch.object(ui, "draw_logical_circle"), \
+                mock.patch.object(ui, "draw_text"), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _c, text, *_a, **_k: text), \
+                mock.patch.object(ui, "draw_radio_option") as option:
+            ui.draw_fmdx_disclaimer(cache)
+        frame.assert_called_once_with(
+            boxes["panel"], ui.STATION_LIST_FILL, ui.STATION_LIST_OUTLINE,
+        )
+        option.assert_called_once_with(cache, boxes["ok"], "OK", False)
+
     def test_notice_is_shown_once_per_process_and_resets_on_restart(self):
         visible, shown = ui.fmdx_disclaimer_transition("fmdx", False, False)
         self.assertEqual((visible, shown), (True, True))

@@ -8388,11 +8388,6 @@ def draw_fmdx_shared_prompt(text_cache):
 # is not theirs to move by hand. This session-only notice occupies the first
 # receiver-list row instead of interrupting the browser with a modal.
 FMDX_DISCLAIMER_TITLE = "FM-DX SHARED SERVERS"
-FMDX_DISCLAIMER_LINES = (
-    "Manual frequency changes are not available for",
-    "these servers. Tuning is shared with every listener,",
-    "so the frequency follows the receiver.",
-)
 
 
 def fmdx_disclaimer_transition(route_filter, visible, shown):
@@ -8410,10 +8405,12 @@ def fmdx_disclaimer_boxes(scroll=0.0):
     if panel is None:
         return {"panel": (0, 0, 0, 0), "ok": (0, 0, 0, 0)}
     x0, y0, x1, y1 = panel
-    ok_width = 150
+    marker_y = (y0 + y1) / 2
     return {
         "panel": panel,
-        "ok": (x1 - ok_width - 18, y0 + 38, x1 - 18, y1 - 38),
+        # This is the same upper-right lane used by a receiver's FREE-slots
+        # label, promoted to a full touch target for acknowledgement.
+        "ok": (x1 - 140, marker_y - 43, x1 - 18, marker_y + 11),
     }
 
 
@@ -8432,22 +8429,35 @@ def draw_fmdx_disclaimer(text_cache, scroll=0.0):
     x0, y0, x1, y1 = boxes["panel"]
     if x1 <= x0 or y1 <= y0:
         return
-    draw_logical_rect(x0, y0, x1, y1, (28, 23, 15, 248))
-    edge = (222, 170, 84, 235)
-    for ax0, ay0, ax1, ay1 in (
-        (x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1),
-    ):
-        draw_logical_line(ax0, ay0, ax1, ay1, edge, 2)
+    draw_station_list_frame((x0, y0, x1, y1), STATION_LIST_FILL, STATION_LIST_OUTLINE)
+    marker_y = (y0 + y1) / 2
+    # Use the receiver row's reserved status-glyph lane for a compact warning
+    # marker, keeping title and metadata aligned with every server below it.
+    draw_logical_circle(x0 + 39, marker_y, 17, (91, 66, 25, 255), 28, True)
+    draw_logical_circle(x0 + 39, marker_y, 17, (222, 170, 84, 235), 28)
     draw_text(
-        text_cache, x0 + 22, y0 + 29, FMDX_DISCLAIMER_TITLE,
-        (243, 200, 118), 20, True, False, "lm", family="Liberation Sans",
+        text_cache, x0 + 39, marker_y, "!", (255, 225, 168),
+        22, True, False, "cm", family="Liberation Sans",
     )
-    for index, line in enumerate(FMDX_DISCLAIMER_LINES):
-        draw_text(
-            text_cache, x0 + 22, y0 + 60 + index * 23, line,
-            (224, 231, 235), 15, False, False, "lm", family="Liberation Sans",
-        )
-    draw_radio_option(text_cache, boxes["ok"], "OK", False)
+    title_x = x0 + 106
+    ok_box = boxes["ok"]
+    title = fit_station_text(
+        text_cache, FMDX_DISCLAIMER_TITLE, ok_box[0] - title_x - 20,
+        26, True, False, "Liberation Sans",
+    )
+    draw_text(
+        text_cache, title_x, marker_y - 16, title,
+        (202, 209, 213), 26, True, False, "lm", family="Liberation Sans",
+    )
+    detail = "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER"
+    detail = fit_station_text(
+        text_cache, detail, x1 - title_x - 20, 16, False, False, "Liberation Sans",
+    )
+    draw_text(
+        text_cache, title_x, marker_y + 17, detail,
+        (115, 124, 130), 16, False, False, "lm", family="Liberation Sans",
+    )
+    draw_radio_option(text_cache, ok_box, "OK", False)
 
 
 def radio_option_at(
@@ -16136,6 +16146,21 @@ def receiver_display_span(zoom, receiver_type):
     )
 
 
+STATION_LIST_FILL = (20, 23, 26, 205)
+STATION_LIST_OUTLINE = (83, 88, 92, 135)
+
+
+def draw_station_list_frame(box, fill, outline):
+    """Draw the common full-border frame used by every receiver-list row."""
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, fill)
+    for ax0, ay0, ax1, ay1 in (
+        (x0, y0, x1, y0), (x0, y1, x1, y1),
+        (x0, y0, x0, y1), (x1, y0, x1, y1),
+    ):
+        draw_logical_line(ax0, ay0, ax1, ay1, outline, 1)
+
+
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
@@ -16222,16 +16247,12 @@ def draw_station_picker(
             fill = (30, 34, 38, 220)
             outline = (136, 142, 146, 170)
         else:
-            fill = (20, 23, 26, 205)
-            outline = (83, 88, 92, 135)
+            fill = STATION_LIST_FILL
+            outline = STATION_LIST_OUTLINE
         pressed = ui_button_pressed(box)
         if pressed:
             fill, outline = UI_PRESSED_FILL, UI_PRESSED_EDGE
-        draw_logical_rect(*box, fill)
-        draw_logical_line(box[0], box[1], box[2], box[1], outline, 1)
-        draw_logical_line(box[0], box[3], box[2], box[3], outline, 1)
-        draw_logical_line(box[0], box[1], box[0], box[3], outline, 1)
-        draw_logical_line(box[2], box[1], box[2], box[3], outline, 1)
+        draw_station_list_frame(box, fill, outline)
         if pending:
             draw_logical_rect(box[0] + 3, box[1] + 3, box[2] - 3, box[1] + 8, (112, 255, 188, 230))
         marker_y = (box[1] + box[3]) / 2
