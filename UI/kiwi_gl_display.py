@@ -2002,7 +2002,7 @@ MENU_ROWS = 2
 # Secondary configuration pages live one tap deeper under Settings so the
 # 800x1280 control rail does not read as an eight-button wall.
 MENU_ITEMS = (
-    ("local_rx", "LOCAL RX"),
+    ("local_rx", "LAN"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
     ("digital", "MODES"),
@@ -2863,8 +2863,8 @@ station_health_write_lock = threading.Lock()
 # operator's LAN address if DHCP changes it.
 LOCAL_KIWI_SERVER = "http://kiwisdr.local:8073"
 LOCAL_KIWI_STATION = (
-    "LOCAL KIWI SDR",
-    "LOCAL NETWORK · kiwisdr.local",
+    "LAN KIWI SDR",
+    "LAN · kiwisdr.local",
     LOCAL_KIWI_SERVER,
     None,
     None,
@@ -3465,7 +3465,7 @@ def receiver_context_for_frequency_identity(server, stations, fallback_profile):
         try:
             coordinates = float(fallback_profile["lat"]), float(fallback_profile["lon"])
             return {
-                "label": str(fallback_profile.get("name") or "LOCAL RECEIVER"),
+                "label": str(fallback_profile.get("name") or "LAN RECEIVER"),
                 "coordinates": coordinates,
                 "source": "SAVED HOME",
             }
@@ -12607,7 +12607,7 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
             if used is not None and total is not None:
                 detail += f"  ·  {used}/{total}"
             if local_receiver:
-                detail = "LOCAL NETWORK  ·  kiwisdr.local"
+                detail = "LAN  ·  kiwisdr.local"
             draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 13, False, False, "lm", family="Liberation Sans")
         draw_text(text_cache, x0 + 32, y0 + 300, "WSPR HF BAND", (117, 238, 180), 18, True, True, "lm", family="Liberation Sans")
         for label, frequency, box in boxes["hf_band_boxes"]:
@@ -12837,8 +12837,8 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
     draw_logical_rect(x0, y0, x1, y1, (8, 20, 27, 250))
     draw_logical_line(x0, y0, x1, y0, (87, 209, 175, 200), 1)
     draw_text(text_cache, 42, 57, "ADD WSPR SESSION", (232, 247, 247), 27, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 42, 80, "LOCAL KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", (120, 196, 185), 14, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LOCAL FIRST", (177, 209, 213), 16, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 42, 80, "LAN KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", (120, 196, 185), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LAN FIRST", (177, 209, 213), 16, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, bands_box[0], 422, "WSPR HF BAND", (177, 209, 213), 16, True, True, "lm", family="Liberation Sans")
     for (label, frequency), box in wspr_add_band_boxes():
         active = label == selected_band
@@ -12858,7 +12858,7 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
         if used is not None and total is not None:
             detail += f"  ·  {used}/{total}"
         if local_receiver:
-            detail = "LOCAL NETWORK  ·  kiwisdr.local"
+            detail = "LAN  ·  kiwisdr.local"
         draw_text(text_cache, box[0] + 16, box[1] + 51, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 14, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 14, False, False, "lm", family="Liberation Sans")
     for box, label, active in ((cancel, "CANCEL", False), (create, "CREATE", True), (prev, "< PREV", False), (next_box, "NEXT >", False)):
         draw_wspr_button(text_cache, box, label, active=active)
@@ -13064,7 +13064,7 @@ RECEIVER_MAP_GROUP_ORDER = ("kiwi", "openwebrx", "local", "fmdx")
 RECEIVER_MAP_GROUP_LABELS = {
     "kiwi": "KIWI",
     "openwebrx": "OPENWEBRX",
-    "local": "LOCAL",
+    "local": "LAN",
     "fmdx": "FM-DX",
 }
 RECEIVER_MAP_GROUP_COLORS = {
@@ -13085,7 +13085,7 @@ RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
     "kiwi": ("KIWI",),
     "openwebrx": ("OPENWEBRX",),
-    "local": ("LOCAL",),
+    "local": ("LAN",),
     "fmdx": ("FM-DX",),
 }
 
@@ -14396,20 +14396,35 @@ def menu_at(x, y, scroll):
 
 def draw_menu_icon(surface, kind, cx, cy, color, dim):
     if kind == "local_rx":
-        # LAN: the familiar hub-and-spokes local-network topology. It is
-        # deliberately literal, distinct from both the global receiver globe
-        # and the abstract constellation tool.
-        mono = (224, 237, 239, 238)
-        stroke = 2
-        top = pygame.Rect(cx - 9, cy - 22, 18, 13)
-        pygame.draw.rect(surface, mono, top, stroke, border_radius=5)
-        bus_y = cy - 2
-        pygame.draw.line(surface, mono, (cx, top.bottom + 3), (cx, bus_y), stroke)
-        pygame.draw.line(surface, mono, (cx - 20, bus_y), (cx + 20, bus_y), stroke)
-        for node_x in (cx - 20, cx, cx + 20):
-            node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
-            pygame.draw.line(surface, mono, (node_x, bus_y), (node_x, node.top - 3), stroke)
-            pygame.draw.rect(surface, mono, node, stroke, border_radius=4)
+        # A wired Ethernet socket identifies the nearby LAN receiver without
+        # repeating the wireless Network-settings symbol.
+        stroke = APP_ACTION_ICON_STROKE
+        jack = pygame.Rect(cx - 27, cy - 22, 54, 44)
+        pygame.draw.rect(surface, color, jack, stroke, border_radius=5)
+        pygame.draw.lines(
+            surface,
+            color,
+            False,
+            ((cx - 18, cy + 22), (cx - 18, cy + 10), (cx - 10, cy + 4),
+             (cx + 10, cy + 4), (cx + 18, cy + 10), (cx + 18, cy + 22)),
+            stroke,
+        )
+        for contact_x in range(cx - 15, cx + 16, 6):
+            pygame.draw.line(surface, dim, (contact_x, cy - 15), (contact_x, cy - 6), stroke)
+    elif kind == "network":
+        # Wi-Fi is reserved for the Network settings route, keeping it
+        # immediately distinguishable from the wired LAN receiver action.
+        stroke = APP_ACTION_ICON_STROKE
+        for radius in (15, 26, 37):
+            points = []
+            for degree in range(220, 321, 10):
+                radians = math.radians(degree)
+                points.append((
+                    cx + round(math.cos(radians) * radius),
+                    cy + 8 + round(math.sin(radians) * radius),
+                ))
+            pygame.draw.lines(surface, color, False, points, stroke)
+        pygame.draw.circle(surface, dim, (cx, cy + 13), 5)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
@@ -14517,9 +14532,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
         if kind in ("local_rx", "network"):
-            # Network is the configuration side of the same local-LAN path
-            # represented by LOCAL RX, so reuse that exact hub glyph.
-            draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
+            draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
             asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)

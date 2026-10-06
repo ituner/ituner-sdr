@@ -89,7 +89,34 @@ class DrawerGeometryTests(unittest.TestCase):
             kinds,
             ["local_rx", "rx", "audio", "digital", "dual", "settings"],
         )
+        self.assertEqual(dict(ui.MENU_ITEMS)["local_rx"], "LAN")
         self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "MODES")
+
+    def test_lan_and_network_use_distinct_drawn_icons(self):
+        surface = mock.Mock()
+        with mock.patch.object(ui.pygame.draw, "rect") as draw_rect, \
+             mock.patch.object(ui.pygame.draw, "line") as draw_line, \
+             mock.patch.object(ui.pygame.draw, "lines") as draw_lines, \
+             mock.patch.object(ui.pygame.draw, "circle") as draw_circle:
+            ui.draw_menu_icon(surface, "local_rx", 50, 50, (1, 2, 3), (4, 5, 6))
+            lan_calls = (
+                draw_rect.call_count,
+                draw_line.call_count,
+                draw_lines.call_count,
+                draw_circle.call_count,
+            )
+            draw_rect.reset_mock()
+            draw_line.reset_mock()
+            draw_lines.reset_mock()
+            draw_circle.reset_mock()
+            ui.draw_menu_icon(surface, "network", 50, 50, (1, 2, 3), (4, 5, 6))
+            network_calls = (
+                draw_rect.call_count,
+                draw_line.call_count,
+                draw_lines.call_count,
+                draw_circle.call_count,
+            )
+        self.assertNotEqual(lan_calls, network_calls)
 
     def test_settings_uses_info_and_has_no_duplicate_kiwi_route(self):
         labels = dict(ui.SETTINGS_MENU_ITEMS)

@@ -745,7 +745,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         texts = self._legend_texts()
         self.assertIn('KIWI', texts)
         self.assertIn('OPENWEBRX', texts)
-        self.assertIn('LOCAL', texts)
+        self.assertIn('LAN', texts)
         self.assertIn('FM-DX', texts)
         ui.receiver_map_toggle_group('kiwi')
         texts = self._legend_texts()
