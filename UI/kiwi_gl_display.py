@@ -2505,6 +2505,8 @@ RECEIVER_PICKER_MARGIN = 10
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
 RECEIVER_PICKER_ACTION_TOP = 478
+RECEIVER_ACTION_ICON_SIZE = 46
+RECEIVER_ACTION_ICON_CENTER_Y = 42
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
@@ -16312,7 +16314,7 @@ def draw_receiver_sidebar_header(text_cache, theme=RECEIVER_LIST_THEME):
 
 def draw_receiver_globe_icon(text_cache, box, color):
     """Use the exact globe asset used by the RECEIVERS navigation screen."""
-    size = 28
+    size = RECEIVER_ACTION_ICON_SIZE
     key = f"receiver_globe_{color}_{size}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -16327,7 +16329,7 @@ def draw_receiver_globe_icon(text_cache, box, color):
         cached = text_cache.surface_texture(key, surface)
     tex, width, height = cached
     cx = (box[0] + box[2]) / 2
-    cy = box[1] + 30
+    cy = box[1] + RECEIVER_ACTION_ICON_CENTER_Y
     draw_textured_quad(tex, cx - width / 2, cy - height / 2,
                        cx + width / 2, cy + height / 2, 0, 0, 1, 1)
 
@@ -16350,23 +16352,23 @@ def regular_star_points(cx, cy, outer_radius):
 
 
 def draw_receiver_action_icon(text_cache, box, kind, color):
-    """Draw the four receiver actions with small dependency-free line icons."""
+    """Draw receiver actions at the same visual scale as the Home icons."""
     x0, y0, x1, _y1 = box
-    cx, cy = (x0 + x1) / 2, y0 + 30
+    cx, cy = (x0 + x1) / 2, y0 + RECEIVER_ACTION_ICON_CENTER_Y
     if kind == "globe":
         draw_receiver_globe_icon(text_cache, box, color)
     elif kind == "search":
-        draw_logical_circle(cx - 3, cy - 3, 8, color, 22, True)
-        draw_logical_line(cx + 3, cy + 3, cx + 11, cy + 11, color, 2)
+        draw_logical_circle(cx - 4, cy - 4, 14, color, 32, True)
+        draw_logical_line(cx + 6, cy + 6, cx + 20, cy + 20, color, 4)
     elif kind == "sort":
-        draw_logical_line(cx - 7, cy - 10, cx - 7, cy + 10, color, 2)
-        draw_logical_line(cx - 12, cy - 5, cx - 7, cy - 10, color, 2)
-        draw_logical_line(cx - 2, cy - 5, cx - 7, cy - 10, color, 2)
-        draw_logical_line(cx + 7, cy - 10, cx + 7, cy + 10, color, 2)
-        draw_logical_line(cx + 2, cy + 5, cx + 7, cy + 10, color, 2)
-        draw_logical_line(cx + 12, cy + 5, cx + 7, cy + 10, color, 2)
+        draw_logical_line(cx - 13, cy - 18, cx - 13, cy + 18, color, 4)
+        draw_logical_line(cx - 21, cy - 10, cx - 13, cy - 18, color, 4)
+        draw_logical_line(cx - 5, cy - 10, cx - 13, cy - 18, color, 4)
+        draw_logical_line(cx + 13, cy - 18, cx + 13, cy + 18, color, 4)
+        draw_logical_line(cx + 5, cy + 10, cx + 13, cy + 18, color, 4)
+        draw_logical_line(cx + 21, cy + 10, cx + 13, cy + 18, color, 4)
     else:
-        draw_logical_polyline(regular_star_points(cx, cy, 11), color, 2)
+        draw_logical_polyline(regular_star_points(cx, cy, 22), color, 3)
 
 
 def draw_receiver_action_button(text_cache, box, label, kind, selected=False,

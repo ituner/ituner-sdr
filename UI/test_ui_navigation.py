@@ -735,6 +735,17 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(max(box[2] for box in boxes), back[2])
         self.assertEqual(back[1] - max(box[3] for box in boxes), ui.RECEIVER_PICKER_ACTION_GAP)
 
+    def test_receiver_action_icons_match_home_menu_scale(self):
+        # Home assets start at 64 px and are rendered at 70% (45 px). The
+        # receiver action glyphs should carry the same visual weight.
+        self.assertGreaterEqual(ui.RECEIVER_ACTION_ICON_SIZE, round(64 * 0.70))
+        with mock.patch.object(ui, "draw_logical_circle") as circle, \
+                mock.patch.object(ui, "draw_logical_line"):
+            ui.draw_receiver_action_icon(
+                self.Cache(), ui.PICKER_SEARCH_BOX, "search", (255, 255, 255, 255),
+            )
+        self.assertEqual(circle.call_args.args[2], 14)
+
     def test_receiver_back_label_is_centered_plain_text(self):
         with mock.patch.object(ui, "draw_styled_text_button") as draw:
             ui.draw_receiver_back_button(self.Cache(), ui.PICKER_EXIT_BOX)
