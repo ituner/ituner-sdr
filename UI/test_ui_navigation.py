@@ -808,6 +808,20 @@ class ReceiverListStyleTests(unittest.TestCase):
             )
         self.assertEqual(texts, ["SORT"])
 
+    def test_sort_notice_is_centered_in_receiver_list_canvas(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        notice = ui.receiver_list_notice_box()
+        self.assertEqual(
+            (notice[0] + notice[2]) / 2,
+            (ui.PICKER_BOX[0] + ui.PICKER_BOX[2]) / 2,
+        )
+        self.assertEqual(
+            (notice[1] + notice[3]) / 2,
+            (ui.PICKER_BOX[1] + ui.PICKER_BOX[3]) / 2,
+        )
+        self.assertLessEqual(notice[2], ui.PICKER_BOX[2])
+
     def test_favorite_star_is_closed_and_mathematically_regular(self):
         points = ui.regular_star_points(0, 0, 23)
         self.assertEqual(len(points), 11)

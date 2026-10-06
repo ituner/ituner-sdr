@@ -2563,6 +2563,14 @@ def receiver_picker_command_boxes():
     )
 
 
+def receiver_list_notice_box():
+    """Centered transient notice within the Receiver list canvas."""
+    x0, y0, x1, y1 = PICKER_BOX
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    return center_x - 190, center_y - 25, center_x + 190, center_y + 25
+
+
 def boxes_overlap(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
@@ -16512,10 +16520,13 @@ def draw_station_picker(
             theme.label_size, False, False, "lm", family=theme.font_family,
         )
     if notice:
-        notice_box = (PICKER_BOX[2] / 2 - 190, 16, PICKER_BOX[2] / 2 + 190, 66)
+        notice_box = receiver_list_notice_box()
         visual = draw_styled_button_frame(notice_box, active=True)
         draw_text(
-            text_cache, PICKER_BOX[2] / 2, 41, notice, visual.text,
+            text_cache,
+            (notice_box[0] + notice_box[2]) / 2,
+            (notice_box[1] + notice_box[3]) / 2,
+            notice, visual.text,
             theme.label_size, True, False, "cm", family=theme.font_family,
         )
 
