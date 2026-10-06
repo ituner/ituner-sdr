@@ -2501,9 +2501,9 @@ RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
 RECEIVER_PICKER_ACTION_GAP = 8
-RECEIVER_PICKER_ACTION_SIZE = 108
-RECEIVER_PICKER_ACTION_TOP = 488
-RECEIVER_PICKER_ROW_HEIGHT = 112
+RECEIVER_PICKER_ACTION_SIZE = 86
+RECEIVER_PICKER_ACTION_TOP = 510
+RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
 RECEIVER_PICKER_BACK_BOX = (
@@ -16133,17 +16133,23 @@ def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LI
     return ReceiverBadge("KIWI", theme.kiwi, theme.primary_text)
 
 
-def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME):
-    """Draw a uniform solid rounded pill and return its occupied width."""
+def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME,
+                        background=None):
+    """Draw a uniform outlined pill and return its occupied width."""
     width = text_cache.texture(
         badge.label, theme.label_size, (255, 255, 255), bold=True,
         family=theme.font_family,
     )[1] + 24
     height = 28
-    draw_logical_rounded_rect(x, y, x + width, y + height, 7, badge.fill)
+    color = badge.fill
+    draw_logical_rounded_rect(
+        x, y, x + width, y + height, 7,
+        theme.row_background if background is None else background,
+        color, 2,
+    )
     draw_text(
         text_cache, x + width / 2, y + height / 2 + 1, badge.label,
-        badge.text, theme.label_size, True, False, "cm", family=theme.font_family,
+        color[:3], theme.label_size, True, False, "cm", family=theme.font_family,
     )
     return width
 
@@ -16346,10 +16352,10 @@ def draw_station_picker(
             receiver_health_badge("WATERFALL", displayed_health, "waterfall", health_fresh, pending, theme),
             receiver_source_badge(receiver_type, local_receiver, theme),
         )
-        if pressed:
-            badges = tuple(ReceiverBadge(badge.label, (18, 18, 18, 255), theme.focus) for badge in badges)
         for badge in badges:
-            badge_x += draw_receiver_badge(text_cache, badge_x, badge_y, badge, theme) + 8
+            badge_x += draw_receiver_badge(
+                text_cache, badge_x, badge_y, badge, theme, background=fill,
+            ) + 8
         draw_text(
             text_cache, badge_x + 6, badge_y + 14, distance_label, secondary_color,
             theme.label_size, False, False, "lm", family=theme.font_family,
@@ -20422,6 +20428,14 @@ def set_audio_output_volume(args, volume):
     return set_pipewire_default_volume(volume)
 
 
+def update_openwebrx_scope(state, samples, floor, ceiling):
+    """Publish the OpenWebRX FFT into the shared top-scope instrument."""
+    if not state.spectrum_enabled_snapshot():
+        return False
+    state.update_spectrum(samples, floor, ceiling)
+    return True
+
+
 def openwebrx_live_worker(args, stop_event, state, line_queue):
     """Adapt one OpenWebRX socket into the normal Home audio and waterfall."""
     player = session = None
@@ -20519,6 +20533,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                     leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
                     mapper = waterfall_mapper(palette)
                 floor, ceiling = leveler.levels_for(samples)
+                update_openwebrx_scope(state, samples, floor, ceiling)
                 line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                 source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom)) / 1000.0
                 # FFT rows describe the receiver's whole current profile,

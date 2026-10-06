@@ -602,6 +602,19 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(ui.receiver_source_badge("fmdx").fill, theme.fmdx)
         self.assertEqual(ui.receiver_source_badge("kiwi", True).label, "LAN")
 
+    def test_receiver_badges_are_outlined_in_their_state_color(self):
+        badge = ui.receiver_source_badge("openwebrx")
+        with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
+                mock.patch.object(ui, "draw_text") as text:
+            ui.draw_receiver_badge(
+                self.Cache(), 10, 20, badge, background=(30, 30, 30, 255),
+            )
+        args = rounded.call_args.args
+        self.assertEqual(args[5], (30, 30, 30, 255))
+        self.assertEqual(args[6], badge.fill)
+        self.assertEqual(args[7], 2)
+        self.assertEqual(text.call_args.args[4], badge.fill[:3])
+
     def test_long_server_names_use_three_dot_elision(self):
         fitted = ui.fit_receiver_name(self.Cache(), "A very long receiver server name", 105)
         self.assertTrue(fitted.endswith("..."))
@@ -618,17 +631,19 @@ class ReceiverListStyleTests(unittest.TestCase):
         )
         self.assertEqual(text.call_args.args[4], (18, 18, 18))
 
-    def test_receiver_rows_are_compact_and_keep_six_visible(self):
+    def test_receiver_rows_show_five_complete_and_a_sixth_teaser(self):
         boxes = [ui.station_tile(index, 0) for index in range(6)]
         self.assertTrue(all(box is not None for box in boxes))
         self.assertTrue(all(box[3] - box[1] == ui.RECEIVER_PICKER_ROW_HEIGHT for box in boxes))
-        self.assertLess(boxes[-1][3], ui.LOGICAL_H)
+        self.assertLess(boxes[-1][1], ui.LOGICAL_H)
+        self.assertGreater(boxes[-1][3], ui.LOGICAL_H)
 
     def test_receiver_actions_use_the_lower_wide_rail_grid(self):
         boxes = ui.receiver_picker_command_boxes()
         self.assertEqual(len(boxes), 4)
-        self.assertGreaterEqual(min(box[1] for box in boxes), 488)
+        self.assertGreaterEqual(min(box[1] for box in boxes), 510)
         self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
+        self.assertTrue(all(box[2] - box[0] == box[3] - box[1] for box in boxes))
 
     def test_receiver_back_label_is_centered_plain_text(self):
         with mock.patch.object(ui, "draw_styled_text_button") as draw:
@@ -669,7 +684,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         drawn_text = []
         badge_calls = []
 
-        def badge(_cache, x, y, badge, _theme):
+        def badge(_cache, x, y, badge, _theme, **_kwargs):
             badge_calls.append((x, y, badge.label))
             return 70
 
@@ -690,6 +705,29 @@ class ReceiverListStyleTests(unittest.TestCase):
         distance_call = next(call for call in drawn_text if str(call[3]).startswith("DISTANCE:"))
         self.assertGreater(badge_calls[0][1], name_call[2])
         self.assertGreater(distance_call[1], badge_calls[-1][0])
+
+
+class OpenWebRxScopeTests(unittest.TestCase):
+    class State:
+        def __init__(self, enabled):
+            self.enabled = enabled
+            self.update = None
+
+        def spectrum_enabled_snapshot(self):
+            return self.enabled
+
+        def update_spectrum(self, samples, floor, ceiling):
+            self.update = (samples, floor, ceiling)
+
+    def test_openwebrx_fft_feeds_the_shared_scope(self):
+        state = self.State(True)
+        self.assertTrue(ui.update_openwebrx_scope(state, (42, 77), 20, 100))
+        self.assertEqual(state.update, ((42, 77), 20, 100))
+
+    def test_disabled_scope_skips_openwebrx_fft_work(self):
+        state = self.State(False)
+        self.assertFalse(ui.update_openwebrx_scope(state, (42, 77), 20, 100))
+        self.assertIsNone(state.update)
 
 
 if __name__ == "__main__":
