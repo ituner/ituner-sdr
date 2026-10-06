@@ -438,28 +438,39 @@ class ReceiverBrowserTests(unittest.TestCase):
             expected,
         )
 
-    def test_active_receiver_near_list_end_stays_in_third_position(self):
+    def test_active_receiver_near_list_end_stays_third_without_losing_tail_rows(self):
         stations = tuple(
             (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
             for index in range(10)
         )
-        scroll = ui.centered_receiver_scroll(stations, "http://rx9.test/")
-        self.assertEqual(scroll, 7)
-        active_box = ui.station_tile(9, scroll)
+        focused = ui.focused_receiver_rows_for_source(
+            stations, "http://rx9.test/", "kiwi", "kiwi",
+        )
+        self.assertEqual([row[0] for row in focused[:6]], [
+            "Receiver 7", "Receiver 8", "Receiver 9",
+            "Receiver 0", "Receiver 1", "Receiver 2",
+        ])
+        self.assertEqual(len(focused), len(stations))
+        self.assertEqual(set(focused), set(stations))
+        active_box = ui.station_tile(2, 0)
         third_box = ui.station_tile(2, 0)
         self.assertIsNotNone(active_box)
         self.assertEqual(active_box[1:], third_box[1:])
-        self.assertGreater(scroll, ui.station_page_max(stations))
+        self.assertLessEqual(
+            ui.centered_receiver_scroll(stations, "http://rx9.test/"),
+            ui.station_page_max(stations),
+        )
 
     def test_fmdx_notice_offset_still_places_active_receiver_third(self):
         stations = tuple(
             (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
             for index in range(6)
         )
-        scroll = ui.centered_receiver_scroll(
-            stations, "http://rx5.test/", leading_rows=1,
+        focused = ui.focused_receiver_rows_for_source(
+            stations, "http://rx5.test/", "fmdx", "fmdx", leading_rows=1,
         )
-        active_box = ui.station_tile(5 + 1, scroll)
+        self.assertEqual(focused[1][0], "Receiver 5")
+        active_box = ui.station_tile(1 + 1, 0)
         third_box = ui.station_tile(2, 0)
         self.assertEqual(active_box[1:], third_box[1:])
 

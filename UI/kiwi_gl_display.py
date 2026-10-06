@@ -2647,12 +2647,7 @@ def active_receiver_source(stations, active_server, receiver_type="kiwi"):
 
 
 def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row=2):
-    """Place the active receiver on the requested row, allowing tail space.
-
-    Manual scrolling stops at the last full page, but active-receiver focus is
-    different: late entries need blank rows beneath them or they remain pinned
-    to the bottom. The first two entries still stay naturally at the top.
-    """
+    """Place the active receiver near the requested row without blank tail rows."""
     selected_index = next(
         (
             index for index, station in enumerate(stations or ())
@@ -2662,10 +2657,40 @@ def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row
     )
     if selected_index is None:
         return 0
-    return max(
+    target = max(
         0,
         selected_index + max(0, int(leading_rows)) - max(0, int(center_row)),
     )
+    return clamp(target, 0, station_page_max(stations, leading_rows))
+
+
+def focused_receiver_rows_for_source(
+    stations, active_server, selected_source, active_source,
+    leading_rows=0, center_row=2,
+):
+    """Cycle one complete source list so its active receiver occupies row 3.
+
+    A late sorted entry cannot be placed on row 3 by overscrolling without
+    leaving blank rows beneath it. Cycling the same rows preserves every
+    receiver exactly once: the sorted sequence simply wraps after its end.
+    """
+    rows = list(stations or ())
+    selected_source = str(selected_source or "").casefold()
+    active_source = str(active_source or "").casefold()
+    if not rows or selected_source not in (active_source, "all"):
+        return rows
+    selected_index = next(
+        (
+            index for index, station in enumerate(rows)
+            if receiver_servers_match(station_fields(station)[2], active_server)
+        ),
+        None,
+    )
+    if selected_index is None:
+        return rows
+    active_row = max(0, int(center_row) - max(0, int(leading_rows)))
+    start = (selected_index - min(active_row, len(rows) - 1)) % len(rows)
+    return rows[start:] + rows[:start]
 
 
 def active_receiver_scroll_for_source(
@@ -23554,11 +23579,12 @@ def main():
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
         )
-        station_scroll = active_receiver_scroll_for_source(
+        visible_stations = focused_receiver_rows_for_source(
             visible_stations, active_server,
             station_route_filter, station_route_filter,
             int(fmdx_disclaimer_open),
         )
+        station_scroll = 0
         picker_map_selected_server = active_server
         return active_server
 
@@ -23573,12 +23599,29 @@ def main():
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
         )
-        station_scroll = active_receiver_scroll_for_source(
+        visible_stations = focused_receiver_rows_for_source(
             visible_stations, active_server,
             station_route_filter, active_source,
             int(fmdx_disclaimer_open),
         )
+        station_scroll = 0
         return active_server
+
+    def current_receiver_rows():
+        """Return the complete directory in the same focused order for draw and taps."""
+        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_source = active_receiver_source(
+            all_stations, active_server, receiver_type,
+        )
+        visible_stations = health_prioritized_stations(
+            stations, station_health, station_sort,
+        )
+        return focused_receiver_rows_for_source(
+            visible_stations, active_server,
+            station_route_filter, active_source,
+            int(fmdx_disclaimer_open),
+        )
 
     def restore_navigation_parent(parent):
         """Close a leaf and restore the screen that opened it."""
@@ -27196,7 +27239,7 @@ def main():
                                 # sequence currently rendered. Using `stations` here
                                 # selected a different endpoint whenever active rows
                                 # had been promoted ahead of their base sort position.
-                                visible_stations = health_prioritized_stations(stations, station_health, station_sort)
+                                visible_stations = current_receiver_rows()
                                 idx = station_at(
                                     x, y, visible_stations, station_scroll,
                                     int(fmdx_disclaimer_open),
@@ -28134,7 +28177,7 @@ def main():
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
                 else:
-                    visible_stations = health_prioritized_stations(stations, station_health, station_sort)
+                    visible_stations = current_receiver_rows()
                     draw_station_picker(
                         text_cache, visible_stations, station_scroll, server, station_query,
                         station_sort, station_health, station_pending_server, station_connection_status,
