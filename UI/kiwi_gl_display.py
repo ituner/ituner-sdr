@@ -8609,6 +8609,9 @@ def draw_fmdx_shared_prompt(text_cache):
 # is not theirs to move by hand. This session-only notice occupies the first
 # receiver-list row instead of interrupting the browser with a modal.
 FMDX_DISCLAIMER_TITLE = "FM-DX SHARED SERVERS"
+FMDX_DISCLAIMER_SUBTITLE = (
+    "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER"
+)
 FMDX_DISCLAIMER_OUTLINE = (222, 170, 84, 235)
 
 
@@ -8625,24 +8628,8 @@ def fmdx_disclaimer_boxes(scroll=0.0):
     """Geometry for the session-only notice in FM-DX's first list row."""
     panel = station_tile(0, scroll)
     if panel is None:
-        return {"panel": (0, 0, 0, 0), "ok": (0, 0, 0, 0)}
-    x0, y0, x1, y1 = panel
-    marker_y = (y0 + y1) / 2
-    return {
-        "panel": panel,
-        # This is the same upper-right lane used by a receiver's FREE-slots
-        # label, promoted to a full touch target for acknowledgement.
-        "ok": (x1 - 140, marker_y - 43, x1 - 18, marker_y + 11),
-    }
-
-
-def fmdx_disclaimer_action_at(x, y, scroll=0.0):
-    boxes = fmdx_disclaimer_boxes(scroll)
-    if contains(boxes["ok"], x, y):
-        return "ok"
-    if contains(boxes["panel"], x, y):
-        return "panel"
-    return None
+        panel = (0, 0, 0, 0)
+    return {"panel": panel}
 
 
 def draw_fmdx_disclaimer(text_cache, scroll=0.0):
@@ -8656,25 +8643,22 @@ def draw_fmdx_disclaimer(text_cache, scroll=0.0):
     )
     theme = RECEIVER_LIST_THEME
     title_x = x0 + 16
-    ok_box = boxes["ok"]
     title = fit_station_text(
-        text_cache, FMDX_DISCLAIMER_TITLE, ok_box[0] - title_x - 20,
+        text_cache, FMDX_DISCLAIMER_TITLE, x1 - title_x - 20,
         theme.server_name_size, True, False, theme.font_family,
     )
     draw_text(
-        text_cache, title_x, y0 + 42, title,
+        text_cache, title_x, y0 + 28, title,
         theme.primary_text, theme.server_name_size, True, False, "lm", family=theme.font_family,
     )
-    detail = "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER"
-    detail = fit_station_text(
-        text_cache, detail, x1 - title_x - 20, theme.label_size,
+    subtitle = fit_station_text(
+        text_cache, FMDX_DISCLAIMER_SUBTITLE, x1 - title_x - 20, theme.label_size,
         False, False, theme.font_family,
     )
     draw_text(
-        text_cache, title_x, y1 - 29, detail,
+        text_cache, title_x, y0 + 56, subtitle,
         theme.secondary_text, theme.label_size, False, False, "lm", family=theme.font_family,
     )
-    draw_radio_option(text_cache, ok_box, "OK", False)
 
 
 def radio_option_at(
@@ -24589,11 +24573,6 @@ def main():
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
                                 gesture = "picker_exit"
-                            elif (
-                                picker_open and fmdx_disclaimer_open
-                                and fmdx_disclaimer_action_at(x, y, station_scroll) == "ok"
-                            ):
-                                gesture = "fmdx_disclaimer"
                             elif picker_open and contains(PICKER_BOX, x, y):
                                 gesture = "picker"
                             elif frequency_entry_open and (frequency_layout := frequency_entry_layout()) and contains(frequency_layout[0], x, y):
@@ -27141,15 +27120,6 @@ def main():
                                 picker_map_motion_at = time.monotonic()
                             wake_controls()
                         elif touch_started and gesture == "picker_map_outside":
-                            wake_controls()
-                        elif touch_started and gesture == "fmdx_disclaimer":
-                            moved = max(abs(x - start_x), abs(y - start_y))
-                            if (
-                                moved <= args.tap_px
-                                and fmdx_disclaimer_action_at(x, y, station_scroll) == "ok"
-                            ):
-                                fmdx_disclaimer_open = False
-                                center_active_receiver_in_current_list()
                             wake_controls()
                         elif touch_started and gesture == "picker_exit":
                             moved = max(abs(x - start_x), abs(y - start_y))

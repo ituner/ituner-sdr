@@ -650,16 +650,12 @@ class BigFrequencyStyleTests(unittest.TestCase):
 
 
 class FmdxDisclaimerTests(unittest.TestCase):
-    def test_disclaimer_uses_first_receiver_row_with_an_ok_button(self):
+    def test_disclaimer_uses_first_receiver_row_without_an_action(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         boxes = ui.fmdx_disclaimer_boxes()
-        x0, y0, x1, y1 = boxes["panel"]
         self.assertEqual(boxes["panel"], ui.station_tile(0, 0))
-        self.assertLessEqual(x1, ui.PICKER_BOX[2])
-        ok = boxes["ok"]
-        self.assertTrue(x0 <= ok[0] and ok[2] <= x1 and y0 <= ok[1] and ok[3] <= y1)
-        self.assertEqual(ui.fmdx_disclaimer_action_at((ok[0] + ok[2]) / 2, (ok[1] + ok[3]) / 2), "ok")
+        self.assertEqual(set(boxes), {"panel"})
 
     def test_notice_offsets_real_receiver_rows(self):
         ui.configure_output(True)
@@ -673,28 +669,34 @@ class FmdxDisclaimerTests(unittest.TestCase):
         notice_center = ((notice[0] + notice[2]) / 2, (notice[1] + notice[3]) / 2)
         self.assertIsNone(ui.station_at(*notice_center, stations, 0, leading_rows=1))
 
-    def test_notice_reuses_server_row_frame_and_free_slot_lane_for_ok(self):
+    def test_notice_reuses_server_row_frame_and_stacks_subtitle_under_title(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         boxes = ui.fmdx_disclaimer_boxes()
         cache = object()
+        text_calls = []
         with mock.patch.object(ui, "draw_station_list_frame") as frame, \
                 mock.patch.object(ui, "draw_logical_circle"), \
-                mock.patch.object(ui, "draw_text"), \
+                mock.patch.object(ui, "draw_text", side_effect=lambda *a, **k: text_calls.append((a, k))), \
                 mock.patch.object(ui, "fit_station_text", side_effect=lambda _c, text, *_a, **_k: text), \
                 mock.patch.object(ui, "draw_radio_option") as option:
             ui.draw_fmdx_disclaimer(cache)
         frame.assert_called_once_with(
             boxes["panel"], ui.STATION_LIST_FILL, ui.FMDX_DISCLAIMER_OUTLINE, 2,
         )
-        option.assert_called_once_with(cache, boxes["ok"], "OK", False)
+        option.assert_not_called()
+        self.assertEqual([call[0][3] for call in text_calls], [
+            ui.FMDX_DISCLAIMER_TITLE,
+            ui.FMDX_DISCLAIMER_SUBTITLE,
+        ])
+        self.assertLess(text_calls[0][0][2], text_calls[1][0][2])
 
     def test_notice_is_shown_once_per_process_and_resets_on_restart(self):
         visible, shown = ui.fmdx_disclaimer_transition("fmdx", False, False)
         self.assertEqual((visible, shown), (True, True))
         # Re-selecting FM-DX does not recreate or toggle the row.
         self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", visible, shown), (True, True))
-        visible = False  # OK dismissed it.
+        visible = False  # Leaving the FM-DX view dismisses it.
         visible, shown = ui.fmdx_disclaimer_transition("kiwi", visible, shown)
         self.assertEqual((visible, shown), (False, True))
         self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", visible, shown), (False, True))
