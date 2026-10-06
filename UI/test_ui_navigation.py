@@ -496,23 +496,40 @@ class BigFrequencyStyleTests(unittest.TestCase):
 
 
 class FmdxDisclaimerTests(unittest.TestCase):
-    def test_disclaimer_is_bounded_with_a_centred_ok_button(self):
+    def test_disclaimer_uses_first_receiver_row_with_an_ok_button(self):
         ui.configure_output(True)
+        ui.configure_popup_layout()
         boxes = ui.fmdx_disclaimer_boxes()
         x0, y0, x1, y1 = boxes["panel"]
-        self.assertGreaterEqual(x0, 0)
-        self.assertLessEqual(x1, ui.LOGICAL_W)
-        self.assertGreaterEqual(y0, 0)
-        self.assertLessEqual(y1, ui.LOGICAL_H)
+        self.assertEqual(boxes["panel"], ui.station_tile(0, 0))
+        self.assertLessEqual(x1, ui.PICKER_BOX[2])
         ok = boxes["ok"]
         self.assertTrue(x0 <= ok[0] and ok[2] <= x1 and y0 <= ok[1] and ok[3] <= y1)
         self.assertEqual(ui.fmdx_disclaimer_action_at((ok[0] + ok[2]) / 2, (ok[1] + ok[3]) / 2), "ok")
 
-    def test_taps_away_from_ok_do_not_dismiss(self):
+    def test_notice_offsets_real_receiver_rows(self):
         ui.configure_output(True)
-        panel = ui.fmdx_disclaimer_boxes()["panel"]
-        self.assertEqual(ui.fmdx_disclaimer_action_at(panel[0] + 10, panel[1] + 10), "panel")
-        self.assertIsNone(ui.fmdx_disclaimer_action_at(panel[0] - 20, panel[1] - 20))
+        ui.configure_popup_layout()
+        stations = [("A", "Somewhere", "http://a.test:8073")]
+        first_receiver = ui.station_tile(1, 0)
+        center = ((first_receiver[0] + first_receiver[2]) / 2,
+                  (first_receiver[1] + first_receiver[3]) / 2)
+        self.assertEqual(ui.station_at(*center, stations, 0, leading_rows=1), 0)
+        notice = ui.station_tile(0, 0)
+        notice_center = ((notice[0] + notice[2]) / 2, (notice[1] + notice[3]) / 2)
+        self.assertIsNone(ui.station_at(*notice_center, stations, 0, leading_rows=1))
+
+    def test_notice_is_shown_once_per_process_and_resets_on_restart(self):
+        visible, shown = ui.fmdx_disclaimer_transition("fmdx", False, False)
+        self.assertEqual((visible, shown), (True, True))
+        # Re-selecting FM-DX does not recreate or toggle the row.
+        self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", visible, shown), (True, True))
+        visible = False  # OK dismissed it.
+        visible, shown = ui.fmdx_disclaimer_transition("kiwi", visible, shown)
+        self.assertEqual((visible, shown), (False, True))
+        self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", visible, shown), (False, True))
+        # A new process initializes both flags to False.
+        self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", False, False), (True, True))
 
 
 if __name__ == "__main__":

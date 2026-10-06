@@ -8385,30 +8385,40 @@ def draw_fmdx_shared_prompt(text_cache):
 
 
 # Picking the FM-DX source is the moment the operator needs to know the tuner
-# is not theirs to move by hand. This is a single-action notice dismissed with
-# OK, distinct from the shared-control acknowledgement in the Modes drawer.
+# is not theirs to move by hand. This session-only notice occupies the first
+# receiver-list row instead of interrupting the browser with a modal.
 FMDX_DISCLAIMER_TITLE = "FM-DX SHARED SERVERS"
 FMDX_DISCLAIMER_LINES = (
     "Manual frequency changes are not available for",
     "these servers. Tuning is shared with every listener,",
     "so the frequency follows the receiver.",
 )
-FMDX_DISCLAIMER_PANEL = (280, 240, 1000, 560)
 
 
-def fmdx_disclaimer_boxes():
-    """OK-only modal shown when the FM-DX source is chosen in the browser."""
-    x0, y0, x1, y1 = FMDX_DISCLAIMER_PANEL
-    ok_width = 200
-    ok_x0 = (x0 + x1 - ok_width) / 2
+def fmdx_disclaimer_transition(route_filter, visible, shown):
+    """Show the inline notice once until a new application process starts."""
+    if str(route_filter).casefold() == "fmdx":
+        if not shown:
+            return True, True
+        return bool(visible), True
+    return False, bool(shown)
+
+
+def fmdx_disclaimer_boxes(scroll=0.0):
+    """Geometry for the session-only notice in FM-DX's first list row."""
+    panel = station_tile(0, scroll)
+    if panel is None:
+        return {"panel": (0, 0, 0, 0), "ok": (0, 0, 0, 0)}
+    x0, y0, x1, y1 = panel
+    ok_width = 150
     return {
-        "panel": FMDX_DISCLAIMER_PANEL,
-        "ok": (ok_x0, y1 - 78, ok_x0 + ok_width, y1 - 20),
+        "panel": panel,
+        "ok": (x1 - ok_width - 18, y0 + 38, x1 - 18, y1 - 38),
     }
 
 
-def fmdx_disclaimer_action_at(x, y):
-    boxes = fmdx_disclaimer_boxes()
+def fmdx_disclaimer_action_at(x, y, scroll=0.0):
+    boxes = fmdx_disclaimer_boxes(scroll)
     if contains(boxes["ok"], x, y):
         return "ok"
     if contains(boxes["panel"], x, y):
@@ -8416,27 +8426,28 @@ def fmdx_disclaimer_action_at(x, y):
     return None
 
 
-def draw_fmdx_disclaimer(text_cache):
-    """Explain the FM-DX read-only tuner; OK is the only way out."""
-    x0, y0, x1, y1 = FMDX_DISCLAIMER_PANEL
-    # Dim the browser behind the modal so the notice clearly owns the screen.
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 0, 0, 168))
-    draw_logical_rect(x0, y0, x1, y1, (16, 22, 28, 252))
+def draw_fmdx_disclaimer(text_cache, scroll=0.0):
+    """Draw the shared-server explanation as FM-DX's leading list item."""
+    boxes = fmdx_disclaimer_boxes(scroll)
+    x0, y0, x1, y1 = boxes["panel"]
+    if x1 <= x0 or y1 <= y0:
+        return
+    draw_logical_rect(x0, y0, x1, y1, (28, 23, 15, 248))
     edge = (222, 170, 84, 235)
     for ax0, ay0, ax1, ay1 in (
         (x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1),
     ):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 2)
     draw_text(
-        text_cache, (x0 + x1) / 2, y0 + 48, FMDX_DISCLAIMER_TITLE,
-        (243, 200, 118), 22, True, False, "cm", family="Liberation Sans",
+        text_cache, x0 + 22, y0 + 29, FMDX_DISCLAIMER_TITLE,
+        (243, 200, 118), 20, True, False, "lm", family="Liberation Sans",
     )
     for index, line in enumerate(FMDX_DISCLAIMER_LINES):
         draw_text(
-            text_cache, (x0 + x1) / 2, y0 + 118 + index * 30, line,
-            (224, 231, 235), 17, False, False, "cm", family="Liberation Sans",
+            text_cache, x0 + 22, y0 + 60 + index * 23, line,
+            (224, 231, 235), 15, False, False, "lm", family="Liberation Sans",
         )
-    draw_radio_option(text_cache, fmdx_disclaimer_boxes()["ok"], "OK", False)
+    draw_radio_option(text_cache, boxes["ok"], "OK", False)
 
 
 def radio_option_at(
@@ -14153,9 +14164,9 @@ def draw_wspr_decode_osd(text_cache, active_tiles, y0):
     draw_text(text_cache, x0 + 18, y0 + 43, detail, (239, 199, 120), 15, True, False, "lm", family="Liberation Sans")
 
 
-def station_page_max(stations):
+def station_page_max(stations, leading_rows=0):
     visible = PICKER_COLS * PICKER_ROWS
-    remaining = max(0, len(stations) - visible)
+    remaining = max(0, len(stations) + max(0, int(leading_rows)) - visible)
     # Keep every page origin on a complete rendered row so drag scrolling
     # never changes a tile's target beneath a finger.
     return ((remaining + PICKER_COLS - 1) // PICKER_COLS) * PICKER_COLS
@@ -14182,9 +14193,10 @@ def station_tile(index, scroll):
     return left, top, left + cell_w, top + cell_h
 
 
-def station_at(x, y, stations, scroll):
+def station_at(x, y, stations, scroll, leading_rows=0):
+    leading_rows = max(0, int(leading_rows))
     for idx, _station in enumerate(stations):
-        box = station_tile(idx, scroll)
+        box = station_tile(idx + leading_rows, scroll)
         if box and contains(box, x, y):
             return idx
     return None
@@ -16127,6 +16139,7 @@ def receiver_display_span(zoom, receiver_type):
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
+    show_fmdx_notice=False,
 ):
     x0, y0, x1, y1 = PICKER_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
@@ -16169,9 +16182,13 @@ def draw_station_picker(
             )
     draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
 
+    leading_rows = 1 if show_fmdx_notice else 0
+    if show_fmdx_notice:
+        draw_fmdx_disclaimer(text_cache, scroll)
+
     for idx, station in enumerate(stations):
         name, location, server, listener_used, listener_total = station_fields(station)
-        box = station_tile(idx, scroll)
+        box = station_tile(idx + leading_rows, scroll)
         if not box:
             continue
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
@@ -21981,8 +21998,10 @@ def main():
     radio_setup_open = False
     # FM-DX shared control starts read-only and is acknowledged per session.
     fmdx_shared_prompt_open = False
-    # One-time-per-visit FM-DX notice shown when the browser picks that source.
+    # The inline FM-DX notice is shown once per application process. Restarting
+    # the app resets both flags and presents it again on the first FM-DX visit.
     fmdx_disclaimer_open = False
+    fmdx_disclaimer_shown = False
     band_navigation_open = False
     radio_family_open = None
     kiwi_landing_connected_at = 0.0
@@ -23981,7 +24000,7 @@ def main():
                         station_scroll = clamp(
                             station_scroll - event.y * PICKER_COLS,
                             0,
-                            station_page_max(stations),
+                            station_page_max(stations, int(fmdx_disclaimer_open)),
                         )
                     else:
                         change_zoom(1 if event.y > 0 else -1)
@@ -24150,10 +24169,6 @@ def main():
                             ):
                                 wake_controls()
                                 gesture = "wake"
-                            elif picker_open and fmdx_disclaimer_open:
-                                # The FM-DX notice is modal over the whole screen:
-                                # it claims every tap until OK dismisses it.
-                                gesture = "fmdx_disclaimer"
                             # The receiver browser owns its entire surface. Its
                             # controls are claimed here, before any Home radio or
                             # waterfall target that happens to share the same
@@ -24194,6 +24209,11 @@ def main():
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
                                 gesture = "picker_exit"
+                            elif (
+                                picker_open and fmdx_disclaimer_open
+                                and fmdx_disclaimer_action_at(x, y, station_scroll) == "ok"
+                            ):
+                                gesture = "fmdx_disclaimer"
                             elif picker_open and contains(PICKER_BOX, x, y):
                                 gesture = "picker"
                             elif frequency_entry_open and (frequency_layout := frequency_entry_layout()) and contains(frequency_layout[0], x, y):
@@ -24599,7 +24619,10 @@ def main():
                             if abs(y - start_y) >= max(18, args.tap_px):
                                 picker_dragged = True
                             row_delta = (start_y - y) / scroll_stride
-                            station_scroll = clamp(start_scroll + row_delta * PICKER_COLS, 0, station_page_max(stations))
+                            station_scroll = clamp(
+                                start_scroll + row_delta * PICKER_COLS, 0,
+                                station_page_max(stations, int(fmdx_disclaimer_open)),
+                            )
                         elif gesture == "menu":
                             # The Home screen is a fixed two-row grid; keep a
                             # finger within its original tile until release.
@@ -26329,7 +26352,10 @@ def main():
                                     action = "saved"
                                 save_favorite_servers(favorite_servers, all_stations)
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
-                                station_scroll = clamp(station_scroll, 0, station_page_max(stations))
+                                station_scroll = clamp(
+                                    station_scroll, 0,
+                                    station_page_max(stations, int(fmdx_disclaimer_open)),
+                                )
                                 print(f"gl favorite {action}: {current_server}", flush=True)
                             wake_controls()
                         elif touch_started and gesture == "audio_transport_graph":
@@ -26730,8 +26756,12 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "fmdx_disclaimer":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px and fmdx_disclaimer_action_at(x, y) == "ok":
+                            if (
+                                moved <= args.tap_px
+                                and fmdx_disclaimer_action_at(x, y, station_scroll) == "ok"
+                            ):
                                 fmdx_disclaimer_open = False
+                                station_scroll = clamp(station_scroll, 0, station_page_max(stations))
                             wake_controls()
                         elif touch_started and gesture == "picker_exit":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -26772,9 +26802,14 @@ def main():
                                     "favorites" if gesture == "picker_route_favorites"
                                     else gesture.removeprefix("picker_source_")
                                 )
-                                # Choosing FM-DX is the moment to explain that its
-                                # tuner is shared and cannot be moved by hand.
-                                fmdx_disclaimer_open = station_route_filter == "fmdx"
+                                # Explain shared tuning once per process. The
+                                # notice is an inline first row, so the receiver
+                                # list and rail remain available around it.
+                                fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
+                                    station_route_filter,
+                                    fmdx_disclaimer_open,
+                                    fmdx_disclaimer_shown,
+                                )
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
                                 station_scroll = 0
                                 # Moving to another source cancels any connection
@@ -26802,7 +26837,10 @@ def main():
                                 # selected a different endpoint whenever active rows
                                 # had been promoted ahead of their base sort position.
                                 visible_stations = health_prioritized_stations(stations, station_health, station_sort)
-                                idx = station_at(x, y, visible_stations, station_scroll)
+                                idx = station_at(
+                                    x, y, visible_stations, station_scroll,
+                                    int(fmdx_disclaimer_open),
+                                )
                                 if idx is not None:
                                     wake_controls()
                                     connect_to_station(visible_stations[idx])
@@ -27110,7 +27148,10 @@ def main():
                     globe_receivers = globe_payload
                     all_stations = stations_from_globe_receivers(globe_receivers)
                     stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
-                    station_scroll = clamp(station_scroll, 0, station_page_max(stations))
+                    station_scroll = clamp(
+                        station_scroll, 0,
+                        station_page_max(stations, int(fmdx_disclaimer_open)),
+                    )
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"
@@ -27678,10 +27719,8 @@ def main():
                     draw_station_picker(
                         text_cache, visible_stations, station_scroll, server, station_query,
                         station_sort, station_health, station_pending_server, station_connection_status,
-                        station_route_filter, receiver_home_profile,
+                        station_route_filter, receiver_home_profile, fmdx_disclaimer_open,
                     )
-                    if fmdx_disclaimer_open:
-                        draw_fmdx_disclaimer(text_cache)
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
                     text_cache,
