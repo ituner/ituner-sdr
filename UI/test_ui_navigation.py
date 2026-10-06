@@ -96,10 +96,21 @@ class DrawerGeometryTests(unittest.TestCase):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["local_rx", "rx", "audio", "digital", "dual", "settings"],
+            ["local_rx", "rx", "audio", "digital", "favorite", "settings"],
         )
         self.assertEqual(dict(ui.MENU_ITEMS)["local_rx"], "LAN")
-        self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "MODES")
+        self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "DIGI")
+        self.assertEqual(dict(ui.MENU_ITEMS)["favorite"], "FAVORITES")
+        self.assertNotIn("dual", kinds)
+
+    def test_digi_rail_is_empty_except_for_back(self):
+        self.assertEqual(ui.DIGITAL_MENU_ITEMS, (("digital_back", "BACK"),))
+        self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
+
+    def test_apps_contains_dual_vfo_action(self):
+        cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
+        cy = (ui.TEST_DUAL_BOX[1] + ui.TEST_DUAL_BOX[3]) / 2
+        self.assertEqual(ui.tests_option_at(cx, cy), "dual")
 
     def test_lan_and_network_use_distinct_drawn_icons(self):
         surface = mock.Mock()

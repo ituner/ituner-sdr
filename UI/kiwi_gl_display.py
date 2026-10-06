@@ -1313,7 +1313,8 @@ TEST_RTL_BOX = (42, 178, 468, 232)
 TEST_PATTERN_BOX = (492, 178, 918, 232)
 TEST_FONT_BOX = (42, 244, 468, 298)
 TEST_OPENWEBRX_BOX = (492, 244, 918, 298)
-TEST_RUN_BOX = (42, 310, 918, 366)
+TEST_RUN_BOX = (42, 310, 468, 366)
+TEST_DUAL_BOX = (492, 310, 918, 366)
 TEST_BACK_BOX = (0, 0, 0, 0)
 # This deliberately fixed public receiver is a protocol/display smoke test,
 # not a directory entry. The isolated Tests tile always restores the prior
@@ -1705,7 +1706,8 @@ POPUP_LAYOUT_BASE = {
               AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX,
               AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX),
     "tests": (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
-              TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX),
+              TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX,
+              TEST_DUAL_BOX),
     "rtl_lab": (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
                 RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX),
     "wspr": (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES,
@@ -1735,7 +1737,7 @@ def configure_popup_layout():
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
     global FONT_LAB_BACK_BOX, WSPR_EXPANDED_LOG_BACK_BOX
-    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_BACK_BOX
+    global TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_DUAL_BOX, TEST_BACK_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
@@ -1873,7 +1875,9 @@ def configure_popup_layout():
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
      TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX,
-     TEST_RUN_BOX) = (popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"])
+     TEST_RUN_BOX, TEST_DUAL_BOX) = (
+        popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"]
+    )
     TEST_BACK_BOX = (0, 0, 0, 0)
     if LCD_800_MODE:
         TEST_PANEL_BOX = (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H)
@@ -1887,7 +1891,8 @@ def configure_popup_layout():
         TEST_PATTERN_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
         TEST_FONT_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
         TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
-        TEST_RUN_BOX = (left_x0, rows[3], right_x1, rows[3] + 78)
+        TEST_RUN_BOX = (left_x0, rows[3], left_x1, rows[3] + 78)
+        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + 78)
         TEST_BACK_BOX = lcd_drawer_back_box()
         FONT_LAB_BACK_BOX = lcd_drawer_back_box()
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
@@ -2007,8 +2012,8 @@ MENU_ITEMS = (
     ("local_rx", "LAN"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "MODES"),
-    ("dual", "DUAL"),
+    ("digital", "DIGI"),
+    ("favorite", "FAVORITES"),
     ("settings", "SETTINGS"),
 )
 
@@ -2461,6 +2466,9 @@ SETTINGS_MENU_ITEMS = (
     ("tests", "APPS"),
     ("system", "INFO"),
     ("settings_back", "BACK"),
+)
+DIGITAL_MENU_ITEMS = (
+    ("digital_back", "BACK"),
 )
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
@@ -10800,6 +10808,8 @@ def tests_option_at(x, y):
         return "openwebrx"
     if contains(TEST_RUN_BOX, x, y):
         return "run"
+    if contains(TEST_DUAL_BOX, x, y):
+        return "dual"
     return None
 
 
@@ -10866,6 +10876,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             (TEST_FONT_BOX, "FONT LAB", "TYPE", False),
             (TEST_OPENWEBRX_BOX, "RETURN KIWI" if openwebrx_active else "OPENWEBRX", "PUBLIC RX", openwebrx_active),
             (TEST_RUN_BOX, "STOP" if sweep is not None else "RUN TEST", "RETUNE PATTERN", sweep is not None),
+            (TEST_DUAL_BOX, "DUAL", "TWO VFO", False),
         ):
             draw_lcd_audio_tile(
                 text_cache, box, title, detail, active,
@@ -10899,6 +10910,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             f"{sweep.name}  {sweep.index}/{sweep.command_count}",
             active=True,
         )
+    draw_tests_button(text_cache, TEST_DUAL_BOX, "DUAL", "TWO RECEIVERS  /  TWO VFO")
 
 
 def draw_font_lab(text_cache, page):
@@ -14557,6 +14569,11 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
         for offset, height in ((-20, 17), (0, 29), (20, 39)):
             pygame.draw.rect(surface, color, (cx + offset - 6, cy + 24 - height, 12, height), 3, border_radius=2)
         pygame.draw.line(surface, dim, (cx - 31, cy + 25), (cx + 31, cy + 25), 2)
+    elif kind == "favorite":
+        pygame.draw.lines(
+            surface, color, False,
+            regular_star_points(cx, cy, 25), APP_ACTION_ICON_STROKE,
+        )
     else:
         pygame.draw.circle(surface, color, (cx, cy), 24, 3)
         pygame.draw.line(surface, color, (cx, cy - 4), (cx, cy + 20), 3)
@@ -14571,7 +14588,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("network", "list"):
+        if kind in ("network", "list", "favorite"):
             draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
@@ -15158,14 +15175,20 @@ def lcd_nav_box(index, item_count=None, has_back=False):
 
 
 def lcd_nav_items(settings_open=False, digital_open=False):
-    """Return Home or Settings; Modes opens its full drawer directly."""
-    return SETTINGS_MENU_ITEMS if settings_open else MENU_ITEMS
+    """Return the active Home, Settings, or empty DIGI rail."""
+    if settings_open:
+        return SETTINGS_MENU_ITEMS
+    if digital_open:
+        return DIGITAL_MENU_ITEMS
+    return MENU_ITEMS
 
 
 def navigation_parent(items, kind):
     """Return the rail surface that owns a destination opened from *items*."""
     if items is SETTINGS_MENU_ITEMS and kind != "settings_back":
         return "settings"
+    if items is DIGITAL_MENU_ITEMS and kind != "digital_back":
+        return "digi"
     return "home"
 
 
@@ -15204,7 +15227,7 @@ def stats_keeps_settings_sidebar(parent):
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
-    has_back = items is SETTINGS_MENU_ITEMS
+    has_back = items in (SETTINGS_MENU_ITEMS, DIGITAL_MENU_ITEMS)
     for index in range(len(items)):
         if contains(lcd_nav_box(index, len(items), has_back), x, y):
             return index
@@ -15539,12 +15562,14 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     if settings_open or digital_open:
-        draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "MODES")
+        draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DIGI")
     items = lcd_nav_items(settings_open, digital_open)
     # The passband and volume are registered here but painted by draw_ui after
     # the mode annunciators, so the mode surface can never cover them.
     for index, (kind, label) in enumerate(items):
-        bx0, by0, bx1, by1 = lcd_nav_box(index, len(items), items is SETTINGS_MENU_ITEMS)
+        bx0, by0, bx1, by1 = lcd_nav_box(
+            index, len(items), items in (SETTINGS_MENU_ITEMS, DIGITAL_MENU_ITEMS)
+        )
         if kind in ("settings_back", "digital_back"):
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
@@ -22395,6 +22420,7 @@ def main():
     # makes it independent from the one live KiWi client until the second
     # transport/audio path is implemented deliberately.
     dual_vfo_open = bool(args.dual_vfo_preview)
+    dual_vfo_parent = "apps" if dual_vfo_open else "home"
     # Home closes B's transport to release the Kiwi slot, but it does not end
     # the operator's Dual session. Keep B's receiver/tuning profile in RAM so
     # re-entering Dual feels like returning to an instrument, not starting it.
@@ -23660,7 +23686,7 @@ def main():
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
         nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
@@ -23701,13 +23727,24 @@ def main():
         # sockets and decode cadence alive in the background.
         asr_moon_language_open = False
         if kind == "local_rx":
+            picker_parent = parent
             settings_menu_open = False
             digital_menu_open = False
-            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            picker_open = True
+            radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+            station_route_filter = "local"
+            station_query = ""
+            stations = filtered_stations(
+                all_stations, station_query, station_sort, station_route_filter,
+                favorite_servers, station_health, receiver_home_profile,
+            )
+            center_active_receiver_in_current_list()
+            search_open = False
+            picker_map_open = False
+            picker_map_garden_mode = True
             station_pending_server = None
             station_connected_at = 0.0
-            connect_to_station(LOCAL_KIWI_STATION)
         elif kind == "rx":
             picker_parent = parent
             settings_menu_open = False
@@ -23770,11 +23807,32 @@ def main():
                 restore_navigation_parent(parent)
         elif kind == "digital":
             settings_menu_open = False
-            digital_menu_open = False
-            radio_setup_open = True
-            radio_family_open = None
+            digital_menu_open = True
+            radio_setup_open = False
             picker_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "digital_back":
+            settings_menu_open = False
+            digital_menu_open = False
+        elif kind == "favorite":
+            picker_parent = parent
+            settings_menu_open = False
+            digital_menu_open = False
+            picker_open = True
+            radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+            station_route_filter = "favorites"
+            station_query = ""
+            stations = filtered_stations(
+                all_stations, station_query, station_sort, station_route_filter,
+                favorite_servers, station_health, receiver_home_profile,
+            )
+            center_active_receiver_in_current_list()
+            search_open = False
+            picker_map_open = False
+            picker_map_garden_mode = True
+            station_pending_server = None
+            station_connected_at = 0.0
         elif kind == "audio":
             settings_menu_open = False
             digital_menu_open = False
@@ -23793,6 +23851,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         elif kind == "dual":
+            dual_vfo_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             dual_vfo_open = True
@@ -25339,6 +25398,7 @@ def main():
                                 if action == "home":
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
+                                    tests_panel_open = dual_vfo_parent == "apps"
                                 elif action in ("A", "B"):
                                     # A spectrum tap is an operator's source
                                     # selection, not merely a cosmetic focus.
@@ -26329,6 +26389,10 @@ def main():
                                 elif choice == "openwebrx":
                                     toggle_openwebrx_test()
                                     tests_panel_open = False
+                                elif choice == "dual":
+                                    tests_panel_open = False
+                                    activate_navigation_item(0, (("dual", "DUAL"),))
+                                    dual_vfo_parent = "apps"
                                 elif choice == "pattern" and retune_sweep is None:
                                     retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
                                 elif choice == "run":
