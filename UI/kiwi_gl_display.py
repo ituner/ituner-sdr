@@ -208,6 +208,7 @@ from OpenGL import GL
 
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
+import openwebrx_directory
 import fmdx
 import receiver_catalog
 import render_sdr_frontend_mockup as sdr_ui
@@ -1941,7 +1942,7 @@ def configure_popup_layout():
         # across the 1024 px waterfall canvas. Put its commands in the same
         # permanent 256 px rail used by Home; two narrow station columns made
         # names and locations needlessly difficult to scan on the LCD.
-        PICKER_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
+        PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
         # The source selectors now use the previously empty upper rail. The
         # receiver list can reclaim the full content height for station rows.
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -1958,7 +1959,7 @@ def configure_popup_layout():
         PICKER_ROUTE_DIRECT_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
         PICKER_SOURCE_SEGMENT_BOXES = receiver_source_segments()
-        PICKER_EXIT_BOX = lcd_drawer_back_box()
+        PICKER_EXIT_BOX = RECEIVER_PICKER_BACK_BOX
         # The Globe keeps every command in the same square 2-column rail
         # launcher as the rest of the app: LIST, VIEW, ZOOM +, ZOOM −, BACK.
         # Nothing floats over the map any more.
@@ -2486,12 +2487,24 @@ class ReceiverBrowserState:
         )
 
 
-# Source tabs are ordered KIWI, OPENWEBRX, LOCAL, FM-DX, ALL. Their wide,
+# Source tabs are ordered LAN, KIWI, OPENWEBRX, FM-DX, ALL. Their wide,
 # single-column treatment makes selection obvious and uses the rail from the
 # top instead of shrinking the station list with a content header.
 RECEIVER_RAIL_TAB_TOP_GAP = 12
 RECEIVER_RAIL_TAB_HEIGHT = 52
 RECEIVER_RAIL_TAB_GAP = 8
+RECEIVER_PICKER_MAIN_W = 1080
+RECEIVER_PICKER_SIDEBAR_W = 200
+RECEIVER_PICKER_MARGIN = 10
+RECEIVER_PICKER_ACTION_GAP = 8
+RECEIVER_PICKER_ACTION_SIZE = 86
+RECEIVER_PICKER_ACTION_TOP = 470
+RECEIVER_PICKER_BACK_BOX = (
+    RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN,
+    722,
+    RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_SIDEBAR_W - RECEIVER_PICKER_MARGIN,
+    790,
+)
 
 
 def receiver_source_segments():
@@ -2500,7 +2513,7 @@ def receiver_source_segments():
     # This helper also seeds module-level placeholder geometry before the LCD
     # constants later in this file are declared. The fallbacks are the native
     # 1280x800 values; configure_output() recomputes the authoritative boxes.
-    rail_x0 = globals().get("LCD_NAV_X0", 1024)
+    rail_x0 = RECEIVER_PICKER_MAIN_W
     logical_w = globals().get("LOGICAL_W", 1280)
     header_h = globals().get("LCD_DRAWER_HEADER_H", 64)
     x0, x1 = rail_x0 + 10, logical_w - 10
@@ -2521,8 +2534,17 @@ def receiver_source_segments():
 
 
 def receiver_picker_command_boxes():
-    """Keep receiver actions in their original grid immediately above Back."""
-    return tuple(lcd_nav_box(index, 5, True) for index in range(4))
+    """Return the receiver browser's square 2x2 action grid."""
+    left = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
+    return tuple(
+        (
+            left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
+            left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
+        )
+        for index in range(4)
+    )
 
 
 def boxes_overlap(a, b):
@@ -3038,8 +3060,8 @@ def station_distance_miles(station, home_profile):
 def format_station_distance(station, home_profile):
     distance_miles = station_distance_miles(station, home_profile)
     if distance_miles is None:
-        return "DIST ?"
-    return f"{int(round(distance_miles)):,} MI"
+        return "DISTANCE: ?"
+    return f"DISTANCE: {int(round(distance_miles)):,} mi"
 
 
 def _frequency_id_text(value):
@@ -3367,29 +3389,6 @@ def station_health_summary(entry, fresh):
     return f"AUDIO: {audio} · WATERFALL: {waterfall} · TESTED: {age}"
 
 
-def station_stream_pill(text_cache, x, y, stream, entry, fresh, pending=False):
-    """Draw one compact framed Audio/Waterfall health annunciator."""
-    if pending:
-        state, fill, edge, ink = "WAIT", (31, 72, 68, 235), (111, 224, 189, 245), (213, 255, 233)
-    elif not fresh:
-        state, fill, edge, ink = "UNTESTED", (36, 42, 47, 225), (120, 133, 141, 210), (185, 196, 201)
-    elif entry.get(stream) is True:
-        state, fill, edge, ink = "READY", (19, 67, 51, 235), (75, 210, 143, 240), (194, 255, 222)
-    else:
-        state, fill, edge, ink = "WAIT", (74, 49, 29, 235), (225, 173, 90, 235), (255, 224, 178)
-    label = f"{stream.upper()}  {state}"
-    size = 14
-    width = text_cache.texture(label, size, (255, 255, 255), bold=True)[1] + 22
-    height = 28
-    draw_logical_rect(x, y, x + width, y + height, fill)
-    draw_logical_line(x, y, x + width, y, edge, 1)
-    draw_logical_line(x, y + height, x + width, y + height, edge, 1)
-    draw_logical_line(x, y, x, y + height, edge, 1)
-    draw_logical_line(x + width, y, x + width, y + height, edge, 1)
-    draw_text(text_cache, x + width / 2, y + height / 2 + 1, label, ink, size, True, False, "cm")
-    return width
-
-
 def parse_public_directory(page):
     """Extract active receiver entries from the official public directory HTML."""
     stations = []
@@ -3541,7 +3540,7 @@ FMDX_LEARNED_STATIONS = fmdx.load_station_cache(FMDX_STATION_CACHE)
 FMDX_STATION_CACHE_LOCK = threading.Lock()
 
 
-def build_receiver_catalog(kiwi_rows=None, fmdx_receivers=None):
+def build_receiver_catalog(kiwi_rows=None, openwebrx_rows=None, fmdx_receivers=None):
     """Build the one receiver catalog shared by the list, map, and health.
 
     The legacy cache files stay as input adapters during migration; both the
@@ -3549,6 +3548,8 @@ def build_receiver_catalog(kiwi_rows=None, fmdx_receivers=None):
     """
     if kiwi_rows is None:
         kiwi_rows = load_public_stations()
+    if openwebrx_rows is None:
+        openwebrx_rows = openwebrx_directory.load_directory()
     if fmdx_receivers is None:
         fmdx_receivers = FMDX_RECEIVERS
     # The built-in OpenWebRX/local metadata is part of the one catalog. The
@@ -3556,6 +3557,7 @@ def build_receiver_catalog(kiwi_rows=None, fmdx_receivers=None):
     # provides, so the LAN Kiwi never appears twice.
     return receiver_catalog.merge_catalogs(
         receiver_catalog.records_from_kiwi_directory(kiwi_rows),
+        tuple(receiver_catalog.normalize_receiver(row) for row in openwebrx_rows),
         receiver_catalog.load_static_sources(),
         receiver_catalog.records_from_fmdx_directory(fmdx_receivers),
     )
@@ -5822,6 +5824,44 @@ def draw_logical_rect(x0, y0, x1, y1, color):
     GL.glEnable(GL.GL_TEXTURE_2D)
 
 
+def rounded_rect_points(x0, y0, x1, y1, radius=8, corner_segments=6):
+    """Return a clockwise rounded-rectangle perimeter in logical pixels."""
+    radius = max(0.0, min(float(radius), (x1 - x0) / 2.0, (y1 - y0) / 2.0))
+    if radius <= 0:
+        return ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    points = []
+    for cx, cy, start in (
+        (x1 - radius, y0 + radius, -math.pi / 2),
+        (x1 - radius, y1 - radius, 0),
+        (x0 + radius, y1 - radius, math.pi / 2),
+        (x0 + radius, y0 + radius, math.pi),
+    ):
+        for step in range(corner_segments + 1):
+            angle = start + (math.pi / 2) * step / corner_segments
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return tuple(points)
+
+
+def draw_logical_rounded_rect(x0, y0, x1, y1, radius, fill, outline=None, width=1):
+    """Draw one filled rounded rectangle and optional antialiased outline."""
+    points = rounded_rect_points(x0, y0, x1, y1, radius)
+    GL.glDisable(GL.GL_TEXTURE_2D)
+    GL.glColor4f(*rgba(fill))
+    GL.glBegin(GL.GL_TRIANGLE_FAN)
+    GL.glVertex2f(*logical_to_native((x0 + x1) / 2, (y0 + y1) / 2))
+    for point in points + (points[0],):
+        GL.glVertex2f(*logical_to_native(*point))
+    GL.glEnd()
+    if outline is not None:
+        GL.glColor4f(*rgba(outline))
+        GL.glLineWidth(width)
+        GL.glBegin(GL.GL_LINE_LOOP)
+        for point in points:
+            GL.glVertex2f(*logical_to_native(*point))
+        GL.glEnd()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+
+
 def draw_logical_square_points(points, radius, color):
     """Draw compact graph marks in one GL call instead of one call per dot."""
     if not points:
@@ -7621,9 +7661,9 @@ class SpectrumLayerCache:
 # immediate, high-contrast press feedback.  It is session-only display state;
 # actions still commit on release through the existing gesture handlers.
 UI_PRESS_POINT = None
-UI_PRESSED_FILL = (74, 205, 156, 255)
-UI_PRESSED_TEXT = (5, 26, 21)
-UI_PRESSED_EDGE = (224, 255, 242, 255)
+UI_PRESSED_FILL = (0, 229, 255, 255)
+UI_PRESSED_TEXT = (18, 18, 18)
+UI_PRESSED_EDGE = (0, 229, 255, 255)
 
 
 def set_ui_press_point(x=None, y=None):
@@ -8433,32 +8473,25 @@ def draw_fmdx_disclaimer(text_cache, scroll=0.0):
     draw_station_list_frame(
         (x0, y0, x1, y1), STATION_LIST_FILL, FMDX_DISCLAIMER_OUTLINE, 2,
     )
-    marker_y = (y0 + y1) / 2
-    # Use the receiver row's reserved status-glyph lane for a compact warning
-    # marker, keeping title and metadata aligned with every server below it.
-    draw_logical_circle(x0 + 39, marker_y, 17, (91, 66, 25, 255), 28, True)
-    draw_logical_circle(x0 + 39, marker_y, 17, FMDX_DISCLAIMER_OUTLINE, 28)
-    draw_text(
-        text_cache, x0 + 39, marker_y, "!", (255, 225, 168),
-        22, True, False, "cm", family="Liberation Sans",
-    )
-    title_x = x0 + 106
+    theme = RECEIVER_LIST_THEME
+    title_x = x0 + 16
     ok_box = boxes["ok"]
     title = fit_station_text(
         text_cache, FMDX_DISCLAIMER_TITLE, ok_box[0] - title_x - 20,
-        26, True, False, "Liberation Sans",
+        theme.server_name_size, True, False, theme.font_family,
     )
     draw_text(
-        text_cache, title_x, marker_y - 16, title,
-        (202, 209, 213), 26, True, False, "lm", family="Liberation Sans",
+        text_cache, title_x, y0 + 42, title,
+        theme.primary_text, theme.server_name_size, True, False, "lm", family=theme.font_family,
     )
     detail = "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER"
     detail = fit_station_text(
-        text_cache, detail, x1 - title_x - 20, 16, False, False, "Liberation Sans",
+        text_cache, detail, x1 - title_x - 20, theme.label_size,
+        False, False, theme.font_family,
     )
     draw_text(
-        text_cache, title_x, marker_y + 17, detail,
-        (115, 124, 130), 16, False, False, "lm", family="Liberation Sans",
+        text_cache, title_x, y1 - 29, detail,
+        theme.secondary_text, theme.label_size, False, False, "lm", family=theme.font_family,
     )
     draw_radio_option(text_cache, ok_box, "OK", False)
 
@@ -16149,19 +16182,171 @@ def receiver_display_span(zoom, receiver_type):
     )
 
 
-STATION_LIST_FILL = (20, 23, 26, 205)
-STATION_LIST_OUTLINE = (83, 88, 92, 135)
+@dataclass(frozen=True)
+class ReceiverListTheme:
+    """One enforceable visual contract for receiver rows and their sidebar."""
+
+    main_background: tuple = (18, 18, 18, 255)
+    sidebar_background: tuple = (26, 26, 26, 255)
+    row_background: tuple = (18, 18, 18, 255)
+    selected_background: tuple = (30, 30, 30, 255)
+    primary_text: tuple = (255, 255, 255)
+    secondary_text: tuple = (160, 160, 160)
+    focus: tuple = (0, 229, 255, 255)
+    row_outline: tuple = (66, 66, 66, 210)
+    ready: tuple = (0, 230, 118, 255)
+    waiting: tuple = (255, 179, 0, 255)
+    untested: tuple = (33, 33, 33, 255)
+    untested_text: tuple = (117, 117, 117)
+    kiwi: tuple = (0, 137, 123, 255)
+    openwebrx: tuple = (41, 121, 255, 255)
+    lan: tuple = (0, 230, 118, 255)
+    fmdx: tuple = (255, 109, 0, 255)
+    label_size: int = 14
+    server_name_size: int = 18
+    font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
+
+
+@dataclass(frozen=True)
+class ReceiverBadge:
+    label: str
+    fill: tuple
+    text: tuple
+
+
+RECEIVER_LIST_THEME = ReceiverListTheme()
+STATION_LIST_FILL = RECEIVER_LIST_THEME.row_background
+STATION_LIST_OUTLINE = RECEIVER_LIST_THEME.row_outline
 
 
 def draw_station_list_frame(box, fill, outline, border_width=1):
     """Draw the common full-border frame used by every receiver-list row."""
-    x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    for ax0, ay0, ax1, ay1 in (
-        (x0, y0, x1, y0), (x0, y1, x1, y1),
-        (x0, y0, x0, y1), (x1, y0, x1, y1),
-    ):
-        draw_logical_line(ax0, ay0, ax1, ay1, outline, border_width)
+    draw_logical_rounded_rect(*box, 8, fill, outline, border_width)
+
+
+def fit_receiver_name(text_cache, text, max_width, theme=RECEIVER_LIST_THEME):
+    """Fit a server name with the requested three-dot truncation marker."""
+    text = str(text)
+    font = theme.font_family
+    size = theme.server_name_size
+    if text_cache.texture(text, size, (255, 255, 255), bold=True, family=font)[1] <= max_width:
+        return text
+    suffix = "..."
+    while text and text_cache.texture(text + suffix, size, (255, 255, 255), bold=True, family=font)[1] > max_width:
+        text = text[:-1]
+    return text + suffix if text else suffix
+
+
+def receiver_health_badge(label, entry, key, fresh, pending=False, theme=RECEIVER_LIST_THEME):
+    if pending or (fresh and entry.get(key) is not True):
+        return ReceiverBadge(label, theme.waiting, (18, 18, 18))
+    if not fresh:
+        return ReceiverBadge(label, theme.untested, theme.untested_text)
+    return ReceiverBadge(label, theme.ready, (18, 18, 18))
+
+
+def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LIST_THEME):
+    if local_receiver:
+        return ReceiverBadge("LAN", theme.lan, (18, 18, 18))
+    key = str(receiver_type).casefold()
+    if key == "openwebrx":
+        return ReceiverBadge("OPENWEBRX", theme.openwebrx, theme.primary_text)
+    if key == "fmdx":
+        return ReceiverBadge("FMDX", theme.fmdx, theme.primary_text)
+    return ReceiverBadge("KIWI", theme.kiwi, theme.primary_text)
+
+
+def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME):
+    """Draw a uniform solid rounded pill and return its occupied width."""
+    width = text_cache.texture(
+        badge.label, theme.label_size, (255, 255, 255), bold=True,
+        family=theme.font_family,
+    )[1] + 24
+    height = 28
+    draw_logical_rounded_rect(x, y, x + width, y + height, 7, badge.fill)
+    draw_text(
+        text_cache, x + width / 2, y + height / 2 + 1, badge.label,
+        badge.text, theme.label_size, True, False, "cm", family=theme.font_family,
+    )
+    return width
+
+
+def receiver_source_label(source):
+    return {"local": "LAN", "openwebrx": "OPENWEBRX", "fmdx": "FMDX"}.get(source, str(source).upper())
+
+
+def draw_receiver_sidebar_header(text_cache, theme=RECEIVER_LIST_THEME):
+    draw_logical_rect(RECEIVER_PICKER_MAIN_W, 0, LOGICAL_W, 64, theme.sidebar_background)
+    draw_text(
+        text_cache, (RECEIVER_PICKER_MAIN_W + LOGICAL_W) / 2, 32, "RECEIVERS",
+        theme.primary_text, 16, True, False, "cm", family=theme.font_family,
+    )
+
+
+def draw_receiver_action_icon(box, kind, color):
+    """Draw the four receiver actions with small dependency-free line icons."""
+    x0, y0, x1, _y1 = box
+    cx, cy = (x0 + x1) / 2, y0 + 30
+    if kind == "globe":
+        draw_logical_circle(cx, cy, 11, color, 24, True)
+        draw_logical_line(cx - 11, cy, cx + 11, cy, color, 1)
+        draw_logical_line(cx, cy - 11, cx, cy + 11, color, 1)
+    elif kind == "search":
+        draw_logical_circle(cx - 3, cy - 3, 8, color, 22, True)
+        draw_logical_line(cx + 3, cy + 3, cx + 11, cy + 11, color, 2)
+    elif kind == "sort":
+        draw_logical_line(cx - 7, cy - 10, cx - 7, cy + 10, color, 2)
+        draw_logical_line(cx - 12, cy - 5, cx - 7, cy - 10, color, 2)
+        draw_logical_line(cx - 2, cy - 5, cx - 7, cy - 10, color, 2)
+        draw_logical_line(cx + 7, cy - 10, cx + 7, cy + 10, color, 2)
+        draw_logical_line(cx + 2, cy + 5, cx + 7, cy + 10, color, 2)
+        draw_logical_line(cx + 12, cy + 5, cx + 7, cy + 10, color, 2)
+    else:
+        points = []
+        for index in range(10):
+            angle = -math.pi / 2 + index * math.pi / 5
+            radius = 11 if index % 2 == 0 else 5
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+        draw_logical_polyline(points + [points[0]], color, 2)
+
+
+def draw_receiver_action_button(text_cache, box, label, kind, selected=False, theme=RECEIVER_LIST_THEME):
+    pressed = ui_button_pressed(box)
+    active = pressed or selected
+    fill = theme.focus if active else (38, 38, 38, 255)
+    edge = theme.focus if active else (88, 88, 88, 255)
+    ink = (18, 18, 18) if active else theme.primary_text
+    draw_logical_rounded_rect(*box, 8, fill, edge, 2 if active else 1)
+    draw_receiver_action_icon(box, kind, ink)
+    draw_text(
+        text_cache, (box[0] + box[2]) / 2, box[3] - 18, label, ink,
+        theme.label_size, True, False, "cm", family=theme.font_family,
+    )
+
+
+def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
+    pressed = ui_button_pressed(box)
+    active = pressed or selected
+    fill = theme.focus if active else (38, 38, 38, 255)
+    edge = theme.focus if active else (88, 88, 88, 255)
+    ink = (18, 18, 18) if active else theme.primary_text
+    draw_logical_rounded_rect(*box, 7, fill, edge, 2 if active else 1)
+    draw_text(
+        text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+        label, ink, theme.label_size, True, False, "cm", family=theme.font_family,
+    )
+
+
+def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
+    pressed = ui_button_pressed(box)
+    fill = theme.focus if pressed else (38, 38, 38, 255)
+    edge = theme.focus if pressed else (88, 88, 88, 255)
+    ink = (18, 18, 18) if pressed else theme.primary_text
+    draw_logical_rounded_rect(*box, 8, fill, edge, 2 if pressed else 1)
+    draw_text(
+        text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+        "← BACK", ink, theme.label_size, True, False, "cm", family=theme.font_family,
+    )
 
 
 def draw_station_picker(
@@ -16169,46 +16354,37 @@ def draw_station_picker(
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
     show_fmdx_notice=False,
 ):
+    theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
+    draw_logical_rect(0, 0, x1, LOGICAL_H, theme.main_background)
     if LCD_800_MODE:
-        # Match the Home screen: stations occupy the left canvas while the
-        # right rail remains a stable column of generously sized commands.
-        draw_logical_rect(x1, 0, LOGICAL_W, LOGICAL_H, (8, 15, 22, 255))
-        draw_logical_line(x1, 0, x1, LOGICAL_H, (83, 112, 119, 180), 1)
+        draw_logical_rect(x1, 0, LOGICAL_W, LOGICAL_H, theme.sidebar_background)
     else:
-        draw_logical_rect(794, 0, LOGICAL_W, LOGICAL_H, (18, 21, 24, 255))
-        draw_logical_line(794, 0, 794, LOGICAL_H, (138, 143, 147, 185), 1)
+        draw_logical_rect(794, 0, LOGICAL_W, LOGICAL_H, theme.sidebar_background)
     if LCD_800_MODE:
-        draw_picker_button(text_cache, PICKER_MAP_MODE_BOX, "GLOBE", 18, selected=False)
-    draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 19 if LCD_800_MODE else 23)
-    first_visible = int(math.floor(scroll)) + 1
-    last_visible = min(len(stations), int(math.ceil(scroll)) + PICKER_COLS * PICKER_ROWS)
-    draw_text(text_cache, (PICKER_SEARCH_BOX[0] + PICKER_SEARCH_BOX[2]) / 2, PICKER_SEARCH_BOX[3] - 14,
-              f"{first_visible}–{last_visible} / {len(stations)}", (198, 202, 205), 12, False, False, "cm")
-    draw_picker_two_line_button(
-        text_cache,
-        PICKER_SORT_BOX,
-        "SORT",
-        "LOCATION" if sort_mode == "location" else "NAME",
-        14 if LCD_800_MODE else 20,
-        False,
-    )
-    if LCD_800_MODE:
-        # Single-select source tabs lead the right rail. Selected is a durable
-        # state, so it uses the same high-contrast cyan/dark treatment as a
-        # pressed control instead of a subtle gray variation.
+        draw_receiver_action_button(text_cache, PICKER_MAP_MODE_BOX, "GLOBE", "globe")
+        draw_receiver_action_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", "search")
+        draw_receiver_action_button(text_cache, PICKER_SORT_BOX, "SORT", "sort")
+        draw_receiver_action_button(
+            text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", "favorite",
+            route_filter == "favorites",
+        )
         for source, box in PICKER_SOURCE_SEGMENT_BOXES:
-            draw_picker_button(text_cache, box, source.upper(), 16, route_filter == source)
-        draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
-        if not stations:
-            # An empty segment is a real answer, not a broken browser.
-            draw_text(
-                text_cache, DESKTOP_1280_MAIN_W / 2, 190,
-                "NO RECEIVERS IN THIS SOURCE", (150, 167, 172), 16, True, False, "cm",
-                family="Liberation Sans",
+            draw_receiver_filter_button(
+                text_cache, box, receiver_source_label(source), route_filter == source, theme,
             )
-    draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
+        if not stations:
+            draw_text(
+                text_cache, RECEIVER_PICKER_MAIN_W / 2, 190,
+                "NO RECEIVERS IN THIS SOURCE", theme.secondary_text, 14, True, False, "cm",
+                family=theme.font_family,
+            )
+        draw_receiver_sidebar_header(text_cache, theme)
+        draw_receiver_back_button(text_cache, PICKER_EXIT_BOX, theme)
+    else:
+        draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 23)
+        draw_picker_two_line_button(text_cache, PICKER_SORT_BOX, "SORT", sort_mode.upper(), 20)
+        draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
 
     leading_rows = 1 if show_fmdx_notice else 0
     if show_fmdx_notice:
@@ -16231,120 +16407,53 @@ def draw_station_picker(
             displayed_health["waterfall"] = displayed_health.get("audio")
         checked = entry_health.get("checked", 0)
         health_fresh = time.time() - checked <= 86400
-        active = health_fresh and displayed_health.get("audio") is True and displayed_health.get("waterfall") is True
-        if pending:
-            # Retain the selected tile while the two Kiwi streams establish.
-            # The inset/bright outline reads as a real pressed touch state.
-            fill = (22, 82, 65, 242)
-            outline = (112, 255, 188, 248)
-        elif selected:
-            fill = (72, 77, 81, 235)
-            outline = (212, 216, 219, 230)
-        elif local_receiver:
-            # The LAN Kiwi is a dependable, operator-owned starting point.
-            # Its restrained teal treatment distinguishes it without making
-            # the receiver list feel like a set of advertising badges.
-            fill = (13, 50, 49, 230)
-            outline = (83, 214, 184, 210)
-        elif active:
-            fill = (30, 34, 38, 220)
-            outline = (136, 142, 146, 170)
-        else:
-            fill = STATION_LIST_FILL
-            outline = STATION_LIST_OUTLINE
         pressed = ui_button_pressed(box)
-        if pressed:
-            fill, outline = UI_PRESSED_FILL, UI_PRESSED_EDGE
-        draw_station_list_frame(box, fill, outline)
-        if pending:
-            draw_logical_rect(box[0] + 3, box[1] + 3, box[2] - 3, box[1] + 8, (112, 255, 188, 230))
-        marker_y = (box[1] + box[3]) / 2
-        draw_station_health_icons(text_cache, box[0] + 17, marker_y, displayed_health, health_fresh)
-        generic_name = "0-30" in name.lower() and "sdr" in name.lower()
-        if generic_name:
-            # Keep the useful suffix for otherwise generic directory labels;
-            # e.g. the two Julussdalen receivers must not both appear only as
-            # "Elverum, Norway" when their #1/#2 endpoints differ.
-            identifier = re.sub(r"^0-30\s*mhz\s*kiwisdr\s*,?\s*", "", name, flags=re.I)
-            identifier = re.split(r"\s+-\s+", identifier, maxsplit=1)[0].strip()
-            identifier = identifier.split(",", 1)[0].strip()
-            station_label = f"{location}  ·  {identifier}" if identifier else location
-        else:
-            station_label = f"{name}  ·  {location}"
-        # Gray health symbols mean unverified or recently unavailable, not a
-        # disabled row. Keep every directory entry equally readable and tappable.
-        title_color = (232, 255, 243) if pending else ((157, 249, 214) if local_receiver else ((238, 240, 242) if active or selected else (202, 209, 213)))
-        host_color = (156, 226, 197) if pending else ((108, 209, 186) if local_receiver else ((129, 134, 138) if active or selected else (115, 124, 130)))
-        capacity_color = (211, 255, 232) if pending else ((164, 237, 211) if local_receiver else ((198, 202, 205) if active or selected else (158, 167, 172)))
-        if pressed:
-            title_color = host_color = capacity_color = UI_PRESSED_TEXT
-        # Reserve a fixed, generously padded glyph lane. This prevents long
-        # station titles from ever colliding with the audio/waterfall symbols.
-        single_column_lcd = LCD_800_MODE and PICKER_COLS == 1
-        title_x = box[0] + (106 if single_column_lcd else 90)
-        title_size = 26 if single_column_lcd else 20
-        station_label = fit_station_text(text_cache, station_label, box[2] - title_x - 90, title_size, True)
-        draw_text(text_cache, title_x, marker_y - (16 if single_column_lcd else 10), station_label, title_color, title_size, True, False, "lm")
-        if local_receiver:
-            badge_x0 = box[2] - (133 if single_column_lcd else 105)
-            badge_y0 = box[1] + 12
-            badge_x1 = box[2] - 14
-            badge_y1 = badge_y0 + (25 if single_column_lcd else 20)
-            draw_logical_rect(badge_x0, badge_y0, badge_x1, badge_y1, (28, 112, 91, 228))
-            draw_text(text_cache, (badge_x0 + badge_x1) / 2, (badge_y0 + badge_y1) / 2, "LOCAL", (222, 255, 237), 13 if single_column_lcd else 10, True, False, "cm", family="Liberation Sans")
-        limit_label = receiver_limit_label(entry_health)
-        route_label = receiver_route_label(server, station_receiver_type(station))
+        focused = selected or pending
+        fill = theme.focus if pressed else (theme.selected_background if focused else theme.row_background)
+        outline = theme.focus if focused or pressed else theme.row_outline
+        if focused and not pressed:
+            draw_logical_rounded_rect(*box, 8, fill, (0, 229, 255, 80), 5)
+        draw_station_list_frame(box, fill, outline, 2 if focused or pressed else 1)
+        text_color = (18, 18, 18) if pressed else theme.primary_text
+        secondary_color = (18, 18, 18) if pressed else theme.secondary_text
+        capacity = (
+            f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
+            if listener_used is not None and listener_total is not None else "FREE ?"
+        )
+        left = box[0] + 16
+        right = box[2] - 16
+        station_label = " · ".join(part for part in (str(name).strip(), str(location).strip()) if part)
+        capacity_width = text_cache.texture(
+            capacity, theme.label_size, (255, 255, 255), bold=False,
+            family=theme.font_family,
+        )[1]
+        station_label = fit_receiver_name(
+            text_cache, station_label, max(60, right - left - capacity_width - 28), theme,
+        )
+        draw_text(
+            text_cache, left, box[1] + 42, station_label, text_color,
+            theme.server_name_size, True, False, "lm", family=theme.font_family,
+        )
+        draw_text(
+            text_cache, right, box[1] + 42, capacity, secondary_color,
+            theme.label_size, False, False, "rm", family=theme.font_family,
+        )
         distance_label = format_station_distance(station, home_profile)
-        connection_label = {
-            "connecting": "CONNECTING",
-            "retrying": "RETRYING",
-            "waterfall_audio_retry": "W/F WAIT",
-            "no_waterfall": "NO W/F",
-            "failed": "UNAVAILABLE",
-        }.get(connection_status, "CONNECTING") if pending else ""
-        pill_y = marker_y + (3 if single_column_lcd else 1)
-        audio_pill_w = station_stream_pill(text_cache, title_x, pill_y, "audio", displayed_health, health_fresh, pending)
-        waterfall_pill_x = title_x + audio_pill_w + 8
-        waterfall_pill_w = station_stream_pill(
-            text_cache, waterfall_pill_x, pill_y, "waterfall", displayed_health, health_fresh, pending
+        badge_y = box[3] - 43
+        badge_x = left
+        badges = (
+            receiver_health_badge("AUDIO", displayed_health, "audio", health_fresh, pending, theme),
+            receiver_health_badge("WATERFALL", displayed_health, "waterfall", health_fresh, pending, theme),
+            receiver_source_badge(receiver_type, local_receiver, theme),
         )
-        status_x = waterfall_pill_x + waterfall_pill_w + 14
-        status_label = " · ".join(
-            part for part in ((f"ROUTE: {route_label}", connection_label) if pending else (f"ROUTE: {route_label}", limit_label, distance_label)) if part
+        if pressed:
+            badges = tuple(ReceiverBadge(badge.label, (18, 18, 18, 255), theme.focus) for badge in badges)
+        for badge in badges:
+            badge_x += draw_receiver_badge(text_cache, badge_x, badge_y, badge, theme) + 8
+        draw_text(
+            text_cache, right, badge_y + 14, distance_label, secondary_color,
+            theme.label_size, False, False, "rm", family=theme.font_family,
         )
-        status_size = 16 if single_column_lcd else (14 if pending else 13)
-        status_label = fit_station_text(text_cache, status_label, box[2] - status_x - 18, status_size, pending)
-        draw_text(text_cache, status_x, marker_y + (17 if single_column_lcd else 11), status_label, host_color, status_size, pending, False, "lm")
-        if not local_receiver:
-            capacity = (
-                f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
-                if listener_used is not None and listener_total is not None else "FREE ?"
-            )
-            draw_text(text_cache, box[2] - 20, marker_y - (16 if single_column_lcd else 10), capacity, capacity_color, 18 if single_column_lcd else 14, True, True, "rm")
-    draw_sidebar_header(text_cache, "RECEIVERS")
-
-
-def station_health_color(entry, key, fresh):
-    if not fresh or entry.get(key) is not True:
-        return (112, 117, 121, 255)
-    return (72, 194, 104, 255)
-
-
-def draw_station_health_icons(text_cache, x, y, entry, fresh):
-    """Draw separate shape-first audio and waterfall availability indicators."""
-    audio = station_health_color(entry, "audio", fresh)
-    waterfall = station_health_color(entry, "waterfall", fresh)
-    # Speaker: cone plus two compact sound-wave arcs.
-    draw_logical_line(x - 8, y, x - 3, y, audio, 3)
-    draw_logical_line(x - 3, y, x + 3, y - 6, audio, 3)
-    draw_logical_line(x - 3, y, x + 3, y + 6, audio, 3)
-    draw_logical_line(x + 3, y - 6, x + 3, y + 6, audio, 3)
-    draw_logical_line(x + 8, y - 5, x + 12, y, audio, 2)
-    draw_logical_line(x + 12, y, x + 8, y + 5, audio, 2)
-    # Waterfall: descending intensity bars, visually distinct from the speaker.
-    wx = x + 39
-    for offset, height in ((0, 4), (5, 7), (10, 10)):
-        draw_logical_line(wx + offset, y - height / 2, wx + offset, y + height / 2, waterfall, 3)
 
 
 def smeter_segment_position(dbm):

@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 # Browser segments, in priority order.  ``all`` is the combined view and is
 # always selected last so the five segments remain readable on 1280x800.
-SOURCE_FILTERS = ("kiwi", "openwebrx", "local", "fmdx", "all")
+SOURCE_FILTERS = ("local", "kiwi", "openwebrx", "fmdx", "all")
 SOURCE_PRIORITY = {name: index for index, name in enumerate(SOURCE_FILTERS[:-1])}
 PROTOCOLS = ("kiwi", "openwebrx", "local", "fmdx")
 
@@ -431,7 +431,7 @@ def records_from_static_sources(path=None) -> tuple:
 
 
 def sort_receivers(records: Iterable[ReceiverRecord]) -> tuple:
-    """Stable priority order: Kiwi, OpenWebRX, Local, FM-DX."""
+    """Stable priority order: LAN, Kiwi, OpenWebRX, FM-DX."""
     def key(record: ReceiverRecord):
         group = record.source_group if record.source_group in SOURCE_PRIORITY else record.protocol
         return SOURCE_PRIORITY.get(group, len(SOURCE_FILTERS))
@@ -516,7 +516,7 @@ def migrate_remembered_view(payload: Mapping) -> dict:
 
 
 def self_test() -> None:
-    assert SOURCE_FILTERS == ("kiwi", "openwebrx", "local", "fmdx", "all")
+    assert SOURCE_FILTERS == ("local", "kiwi", "openwebrx", "fmdx", "all")
     caps = ReceiverCapabilities.fixed_audio("fmdx", "FM-DX")
     assert caps.decide("passband").message == FMDX_FIXED_PASSBAND_MESSAGE
     record = normalize_receiver({

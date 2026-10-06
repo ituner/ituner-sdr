@@ -8,8 +8,8 @@ import openwebrx_client as owrx  # noqa: E402
 
 
 class ReceiverCapabilityTests(unittest.TestCase):
-    def test_source_order_prioritizes_kiwi_and_openwebrx(self):
-        self.assertEqual(catalog.SOURCE_FILTERS, ("kiwi", "openwebrx", "local", "fmdx", "all"))
+    def test_source_order_matches_receiver_sidebar(self):
+        self.assertEqual(catalog.SOURCE_FILTERS, ("local", "kiwi", "openwebrx", "fmdx", "all"))
 
     def test_fixed_passband_returns_an_explanation(self):
         caps = catalog.ReceiverCapabilities.fixed_audio("fmdx", "FM-DX")
@@ -96,7 +96,7 @@ class CatalogMergeTests(unittest.TestCase):
                          {"kiwi", "openwebrx", "local", "fmdx"})
         self.assertEqual(len({item.id for item in merged}), len(merged))
         self.assertEqual([item.protocol for item in merged],
-                         ["kiwi", "openwebrx", "local", "fmdx"])
+                         ["local", "kiwi", "openwebrx", "fmdx"])
 
     def test_openwebrx_endpoint_is_not_classified_as_kiwi(self):
         record = catalog.normalize_receiver({
@@ -131,7 +131,8 @@ class CatalogMergeTests(unittest.TestCase):
         # The static LAN Kiwi stays protocol="kiwi" but lands in the local segment.
         self.assertEqual({item.source_group for item in loaded},
                          {"kiwi", "openwebrx", "local", "fmdx"})
-        self.assertEqual([item.protocol for item in loaded[:2]], ["kiwi", "openwebrx"])
+        self.assertEqual([item.source_group for item in loaded[:3]],
+                         ["local", "kiwi", "openwebrx"])
 
     def test_legacy_row_adapter_round_trips_trailing_fields(self):
         record = catalog.normalize_receiver({

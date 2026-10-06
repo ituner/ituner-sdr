@@ -295,11 +295,11 @@ class BoardLayoutTests(unittest.TestCase):
     def test_receiver_browser_opens_the_globe_not_a_map(self):
         labels = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
-             patch.object(ui, 'draw_picker_button',
+             patch.object(ui, 'draw_receiver_action_button',
                           side_effect=lambda _c, _b, label, *_a, **_k: labels.append(str(label))), \
-             patch.object(ui, 'draw_picker_two_line_button'), \
-             patch.object(ui, 'draw_radio_close_button'), patch.object(ui, 'draw_text'), \
-             patch.object(ui, 'draw_station_health_icons'):
+             patch.object(ui, 'draw_receiver_filter_button'), \
+             patch.object(ui, 'draw_receiver_sidebar_header'), \
+             patch.object(ui, 'draw_receiver_back_button'), patch.object(ui, 'draw_text'):
             ui.draw_station_picker(None, [], 0, "", "", "location", {}, None, None, "kiwi", None)
         self.assertIn("GLOBE", labels)
         self.assertNotIn("MAP", labels)
@@ -318,7 +318,7 @@ class BoardLayoutTests(unittest.TestCase):
         commands = [ui.PICKER_MAP_MODE_BOX, ui.PICKER_SEARCH_BOX,
                     ui.PICKER_SORT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX]
         back = ui.PICKER_EXIT_BOX
-        self.assertEqual(commands, [ui.lcd_nav_box(index, 5, True) for index in range(4)])
+        self.assertEqual(commands, list(ui.receiver_picker_command_boxes()))
         self.assertTrue(all(box[0] == tabs[0][0] and box[2] == tabs[0][2] for box in tabs))
         self.assertTrue(all(box[2] - box[0] > box[3] - box[1] for box in tabs))
         self.assertLess(tabs[-1][3], min(box[1] for box in commands))
@@ -505,10 +505,13 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
         ui.configure_output(True)
         ui.configure_popup_layout()
         expected = ui.lcd_drawer_back_box()
-        for box in (ui.TEST_BACK_BOX, ui.PICKER_EXIT_BOX, ui.RADIOGARDEN_EXIT_BOX,
+        for box in (ui.TEST_BACK_BOX, ui.RADIOGARDEN_EXIT_BOX,
                     ui.RTL_LAB_BACK_BOX, ui.FONT_LAB_BACK_BOX, ui.WSPR_EXPANDED_LOG_BACK_BOX,
                     ui.network_panel_boxes()["back"]):
             self.assertEqual(box, expected)
+        self.assertEqual(ui.PICKER_EXIT_BOX, ui.RECEIVER_PICKER_BACK_BOX)
+        self.assertEqual(ui.PICKER_EXIT_BOX[1:], expected[1:])
+        self.assertGreaterEqual(ui.PICKER_EXIT_BOX[0], ui.RECEIVER_PICKER_MAIN_W)
         for count in (2, 7, 8):
             for index in range(count - 1):
                 self.assertLess(ui.lcd_nav_box(index, count, True)[3], expected[1])
@@ -1022,9 +1025,10 @@ class ReceiverBrowserEmptyStateTests(unittest.TestCase):
     def test_empty_source_renders_the_shared_empty_text(self):
         texts = []
         with patch.object(ui, "draw_logical_rect"), patch.object(ui, "draw_logical_line"), \
-             patch.object(ui, "draw_picker_button"), \
-             patch.object(ui, "draw_picker_two_line_button"), \
-             patch.object(ui, "draw_radio_close_button"), \
+             patch.object(ui, "draw_receiver_action_button"), \
+             patch.object(ui, "draw_receiver_filter_button"), \
+             patch.object(ui, "draw_receiver_sidebar_header"), \
+             patch.object(ui, "draw_receiver_back_button"), \
              patch.object(ui, "draw_text",
                           side_effect=lambda _c, _x, _y, text, *_a, **_k: texts.append(str(text))):
             ui.draw_station_picker(None, [], 0, "", "", "location", {}, None, None, "local", None)

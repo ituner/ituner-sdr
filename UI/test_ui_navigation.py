@@ -282,7 +282,7 @@ class ReceiverBrowserTests(unittest.TestCase):
         ui.configure_popup_layout()
         segments = ui.receiver_source_segments()
         self.assertEqual([source for source, _box in segments],
-                         ["kiwi", "openwebrx", "local", "fmdx", "all"])
+                         ["local", "kiwi", "openwebrx", "fmdx", "all"])
         for box in (box for _source, box in segments):
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
@@ -546,6 +546,59 @@ class FmdxDisclaimerTests(unittest.TestCase):
         self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", visible, shown), (False, True))
         # A new process initializes both flags to False.
         self.assertEqual(ui.fmdx_disclaimer_transition("fmdx", False, False), (True, True))
+
+
+class ReceiverListStyleTests(unittest.TestCase):
+    class Cache:
+        @staticmethod
+        def texture(text, _size, _color, **_kwargs):
+            return 0, len(str(text)) * 10, 14
+
+    def setUp(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+
+    def test_receiver_browser_uses_requested_1080_200_split(self):
+        self.assertEqual(ui.PICKER_BOX, (0, 0, 1080, 800))
+        self.assertEqual(ui.LOGICAL_W - ui.PICKER_BOX[2], 200)
+        self.assertTrue(all(box[0] >= 1080 for _source, box in ui.PICKER_SOURCE_SEGMENT_BOXES))
+
+    def test_theme_uses_exact_receiver_palette_and_type_scale(self):
+        theme = ui.RECEIVER_LIST_THEME
+        self.assertEqual(theme.main_background, (18, 18, 18, 255))
+        self.assertEqual(theme.sidebar_background, (26, 26, 26, 255))
+        self.assertEqual(theme.primary_text, (255, 255, 255))
+        self.assertEqual(theme.secondary_text, (160, 160, 160))
+        self.assertEqual(theme.focus, (0, 229, 255, 255))
+        self.assertEqual((theme.label_size, theme.server_name_size), (14, 18))
+
+    def test_badges_share_labels_and_exact_state_colors(self):
+        theme = ui.RECEIVER_LIST_THEME
+        ready = ui.receiver_health_badge("AUDIO", {"audio": True}, "audio", True)
+        waiting = ui.receiver_health_badge("WATERFALL", {"waterfall": False}, "waterfall", True)
+        untested = ui.receiver_health_badge("AUDIO", {}, "audio", False)
+        self.assertEqual((ready.label, ready.fill), ("AUDIO", theme.ready))
+        self.assertEqual((waiting.label, waiting.fill), ("WATERFALL", theme.waiting))
+        self.assertEqual((untested.label, untested.fill, untested.text),
+                         ("AUDIO", theme.untested, theme.untested_text))
+        self.assertEqual(ui.receiver_source_badge("kiwi").fill, theme.kiwi)
+        self.assertEqual(ui.receiver_source_badge("openwebrx").fill, theme.openwebrx)
+        self.assertEqual(ui.receiver_source_badge("fmdx").fill, theme.fmdx)
+        self.assertEqual(ui.receiver_source_badge("kiwi", True).label, "LAN")
+
+    def test_long_server_names_use_three_dot_elision(self):
+        fitted = ui.fit_receiver_name(self.Cache(), "A very long receiver server name", 105)
+        self.assertTrue(fitted.endswith("..."))
+        self.assertLessEqual(len(fitted) * 10, 105)
+
+    def test_selected_filter_is_cyan_with_dark_text(self):
+        box = (1090, 76, 1270, 128)
+        with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
+                mock.patch.object(ui, "draw_text") as text:
+            ui.draw_receiver_filter_button(self.Cache(), box, "LAN", True)
+        rounded.assert_called_once_with(*box, 7, ui.RECEIVER_LIST_THEME.focus,
+                                        ui.RECEIVER_LIST_THEME.focus, 2)
+        self.assertEqual(text.call_args.args[4], (18, 18, 18))
 
 
 if __name__ == "__main__":
