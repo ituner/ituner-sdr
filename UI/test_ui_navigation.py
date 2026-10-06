@@ -692,9 +692,10 @@ class FmdxDisclaimerTests(unittest.TestCase):
         option.assert_not_called()
         self.assertEqual([call[0][3] for call in text_calls], [
             ui.FMDX_DISCLAIMER_TITLE,
-            ui.FMDX_DISCLAIMER_SUBTITLE,
+            *ui.FMDX_DISCLAIMER_SUBTITLE_LINES,
         ])
         self.assertLess(text_calls[0][0][2], text_calls[1][0][2])
+        self.assertLess(text_calls[1][0][2], text_calls[2][0][2])
 
     def test_notice_is_shown_once_per_process_and_resets_on_restart(self):
         visible, shown = ui.fmdx_disclaimer_transition("fmdx", False, False)

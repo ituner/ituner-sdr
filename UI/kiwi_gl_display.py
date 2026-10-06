@@ -8609,8 +8609,9 @@ def draw_fmdx_shared_prompt(text_cache):
 # is not theirs to move by hand. This session-only notice occupies the first
 # receiver-list row instead of interrupting the browser with a modal.
 FMDX_DISCLAIMER_TITLE = "FM-DX SHARED SERVERS"
-FMDX_DISCLAIMER_SUBTITLE = (
-    "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER"
+FMDX_DISCLAIMER_SUBTITLE_LINES = (
+    "FREQUENCY FOLLOWS RECEIVER  ·  TUNING IS SHARED WITH EVERY LISTENER",
+    "MANUAL FREQUENCY CHANGES ARE UNAVAILABLE ON FM-DX SERVERS",
 )
 FMDX_DISCLAIMER_OUTLINE = (222, 170, 84, 235)
 
@@ -8651,14 +8652,16 @@ def draw_fmdx_disclaimer(text_cache, scroll=0.0):
         text_cache, title_x, y0 + 28, title,
         theme.primary_text, theme.server_name_size, True, False, "lm", family=theme.font_family,
     )
-    subtitle = fit_station_text(
-        text_cache, FMDX_DISCLAIMER_SUBTITLE, x1 - title_x - 20, theme.label_size,
-        False, False, theme.font_family,
-    )
-    draw_text(
-        text_cache, title_x, y0 + 56, subtitle,
-        theme.secondary_text, theme.label_size, False, False, "lm", family=theme.font_family,
-    )
+    for index, subtitle_text in enumerate(FMDX_DISCLAIMER_SUBTITLE_LINES):
+        subtitle = fit_station_text(
+            text_cache, subtitle_text, x1 - title_x - 20, theme.label_size,
+            False, False, theme.font_family,
+        )
+        draw_text(
+            text_cache, title_x, y0 + 56 + index * 22, subtitle,
+            theme.secondary_text, theme.label_size, False, False, "lm",
+            family=theme.font_family,
+        )
 
 
 def radio_option_at(
