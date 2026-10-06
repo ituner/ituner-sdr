@@ -2504,7 +2504,7 @@ RECEIVER_PICKER_MARGIN = 10
 # BACK. These dimensions match every other square launcher in the app.
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
-RECEIVER_PICKER_ACTION_TOP = 466
+RECEIVER_PICKER_ACTION_TOP = 478
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
@@ -14725,7 +14725,12 @@ def lcd_nav_top(item_count=None, has_back=False):
     item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
     rows = math.ceil((item_count - int(has_back)) / 2)
     tiles_h = rows * LCD_NAV_TILE_H + (rows - 1) * LCD_NAV_GAP
-    bottom = lcd_drawer_back_box()[1] - 20 if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
+    # The last square row uses the same gutter above BACK as the gaps within
+    # the square grid, so the five-button group reads as one unit.
+    bottom = (
+        lcd_drawer_back_box()[1] - LCD_NAV_GAP
+        if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
+    )
     return max(LCD_NAV_TOP_MIN, bottom - tiles_h)
 
 

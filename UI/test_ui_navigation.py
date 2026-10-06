@@ -691,6 +691,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         back = ui.RECEIVER_PICKER_BACK_BOX
         self.assertEqual(min(box[0] for box in boxes), back[0])
         self.assertEqual(max(box[2] for box in boxes), back[2])
+        self.assertEqual(back[1] - max(box[3] for box in boxes), ui.RECEIVER_PICKER_ACTION_GAP)
 
     def test_receiver_back_label_is_centered_plain_text(self):
         with mock.patch.object(ui, "draw_styled_text_button") as draw:

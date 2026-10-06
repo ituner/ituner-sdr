@@ -279,6 +279,12 @@ class BoardLayoutTests(unittest.TestCase):
             max(ui.RADIOGARDEN_LIST_BOX[2], ui.RADIOGARDEN_VIEW_BOX[2]),
             ui.RADIOGARDEN_EXIT_BOX[2],
         )
+        self.assertEqual(
+            ui.RADIOGARDEN_EXIT_BOX[1] - max(
+                ui.RADIOGARDEN_ZOOM_IN_BOX[3], ui.RADIOGARDEN_ZOOM_OUT_BOX[3],
+            ),
+            ui.LCD_NAV_GAP,
+        )
 
     def test_globe_commands_all_live_in_the_right_rail(self):
         # The Globe's controls (including zoom) belong to the rail, never
