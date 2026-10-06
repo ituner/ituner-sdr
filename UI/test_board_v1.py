@@ -1010,22 +1010,13 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
         self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
 
-    def test_pressed_close_button_supplies_rgba_to_opengl_primitives(self):
+    def test_legacy_close_entry_point_draws_the_shared_text_back_button(self):
         box = (10, 20, 104, 114)
-        primitive_colors = []
-        ui.set_ui_press_point(40, 50)
-
-        def record_line(_x0, _y0, _x1, _y1, color, _width):
-            primitive_colors.append(color)
-            if len(ui.rgba(color)) != 4:
-                raise TypeError("OpenGL color must contain RGBA")
-
-        with patch.object(ui, 'draw_logical_rect'), \
-             patch.object(ui, 'draw_logical_rounded_rect'), \
-             patch.object(ui, 'draw_logical_line', side_effect=record_line):
+        with patch.object(ui, 'draw_styled_text_button') as draw:
             ui.draw_radio_close_button(None, box)
-
-        self.assertTrue(primitive_colors)
+        draw.assert_called_once_with(
+            None, box, 'BACK', size=ui.BACK_BUTTON_FONT_SIZE,
+        )
 
 
 class PassbandDrawerInteractionTests(unittest.TestCase):

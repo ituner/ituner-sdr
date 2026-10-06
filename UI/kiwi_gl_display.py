@@ -8673,17 +8673,17 @@ def draw_radio_option(text_cache, box, label, active):
     draw_styled_text_button(text_cache, box, label, size=font_size, active=active)
 
 
+BACK_BUTTON_FONT_SIZE = 14
+
+
+def draw_shared_back_button(text_cache, box, size=BACK_BUTTON_FONT_SIZE):
+    """Render every navigation return with the Receivers BACK treatment."""
+    draw_styled_text_button(text_cache, box, "BACK", size=size)
+
+
 def draw_radio_close_button(text_cache, box):
-    """A deliberately distinct, icon-led drawer return control."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, pressed=pressed)
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    arrow_color = visual.text
-    # A familiar, text-free back glyph: arrow head plus a generous stem.
-    draw_logical_line(cx + 11, cy, cx - 9, cy, arrow_color, 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy - 8, arrow_color, 2)
-    draw_logical_line(cx - 9, cy, cx - 1, cy + 8, arrow_color, 2)
+    """Compatibility entry point for drawer return controls."""
+    draw_shared_back_button(text_cache, box)
 
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
@@ -16384,7 +16384,7 @@ def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RE
 
 
 def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
-    draw_styled_text_button(text_cache, box, "BACK", size=theme.label_size)
+    draw_shared_back_button(text_cache, box, size=theme.label_size)
 
 
 def draw_station_picker(
