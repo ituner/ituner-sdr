@@ -8075,7 +8075,7 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
 
 
 def draw_favorite_waterfall_button(favorited):
-    """A geometrically regular five-point star for the Home favorite action."""
+    """Draw the Home favorite with the shared cyan active/pressed styling."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -8084,9 +8084,6 @@ def draw_favorite_waterfall_button(favorited):
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     draw_logical_polyline(regular_star_points(cx, cy, 23), edge, 3)
-    if favorited:
-        for radius in (15, 9, 4):
-            draw_logical_circle(cx, cy, radius, (248, 207, 104, 145), 18, True)
 
 
 def draw_audio_transport_graph(text_cache, history, box):

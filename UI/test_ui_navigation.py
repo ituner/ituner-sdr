@@ -780,6 +780,17 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(active.text, (18, 18, 18))
         self.assertEqual(pressed, active)
 
+    def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
+        active = ui.APP_UI_STYLE.button.resolve(active=True)
+        with mock.patch.object(ui, "ui_button_pressed", return_value=False), \
+                mock.patch.object(ui, "draw_styled_button_frame", return_value=active) as frame, \
+                mock.patch.object(ui, "draw_logical_polyline") as star, \
+                mock.patch.object(ui, "draw_logical_circle") as gold_fill:
+            ui.draw_favorite_waterfall_button(True)
+        self.assertTrue(frame.call_args.kwargs["active"])
+        self.assertEqual(star.call_args.args[1], active.text)
+        gold_fill.assert_not_called()
+
     def test_distance_follows_the_badges_under_the_server_name(self):
         station = ("Receiver", "Location", "owrx://example.test", None, None, 1.0, 2.0, "openwebrx")
         drawn_text = []
