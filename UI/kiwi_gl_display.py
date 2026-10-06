@@ -2500,9 +2500,10 @@ RECEIVER_RAIL_TAB_GAP = 8
 RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
-RECEIVER_PICKER_ACTION_GAP = 8
-RECEIVER_PICKER_ACTION_SIZE = 86
-RECEIVER_PICKER_ACTION_TOP = 510
+RECEIVER_PICKER_ACTION_GAP = 20
+# Two square actions plus their gutter span the same 236 px as BACK.
+RECEIVER_PICKER_ACTION_SIZE = 108
+RECEIVER_PICKER_ACTION_TOP = 466
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
@@ -14576,11 +14577,10 @@ def draw_desktop_1280_navigation(text_cache):
 
 LCD_NAV_X0 = 1024
 LCD_NAV_TOP_MIN = 88
-# The right rail is an instrument launcher, not an iPad home screen. Keep its
-# 2x4 composition but give each action 20% less visual mass and generous
-# gutters around it, so the waterfall remains the primary surface.
-LCD_NAV_TILE_W = 94
-LCD_NAV_TILE_H = 94
+# Every two-column square row shares the full-width BACK button's left and
+# right edges: 108 + 20 + 108 = 236 px inside the rail's 10 px margins.
+LCD_NAV_TILE_W = 108
+LCD_NAV_TILE_H = 108
 LCD_NAV_GAP = 20
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = (151, 169, 174)

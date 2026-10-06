@@ -251,6 +251,11 @@ class BoardLayoutTests(unittest.TestCase):
 
     def test_navigation_tiles_are_equal_squares(self):
         self.assertEqual(ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H)
+        back = ui.lcd_drawer_back_box()
+        self.assertEqual(
+            2 * ui.LCD_NAV_TILE_W + ui.LCD_NAV_GAP,
+            back[2] - back[0],
+        )
         for items in (ui.MENU_ITEMS, ui.SETTINGS_MENU_ITEMS):
             has_back = items is ui.SETTINGS_MENU_ITEMS
             for index in range(len(items)):
@@ -266,6 +271,14 @@ class BoardLayoutTests(unittest.TestCase):
                     ui.RADIOGARDEN_ZOOM_IN_BOX, ui.RADIOGARDEN_ZOOM_OUT_BOX):
             self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
             self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
+        self.assertEqual(
+            min(ui.RADIOGARDEN_LIST_BOX[0], ui.RADIOGARDEN_VIEW_BOX[0]),
+            ui.RADIOGARDEN_EXIT_BOX[0],
+        )
+        self.assertEqual(
+            max(ui.RADIOGARDEN_LIST_BOX[2], ui.RADIOGARDEN_VIEW_BOX[2]),
+            ui.RADIOGARDEN_EXIT_BOX[2],
+        )
 
     def test_globe_commands_all_live_in_the_right_rail(self):
         # The Globe's controls (including zoom) belong to the rail, never

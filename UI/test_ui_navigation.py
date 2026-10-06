@@ -679,9 +679,12 @@ class ReceiverListStyleTests(unittest.TestCase):
     def test_receiver_actions_use_the_lower_wide_rail_grid(self):
         boxes = ui.receiver_picker_command_boxes()
         self.assertEqual(len(boxes), 4)
-        self.assertGreaterEqual(min(box[1] for box in boxes), 510)
+        self.assertGreaterEqual(min(box[1] for box in boxes), 466)
         self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
         self.assertTrue(all(box[2] - box[0] == box[3] - box[1] for box in boxes))
+        back = ui.RECEIVER_PICKER_BACK_BOX
+        self.assertEqual(min(box[0] for box in boxes), back[0])
+        self.assertEqual(max(box[2] for box in boxes), back[2])
 
     def test_receiver_back_label_is_centered_plain_text(self):
         with mock.patch.object(ui, "draw_styled_text_button") as draw:
