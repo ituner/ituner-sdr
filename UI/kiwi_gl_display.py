@@ -1942,24 +1942,23 @@ def configure_popup_layout():
         # permanent 256 px rail used by Home; two narrow station columns made
         # names and locations needlessly difficult to scan on the LCD.
         PICKER_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        # Reserve the content header for the source segments so the five
-        # segments never collide with the station tiles below them.
-        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 88
+        # The source selectors now use the previously empty upper rail. The
+        # receiver list can reclaim the full content height for station rows.
+        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
         # RadioGarden gets the same dedicated 256 px right rail as Home.
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        # The right rail keeps only global commands: MAP toggle, Search, Sort,
-        # Favorites, and Back. Source segments move to the content header.
-        PICKER_MAP_MODE_BOX = lcd_nav_box(0, 5, True)
-        PICKER_SEARCH_BOX = lcd_nav_box(1, 5, True)
-        PICKER_SORT_BOX = lcd_nav_box(2, 5, True)
+        # Source selectors lead the rail as full-width horizontal tabs. The
+        # four secondary commands retain the familiar square 2-column grid
+        # immediately beneath them, with Back anchored at the bottom.
+        (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
+         PICKER_SORT_BOX, PICKER_ROUTE_FAVORITES_BOX) = receiver_picker_command_boxes()
         PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_DIRECT_BOX = (0, 0, 0, 0)
         PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
-        PICKER_ROUTE_FAVORITES_BOX = lcd_nav_box(3, 5, True)
         PICKER_SOURCE_SEGMENT_BOXES = receiver_source_segments()
-        PICKER_EXIT_BOX = lcd_nav_box(4, 5, True)
+        PICKER_EXIT_BOX = lcd_drawer_back_box()
         # The Globe keeps every command in the same square 2-column rail
         # launcher as the rest of the app: LIST, VIEW, ZOOM +, ZOOM −, BACK.
         # Nothing floats over the map any more.
@@ -2487,24 +2486,60 @@ class ReceiverBrowserState:
         )
 
 
-# Source segments are ordered KIWI, OPENWEBRX, LOCAL, FM-DX, ALL. They render
-# in one row across the top of the 1024 px content canvas, never in the rail.
-RECEIVER_HEADER_Y = (28, 78)
-RECEIVER_SEGMENT_GAP = 8
+# Source tabs are ordered KIWI, OPENWEBRX, LOCAL, FM-DX, ALL. Their wide,
+# single-column treatment makes selection obvious and uses the rail from the
+# top instead of shrinking the station list with a content header.
+RECEIVER_RAIL_TAB_TOP_GAP = 12
+RECEIVER_RAIL_TAB_HEIGHT = 52
+RECEIVER_RAIL_TAB_GAP = 8
+RECEIVER_RAIL_COMMAND_GAP = 20
 
 
 def receiver_source_segments():
-    """Return ``(source, box)`` pairs in priority order for the LCD header."""
+    """Return full-width source tabs in priority order down the LCD rail."""
     names = receiver_catalog.SOURCE_FILTERS
-    x0, x1 = 12, DESKTOP_1280_MAIN_W - 12
-    y0, y1 = RECEIVER_HEADER_Y
-    count = len(names)
-    width = (x1 - x0 - RECEIVER_SEGMENT_GAP * (count - 1)) // count
-    segments = []
-    for index, name in enumerate(names):
-        bx0 = x0 + index * (width + RECEIVER_SEGMENT_GAP)
-        segments.append((name, (bx0, y0, bx0 + width, y1)))
-    return tuple(segments)
+    # This helper also seeds module-level placeholder geometry before the LCD
+    # constants later in this file are declared. The fallbacks are the native
+    # 1280x800 values; configure_output() recomputes the authoritative boxes.
+    rail_x0 = globals().get("LCD_NAV_X0", 1024)
+    logical_w = globals().get("LOGICAL_W", 1280)
+    header_h = globals().get("LCD_DRAWER_HEADER_H", 64)
+    x0, x1 = rail_x0 + 10, logical_w - 10
+    top = header_h + RECEIVER_RAIL_TAB_TOP_GAP
+    return tuple(
+        (
+            name,
+            (
+                x0,
+                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP),
+                x1,
+                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP)
+                + RECEIVER_RAIL_TAB_HEIGHT,
+            ),
+        )
+        for index, name in enumerate(names)
+    )
+
+
+def receiver_picker_command_boxes():
+    """Place receiver actions directly below the source-tab stack."""
+    tab_boxes = receiver_source_segments()
+    top = tab_boxes[-1][1][3] + RECEIVER_RAIL_COMMAND_GAP
+    rail_x0 = globals().get("LCD_NAV_X0", 1024)
+    logical_w = globals().get("LOGICAL_W", 1280)
+    tile_w = globals().get("LCD_NAV_TILE_W", 94)
+    tile_h = globals().get("LCD_NAV_TILE_H", 94)
+    gap = globals().get("LCD_NAV_GAP", 20)
+    grid_width = 2 * tile_w + gap
+    left = rail_x0 + (logical_w - rail_x0 - grid_width) / 2
+    boxes = []
+    for index in range(4):
+        column = index % 2
+        row = index // 2
+        x0 = left + column * (tile_w + gap)
+        y0 = top + row * (tile_h + gap)
+        boxes.append((x0, y0, x0 + tile_w, y0 + tile_h))
+    return tuple(boxes)
 
 
 def boxes_overlap(a, b):
@@ -15462,14 +15497,19 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
     x0, y0, x1, y1 = box
     pressed = ui_button_pressed(box)
-    fill = UI_PRESSED_FILL if pressed else ((72, 77, 81, 255) if selected else (38, 42, 46, 255))
-    outline = UI_PRESSED_EDGE if pressed else ((220, 223, 225, 235) if selected else (150, 155, 159, 220))
+    active = pressed or selected
+    fill = UI_PRESSED_FILL if active else (38, 42, 46, 255)
+    outline = UI_PRESSED_EDGE if active else (150, 155, 159, 220)
     draw_logical_rect(x0, y0, x1, y1, fill)
     draw_logical_line(x0, y0, x1, y0, outline, 1)
     draw_logical_line(x0, y1, x1, y1, outline, 1)
     draw_logical_line(x0, y0, x0, y1, outline, 1)
     draw_logical_line(x1, y0, x1, y1, outline, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, UI_PRESSED_TEXT if pressed else (238, 240, 242), size, True, False, "cm")
+    draw_text(
+        text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label,
+        UI_PRESSED_TEXT if active else (238, 240, 242),
+        size, True, False, "cm", family="Liberation Sans",
+    )
 
 
 def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
@@ -16131,11 +16171,11 @@ def draw_station_picker(
         False,
     )
     if LCD_800_MODE:
-        # One receiver browser: a RECEIVERS title and a single-select source
-        # segment row (KIWI, OPENWEBRX, LOCAL, FM-DX, ALL).
-        draw_text(text_cache, 16, 18, "RECEIVERS", (196, 216, 224), 16, True, False, "lm", family="Liberation Sans")
+        # Single-select source tabs lead the right rail. Selected is a durable
+        # state, so it uses the same high-contrast cyan/dark treatment as a
+        # pressed control instead of a subtle gray variation.
         for source, box in PICKER_SOURCE_SEGMENT_BOXES:
-            draw_picker_button(text_cache, box, source.upper(), 14, route_filter == source)
+            draw_picker_button(text_cache, box, source.upper(), 16, route_filter == source)
         draw_picker_button(text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", 15, route_filter == "favorites")
         if not stations:
             # An empty segment is a real answer, not a broken browser.

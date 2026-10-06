@@ -311,6 +311,22 @@ class BoardLayoutTests(unittest.TestCase):
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.picker_source_segment_at(*center), source)
 
+    def test_receiver_rail_tabs_and_commands_do_not_overlap(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        tabs = [box for _source, box in ui.receiver_source_segments()]
+        commands = [ui.PICKER_MAP_MODE_BOX, ui.PICKER_SEARCH_BOX,
+                    ui.PICKER_SORT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX]
+        back = ui.PICKER_EXIT_BOX
+        self.assertTrue(all(box[0] == tabs[0][0] and box[2] == tabs[0][2] for box in tabs))
+        self.assertTrue(all(box[2] - box[0] > box[3] - box[1] for box in tabs))
+        self.assertLess(tabs[-1][3], min(box[1] for box in commands))
+        self.assertLess(max(box[3] for box in commands), back[1])
+        boxes = tabs + commands + [back]
+        for index, first in enumerate(boxes):
+            for second in boxes[index + 1:]:
+                self.assertFalse(ui.boxes_overlap(first, second), (first, second))
+
     def test_frequency_drawer_lists_steps_without_up_down_captions(self):
         texts = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
@@ -909,6 +925,17 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
              patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_button(None, box, 'TEST')
+        self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
+        self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
+
+    def test_selected_picker_tab_uses_cyan_fill_and_dark_text(self):
+        box = (10, 20, 246, 72)
+        fills = []
+        colors = []
+        with patch.object(ui, 'draw_logical_rect', side_effect=lambda *_args: fills.append(_args[-1])), \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
+            ui.draw_picker_button(None, box, 'KIWI', selected=True)
         self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
         self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
 

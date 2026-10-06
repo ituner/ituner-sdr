@@ -278,16 +278,20 @@ class ReceiverBrowserTests(unittest.TestCase):
         self.assertFalse(state.favorites_only)
 
     def test_source_segments_are_single_select_and_in_priority_order(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
         segments = ui.receiver_source_segments()
         self.assertEqual([source for source, _box in segments],
                          ["kiwi", "openwebrx", "local", "fmdx", "all"])
         for box in (box for _source, box in segments):
-            self.assertGreaterEqual(box[0], 0)
-            self.assertLessEqual(box[2], ui.DESKTOP_1280_MAIN_W)
-            self.assertGreater(box[2], box[0])
+            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
+            self.assertLessEqual(box[2], ui.LOGICAL_W)
+            self.assertGreater(box[2] - box[0], box[3] - box[1])
         for index, (_name, a) in enumerate(segments):
             for _other, b in segments[index + 1:]:
                 self.assertFalse(ui.boxes_overlap(a, b))
+        self.assertLess(segments[-1][1][3], ui.PICKER_MAP_MODE_BOX[1])
+        self.assertEqual(ui.PICKER_HEADER_H, 0)
 
     def test_list_and_map_use_the_same_filtered_records(self):
         state = ui.ReceiverBrowserState(source="openwebrx")
