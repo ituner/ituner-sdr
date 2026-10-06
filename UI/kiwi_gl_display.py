@@ -14419,7 +14419,7 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
             stroke,
         )
         for contact_x in range(cx - 15, cx + 16, 6):
-            pygame.draw.line(surface, dim, (contact_x, cy - 15), (contact_x, cy - 6), stroke)
+            pygame.draw.line(surface, color, (contact_x, cy - 15), (contact_x, cy - 6), stroke)
     elif kind == "network":
         # Wi-Fi is reserved for the Network settings route, keeping it
         # immediately distinguishable from the wired LAN receiver action.
@@ -14433,7 +14433,7 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
                     cy + 8 + round(math.sin(radians) * radius),
                 ))
             pygame.draw.lines(surface, color, False, points, stroke)
-        pygame.draw.circle(surface, dim, (cx, cy + 13), 5)
+        pygame.draw.circle(surface, color, (cx, cy + 13), 5)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
