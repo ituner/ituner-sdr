@@ -404,6 +404,7 @@ def menu_icon_filename(kind, muted=False):
 
 
 RECEIVER_GLOBE_ICON = "globe-network.png"
+GLOBE_LIST_ICON_KIND = "list"
 SPECTRUM_H = 70
 LCD_SPECTRUM_H = 240
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
@@ -13583,7 +13584,7 @@ def draw_receiver_map(
             46, True, False, "cm", family="Liberation Sans",
         )
 
-    draw_globe_icon_tile(RADIOGARDEN_LIST_BOX, "rx", "LIST")
+    draw_globe_icon_tile(RADIOGARDEN_LIST_BOX, GLOBE_LIST_ICON_KIND, "LIST")
     draw_picker_two_line_button(
         text_cache,
         RADIOGARDEN_VIEW_BOX,
@@ -14450,6 +14451,17 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
                 ))
             pygame.draw.lines(surface, color, False, points, stroke)
         pygame.draw.circle(surface, color, (cx, cy + 13), 6)
+    elif kind == "list":
+        # Three plain rows identify the return to the receiver directory.
+        # The glyph follows the same monochrome stroke and footprint as the
+        # other square rail actions.
+        stroke = APP_ACTION_ICON_STROKE
+        for offset_y in (-18, 0, 18):
+            pygame.draw.circle(surface, color, (cx - 22, cy + offset_y), 3)
+            pygame.draw.line(
+                surface, color,
+                (cx - 10, cy + offset_y), (cx + 26, cy + offset_y), stroke,
+            )
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
@@ -14556,7 +14568,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind == "network":
+        if kind in ("network", "list"):
             draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:

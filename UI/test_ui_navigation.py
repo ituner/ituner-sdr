@@ -57,6 +57,9 @@ class MenuIconTests(unittest.TestCase):
     def test_lan_uses_the_requested_home_network_asset(self):
         self.assertEqual(ui.menu_icon_filename("local_rx"), "lan-home.png")
 
+    def test_globe_list_action_uses_a_list_glyph(self):
+        self.assertEqual(ui.GLOBE_LIST_ICON_KIND, "list")
+
     def test_dual_icon_has_requested_wide_low_profile(self):
         icon = Path(__file__).resolve().parent / "assets/menu-icons/dual.png"
         with Image.open(icon).convert("RGBA") as image:
@@ -136,6 +139,21 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertTrue(all(call.args[1] == monochrome for call in draw_lines.call_args_list))
             self.assertTrue(all(call.args[1] == monochrome for call in draw_circle.call_args_list))
         self.assertNotEqual(lan_calls, network_calls)
+
+    def test_list_glyph_has_three_monochrome_rows(self):
+        surface = mock.Mock()
+        color = (11, 22, 33)
+        with mock.patch.object(ui.pygame.draw, "line") as draw_line, \
+             mock.patch.object(ui.pygame.draw, "circle") as draw_circle:
+            ui.draw_menu_icon(surface, "list", 50, 50, color, (4, 5, 6))
+        self.assertEqual(draw_line.call_count, 3)
+        self.assertEqual(draw_circle.call_count, 3)
+        self.assertTrue(all(call.args[1] == color for call in draw_line.call_args_list))
+        self.assertTrue(all(call.args[1] == color for call in draw_circle.call_args_list))
+        self.assertTrue(all(
+            call.args[4] == ui.APP_ACTION_ICON_STROKE
+            for call in draw_line.call_args_list
+        ))
 
     def test_settings_uses_info_and_has_no_duplicate_kiwi_route(self):
         labels = dict(ui.SETTINGS_MENU_ITEMS)
