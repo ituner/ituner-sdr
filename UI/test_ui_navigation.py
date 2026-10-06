@@ -591,12 +591,15 @@ class ReceiverListStyleTests(unittest.TestCase):
     def test_badges_share_labels_and_exact_state_colors(self):
         theme = ui.RECEIVER_LIST_THEME
         ready = ui.receiver_health_badge("AUDIO", {"audio": True}, "audio", True)
-        waiting = ui.receiver_health_badge("WATERFALL", {"waterfall": False}, "waterfall", True)
+        inactive = ui.receiver_health_badge("WATERFALL", {"waterfall": False}, "waterfall", True)
         untested = ui.receiver_health_badge("AUDIO", {}, "audio", False)
+        waiting = ui.receiver_health_badge("WATERFALL", {}, "waterfall", False, pending=True)
         self.assertEqual((ready.label, ready.fill), ("AUDIO", theme.ready))
-        self.assertEqual((waiting.label, waiting.fill), ("WATERFALL", theme.waiting))
+        self.assertEqual((inactive.label, inactive.fill, inactive.text),
+                         ("WATERFALL", theme.secondary_text, theme.secondary_text))
         self.assertEqual((untested.label, untested.fill, untested.text),
-                         ("AUDIO", theme.untested, theme.untested_text))
+                         ("AUDIO", theme.secondary_text, theme.secondary_text))
+        self.assertEqual((waiting.label, waiting.fill), ("WATERFALL", theme.waiting))
         self.assertEqual(ui.receiver_source_badge("kiwi").fill, theme.kiwi)
         self.assertEqual(ui.receiver_source_badge("openwebrx").fill, theme.openwebrx)
         self.assertEqual(ui.receiver_source_badge("fmdx").fill, theme.fmdx)

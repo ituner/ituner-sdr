@@ -16241,11 +16241,13 @@ def fit_receiver_name(text_cache, text, max_width, theme=RECEIVER_LIST_THEME):
 
 
 def receiver_health_badge(label, entry, key, fresh, pending=False, theme=RECEIVER_LIST_THEME):
-    if pending or (fresh and entry.get(key) is not True):
+    if pending:
         return ReceiverBadge(label, theme.waiting, (18, 18, 18))
-    if not fresh:
-        return ReceiverBadge(label, theme.untested, theme.untested_text)
-    return ReceiverBadge(label, theme.ready, (18, 18, 18))
+    if fresh and entry.get(key) is True:
+        return ReceiverBadge(label, theme.ready, (18, 18, 18))
+    # An inactive or not-yet-tested stream is supporting information, just
+    # like DISTANCE. Reserve amber for a connection currently in progress.
+    return ReceiverBadge(label, theme.secondary_text, theme.secondary_text)
 
 
 def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LIST_THEME):
