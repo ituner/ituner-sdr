@@ -16201,7 +16201,7 @@ class ReceiverListTheme:
     waiting: tuple = APP_UI_STYLE.palette.waiting
     untested: tuple = APP_UI_STYLE.palette.untested
     untested_text: tuple = APP_UI_STYLE.palette.untested_text
-    kiwi: tuple = (0, 137, 123, 255)
+    kiwi: tuple = APP_UI_STYLE.palette.focus
     openwebrx: tuple = (41, 121, 255, 255)
     lan: tuple = (0, 230, 118, 255)
     fmdx: tuple = (255, 109, 0, 255)

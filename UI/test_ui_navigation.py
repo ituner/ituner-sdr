@@ -601,6 +601,7 @@ class ReceiverListStyleTests(unittest.TestCase):
                          ("AUDIO", theme.secondary_text, theme.secondary_text))
         self.assertEqual((waiting.label, waiting.fill), ("WATERFALL", theme.waiting))
         self.assertEqual(ui.receiver_source_badge("kiwi").fill, theme.kiwi)
+        self.assertEqual(theme.kiwi, (0, 229, 255, 255))
         self.assertEqual(ui.receiver_source_badge("openwebrx").fill, theme.openwebrx)
         self.assertEqual(ui.receiver_source_badge("fmdx").fill, theme.fmdx)
         self.assertEqual(ui.receiver_source_badge("kiwi", True).label, "LAN")
