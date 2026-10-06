@@ -1964,14 +1964,11 @@ def configure_popup_layout():
         PICKER_ROUTE_PROXY_BOX = (0, 0, 0, 0)
         PICKER_SOURCE_SEGMENT_BOXES = receiver_source_segments()
         PICKER_EXIT_BOX = RECEIVER_PICKER_BACK_BOX
-        # The Globe keeps every command in the same square 2-column rail
-        # launcher as the rest of the app: LIST, VIEW, ZOOM +, ZOOM −, BACK.
-        # Nothing floats over the map any more.
-        RADIOGARDEN_LIST_BOX = lcd_nav_box(0, 5, True)
-        RADIOGARDEN_VIEW_BOX = lcd_nav_box(1, 5, True)
-        RADIOGARDEN_ZOOM_IN_BOX = lcd_nav_box(2, 5, True)
-        RADIOGARDEN_ZOOM_OUT_BOX = lcd_nav_box(3, 5, True)
-        RADIOGARDEN_EXIT_BOX = lcd_drawer_back_box()
+        # The Globe uses the exact same lower 2x2 grid and Back geometry as
+        # Receivers, rather than independently recreating equivalent boxes.
+        (RADIOGARDEN_LIST_BOX, RADIOGARDEN_VIEW_BOX,
+         RADIOGARDEN_ZOOM_IN_BOX, RADIOGARDEN_ZOOM_OUT_BOX) = receiver_picker_command_boxes()
+        RADIOGARDEN_EXIT_BOX = RECEIVER_PICKER_BACK_BOX
     else:
         PICKER_BOX = (0, 0, 790, LOGICAL_H)
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
@@ -13057,13 +13054,14 @@ RECEIVER_MAP_GROUP_COLORS = {
 }
 # Session-only visibility; groups the operator has switched off in the legend.
 RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters use the same 94×94 two-column launcher grid as LIST, VIEW and
-# zoom. Their full source names remain visible at the normal launcher size.
-RECEIVER_MAP_LEGEND_RAIL_TOP = 88
-RECEIVER_MAP_LEGEND_FONT_SIZE = 18
+# Legend filters follow the full-width horizontal source-tab language from
+# Receivers. Their coloured circles remain the source key while the neutral
+# label and cyan active outline retain the Globe's visibility-filter state.
+RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + RECEIVER_RAIL_TAB_TOP_GAP
+RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
     "kiwi": ("KIWI",),
-    "openwebrx": ("OPEN", "WEBRX"),
+    "openwebrx": ("OPENWEBRX",),
     "local": ("LOCAL",),
     "fmdx": ("FM-DX",),
 }
@@ -13120,18 +13118,18 @@ def receiver_map_legend_visual(group, active, pressed=False):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Launcher-sized touch targets for the legend filters in the Globe rail."""
+    """Full-width horizontal legend filters matching Receivers source tabs."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
-    grid_x0 = LCD_NAV_X0 + ((LOGICAL_W - LCD_NAV_X0) - grid_width) / 2
+    x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
+    x1 = LOGICAL_W - RECEIVER_PICKER_MARGIN
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
-        col, row = index % 2, index // 2
-        x = grid_x0 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
-        y = RECEIVER_MAP_LEGEND_RAIL_TOP + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-        boxes.append((group, (x, y, x + LCD_NAV_TILE_W, y + LCD_NAV_TILE_H)))
+        y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
+            RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP
+        )
+        boxes.append((group, (x0, y, x1, y + RECEIVER_RAIL_TAB_HEIGHT)))
     return tuple(boxes)
 
 
@@ -13504,14 +13502,12 @@ def draw_receiver_map(
     # floats over the map any more, so the whole canvas stays a drag surface.
     draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
 
-    # The colour legend doubles as the visibility filter. A source-coloured
-    # outline is the selected/visible state; tapping it removes every dot of
-    # that source group from the globe.
+    # The horizontal legend doubles as the visibility filter. Its dot retains
+    # the source colour while the neutral label and cyan outline carry state.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
-        legend_lines = RECEIVER_MAP_LEGEND_TEXT_LINES[legend_group]
         visual = receiver_map_legend_visual(
             legend_group, legend_active, pressed,
         )
@@ -13519,18 +13515,13 @@ def draw_receiver_map(
             lx0, ly0, lx1, ly1, APP_UI_STYLE.button.radius,
             visual.fill, visual.border, visual.border_width,
         )
-        swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 31
-        if legend_active or pressed:
-            draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
-        else:
-            draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
-        label_color = visual.text
-        label_y = (ly1 - 24,) if len(legend_lines) == 1 else (ly1 - 36, ly1 - 16)
-        for line, line_y in zip(legend_lines, label_y):
-            draw_text(
-                text_cache, swatch_x, line_y, line, label_color,
-                RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Liberation Sans",
-            )
+        swatch_x, swatch_y = lx0 + 24, (ly0 + ly1) / 2
+        draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
+        draw_text(
+            text_cache, (lx0 + lx1) / 2, swatch_y,
+            RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
+            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "cm", family="Liberation Sans",
+        )
 
     def draw_globe_tile_border(command_box):
         pressed = ui_button_pressed(command_box)

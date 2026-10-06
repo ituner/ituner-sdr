@@ -272,6 +272,13 @@ class BoardLayoutTests(unittest.TestCase):
             self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
             self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
         self.assertEqual(
+            (
+                ui.RADIOGARDEN_LIST_BOX, ui.RADIOGARDEN_VIEW_BOX,
+                ui.RADIOGARDEN_ZOOM_IN_BOX, ui.RADIOGARDEN_ZOOM_OUT_BOX,
+            ),
+            ui.receiver_picker_command_boxes(),
+        )
+        self.assertEqual(
             min(ui.RADIOGARDEN_LIST_BOX[0], ui.RADIOGARDEN_VIEW_BOX[0]),
             ui.RADIOGARDEN_EXIT_BOX[0],
         )
@@ -680,8 +687,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
     def test_legend_tiles_show_full_source_names(self):
         texts = self._legend_texts()
         self.assertIn('KIWI', texts)
-        self.assertIn('OPEN', texts)
-        self.assertIn('WEBRX', texts)
+        self.assertIn('OPENWEBRX', texts)
         self.assertIn('LOCAL', texts)
         self.assertIn('FM-DX', texts)
         ui.receiver_map_toggle_group('kiwi')
@@ -710,14 +716,14 @@ class ReceiverMapLegendTests(unittest.TestCase):
             )
         return sizes
 
-    def test_legend_square_keeps_the_normal_button_font_size(self):
+    def test_legend_rows_keep_the_receiver_category_font_size(self):
         sizes = [
             size for text, size in self._legend_text_sizes()
             if any(text in lines for lines in ui.RECEIVER_MAP_LEGEND_TEXT_LINES.values())
         ]
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_MAP_LEGEND_FONT_SIZE for size in sizes))
-        self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, 18)
+        self.assertEqual(ui.RECEIVER_MAP_LEGEND_FONT_SIZE, ui.RECEIVER_LIST_THEME.label_size)
 
     def _draw_dots(self, scale):
         drawn = []
@@ -820,8 +826,9 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
-            self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
+            self.assertEqual(box[0], ui.PICKER_SOURCE_SEGMENT_BOXES[0][1][0])
+            self.assertEqual(box[2], ui.PICKER_SOURCE_SEGMENT_BOXES[0][1][2])
+            self.assertEqual(box[3] - box[1], ui.RECEIVER_RAIL_TAB_HEIGHT)
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.receiver_map_legend_at(*center, receivers), group)
         for index, (_group, first) in enumerate(boxes):
