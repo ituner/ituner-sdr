@@ -3110,6 +3110,36 @@ def format_station_distance(station, home_profile):
     return f"DISTANCE: {int(round(distance_miles)):,} mi"
 
 
+RECEIVER_SORT_MODES = (
+    "distance_near",
+    "distance_far",
+    "name_az",
+    "name_za",
+)
+RECEIVER_SORT_LABELS = {
+    "distance_near": "NEAREST FIRST",
+    "distance_far": "FARTHEST FIRST",
+    "name_az": "NAME A-Z",
+    "name_za": "NAME Z-A",
+}
+
+
+def normalize_receiver_sort_mode(mode):
+    """Map legacy two-state values onto the four receiver sort states."""
+    aliases = {"location": "distance_near", "name": "name_az"}
+    normalized = aliases.get(str(mode or "").casefold(), str(mode or "").casefold())
+    return normalized if normalized in RECEIVER_SORT_MODES else RECEIVER_SORT_MODES[0]
+
+
+def next_receiver_sort_mode(mode):
+    mode = normalize_receiver_sort_mode(mode)
+    return RECEIVER_SORT_MODES[(RECEIVER_SORT_MODES.index(mode) + 1) % len(RECEIVER_SORT_MODES)]
+
+
+def receiver_sort_label(mode):
+    return RECEIVER_SORT_LABELS[normalize_receiver_sort_mode(mode)]
+
+
 def _frequency_id_text(value):
     """Turn one HTML cell into a compact, display-safe schedule field."""
     value = re.sub(r"<br\s*/?>", " ", str(value), flags=re.I)
@@ -3991,7 +4021,10 @@ def local_kiwi_is_reachable(server, station_health, now=None):
     return entry.get("audio") is True or entry.get("waterfall") is True
 
 
-def filtered_stations(stations, query, sort_mode, route_filter="all", favorites=(), station_health=None):
+def filtered_stations(
+    stations, query, sort_mode, route_filter="all", favorites=(),
+    station_health=None, home_profile=None,
+):
     terms = query.casefold().split()
     def matches(station):
         name, location, server = station[:3]
@@ -4010,13 +4043,23 @@ def filtered_stations(stations, query, sort_mode, route_filter="all", favorites=
             station for station in filtered
             if local_kiwi_is_reachable(station[2], station_health)
         ]
-    key = (lambda station: (station[1].casefold(), station[0].casefold())) if sort_mode == "location" else (lambda station: (station[0].casefold(), station[1].casefold()))
-    # The LAN receiver stays at the top for every regular list/search view.
-    # A search for unrelated terms can still omit it, keeping search literal.
-    return sorted(
-        filtered,
-        key=lambda station: (0 if station[2].rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/") else 1, *key(station)),
-    )
+    sort_mode = normalize_receiver_sort_mode(sort_mode)
+    name_key = lambda station: (station[0].casefold(), station[1].casefold())
+    if sort_mode == "name_az":
+        return sorted(filtered, key=name_key)
+    if sort_mode == "name_za":
+        return sorted(filtered, key=name_key, reverse=True)
+
+    def distance_key(station):
+        distance = station_distance_miles(station, home_profile)
+        # Unknown coordinates always follow known distances in either
+        # direction; alphabetical order keeps that trailing group stable.
+        if distance is None:
+            return 1, 0.0, *name_key(station)
+        order = distance if sort_mode == "distance_near" else -distance
+        return 0, order, *name_key(station)
+
+    return sorted(filtered, key=distance_key)
 
 
 def bottom_station_title(name, location):
@@ -4042,38 +4085,8 @@ def bottom_station_title(name, location):
 
 
 def health_prioritized_stations(stations, station_health, sort_mode):
-    now = time.time()
-    def health_group(station):
-        _name, _location, server = station[:3]
-        entry = station_health.get(server, {})
-        fresh = now - entry.get("checked", 0) <= 86400
-        if not fresh:
-            return 2
-        # A green-ready receiver means the actual paired experience works:
-        # waterfall plus audio. Audio-only and waterfall-only stations remain
-        # useful and selectable, but are not promoted as fully healthy.
-        audio_active = entry.get("audio") is True
-        waterfall_active = entry.get("waterfall") is True
-        if audio_active and waterfall_active:
-            return 0
-        if waterfall_active:
-            return 1
-        if audio_active:
-            return 2
-        return 3
-
-    # `stations` has already been ordered by the chosen Location/Name sort.
-    # Keep that exact, predictable order inside each availability group.
-    return [
-        station for _index, station in sorted(
-            enumerate(stations),
-            key=lambda item: (
-                0 if item[1][2].rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/") else 1,
-                health_group(item[1]),
-                item[0],
-            ),
-        )
-    ]
+    """Retain the requested sort order; health is expressed by row badges."""
+    return list(stations)
 
 
 def keyboard_rows(mode):
@@ -22139,7 +22152,7 @@ def main():
     all_stations = catalog_stations
     main_receiver_capacity = MainReceiverCapacityMonitor()
     station_query = ""
-    station_sort = "location"
+    station_sort = RECEIVER_SORT_MODES[0]
     # KiwiSDR is the default and most complete receiver type, so Receivers
     # opens on the KIWI source segment.
     station_route_filter = "kiwi"
@@ -22147,8 +22160,11 @@ def main():
     # Health comes from the scanner cache reloaded below. The browser needs it
     # from its very first filtered list so an unconfirmed LAN Kiwi never shows.
     station_health = {}
-    stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
     receiver_home_profile, receiver_home_saved = load_receiver_home_profile()
+    stations = filtered_stations(
+        all_stations, station_query, station_sort, station_route_filter,
+        favorite_servers, station_health, receiver_home_profile,
+    )
     fan_curve = load_fan_curve()
     receiver_home_result_queue = queue.Queue(maxsize=1)
     receiver_home_locating = not receiver_home_saved
@@ -22648,7 +22664,10 @@ def main():
         all_stations = merge_station_rows(
             stations_from_globe_receivers(globe_receivers), catalog_stations,
         )
-        stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+        stations = filtered_stations(
+            all_stations, station_query, station_sort, station_route_filter,
+            favorite_servers, station_health, receiver_home_profile,
+        )
     globe_result_queue = queue.Queue(maxsize=1)
     globe_fetch_started = True
     threading.Thread(
@@ -23477,6 +23496,7 @@ def main():
         stations = filtered_stations(
             all_stations, station_query, station_sort,
             station_route_filter, favorite_servers, station_health,
+            receiver_home_profile,
         )
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
@@ -23564,7 +23584,7 @@ def main():
             picker_open = True
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-            station_sort = "location"
+            station_sort = RECEIVER_SORT_MODES[0]
             sync_receiver_browser_to_active()
             search_open = False
             picker_map_open = False
@@ -26602,7 +26622,10 @@ def main():
                                     favorite_servers.add(current_server)
                                     action = "saved"
                                 save_favorite_servers(favorite_servers, all_stations)
-                                stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+                                stations = filtered_stations(
+                                    all_stations, station_query, station_sort, station_route_filter,
+                                    favorite_servers, station_health, receiver_home_profile,
+                                )
                                 station_scroll = clamp(
                                     station_scroll, 0,
                                     station_page_max(stations, int(fmdx_disclaimer_open)),
@@ -26918,7 +26941,10 @@ def main():
                                         search_open = False
                                     elif key and len(station_query) < 48:
                                         station_query += key
-                                    stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+                                    stations = filtered_stations(
+                                        all_stations, station_query, station_sort, station_route_filter,
+                                        favorite_servers, station_health, receiver_home_profile,
+                                    )
                                     station_scroll = 0
                         elif touch_started and gesture == "picker_map_open":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -27038,10 +27064,13 @@ def main():
                         elif touch_started and gesture == "picker_sort":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                station_sort = "name" if station_sort == "location" else "location"
-                                stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+                                station_sort = next_receiver_sort_mode(station_sort)
+                                stations = filtered_stations(
+                                    all_stations, station_query, station_sort, station_route_filter,
+                                    favorite_servers, station_health, receiver_home_profile,
+                                )
                                 station_scroll = 0
-                                picker_list_notice = f"SORTED BY {station_sort.upper()}"
+                                picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
                                 picker_list_notice_until = time.monotonic() + 1.8
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -27058,7 +27087,10 @@ def main():
                                     fmdx_disclaimer_open,
                                     fmdx_disclaimer_shown,
                                 )
-                                stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+                                stations = filtered_stations(
+                                    all_stations, station_query, station_sort, station_route_filter,
+                                    favorite_servers, station_health, receiver_home_profile,
+                                )
                                 station_scroll = 0
                                 # Moving to another source cancels any connection
                                 # a previous row tap started. The browser must
@@ -27187,6 +27219,15 @@ def main():
                 except queue.Empty:
                     break
                 receiver_home_locating = False
+                if normalize_receiver_sort_mode(station_sort).startswith("distance_"):
+                    stations = filtered_stations(
+                        all_stations, station_query, station_sort, station_route_filter,
+                        favorite_servers, station_health, receiver_home_profile,
+                    )
+                    station_scroll = clamp(
+                        station_scroll, 0,
+                        station_page_max(stations, int(fmdx_disclaimer_open)),
+                    )
                 print(
                     f"gl receiver home {receiver_home_profile['name']} "
                     f"{receiver_home_profile['lat']:.4f},{receiver_home_profile['lon']:.4f}",
@@ -27409,6 +27450,7 @@ def main():
                     stations = filtered_stations(
                         all_stations, station_query, station_sort,
                         station_route_filter, favorite_servers, station_health,
+                        receiver_home_profile,
                     )
                     station_scroll = clamp(
                         station_scroll, 0,
@@ -27432,7 +27474,10 @@ def main():
                     all_stations = merge_station_rows(
                         stations_from_globe_receivers(globe_receivers), catalog_stations,
                     )
-                    stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
+                    stations = filtered_stations(
+                        all_stations, station_query, station_sort, station_route_filter,
+                        favorite_servers, station_health, receiver_home_profile,
+                    )
                     station_scroll = clamp(
                         station_scroll, 0,
                         station_page_max(stations, int(fmdx_disclaimer_open)),

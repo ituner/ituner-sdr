@@ -348,6 +348,48 @@ class ReceiverBrowserTests(unittest.TestCase):
             records, ui.ReceiverBrowserState(source="all", favorites_only=True), "list")
         self.assertEqual([record.id for record in favorites], ["kiwi:a"])
 
+    def test_receiver_sort_cycles_through_four_states_and_wraps(self):
+        modes = []
+        mode = ui.RECEIVER_SORT_MODES[0]
+        for _ in range(4):
+            modes.append(mode)
+            mode = ui.next_receiver_sort_mode(mode)
+        self.assertEqual(tuple(modes), ui.RECEIVER_SORT_MODES)
+        self.assertEqual(mode, ui.RECEIVER_SORT_MODES[0])
+        self.assertEqual(
+            [ui.receiver_sort_label(value) for value in modes],
+            ["NEAREST FIRST", "FARTHEST FIRST", "NAME A-Z", "NAME Z-A"],
+        )
+
+    def test_receiver_distance_and_name_sort_orders_are_exact(self):
+        stations = (
+            ("Bravo", "B", "http://bravo.test", 0, 4, 0.0, 10.0, "kiwi"),
+            ("Alpha", "A", "http://alpha.test", 0, 4, 0.0, 1.0, "kiwi"),
+            ("Charlie", "C", "http://charlie.test", 0, 4, None, None, "kiwi"),
+        )
+        home = {"lat": 0.0, "lon": 0.0}
+
+        def names(mode):
+            return [row[0] for row in ui.filtered_stations(
+                stations, "", mode, "all", set(), {}, home,
+            )]
+
+        self.assertEqual(names("distance_near"), ["Alpha", "Bravo", "Charlie"])
+        self.assertEqual(names("distance_far"), ["Bravo", "Alpha", "Charlie"])
+        self.assertEqual(names("name_az"), ["Alpha", "Bravo", "Charlie"])
+        self.assertEqual(names("name_za"), ["Charlie", "Bravo", "Alpha"])
+
+    def test_health_badges_do_not_override_selected_sort_order(self):
+        stations = (
+            ("Alpha", "", "http://alpha.test"),
+            ("Bravo", "", "http://bravo.test"),
+        )
+        health = {
+            "http://alpha.test": {"audio": False, "waterfall": False, "checked": ui.time.time()},
+            "http://bravo.test": {"audio": True, "waterfall": True, "checked": ui.time.time()},
+        }
+        self.assertEqual(ui.health_prioritized_stations(stations, health, "name_az"), list(stations))
+
 
 class WorkspaceLayoutTests(unittest.TestCase):
     def test_settings_center_workspace_stays_outside_sidebar(self):
