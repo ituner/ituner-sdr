@@ -682,6 +682,8 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertGreaterEqual(min(box[1] for box in boxes), 466)
         self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
         self.assertTrue(all(box[2] - box[0] == box[3] - box[1] for box in boxes))
+        self.assertEqual(ui.RECEIVER_PICKER_ACTION_SIZE, ui.LCD_NAV_TILE_W)
+        self.assertEqual(ui.RECEIVER_PICKER_ACTION_GAP, ui.LCD_NAV_GAP)
         back = ui.RECEIVER_PICKER_BACK_BOX
         self.assertEqual(min(box[0] for box in boxes), back[0])
         self.assertEqual(max(box[2] for box in boxes), back[2])
@@ -691,7 +693,7 @@ class ReceiverListStyleTests(unittest.TestCase):
             ui.draw_receiver_back_button(self.Cache(), ui.PICKER_EXIT_BOX)
         self.assertEqual(draw.call_args.args[2], "BACK")
 
-    def test_sort_button_always_names_the_active_order(self):
+    def test_sort_button_has_no_persistent_sort_subtitle(self):
         texts = []
         with mock.patch.object(ui, "draw_styled_button_frame",
                                return_value=ui.APP_UI_STYLE.button.resolve()), \
@@ -699,9 +701,9 @@ class ReceiverListStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "draw_text",
                                   side_effect=lambda *args, **_kwargs: texts.append(args[3])):
             ui.draw_receiver_action_button(
-                self.Cache(), ui.PICKER_SORT_BOX, "SORT", "sort", detail="LOCATION",
+                self.Cache(), ui.PICKER_SORT_BOX, "SORT", "sort",
             )
-        self.assertEqual(texts, ["SORT", "LOCATION"])
+        self.assertEqual(texts, ["SORT"])
 
     def test_favorite_star_is_closed_and_mathematically_regular(self):
         points = ui.regular_star_points(0, 0, 23)

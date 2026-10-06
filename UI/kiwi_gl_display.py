@@ -2500,9 +2500,10 @@ RECEIVER_RAIL_TAB_GAP = 8
 RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
-RECEIVER_PICKER_ACTION_GAP = 20
-# Two square actions plus their gutter span the same 236 px as BACK.
-RECEIVER_PICKER_ACTION_SIZE = 108
+# Two larger square actions plus their compact gutter span the same 236 px as
+# BACK. These dimensions match every other square launcher in the app.
+RECEIVER_PICKER_ACTION_GAP = 8
+RECEIVER_PICKER_ACTION_SIZE = 114
 RECEIVER_PICKER_ACTION_TOP = 466
 RECEIVER_PICKER_ROW_HEIGHT = 138
 RECEIVER_PICKER_ROW_GAP = 8
@@ -14578,10 +14579,10 @@ def draw_desktop_1280_navigation(text_cache):
 LCD_NAV_X0 = 1024
 LCD_NAV_TOP_MIN = 88
 # Every two-column square row shares the full-width BACK button's left and
-# right edges: 108 + 20 + 108 = 236 px inside the rail's 10 px margins.
-LCD_NAV_TILE_W = 108
-LCD_NAV_TILE_H = 108
-LCD_NAV_GAP = 20
+# right edges: 114 + 8 + 114 = 236 px inside the rail's 10 px margins.
+LCD_NAV_TILE_W = 114
+LCD_NAV_TILE_H = 114
+LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
 LCD_DRAWER_HEADING_SIZE = 13
@@ -16393,9 +16394,7 @@ def draw_station_picker(
     if LCD_800_MODE:
         draw_receiver_action_button(text_cache, PICKER_MAP_MODE_BOX, "GLOBE", "globe")
         draw_receiver_action_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", "search")
-        draw_receiver_action_button(
-            text_cache, PICKER_SORT_BOX, "SORT", "sort", detail=sort_mode.upper(),
-        )
+        draw_receiver_action_button(text_cache, PICKER_SORT_BOX, "SORT", "sort")
         draw_receiver_action_button(
             text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", "favorite",
             route_filter == "favorites",
