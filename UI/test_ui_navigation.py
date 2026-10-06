@@ -531,7 +531,7 @@ class FmdxDisclaimerTests(unittest.TestCase):
                 mock.patch.object(ui, "draw_radio_option") as option:
             ui.draw_fmdx_disclaimer(cache)
         frame.assert_called_once_with(
-            boxes["panel"], ui.STATION_LIST_FILL, ui.STATION_LIST_OUTLINE,
+            boxes["panel"], ui.STATION_LIST_FILL, ui.FMDX_DISCLAIMER_OUTLINE, 2,
         )
         option.assert_called_once_with(cache, boxes["ok"], "OK", False)
 

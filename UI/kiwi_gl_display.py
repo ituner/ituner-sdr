@@ -8388,6 +8388,7 @@ def draw_fmdx_shared_prompt(text_cache):
 # is not theirs to move by hand. This session-only notice occupies the first
 # receiver-list row instead of interrupting the browser with a modal.
 FMDX_DISCLAIMER_TITLE = "FM-DX SHARED SERVERS"
+FMDX_DISCLAIMER_OUTLINE = (222, 170, 84, 235)
 
 
 def fmdx_disclaimer_transition(route_filter, visible, shown):
@@ -8429,12 +8430,14 @@ def draw_fmdx_disclaimer(text_cache, scroll=0.0):
     x0, y0, x1, y1 = boxes["panel"]
     if x1 <= x0 or y1 <= y0:
         return
-    draw_station_list_frame((x0, y0, x1, y1), STATION_LIST_FILL, STATION_LIST_OUTLINE)
+    draw_station_list_frame(
+        (x0, y0, x1, y1), STATION_LIST_FILL, FMDX_DISCLAIMER_OUTLINE, 2,
+    )
     marker_y = (y0 + y1) / 2
     # Use the receiver row's reserved status-glyph lane for a compact warning
     # marker, keeping title and metadata aligned with every server below it.
     draw_logical_circle(x0 + 39, marker_y, 17, (91, 66, 25, 255), 28, True)
-    draw_logical_circle(x0 + 39, marker_y, 17, (222, 170, 84, 235), 28)
+    draw_logical_circle(x0 + 39, marker_y, 17, FMDX_DISCLAIMER_OUTLINE, 28)
     draw_text(
         text_cache, x0 + 39, marker_y, "!", (255, 225, 168),
         22, True, False, "cm", family="Liberation Sans",
@@ -16150,7 +16153,7 @@ STATION_LIST_FILL = (20, 23, 26, 205)
 STATION_LIST_OUTLINE = (83, 88, 92, 135)
 
 
-def draw_station_list_frame(box, fill, outline):
+def draw_station_list_frame(box, fill, outline, border_width=1):
     """Draw the common full-border frame used by every receiver-list row."""
     x0, y0, x1, y1 = box
     draw_logical_rect(x0, y0, x1, y1, fill)
@@ -16158,7 +16161,7 @@ def draw_station_list_frame(box, fill, outline):
         (x0, y0, x1, y0), (x0, y1, x1, y1),
         (x0, y0, x0, y1), (x1, y0, x1, y1),
     ):
-        draw_logical_line(ax0, ay0, ax1, ay1, outline, 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, outline, border_width)
 
 
 def draw_station_picker(
