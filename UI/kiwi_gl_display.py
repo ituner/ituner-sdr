@@ -212,7 +212,7 @@ import openwebrx_directory
 import fmdx
 import receiver_catalog
 import render_sdr_frontend_mockup as sdr_ui
-from ui_style import APP_UI_STYLE
+from ui_style import APP_UI_STYLE, ButtonVisualState
 
 
 LCD_NATIVE_W = 800
@@ -13035,7 +13035,9 @@ RECEIVER_MAP_GROUP_LABELS = {
 }
 RECEIVER_MAP_GROUP_COLORS = {
     "kiwi": (83, 229, 176, 235),
-    "openwebrx": (110, 194, 255, 235),
+    # Match the OpenWebRX badge blue so its list row, Globe dots and legend
+    # communicate one source identity everywhere.
+    "openwebrx": (41, 121, 255, 255),
     "local": (255, 208, 92, 235),
     "fmdx": (255, 154, 61, 245),
 }
@@ -13087,6 +13089,19 @@ def receiver_map_legend_entries(receivers):
     return tuple(
         (group, RECEIVER_MAP_GROUP_LABELS[group], RECEIVER_MAP_GROUP_COLORS[group])
         for group in RECEIVER_MAP_GROUP_ORDER if group in present
+    )
+
+
+def receiver_map_legend_visual(group, active, pressed=False):
+    """Resolve a Globe legend toggle without filling its selected state."""
+    if pressed:
+        return APP_UI_STYLE.button.resolve(pressed=True)
+    base = APP_UI_STYLE.button.resolve()
+    if active:
+        color = RECEIVER_MAP_GROUP_COLORS[group]
+        return ButtonVisualState(base.fill, color, color[:3], 2)
+    return ButtonVisualState(
+        base.fill, base.border, APP_UI_STYLE.palette.secondary_text, base.border_width,
     )
 
 
@@ -13475,16 +13490,20 @@ def draw_receiver_map(
     # floats over the map any more, so the whole canvas stays a drag surface.
     draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
 
-    # The colour legend doubles as the visibility filter, and now lives in the
-    # rail with the other Globe commands. A lit chip is the active state;
-    # tapping it removes every dot of that source group from the globe.
+    # The colour legend doubles as the visibility filter. A source-coloured
+    # outline is the selected/visible state; tapping it removes every dot of
+    # that source group from the globe.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
         legend_lines = RECEIVER_MAP_LEGEND_TEXT_LINES[legend_group]
-        visual = draw_styled_button_frame(
-            (lx0, ly0, lx1, ly1), active=legend_active, pressed=pressed,
+        visual = receiver_map_legend_visual(
+            legend_group, legend_active, pressed,
+        )
+        draw_logical_rounded_rect(
+            lx0, ly0, lx1, ly1, APP_UI_STYLE.button.radius,
+            visual.fill, visual.border, visual.border_width,
         )
         swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 31
         if pressed:
@@ -13493,7 +13512,7 @@ def draw_receiver_map(
             draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         else:
             draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
-        label_color = visual.text if legend_active or pressed else APP_UI_STYLE.palette.secondary_text
+        label_color = visual.text
         label_y = (ly1 - 24,) if len(legend_lines) == 1 else (ly1 - 36, ly1 - 16)
         for line, line_y in zip(legend_lines, label_y):
             draw_text(

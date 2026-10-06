@@ -606,6 +606,22 @@ class ReceiverMapLegendTests(unittest.TestCase):
             (('kiwi', 'KIWI', ui.RECEIVER_MAP_GROUP_COLORS['kiwi']),),
         )
 
+    def test_openwebrx_has_its_blue_globe_identity_and_legend_button(self):
+        self.assertEqual(ui.RECEIVER_MAP_GROUP_COLORS['openwebrx'], (41, 121, 255, 255))
+        entries = ui.receiver_map_legend_entries(self.receivers())
+        self.assertIn(
+            ('openwebrx', 'OPENWEBRX', (41, 121, 255, 255)),
+            entries,
+        )
+
+    def test_selected_legend_state_is_outlined_in_its_source_color(self):
+        visual = ui.receiver_map_legend_visual('openwebrx', True)
+        self.assertEqual(visual.fill, ui.APP_UI_STYLE.palette.surface)
+        self.assertEqual(visual.border, ui.RECEIVER_MAP_GROUP_COLORS['openwebrx'])
+        self.assertEqual(visual.text, ui.RECEIVER_MAP_GROUP_COLORS['openwebrx'][:3])
+        self.assertEqual(visual.border_width, 2)
+        self.assertNotEqual(visual.fill, visual.border)
+
     def test_legend_label_names_the_action(self):
         # A lit chip offers to hide its group; a hidden chip offers to show it.
         self.assertEqual(ui.receiver_map_legend_label('kiwi', True), 'HIDE KIWI')
