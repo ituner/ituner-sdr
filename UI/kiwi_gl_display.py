@@ -2650,6 +2650,20 @@ def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row
     return clamp(target, 0, station_page_max(stations, leading_rows))
 
 
+def active_receiver_scroll_for_source(
+    stations, active_server, selected_source, active_source,
+    leading_rows=0, center_row=2,
+):
+    """Center the live row when its source, or ALL, is being displayed."""
+    selected_source = str(selected_source or "").casefold()
+    active_source = str(active_source or "").casefold()
+    if selected_source not in (active_source, "all"):
+        return 0
+    return centered_receiver_scroll(
+        stations, active_server, leading_rows, center_row,
+    )
+
+
 def connect_to_receiver(state, record):
     """Apply one catalog record to the live radio through the single path."""
     if not isinstance(record, receiver_catalog.ReceiverRecord):
@@ -23508,10 +23522,30 @@ def main():
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
         )
-        station_scroll = centered_receiver_scroll(
-            visible_stations, active_server, int(fmdx_disclaimer_open),
+        station_scroll = active_receiver_scroll_for_source(
+            visible_stations, active_server,
+            station_route_filter, station_route_filter,
+            int(fmdx_disclaimer_open),
         )
         picker_map_selected_server = active_server
+        return active_server
+
+    def center_active_receiver_in_current_list():
+        """Keep the live row centred when the current source can contain it."""
+        nonlocal station_scroll
+        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_source = active_receiver_source(
+            all_stations, active_server, receiver_type,
+        )
+        visible_stations = health_prioritized_stations(
+            stations, station_health, station_sort,
+        )
+        station_scroll = active_receiver_scroll_for_source(
+            visible_stations, active_server,
+            station_route_filter, active_source,
+            int(fmdx_disclaimer_open),
+        )
         return active_server
 
     def restore_navigation_parent(parent):
@@ -27053,6 +27087,7 @@ def main():
                                     picker_map_open = False
                                     picker_map_hover_server = None
                                     search_open = False
+                                    sync_receiver_browser_to_active()
                                 else:
                                     picker_open = False
                                     picker_map_open = False
@@ -27076,7 +27111,7 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                station_scroll = 0
+                                center_active_receiver_in_current_list()
                                 picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
                                 picker_list_notice_until = time.monotonic() + 1.8
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
@@ -27086,6 +27121,12 @@ def main():
                                     "favorites" if gesture == "picker_route_favorites"
                                     else gesture.removeprefix("picker_source_")
                                 )
+                                if gesture.startswith("picker_source_"):
+                                    # A category tap is an explicit return to
+                                    # that complete list, not a continuation
+                                    # of an old search that could hide Home's
+                                    # currently playing receiver.
+                                    station_query = ""
                                 # Explain shared tuning once per process. The
                                 # notice is an inline first row, so the receiver
                                 # list and rail remain available around it.
@@ -27098,7 +27139,7 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                station_scroll = 0
+                                center_active_receiver_in_current_list()
                                 # Moving to another source cancels any connection
                                 # a previous row tap started. The browser must
                                 # never dismiss itself to the main screen just
@@ -27231,10 +27272,13 @@ def main():
                         all_stations, station_query, station_sort, station_route_filter,
                         favorite_servers, station_health, receiver_home_profile,
                     )
-                    station_scroll = clamp(
-                        station_scroll, 0,
-                        station_page_max(stations, int(fmdx_disclaimer_open)),
-                    )
+                    if picker_open and not picker_map_open and not search_open:
+                        center_active_receiver_in_current_list()
+                    else:
+                        station_scroll = clamp(
+                            station_scroll, 0,
+                            station_page_max(stations, int(fmdx_disclaimer_open)),
+                        )
                 print(
                     f"gl receiver home {receiver_home_profile['name']} "
                     f"{receiver_home_profile['lat']:.4f},{receiver_home_profile['lon']:.4f}",
@@ -27459,10 +27503,13 @@ def main():
                         station_route_filter, favorite_servers, station_health,
                         receiver_home_profile,
                     )
-                    station_scroll = clamp(
-                        station_scroll, 0,
-                        station_page_max(stations, int(fmdx_disclaimer_open)),
-                    )
+                    if picker_open and not picker_map_open and not search_open:
+                        center_active_receiver_in_current_list()
+                    else:
+                        station_scroll = clamp(
+                            station_scroll, 0,
+                            station_page_max(stations, int(fmdx_disclaimer_open)),
+                        )
                     print(
                         f"gl OpenWebRX directory ready: {len(openwebrx_payload)} receiver(s)",
                         flush=True,
@@ -27485,10 +27532,13 @@ def main():
                         all_stations, station_query, station_sort, station_route_filter,
                         favorite_servers, station_health, receiver_home_profile,
                     )
-                    station_scroll = clamp(
-                        station_scroll, 0,
-                        station_page_max(stations, int(fmdx_disclaimer_open)),
-                    )
+                    if picker_open and not picker_map_open and not search_open:
+                        center_active_receiver_in_current_list()
+                    else:
+                        station_scroll = clamp(
+                            station_scroll, 0,
+                            station_page_max(stations, int(fmdx_disclaimer_open)),
+                        )
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"

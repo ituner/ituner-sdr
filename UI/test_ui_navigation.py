@@ -390,6 +390,39 @@ class ReceiverBrowserTests(unittest.TestCase):
         }
         self.assertEqual(ui.health_prioritized_stations(stations, health, "name_az"), list(stations))
 
+    def test_active_receiver_centers_in_its_category_and_all(self):
+        stations = tuple(
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        )
+        active = "http://rx5.test/"
+        expected = ui.centered_receiver_scroll(stations, active)
+        self.assertEqual(expected, 3)
+        self.assertEqual(
+            ui.active_receiver_scroll_for_source(
+                stations, active, "kiwi", "kiwi",
+            ),
+            expected,
+        )
+        self.assertEqual(
+            ui.active_receiver_scroll_for_source(
+                stations, active, "all", "kiwi",
+            ),
+            expected,
+        )
+
+    def test_unrelated_category_starts_at_top_instead_of_centering_active(self):
+        stations = tuple(
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        )
+        self.assertEqual(
+            ui.active_receiver_scroll_for_source(
+                stations, "http://rx5.test", "openwebrx", "kiwi",
+            ),
+            0,
+        )
+
 
 class WorkspaceLayoutTests(unittest.TestCase):
     def test_settings_center_workspace_stays_outside_sidebar(self):
