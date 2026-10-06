@@ -627,13 +627,20 @@ class ReceiverMapLegendTests(unittest.TestCase):
             entries,
         )
 
-    def test_selected_legend_state_is_outlined_in_its_source_color(self):
+    def test_legend_uses_cyan_active_border_and_always_gray_text(self):
         visual = ui.receiver_map_legend_visual('openwebrx', True)
         self.assertEqual(visual.fill, ui.APP_UI_STYLE.palette.surface)
-        self.assertEqual(visual.border, ui.RECEIVER_MAP_GROUP_COLORS['openwebrx'])
-        self.assertEqual(visual.text, ui.RECEIVER_MAP_GROUP_COLORS['openwebrx'][:3])
+        self.assertEqual(visual.border, ui.APP_UI_STYLE.palette.focus)
+        self.assertEqual(visual.text, ui.APP_UI_STYLE.palette.secondary_text)
         self.assertEqual(visual.border_width, 2)
         self.assertNotEqual(visual.fill, visual.border)
+        self.assertEqual(visual, ui.receiver_map_legend_visual('kiwi', True))
+        inactive = ui.receiver_map_legend_visual('openwebrx', False)
+        self.assertEqual(inactive.border, ui.APP_UI_STYLE.palette.border)
+        self.assertEqual(inactive.text, ui.APP_UI_STYLE.palette.secondary_text)
+        pressed = ui.receiver_map_legend_visual('openwebrx', False, pressed=True)
+        self.assertEqual(pressed.border, ui.APP_UI_STYLE.palette.focus)
+        self.assertEqual(pressed.text, ui.APP_UI_STYLE.palette.secondary_text)
 
     def test_legend_label_names_the_action(self):
         # A lit chip offers to hide its group; a hidden chip offers to show it.

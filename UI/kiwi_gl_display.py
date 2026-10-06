@@ -13095,13 +13095,13 @@ def receiver_map_legend_entries(receivers):
 
 
 def receiver_map_legend_visual(group, active, pressed=False):
-    """Resolve a Globe legend toggle without filling its selected state."""
-    if pressed:
-        return APP_UI_STYLE.button.resolve(pressed=True)
+    """Use neutral legend labels; only the circle carries source identity."""
     base = APP_UI_STYLE.button.resolve()
-    if active:
-        color = RECEIVER_MAP_GROUP_COLORS[group]
-        return ButtonVisualState(base.fill, color, color[:3], 2)
+    if active or pressed:
+        return ButtonVisualState(
+            base.fill, APP_UI_STYLE.palette.focus,
+            APP_UI_STYLE.palette.secondary_text, 2,
+        )
     return ButtonVisualState(
         base.fill, base.border, APP_UI_STYLE.palette.secondary_text, base.border_width,
     )
@@ -13508,9 +13508,7 @@ def draw_receiver_map(
             visual.fill, visual.border, visual.border_width,
         )
         swatch_x, swatch_y = (lx0 + lx1) / 2, ly0 + 31
-        if pressed:
-            draw_logical_circle(swatch_x, swatch_y, 9, UI_PRESSED_TEXT, 18)
-        elif legend_active:
+        if legend_active or pressed:
             draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         else:
             draw_logical_circle(swatch_x, swatch_y, 9, (*legend_color[:3], 88), 18, True)
