@@ -2647,7 +2647,12 @@ def active_receiver_source(stations, active_server, receiver_type="kiwi"):
 
 
 def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row=2):
-    """Place the active receiver near the list's visual centre when possible."""
+    """Place the active receiver on the requested row, allowing tail space.
+
+    Manual scrolling stops at the last full page, but active-receiver focus is
+    different: late entries need blank rows beneath them or they remain pinned
+    to the bottom. The first two entries still stay naturally at the top.
+    """
     selected_index = next(
         (
             index for index, station in enumerate(stations or ())
@@ -2657,8 +2662,10 @@ def centered_receiver_scroll(stations, active_server, leading_rows=0, center_row
     )
     if selected_index is None:
         return 0
-    target = max(0, selected_index + max(0, int(leading_rows)) - int(center_row))
-    return clamp(target, 0, station_page_max(stations, leading_rows))
+    return max(
+        0,
+        selected_index + max(0, int(leading_rows)) - max(0, int(center_row)),
+    )
 
 
 def active_receiver_scroll_for_source(
@@ -27086,7 +27093,7 @@ def main():
                                 and fmdx_disclaimer_action_at(x, y, station_scroll) == "ok"
                             ):
                                 fmdx_disclaimer_open = False
-                                station_scroll = clamp(station_scroll, 0, station_page_max(stations))
+                                center_active_receiver_in_current_list()
                             wake_controls()
                         elif touch_started and gesture == "picker_exit":
                             moved = max(abs(x - start_x), abs(y - start_y))

@@ -411,6 +411,31 @@ class ReceiverBrowserTests(unittest.TestCase):
             expected,
         )
 
+    def test_active_receiver_near_list_end_stays_in_third_position(self):
+        stations = tuple(
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        )
+        scroll = ui.centered_receiver_scroll(stations, "http://rx9.test/")
+        self.assertEqual(scroll, 7)
+        active_box = ui.station_tile(9, scroll)
+        third_box = ui.station_tile(2, 0)
+        self.assertIsNotNone(active_box)
+        self.assertEqual(active_box[1:], third_box[1:])
+        self.assertGreater(scroll, ui.station_page_max(stations))
+
+    def test_fmdx_notice_offset_still_places_active_receiver_third(self):
+        stations = tuple(
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(6)
+        )
+        scroll = ui.centered_receiver_scroll(
+            stations, "http://rx5.test/", leading_rows=1,
+        )
+        active_box = ui.station_tile(5 + 1, scroll)
+        third_box = ui.station_tile(2, 0)
+        self.assertEqual(active_box[1:], third_box[1:])
+
     def test_unrelated_category_starts_at_top_instead_of_centering_active(self):
         stations = tuple(
             (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
