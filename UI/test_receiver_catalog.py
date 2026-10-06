@@ -146,6 +146,17 @@ class CatalogMergeTests(unittest.TestCase):
 
 
 class OpenWebRxNegotiationTests(unittest.TestCase):
+    def test_foreign_frequency_falls_back_to_announced_profile_start(self):
+        session = owrx.OpenWebRxSession("owrxs://rx.test/")
+        session.frequency_hz = 1_088_000.0
+        session.config.update({
+            "center_freq": 145_500_000.0,
+            "samp_rate": 1_000_000.0,
+            "start_offset_freq": 100_000.0,
+        })
+        self.assertEqual(session._effective_frequency_hz(), 145_600_000.0)
+        self.assertEqual(session.effective_frequency_hz, 145_600_000.0)
+
     def test_openwebrx_profile_bounds_frequency(self):
         session = owrx.OpenWebRxSession("owrxs://rx.test/")
         session.config.update({

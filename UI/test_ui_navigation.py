@@ -574,10 +574,10 @@ class ReceiverListStyleTests(unittest.TestCase):
         ui.configure_output(True)
         ui.configure_popup_layout()
 
-    def test_receiver_browser_uses_requested_1080_200_split(self):
-        self.assertEqual(ui.PICKER_BOX, (0, 0, 1080, 800))
-        self.assertEqual(ui.LOGICAL_W - ui.PICKER_BOX[2], 200)
-        self.assertTrue(all(box[0] >= 1080 for _source, box in ui.PICKER_SOURCE_SEGMENT_BOXES))
+    def test_receiver_browser_uses_the_standard_1024_256_split(self):
+        self.assertEqual(ui.PICKER_BOX, (0, 0, 1024, 800))
+        self.assertEqual(ui.LOGICAL_W - ui.PICKER_BOX[2], 256)
+        self.assertTrue(all(box[0] >= 1024 for _source, box in ui.PICKER_SOURCE_SEGMENT_BOXES))
 
     def test_theme_uses_exact_receiver_palette_and_type_scale(self):
         theme = ui.RECEIVER_LIST_THEME
@@ -618,11 +618,42 @@ class ReceiverListStyleTests(unittest.TestCase):
         )
         self.assertEqual(text.call_args.args[4], (18, 18, 18))
 
-    def test_receiver_rows_are_compact_and_keep_five_visible(self):
-        boxes = [ui.station_tile(index, 0) for index in range(5)]
+    def test_receiver_rows_are_compact_and_keep_six_visible(self):
+        boxes = [ui.station_tile(index, 0) for index in range(6)]
         self.assertTrue(all(box is not None for box in boxes))
         self.assertTrue(all(box[3] - box[1] == ui.RECEIVER_PICKER_ROW_HEIGHT for box in boxes))
         self.assertLess(boxes[-1][3], ui.LOGICAL_H)
+
+    def test_receiver_actions_use_the_lower_wide_rail_grid(self):
+        boxes = ui.receiver_picker_command_boxes()
+        self.assertEqual(len(boxes), 4)
+        self.assertGreaterEqual(min(box[1] for box in boxes), 488)
+        self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
+
+    def test_receiver_back_label_is_centered_plain_text(self):
+        with mock.patch.object(ui, "draw_styled_text_button") as draw:
+            ui.draw_receiver_back_button(self.Cache(), ui.PICKER_EXIT_BOX)
+        self.assertEqual(draw.call_args.args[2], "BACK")
+
+    def test_sort_button_always_names_the_active_order(self):
+        texts = []
+        with mock.patch.object(ui, "draw_styled_button_frame",
+                               return_value=ui.APP_UI_STYLE.button.resolve()), \
+                mock.patch.object(ui, "draw_receiver_action_icon"), \
+                mock.patch.object(ui, "draw_text",
+                                  side_effect=lambda *args, **_kwargs: texts.append(args[3])):
+            ui.draw_receiver_action_button(
+                self.Cache(), ui.PICKER_SORT_BOX, "SORT", "sort", detail="LOCATION",
+            )
+        self.assertEqual(texts, ["SORT", "LOCATION"])
+
+    def test_favorite_star_is_closed_and_mathematically_regular(self):
+        points = ui.regular_star_points(0, 0, 23)
+        self.assertEqual(len(points), 11)
+        self.assertEqual(points[0], points[-1])
+        outer = (points[0][0] ** 2 + points[0][1] ** 2) ** 0.5
+        inner = (points[1][0] ** 2 + points[1][1] ** 2) ** 0.5
+        self.assertAlmostEqual(inner / outer, 0.38196601125)
 
     def test_shared_button_style_uses_cyan_active_state_everywhere(self):
         normal = ui.APP_UI_STYLE.button.resolve()

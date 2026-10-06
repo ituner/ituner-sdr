@@ -153,6 +153,11 @@ class OpenWebRxSession:
         except (KeyError, TypeError, ValueError):
             return None
 
+    @property
+    def effective_frequency_hz(self) -> Optional[float]:
+        """Frequency accepted by the active profile after initial negotiation."""
+        return self.frequency_hz
+
     def advertised_modes(self) -> tuple:
         """Map the server's advertised demodulators onto implemented modes."""
         advertised = self.config.get("modes")
@@ -228,13 +233,21 @@ class OpenWebRxSession:
         center = self.center_frequency_hz
         if center is None:
             raise OpenWebRxError("receiver did not provide center_freq")
-        if self.frequency_hz is not None:
-            return self.frequency_hz
         sample_rate = self.sample_rate_hz or 0.0
         start_offset = float(self.config.get("start_offset_freq", 0.0) or 0.0)
         if sample_rate and abs(start_offset) > sample_rate / 2:
             start_offset = 0.0
-        return center + start_offset
+        requested = self.frequency_hz
+        # Receiver switches commonly carry a frequency from an unrelated
+        # Kiwi or FM-DX band. OpenWebRX announces its active profile only
+        # after the socket opens, so use that profile's browser default when
+        # the carried frequency cannot exist in its capture window.
+        if requested is None or (
+            sample_rate and abs(float(requested) - center) > sample_rate / 2
+        ):
+            requested = center + start_offset
+        self.frequency_hz = float(requested)
+        return self.frequency_hz
 
     def _send_dsp_control(self) -> None:
         if self.ws is None:

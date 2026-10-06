@@ -1949,7 +1949,7 @@ def configure_popup_layout():
         PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
         # The source selectors now use the previously empty upper rail. The
         # receiver list can reclaim the full content height for station rows.
-        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 5, 0
+        PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 6, 0
         # RadioGarden gets the same dedicated 256 px right rail as Home.
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
@@ -2497,12 +2497,12 @@ class ReceiverBrowserState:
 RECEIVER_RAIL_TAB_TOP_GAP = 12
 RECEIVER_RAIL_TAB_HEIGHT = 52
 RECEIVER_RAIL_TAB_GAP = 8
-RECEIVER_PICKER_MAIN_W = 1080
-RECEIVER_PICKER_SIDEBAR_W = 200
+RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
+RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
 RECEIVER_PICKER_ACTION_GAP = 8
-RECEIVER_PICKER_ACTION_SIZE = 86
-RECEIVER_PICKER_ACTION_TOP = 470
+RECEIVER_PICKER_ACTION_SIZE = 108
+RECEIVER_PICKER_ACTION_TOP = 488
 RECEIVER_PICKER_ROW_HEIGHT = 112
 RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
@@ -2542,7 +2542,8 @@ def receiver_source_segments():
 
 def receiver_picker_command_boxes():
     """Return the receiver browser's square 2x2 action grid."""
-    left = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
+    grid_width = 2 * RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP
+    left = RECEIVER_PICKER_MAIN_W + (RECEIVER_PICKER_SIDEBAR_W - grid_width) / 2
     return tuple(
         (
             left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
@@ -7979,7 +7980,7 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
 
 
 def draw_favorite_waterfall_button(favorited):
-    """Transparent outlined/filled star: a durable receiver bookmark."""
+    """A geometrically regular five-point star for the Home favorite action."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -7987,12 +7988,7 @@ def draw_favorite_waterfall_button(favorited):
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    points = []
-    for index in range(11):
-        angle = -math.pi / 2 + index * math.pi / 5
-        radius = 23 if index % 2 == 0 else 10
-        points.append((cx + math.cos(angle) * radius, cy + math.sin(angle) * radius))
-    draw_logical_polyline(points, edge, 3)
+    draw_logical_polyline(regular_star_points(cx, cy, 23), edge, 3)
     if favorited:
         for radius in (15, 9, 4):
             draw_logical_circle(cx, cy, radius, (248, 207, 104, 145), 18, True)
@@ -16186,6 +16182,23 @@ def draw_receiver_globe_icon(text_cache, box, color):
                        cx + width / 2, cy + height / 2, 0, 0, 1, 1)
 
 
+def regular_star_points(cx, cy, outer_radius):
+    """Return a closed, mathematically regular five-point star."""
+    inner_radius = float(outer_radius) * 0.38196601125
+    points = tuple(
+        (
+            cx + math.cos(-math.pi / 2 + index * math.pi / 5) * (
+                outer_radius if index % 2 == 0 else inner_radius
+            ),
+            cy + math.sin(-math.pi / 2 + index * math.pi / 5) * (
+                outer_radius if index % 2 == 0 else inner_radius
+            ),
+        )
+        for index in range(10)
+    )
+    return points + (points[0],)
+
+
 def draw_receiver_action_icon(text_cache, box, kind, color):
     """Draw the four receiver actions with small dependency-free line icons."""
     x0, y0, x1, _y1 = box
@@ -16203,23 +16216,25 @@ def draw_receiver_action_icon(text_cache, box, kind, color):
         draw_logical_line(cx + 2, cy + 5, cx + 7, cy + 10, color, 2)
         draw_logical_line(cx + 12, cy + 5, cx + 7, cy + 10, color, 2)
     else:
-        points = []
-        for index in range(10):
-            angle = -math.pi / 2 + index * math.pi / 5
-            radius = 11 if index % 2 == 0 else 5
-            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
-        draw_logical_polyline(points + [points[0]], color, 2)
+        draw_logical_polyline(regular_star_points(cx, cy, 11), color, 2)
 
 
-def draw_receiver_action_button(text_cache, box, label, kind, selected=False, theme=RECEIVER_LIST_THEME):
+def draw_receiver_action_button(text_cache, box, label, kind, selected=False,
+                                theme=RECEIVER_LIST_THEME, detail=""):
     pressed = ui_button_pressed(box)
     visual = draw_styled_button_frame(box, active=selected, pressed=pressed)
     ink = visual.text
     draw_receiver_action_icon(text_cache, box, kind, ink)
+    label_y = box[3] - (29 if detail else 18)
     draw_text(
-        text_cache, (box[0] + box[2]) / 2, box[3] - 18, label, ink,
+        text_cache, (box[0] + box[2]) / 2, label_y, label, ink,
         theme.label_size, True, False, "cm", family=theme.font_family,
     )
+    if detail:
+        draw_text(
+            text_cache, (box[0] + box[2]) / 2, box[3] - 12, detail, ink,
+            11, True, False, "cm", family=theme.font_family,
+        )
 
 
 def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
@@ -16229,13 +16244,13 @@ def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RE
 
 
 def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
-    draw_styled_text_button(text_cache, box, "← BACK", size=theme.label_size)
+    draw_styled_text_button(text_cache, box, "BACK", size=theme.label_size)
 
 
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
-    show_fmdx_notice=False,
+    show_fmdx_notice=False, notice="",
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -16247,7 +16262,9 @@ def draw_station_picker(
     if LCD_800_MODE:
         draw_receiver_action_button(text_cache, PICKER_MAP_MODE_BOX, "GLOBE", "globe")
         draw_receiver_action_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", "search")
-        draw_receiver_action_button(text_cache, PICKER_SORT_BOX, "SORT", "sort")
+        draw_receiver_action_button(
+            text_cache, PICKER_SORT_BOX, "SORT", "sort", detail=sort_mode.upper(),
+        )
         draw_receiver_action_button(
             text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", "favorite",
             route_filter == "favorites",
@@ -16336,6 +16353,13 @@ def draw_station_picker(
         draw_text(
             text_cache, badge_x + 6, badge_y + 14, distance_label, secondary_color,
             theme.label_size, False, False, "lm", family=theme.font_family,
+        )
+    if notice:
+        notice_box = (PICKER_BOX[2] / 2 - 190, 16, PICKER_BOX[2] / 2 + 190, 66)
+        visual = draw_styled_button_frame(notice_box, active=True)
+        draw_text(
+            text_cache, PICKER_BOX[2] / 2, 41, notice, visual.text,
+            theme.label_size, True, False, "cm", family=theme.font_family,
         )
 
 
@@ -20460,7 +20484,15 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 continue
             if event is None:
                 continue
-            if event.kind == "audio" and event.audio:
+            if event.kind == "config" and session.effective_frequency_hz is not None:
+                negotiated_khz = session.effective_frequency_hz / 1000.0
+                if abs(negotiated_khz - freq_khz) > 0.0005:
+                    state.set_view(freq_khz=negotiated_khz)
+                    print(
+                        f"gl OpenWebRX profile selected {negotiated_khz:.3f} kHz",
+                        flush=True,
+                    )
+            elif event.kind == "audio" and event.audio:
                 state.connection_ready(server_generation, "audio")
                 muted = bool(audio_controls.get("mute", False))
                 player.submit(bytes(len(event.audio)) if muted else event.audio, silence=muted)
@@ -21998,6 +22030,8 @@ def main():
     picker_map_hover_server = None
     picker_map_notice = ""
     picker_map_notice_until = 0.0
+    picker_list_notice = ""
+    picker_list_notice_until = 0.0
     picker_map_start_yaw = picker_map_yaw
     picker_map_start_pitch = picker_map_pitch
     picker_map_pinch_distance = None
@@ -26826,6 +26860,8 @@ def main():
                                 station_sort = "name" if station_sort == "location" else "location"
                                 stations = filtered_stations(all_stations, station_query, station_sort, station_route_filter, favorite_servers, station_health)
                                 station_scroll = 0
+                                picker_list_notice = f"SORTED BY {station_sort.upper()}"
+                                picker_list_notice_until = time.monotonic() + 1.8
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -27777,6 +27813,7 @@ def main():
                         text_cache, visible_stations, station_scroll, server, station_query,
                         station_sort, station_health, station_pending_server, station_connection_status,
                         station_route_filter, receiver_home_profile, fmdx_disclaimer_open,
+                        picker_list_notice if time.monotonic() < picker_list_notice_until else "",
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
