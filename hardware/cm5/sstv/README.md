@@ -125,3 +125,35 @@ Original decoder IDs, source addresses, frequencies and paused states were
 verified unchanged afterward. The service remained active with zero
 automatic restarts; protected display, touch and audio setup checksums were
 unchanged. No successful over-the-air WSPR decode is claimed by this test.
+
+## WSPR runtime repair (2026-10-08)
+
+Apply `wspr-runtime-ui.patch` after the three UI patches above. It preserves
+PR #12's navigation while repairing the same WSPR code as the main branch.
+The root-owned `/opt/ituner-sdr/UI` directory is intentionally not writable by
+`ituner`; the old decoder exited with `Error: inaccessible data directory: '.'`.
+Each decode now runs in its writable capture directory, drains process output,
+reaps stopped/timed-out processes, and reports the underlying error during retry.
+New capture/retry states clear the previous cycle's progress.
+
+Installed UI SHA-256: `bb41fc379ecec9d7fe61f740e92955fdcb8a623eff672334e579c19fd3d204df`.
+Backup: `/var/backups/ituner-sdr/before-wspr-runtime-20261008-101941/`.
+Staging: `/home/ituner/wspr-fix-stage/`. The guarded installer retained the
+boot configuration, app configuration and CM5 audio/display launcher hashes.
+The application started with zero automatic restarts.
+
+Validation: 47 local tests completed (45 passed, two optional encoder cases
+skipped). All five new subprocess/progress regressions also passed on CM5.
+The installed worker ran the real `/usr/bin/wsprd` against a 120-second silent
+12 kHz, 16-bit mono WAV while the calling process remained in the unwritable
+application directory. It completed successfully with no spots and created its
+auxiliary files only in the temporary capture directory.
+
+The user's 40 m WSPR receiver at 7038.6 kHz and both existing SSTV receivers
+were restarted with their IDs, sources and frequencies retained. At validation,
+`kiwisdr.local:8073` accepted TCP but returned no HTTP status or audio, including
+while all our digital receivers were stopped. The receivers now accurately
+report RETRY with zero stale progress. Live WSPR reception cannot be verified
+until that separate Kiwi service recovers; no over-the-air decode is claimed.
+PR #12 remains a separate, unmerged PR; this deployment preserves its installed
+features without merging it into main.
