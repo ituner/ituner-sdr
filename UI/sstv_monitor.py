@@ -490,6 +490,7 @@ class GalleryServer(ThreadingHTTPServer):
     def __init__(self, gallery, sessions, address):
         self.gallery, self.sessions = gallery, sessions
         self.bridge = None
+        self.wspr_history = None
         self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
 
@@ -507,14 +508,39 @@ class GalleryHandler(BaseHTTPRequestHandler):
             elif path.path in ('/wspr', '/wspr/'):
                 data = Path(__file__).with_name('wspr_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
-            elif path.path == '/digital-controls.js':
-                data = Path(__file__).with_name('digital_controls.js').read_bytes()
+            elif path.path in ('/digital-controls.js', '/wspr-history.js'):
+                data = Path(__file__).with_name('digital_controls.js' if path.path == '/digital-controls.js' else 'wspr_history.js').read_bytes()
                 content_type = 'text/javascript; charset=utf-8'
             elif path.path == '/api/digital/options':
                 if self.server.bridge is None:
                     self.send_error(503)
                     return
                 data = json.dumps(self.server.bridge.options_snapshot()).encode()
+                content_type = 'application/json'
+            elif path.path in ('/api/wspr/history', '/api/wspr/history.csv', '/api/wspr/reporting'):
+                history = self.server.wspr_history
+                if history is None:
+                    self.send_error(503)
+                    return
+                if path.path == '/api/wspr/reporting':
+                    data = json.dumps({'sources': history.sources(), 'control_token': self.server.control_token}).encode()
+                else:
+                    filters = {k:v[0] for k,v in parse_qs(path.query).items() if k in ('source','band','scope','run','since','until','offset','limit')}
+                    if path.path.endswith('.csv'):
+                        filters.pop('offset',None); filters.pop('limit',None)
+                        # Freeze the displayed time window; the CSV iterator also
+                        # excludes rows inserted after its snapshot began.
+                        filters.setdefault('until', time.time()+1)
+                        history.query(**filters, limit=1)
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/csv; charset=utf-8')
+                        self.send_header('Content-Disposition', 'attachment; filename="wspr-history.csv"')
+                        self.send_header('Cache-Control', 'no-store')
+                        self.end_headers()
+                        for chunk in history.csv(**filters):
+                            self.wfile.write(chunk)
+                        return
+                    data = json.dumps(history.query(**filters)).encode()
                 content_type = 'application/json'
             elif path.path == '/api/wspr':
                 if self.server.bridge is None:
@@ -553,7 +579,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ('/api/sstv/control', '/api/wspr/control'):
+            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting'):
                 raise ControlError(404, 'Unknown control endpoint')
             origin = self.headers.get('Origin')
             if origin and origin != 'http://' + self.headers.get('Host', ''):
@@ -578,7 +604,16 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 raise ControlError(400, 'Invalid control request')
             if self.server.bridge is None:
                 raise ControlError(503, 'Receiver controls unavailable')
-            result = self.server.bridge.request(path.split('/')[2], payload.get('id'), payload.get('action'), config=payload.get('config'))
+            if path == '/api/wspr/reporting':
+                if self.server.wspr_history is None:
+                    raise ControlError(503, 'History unavailable')
+                try:
+                    result = self.server.wspr_history.configure(payload.get('source'), payload.get('call',''),
+                        payload.get('grid',''), payload.get('enabled',False), payload.get('confirmed',False))
+                except (ValueError, TypeError) as exc:
+                    raise ControlError(400, str(exc))
+            else:
+                result = self.server.bridge.request(path.split('/')[2], payload.get('id'), payload.get('action'), config=payload.get('config'))
             status = 200
         except ControlError as exc:
             status, result = exc.status, {'error': str(exc)}

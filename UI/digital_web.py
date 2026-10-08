@@ -99,6 +99,7 @@ def wspr_snapshot(tiles, manager):
             status='STOPPED' if paused else state.get('status', 'QUEUED'),
             decode_status='STOPPED' if paused else state.get('decode_status', 'QUEUED'),
             detail=state.get('decode_detail', ''), receiver_grid=state.get('receiver_grid'),
+            run_id=state.get('run_id', ''),
             progress_pct=0 if paused else min(100, max(0, state.get('decode_audio_seconds', 0)/1.2)),
             cycle_start=state.get('decode_cycle_start', 0),
             spots=list(state.get('decoded_spots', ()))[:96]))

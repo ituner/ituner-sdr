@@ -188,3 +188,10 @@ sudo reboot
 
 Digital tools → SSTV adds continuous receiver decoders, a 1280 × 800 touch
 gallery and LAN SSTV/WSPR pages with receiver selection and Add/Edit/Start/Stop controls. See [SSTV setup and supported modes](docs/sstv.md).
+
+## WSPR history and reporting
+
+WSPR spots survive decoder restarts and card removal. Browse sessions, dates
+and receiver/band archives on the touchscreen or `/wspr`, export CSV, and
+optionally upload new spots to WSPRnet with a separate identity per receiver.
+See [history and reporting setup](docs/WSPR_HISTORY.md).

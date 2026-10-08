@@ -157,3 +157,34 @@ report RETRY with zero stale progress. Live WSPR reception cannot be verified
 until that separate Kiwi service recovers; no over-the-air decode is claimed.
 PR #12 remains a separate, unmerged PR; this deployment preserves its installed
 features without merging it into main.
+
+## Persistent WSPR history and optional reporting (2026-10-08)
+
+Apply `wspr-history-ui.patch` after `wspr-runtime-ui.patch`, and install
+`wspr_history.py`, `wspr_history_view.py`, `wspr_history.js`, `wspr_gallery.html`,
+`sstv_monitor.py` and `digital_web.py` from the corresponding main update.
+This preserves the installed PR #12 navigation and features. It does not merge
+PR #12 into main or change display, touch, audio or boot configuration.
+
+Expected original UI SHA-256:
+`bb41fc379ecec9d7fe61f740e92955fdcb8a623eff672334e579c19fd3d204df`.
+Installed UI SHA-256:
+`4b04b49fe7b08edb287dec0b794dee3c1fe222483e93a4cf67dcf48b11c75b11`.
+
+See [WSPR history and reporting](../../../docs/WSPR_HISTORY.md) for retained
+logs, local/web filters, CSV export, receiver identities and upload behaviour.
+
+Deployed with backup
+`/var/backups/ituner-sdr/before-wspr-history-20261008-111236/`.
+The timestamp follows CM5's configured local timezone; its UTC clock was
+NTP-synchronized. Staging: `/home/ituner/wspr-history-deploy/`.
+
+Validation: 71 local tests completed (69 passed, two optional encoder cases
+skipped); all 24 history, reporting, HTTP and integration cases passed on CM5.
+The native history and settings screens were rendered at 1280 × 800. Browser
+checks verified the confirmation guard, save/off settings, actual CM5 history
+and Stop/Start. The archive imported 51 real spots, kept all 51 across the live
+40 m decoder restart, and exported all 51 CSV rows. The existing SSTV receiver
+states remained one running and one stopped. The app had zero automatic
+restarts and unchanged protected boot/display/audio configuration hashes.
+Uploads remained disabled; no synthetic spots were sent to WSPRnet.
