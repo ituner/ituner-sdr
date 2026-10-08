@@ -223,3 +223,18 @@ WSPR and two SSTV decoder configurations and active states were retained.
 The running service had no automatic restarts and unchanged boot configuration,
 app configuration and display/audio launcher checksums. See
 [Hell operation and reporting](../../../docs/HELL.md).
+
+QRSS adds visual captures and tentative CW / FSKCW text. For a PR12 UI already
+carrying `hell-ui.patch`, apply `qrss-ui.patch` next. Copy the `UI/qrss_*` files,
+updated `digital_web.py`, `sstv_monitor.py`, digital gallery pages and
+`licenses/qrsspig-GPL-3.txt`. The main-branch UI has these hooks directly.
+See [QRSS operation](../../../docs/QRSS.md). No display or audio driver changes
+are involved.
+
+QRSS was validated on CM5 with eight passing tests, including generated
+CW/FSKCW at all five dot speeds and saved-text/image continuity. The live 30 m
+check receives a waterfall using one additional Kiwi audio session; stopping
+retains its capture. Existing two WSPR, two SSTV and seven-mode Hell receiver
+sessions resumed. Backup: `/var/backups/ituner-sdr/before-qrss-20261008-135223`.
+The service remained active without automatic restarts and installed hashes
+matched the deployment manifest. No on-air Morse text is claimed from this test.

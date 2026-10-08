@@ -506,6 +506,7 @@ class GalleryServer(ThreadingHTTPServer):
         self.bridge = None
         self.wspr_history = None
         self.hell = None
+        self.qrss = None
         self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
 
@@ -520,6 +521,22 @@ class GalleryHandler(BaseHTTPRequestHandler):
             if path.path in ('/', '/sstv', '/sstv/'):
                 data = Path(__file__).with_name('sstv_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path in ('/qrss','/qrss/'):
+                data = Path(__file__).with_name('qrss_gallery.html').read_bytes()
+                content_type = 'text/html; charset=utf-8'
+            elif path.path.startswith('/qrss-images/') and path.path.endswith('.png'):
+                if self.server.qrss is None:
+                    self.send_error(503)
+                    return
+                data = self.server.qrss.gallery.image_path(path.path[13:-4]).read_bytes()
+                content_type = 'image/png'
+            elif path.path == '/api/qrss':
+                if self.server.qrss is None or self.server.bridge is None:
+                    self.send_error(503)
+                    return
+                state = dict(images=self.server.qrss.image_snapshot(),decoders=self.server.bridge.snapshot('qrss')['decoders'],control_token=self.server.control_token)
+                data = json.dumps(state).encode()
+                content_type = 'application/json'
             elif path.path in ('/hell', '/hell/'):
                 data = Path(__file__).with_name('hell_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
@@ -617,7 +634,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting'):
+            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting', '/api/qrss/control'):
                 raise ControlError(404, 'Unknown control endpoint')
             origin = self.headers.get('Origin')
             if origin and origin != 'http://' + self.headers.get('Host', ''):

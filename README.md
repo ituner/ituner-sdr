@@ -200,3 +200,8 @@ See [history and reporting setup](docs/WSPR_HISTORY.md).
 
 Seven Hellschreiber receive variants, local/web live strips and optional manual
 PSK Reporter spots: see [Hell RX setup and operation](docs/HELL.md).
+
+## QRSS
+
+Slow waterfall captures and tentative CW / FSKCW Morse text share one Kiwi
+channel, with local and web receiver controls. See [QRSS setup and limits](docs/QRSS.md).

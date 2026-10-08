@@ -2381,6 +2381,7 @@ DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
     ("sstv", "SSTV"),
     ("hell", "Hell RX"),
+    ("qrss", "QRSS"),
     ("digital_back", "HOME"),
 )
 WATERFALL_TUNE_X0 = 88
@@ -13026,7 +13027,7 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
             node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
             pygame.draw.line(surface, mono, (node_x, bus_y), (node_x, node.top - 3), stroke)
             pygame.draw.rect(surface, mono, node, stroke, border_radius=4)
-    elif kind in ("sstv", "hell"):
+    elif kind in ("sstv", "hell", "qrss"):
         pygame.draw.rect(surface, color, (cx-29, cy-23, 58, 43), 3, border_radius=4)
         pygame.draw.circle(surface, dim, (cx+15, cy-11), 5)
         pygame.draw.lines(surface, color, False, ((cx-25, cy+14), (cx-10, cy-5), (cx+1, cy+7), (cx+10, cy-2), (cx+25, cy+14)), 3)
@@ -13136,7 +13137,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("sstv", "hell"):
+        if kind in ("sstv", "hell", "qrss"):
             draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         elif kind in ("local_rx", "network"):
@@ -20279,12 +20280,18 @@ def main():
     from hell_workspace import HellWorkspace
     hell_manager = HellManager(kiwi, args.user)
     hell_workspace = HellWorkspace(sys.modules[__name__], hell_manager)
+    from qrss_monitor import QRSSManager
+    from qrss_workspace import QRSSWorkspace
+    qrss_manager = QRSSManager(kiwi, args.user)
+    qrss_workspace = QRSSWorkspace(sys.modules[__name__], qrss_manager)
     from digital_web import DigitalWebBridge, wspr_snapshot, receiver_options, ReceiverController
     digital_web = DigitalWebBridge()
     sstv_manager.ensure_web()
     if sstv_manager.web:
         sstv_manager.web.bridge = digital_web
         sstv_manager.web.hell = hell_manager
+        sstv_manager.web.qrss = qrss_manager
+        qrss_manager.web_port = sstv_manager.web_port
         hell_manager.web_port = sstv_manager.web_port
         sstv_manager.web.wspr_history = wspr_archive
     digital_web_next_snapshot = 0.0
@@ -21106,18 +21113,20 @@ def main():
         _server, frequency, *_rest = state.snapshot()
         mode, *_radio = state.radio_snapshot()
         options = receiver_options(wspr_receiver_choices(), WSPR_BANDS, PRESETS,
-                                [*sstv_manager.configs, *wspr_tiles, *hell_manager.configs],
+                                [*sstv_manager.configs, *wspr_tiles, *hell_manager.configs, *qrss_manager.configs],
                                 ('Current dial', frequency, mode.lower()))
         from hell_modes import PRESETS as HELL_PRESETS, MODES as HELL_MODES
         options['presets']['hell'] = list(HELL_PRESETS)
         options['hell_modes'] = HELL_MODES
+        from qrss_modes import PRESETS as QRSS_PRESETS
+        options['presets']['qrss'] = list(QRSS_PRESETS)
         kind_of = globals().get('station_receiver_type', lambda row: 'kiwi')
         kiwi_servers = {row[2] for row in wspr_receiver_choices() if kind_of(row) == 'kiwi'}
-        kiwi_servers.update(row['server'] for row in hell_manager.configs)
+        kiwi_servers.update(row['server'] for row in (*hell_manager.configs, *qrss_manager.configs))
         options['hell_receivers'] = [row for row in options['receivers'] if row['server'] in kiwi_servers]
         return options
 
-    receiver_controller = ReceiverController(sstv_manager, wspr_tiles, wspr_monitor, digital_receiver_options, hell_manager)
+    receiver_controller = ReceiverController(sstv_manager, wspr_tiles, wspr_monitor, digital_receiver_options, hell_manager, qrss_manager)
     digital_web.publish_options(digital_receiver_options())
 
     def apply_web_receiver_control(mode, key, action, config):
@@ -21134,7 +21143,7 @@ def main():
                                  receiver=tile.get('name'), server=tile.get('server'))
             preferences_dirty = True
             write_remembered_view(force=True)
-        digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot())
+        digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot(), qrss_manager.snapshot())
         digital_web.publish_options(digital_receiver_options())
         digital_web_next_snapshot = time.monotonic() + 1
 
@@ -21165,6 +21174,7 @@ def main():
         kind, label = items[index]
         sstv_workspace.open = False
         hell_workspace.open = False
+        qrss_workspace.open = False
         wake_controls()
         menu_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
@@ -21339,11 +21349,11 @@ def main():
             start_dual_vfo_clients()
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind in ("sstv", "hell"):
+        elif kind in ("sstv", "hell", "qrss"):
             settings_menu_open = digital_menu_open = False
             active_server, active_freq, *_ = state.snapshot()
             active_mode, *_ = state.radio_snapshot()
-            (hell_workspace if kind == "hell" else sstv_workspace).show(active_server, active_freq, active_mode)
+            ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace}[kind]).show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
@@ -21969,7 +21979,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if hell_workspace.open:
+                            if qrss_workspace.open:
+                                gesture = "qrss_workspace"
+                            elif hell_workspace.open:
                                 gesture = "hell_workspace"
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
@@ -23283,6 +23295,10 @@ def main():
                                     write_remembered_view(force=True)
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "qrss_workspace":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                qrss_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "hell_workspace":
                             if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
@@ -25358,8 +25374,9 @@ def main():
             digital_web.drain(apply_web_receiver_control)
             sstv_manager.tick()
             hell_manager.tick()
+            qrss_manager.tick()
             if time.monotonic() >= digital_web_next_snapshot:
-                digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot())
+                digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot(), qrss_manager.snapshot())
                 digital_web_next_snapshot = time.monotonic() + 1
             if wspr_tiles or wspr_monitor.sessions:
                 refresh_wspr_waterfalls()
@@ -25553,6 +25570,8 @@ def main():
                 or filter_panel_open or frequency_entry_open or dual_vfo_open
             ):
                 draw_utc_clock(text_cache)
+            if qrss_workspace.open:
+                qrss_workspace.draw(text_cache, wspr_receiver_choices())
             if hell_workspace.open:
                 hell_workspace.draw(text_cache, wspr_receiver_choices())
             if sstv_workspace.open:
@@ -25588,6 +25607,8 @@ def main():
         rtl_lab.stop()
         stop_dual_vfo_clients()
         digital_web.close()
+        qrss_manager.stop()
+        qrss_workspace.close()
         hell_manager.stop()
         hell_workspace.close()
         sstv_manager.stop()
