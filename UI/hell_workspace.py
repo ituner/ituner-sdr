@@ -2,7 +2,7 @@
 import math
 import socket
 from sstv_workspace import SSTVWorkspace
-from hell_modes import MODES, PRESETS, settings
+from hell_modes import MODES, PRESETS, settings, selected_modes, fit_modes
 
 
 class HellWorkspace(SSTVWorkspace):
@@ -13,6 +13,7 @@ class HellWorkspace(SSTVWorkspace):
         self.entry = ''
         self.reporting = None
         self.report_field = 'call'
+        self.saved_view = False
 
     def preview(self, cache, item, box):
         self.image(item['id'], box)
@@ -43,11 +44,11 @@ class HellWorkspace(SSTVWorkspace):
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None))
                 self.button(cache,(24,704,330,770),'REPORT STATION',('report',item['id']))
                 self.text(cache,354,730,'Read the callsign from the strip; reporting is optional.',18,width=890)
-                self.text(cache,354,761,self.message,16,width=890)
+                self.text(cache,354,761,self.message or ('OCR guess: '+item.get('ocr_text','—')),16,width=890)
                 return
             self.enlarged = None
         self.text(cache,20,36,'Hell RX',29,(104,234,194))
-        self.text(cache,175,36,'Receivers' if self.decoders_open else 'Live & saved strips',23)
+        self.text(cache,175,36,'Receivers' if self.decoders_open else 'Saved strips' if self.saved_view else 'Latest previews',23)
         self.button(cache,(654,14,842,70),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
         self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
         self.button(cache,(1102,14,1258,70),'HOME',('home',None))
@@ -55,6 +56,13 @@ class HellWorkspace(SSTVWorkspace):
             self.draw_decoders(cache)
             return
         images = self.manager.image_snapshot(self.filter_id)
+        if self.saved_view:
+            images = [item for item in images if item['kind']=='saved']
+        else:
+            latest = {}
+            for item in images:
+                latest.setdefault((item['session_id'],item['mode']),item)
+            images = list(latest.values())
         pages = max(1,math.ceil(len(images)/5))
         self.page = min(self.page,pages-1)
         if not images:
@@ -64,16 +72,19 @@ class HellWorkspace(SSTVWorkspace):
         for i,item in enumerate(images[self.page*5:self.page*5+5]):
             y = 86+i*124
             self.ui.draw_logical_rect(16,y,1260,y+118,(17,34,42,255))
-            live = 'LIVE' if item['kind']=='receiving' else 'SAVED'
+            live = ('LIVE' if item['kind']=='receiving' else
+                    'POSSIBLE TEXT' if item.get('ocr_status')=='possible_text' else
+                    'LATEST PREVIEW' if item['kind']=='preview' else 'SAVED')
             self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']}",16,width=1215)
             self.image(item['id'],(24,y+32,1252,y+113))
             self.actions.append(((16,y,1260,y+118),('image',item['id'])))
         self.button(cache,(16,730,168,786),'< PREV',('page',-1))
         self.text(cache,188,758,f'{self.page+1} / {pages}',19)
         self.button(cache,(282,730,434,786),'NEXT >',('page',1))
-        self.button(cache,(450,730,650,786),'ALL STRIPS',('filter',None))
-        self.text(cache,676,743,self.message or 'Tap a strip to enlarge or report a station.',16,width=580)
-        self.text(cache,676,773,f'{socket.gethostname().split(".")[0]}.local:{self.manager.web_port}/hell',16,width=580)
+        self.button(cache,(450,730,658,786),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
+        self.button(cache,(670,730,870,786),'ALL RECEIVERS',('filter',None))
+        self.text(cache,890,743,self.message or 'Tap a strip to enlarge.',16,width=370)
+        self.text(cache,890,773,f'{socket.gethostname().split(".")[0]}.local:{self.manager.web_port}/hell',16,width=370)
 
     def draw_add(self,cache,receivers):
         p = self.preset
@@ -91,15 +102,16 @@ class HellWorkspace(SSTVWorkspace):
             self.button(cache,(x,y,x+198,y+53),preset['band'],('hell_preset',preset),active=p['band']==preset['band'])
         if self.current and 0<self.current[1]<30000 and self.current[2]=='usb':
             self.button(cache,(1064,320,1254,373),'CURRENT USB',('current',None))
-        self.text(cache,24,400,'HELL VARIANT · select the transmitted mode',18)
+        self.text(cache,24,400,'HELL MODES · select several; all share one Kiwi channel',18)
         for i,(key,spec) in enumerate(MODES.items()):
             x,y=24+i%4*312,420+i//4*59
-            self.button(cache,(x,y,x+300,y+51),spec['label'],('hell_mode',key),active=p['hell_mode']==key)
-        self.button(cache,(24,548,420,610),f"Dial: {p['freq_khz']:g} kHz USB",('number','freq_khz'))
+            self.button(cache,(x,y,x+300,y+51),spec['label'],('hell_mode',key),active=key in selected_modes(p))
+        self.button(cache,(960,479,1260,530),'ALL MODES',('hell_all',None),active=len(selected_modes(p))==len(MODES))
+        self.button(cache,(24,548,420,610),f"Dial: {p['freq_khz']:.3f} kHz USB",('number','freq_khz'))
         self.button(cache,(440,548,830,610),f"Audio center: {p['tone_hz']:g} Hz",('number','tone_hz'))
         self.button(cache,(850,548,1256,610),'REVERSE: '+('ON' if p.get('reverse') else 'OFF'),('reverse',None))
-        self.text(cache,24,639,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · one Kiwi audio channel per decoder",19)
-        self.text(cache,24,674,'EU net presets: Saturday 10:00 UTC, 30 m odd weeks / 20 m even weeks; verify announcements.',16)
+        self.text(cache,24,639,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · {len(selected_modes(p))} modes / one Kiwi channel",19)
+        self.text(cache,24,674,'One OCR letter or digit keeps a strip. No text: only the latest preview per mode is kept.',16)
         self.button(cache,(24,714,244,780),'CANCEL',('cancel_add',None))
         self.text(cache,265,748,self.message,17,width=715)
         self.button(cache,(990,714,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
@@ -141,8 +153,13 @@ class HellWorkspace(SSTVWorkspace):
         try:
             if key=='hell_preset':self.preset=dict(value)
             elif key=='hell_mode':
-                self.preset['hell_mode']=value
-                self.preset['tone_hz']=max(self.preset['tone_hz'],MODES[value]['bandwidth']/2+150)
+                modes=selected_modes(self.preset)
+                if value in modes:
+                    if len(modes)>1:modes.remove(value)
+                else:modes.append(value)
+                self.preset=fit_modes(self.preset,modes)
+            elif key=='hell_all':self.preset=fit_modes(self.preset,list(MODES))
+            elif key=='saved_view':self.saved_view=not self.saved_view;self.page=0
             elif key=='reverse':self.preset['reverse']=not self.preset.get('reverse',False)
             elif key=='current':self.preset.update(band='Current dial',freq_khz=self.current[1])
             elif key=='number':self.field=value;self.entry='';self.message=''
@@ -155,6 +172,7 @@ class HellWorkspace(SSTVWorkspace):
             elif key=='edit':
                 row=next(r for r in self.manager.configs if r['id']==value)
                 self.preset={k:row[k] for k in ('band','freq_khz','mode','tone_hz','hell_mode','reverse')}
+                self.preset['hell_modes']=selected_modes(row)
                 self.edit_id=value;self.selected_server=row['server'];self.add_open=True;self.delete_armed=None
                 self.receiver_page=next((i//2 for i,r in enumerate(receivers) if self.ui.station_fields(r)[2]==row['server']),0)
             elif key=='report':

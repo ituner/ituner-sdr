@@ -23,23 +23,40 @@ PRESETS = tuple(dict(id=key, band=band, freq_khz=dial, mode='usb', tone_hz=1500,
 ))
 
 
+def selected_modes(config):
+    modes = config.get('hell_modes', [config.get('hell_mode', 'HELL')])
+    if not isinstance(modes, list) or not modes or len(modes) > len(MODES):
+        raise ValueError('Select at least one Hell mode')
+    if any(not isinstance(mode, str) or mode not in MODES for mode in modes):
+        raise ValueError('Choose supported Hell modes')
+    return [mode for mode in MODES if mode in modes]
+
+
+def fit_modes(config, modes):
+    """Changing the audio passband must not move the station's RF center."""
+    modes = selected_modes({'hell_modes': modes})
+    half = max(MODES[mode]['bandwidth']/2 for mode in modes)
+    old_tone = config['tone_hz']
+    tone = min(5000-half, max(old_tone, 200, half+150))
+    return dict(config, hell_mode=modes[0], hell_modes=modes, tone_hz=tone,
+                freq_khz=config['freq_khz']+(old_tone-tone)/1000)
+
+
 def settings(payload, preset):
     import math
-    mode = payload.get('hell_mode', preset.get('hell_mode', 'HELL'))
-    if mode not in MODES:
-        raise ValueError('Choose a supported Hell mode')
+    modes = selected_modes(payload if 'hell_modes' in payload or 'hell_mode' in payload else preset)
     try:
         tone = float(payload.get('tone_hz', preset.get('tone_hz', 1500)))
         freq = float(payload.get('freq_khz', preset['freq_khz']))
     except (ValueError, TypeError):
         raise ValueError('Enter a valid dial frequency and audio center')
     # Preserve the full occupied bandwidth in Kiwi audio, including Hell x9.
-    half = MODES[mode]['bandwidth']/2
+    half = max(MODES[mode]['bandwidth']/2 for mode in modes)
     if not math.isfinite(tone) or not max(200, half+100) <= tone <= 5000-half:
-        raise ValueError(f'Audio center for {MODES[mode]["label"]}: {max(200, half+100):g}–{5000-half:g} Hz')
+        raise ValueError(f'Audio center for selected modes: {max(200, half+100):g}–{5000-half:g} Hz')
     if not math.isfinite(freq) or not 0 < freq <= 30000-tone/1000:
         raise ValueError('Choose a frequency within Kiwi’s 0–30 MHz range')
-    reverse = payload.get('reverse', False)
+    reverse = payload.get('reverse', preset.get('reverse', False))
     if type(reverse) is not bool:
         raise ValueError('Invalid reverse setting')
-    return dict(hell_mode=mode, tone_hz=tone, freq_khz=freq, reverse=reverse)
+    return dict(hell_mode=modes[0], hell_modes=modes, tone_hz=tone, freq_khz=freq, reverse=reverse)

@@ -2,19 +2,19 @@
 import json
 import os
 from pathlib import Path
-import threading
 import time
 import uuid
-from hell_modes import MODES, settings
-from sstv_monitor import Gallery, Session, SSTVManager
+from hell_modes import MODES, settings, selected_modes
+from sstv_monitor import Session, SSTVManager
 
 
 class StripAssembler:
-    def __init__(self, session, gallery):
+    def __init__(self, session, gallery, mode=None):
         from hell_decoder import HellDecoder
         self.session, self.gallery = session, gallery
         config = session.config
-        self.decoder = HellDecoder(config['hell_mode'], config['tone_hz'], config['reverse'])
+        self.mode = mode or config['hell_mode']
+        self.decoder = HellDecoder(self.mode, config['tone_hz'], config['reverse'])
         self.parts = []
         self.columns = 0
         self.key = None
@@ -33,7 +33,7 @@ class StripAssembler:
             self.started = time.time()
         self.parts.append(columns)
         self.columns += columns.shape[1]
-        self.session.report('RECEIVING', f"{MODES[self.session.config['hell_mode']]['label']} · {self.session.config['tone_hz']:g} Hz audio · {self.decoder.level:.0f} dBFS")
+        self.session.report('RECEIVING', f"{len(selected_modes(self.session.config))} mode(s) · one Kiwi channel · {self.session.config['tone_hz']:g} Hz audio")
         now = time.monotonic()
         if self.columns >= min(768, 30*self.decoder.spec['columns']):
             self.flush()
@@ -55,13 +55,15 @@ class StripAssembler:
         image.save(path)
         item = dict(id=self.key, session_id=config['id'], receiver=config['name'], server=config['server'],
                     band=config['band'], freq_khz=config['freq_khz'], tone_hz=config['tone_hz'],
-                    rf_hz=round(config['freq_khz']*1000+config['tone_hz']), mode=config['hell_mode'],
+                    rf_hz=round(config['freq_khz']*1000+config['tone_hz']), mode=self.mode,
                     sideband='usb', reverse=config['reverse'], kind=kind, progress_pct=0,
                     capture_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(self.started)),
                     received_at=self.started, updated_ns=time.time_ns(), has_image=True,
                     duration_seconds=round(self.columns/self.decoder.spec['columns'],1),
                     width=image.width, height=image.height)
         self.gallery.publish(path, item)
+        if kind == 'saved' and hasattr(self.gallery, 'classify'):
+            self.gallery.classify(self.key)
         self.session.note('Live raster · read callsigns visually; noise is also displayed')
 
     def flush(self):
@@ -70,15 +72,34 @@ class StripAssembler:
         self.parts, self.columns, self.key = [], 0, None
 
 
+class ModeBank:
+    """Every selected raster engine consumes the same PCM from one socket."""
+    def __init__(self, session, gallery):
+        self.assemblers = [StripAssembler(session, gallery, mode)
+                           for mode in selected_modes(session.config)]
+
+    def feed(self, pcm):
+        for assembler in self.assemblers:
+            assembler.feed(pcm)
+
+    def reset(self):
+        for assembler in self.assemblers:
+            assembler.reset()
+
+    def flush(self):
+        for assembler in self.assemblers:
+            assembler.flush()
+
+
 class HellSession(Session):
     receiver_label = 'Hell'
-    listening_message = 'Receiving a live Hell raster (no automatic text recognition)'
+    listening_message = 'Receiving Hell rasters; finished strips are checked for possible text'
 
     def make_assembler(self):
-        return StripAssembler(self, self.queue)
+        return ModeBank(self, self.queue)
 
     def bandpass(self):
-        half = MODES[self.config['hell_mode']]['bandwidth']/2
+        half = max(MODES[mode]['bandwidth']/2 for mode in selected_modes(self.config))
         center = self.config['tone_hz']
         return round(center-half-70), round(center+half+70)
 
@@ -86,11 +107,13 @@ class HellSession(Session):
 class HellManager(SSTVManager):
     def __init__(self, kiwi, user, root=None):
         self.root = Path(root or os.environ.get('ITUNER_HELL_DIR', '~/.local/share/ituner-sdr/hell')).expanduser()
-        self.gallery = Gallery(self.root/'images')
+        from hell_ocr import HellGallery
+        self.gallery = HellGallery(self.root/'images')
         # Recover interrupted live strips as saved; no phantom reception on boot.
         with self.gallery.lock:
             for row in self.gallery.items:
-                row['kind'] = 'saved'
+                if row['kind'] == 'receiving':
+                    row['kind'] = 'saved'
         self.config_path = self.root/'sessions.json'
         self.kiwi, self.user = kiwi, user
         self.configs, self.sessions = [], {}
@@ -101,6 +124,7 @@ class HellManager(SSTVManager):
         try:
             for config in json.loads(self.config_path.read_text())[:6]:
                 self.validate(config)
+                config.update(settings(config, config))
                 if not any(r['id']==config['id'] for r in self.configs):
                     self.configs.append(config)
         except (OSError, ValueError, TypeError, KeyError):
@@ -120,7 +144,7 @@ class HellManager(SSTVManager):
 
     def add(self, name, server, preset, key=None, running=True):
         if len(self.configs) >= 6:
-            raise ValueError('Six Hell decoders maximum; remove an unused decoder')
+            raise ValueError('Six Hell receivers maximum; each can decode all seven modes')
         config = dict(preset, id=key or uuid.uuid4().hex, name=name, server=server, paused=not running)
         config.update(settings(config, config))
         self.validate(config)
@@ -144,9 +168,9 @@ class HellManager(SSTVManager):
         config = next(row for row in self.configs if row['id']==key)
         updated = dict(config, **{k:v for k,v in preset.items() if k not in ('id','paused','name','server')})
         updated.update(name=name, server=server)
-        updated.update(settings(updated, updated))
+        updated.update(settings(preset, updated))
         self.validate(updated)
-        changed = any(config.get(k)!=updated[k] for k in ('server','freq_khz','tone_hz','hell_mode','reverse'))
+        changed = any(config.get(k)!=updated[k] for k in ('server','freq_khz','tone_hz','hell_modes','reverse'))
         if changed:
             old = self.sessions.pop(key, None)
             if old:
@@ -168,3 +192,4 @@ class HellManager(SSTVManager):
             if session.thread:
                 session.thread.join(timeout=3)
         self.reporter.close()
+        self.gallery.close()

@@ -1,15 +1,19 @@
 # Hell RX
 
 Open **Digital tools → Hell RX** (or **Modes → HELL RX** on the CM5 PR #12
-installation). Choose **Add decoder**, a KiwiSDR receiver, band, Hell variant,
-USB dial frequency and audio center. Each running decoder occupies one Kiwi
-audio channel. Start, Stop, Edit and Remove use the same saved settings on the
+installation). Choose **Add decoder**, a KiwiSDR receiver, band, one or more Hell variants,
+USB dial frequency and audio center. Select **All modes** to run all seven
+raster engines on the same audio. Each receiver occupies just **one Kiwi audio
+channel**, regardless of the number of selected modes. This covers different
+variants at the same RF center; it does not scan other frequencies. Start, Stop, Edit and Remove use the same saved settings on the
 touchscreen and the web page at `http://cm5.local:8073/hell`.
 
 Supported variants: Feld Hell, Slow Hell, Hell ×5, Hell ×9, FSK Hell 245,
 FSK Hell 105 and Hell 80. This is a headless NumPy receiver based on fldigi's
 receive design and timings, rather than a launched fldigi desktop. It uses the
-existing NumPy and Pillow dependencies; no new display or audio driver is used.
+existing NumPy and Pillow dependencies. Tesseract with English recognition data
+(`tesseract-ocr` and `tesseract-ocr-eng`) is installed by the dependency script
+for optional text triage. No new display or audio driver is used.
 
 ## Reading and saving
 
@@ -17,17 +21,35 @@ Hell is an asynchronous facsimile mode. There is **no mode header, automatic
 callsign decoding or completion percentage**. Select the actual transmitted
 variant and adjust the audio center until text is readable. Reverse swaps ink
 and background (useful for reversed FSK). The receiver displays noise too; a
-saved strip is not a verified transmission. There is no OCR or automatic spot
+saved strip is not a verified transmission. OCR is a retention aid, never proof of a decode; there is no automatic spot
 submission.
 
-The gallery shows a live raster in both interfaces, updates about every two
+The gallery shows the latest raster for each receiver/mode in both interfaces, updates about every two
 seconds (the web polls every three), and saves strips every 30 seconds or 768
 columns, whichever is sooner. Five wide strips fit the local 1280×800 display.
 Tap one to enlarge it; the web viewer also offers PNG download. Receiver cards
 have a latest-strip preview. Reception continues when returning to the radio.
 
+Finished strips are checked in one bounded background OCR worker. **A single
+recognized ASCII letter or digit is enough to keep a strip**, even without a
+word or callsign. A low Tesseract confidence floor of 20/100 excludes
+zero-confidence guesses generated from static (this is not a probability). These are labelled **Possible
+text**, and may include noise resembling a character. Punctuation alone does
+not qualify. OCR is imperfect on weak, drifting Hell rasters; a blank result is
+not proof that a transmission was absent.
+
+When OCR finds no text, the latest **preview** for that receiver and mode is
+kept and replaces the preceding OCR-negative preview. The **Saved strips** view
+retains possible text and unchecked captures. Existing archives are not run
+through this filter. OCR errors, missing software, timeouts and overload keep
+the original strip as unchecked. Recognition is local; no image is sent to a
+cloud service. The web page also has a **Possible text** filter and mode filter.
+The latest view shows one image per receiver/mode so empty listening periods do
+not fill the preview page. OCR output is only a guess and never auto-fills a
+PSK Reporter callsign.
+
 Stop, an audio gap, an edit or disconnect finishes the current strip. Restart
-keeps earlier strips. The most recent **300** strips are retained across all
+keeps earlier saved strips. The most recent **300** strips are retained across all
 Hell receivers, including across application restarts. Download any images you
 want to keep permanently. Removing a receiver keeps its saved strips.
 Data defaults to `~/.local/share/ituner-sdr/hell` (`ITUNER_HELL_DIR` overrides it).
@@ -58,8 +80,9 @@ not dedicated channels or a promise of activity.
 
 The club lists the Saturday European net at 10:00 UTC: 30 m on odd weeks,
 20 m on even weeks. Confirm current announcements and the mode. Selecting
-Hell ×9 raises the audio center if necessary to fit its wider bandwidth;
-check the displayed RF center and adjust the dial to keep a signal centered.
+Hell ×9 raises the audio center if necessary to fit its wider bandwidth and
+automatically compensates the USB dial to keep the same RF center. Existing
+single-mode settings remain single-mode until edited.
 The editor permits custom frequencies. The local editor can also copy the
 current radio's USB dial.
 

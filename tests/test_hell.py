@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'UI'))
 from hell_decoder import HellDecoder
-from hell_modes import MODES, PRESETS, settings
+from hell_modes import MODES, PRESETS, settings, fit_modes
 from hell_monitor import HellManager, HellSession, StripAssembler
 from hell_reporting import HellReporter, packet, RX_TEMPLATE, TX_TEMPLATE
 from digital_web import ReceiverController, ControlError
@@ -104,6 +104,7 @@ class IntegrationTests(unittest.TestCase):
         self.controller.apply('hell','test','delete',{})
         self.assertEqual(self.manager.configs,[])
         self.assertTrue(self.manager.gallery.image_path(key).exists())
+        self.manager.stop()
         restarted=HellManager(None,'test',self.temp.name)
         try:self.assertEqual(len(restarted.image_snapshot()),1)
         finally:restarted.stop()
@@ -126,6 +127,98 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(self.manager.configs[0]['hell_mode'],'HELL')
         self.assertFalse(w.add_open)
         with self.assertRaises(ValueError):self.manager.reporter.submit(dict(call='KN6KEZ',confirmed=False))
+
+    def test_all_modes_share_one_session_and_keep_rf_center(self):
+        config=fit_modes(dict(PRESETS[4]),list(MODES))
+        self.assertEqual(config['freq_khz']*1000+config['tone_hz'],14063000)
+        config.update(settings(config,config))
+        key=self.manager.add('Local','http://kiwi.local',config,running=False)
+        row=self.manager.configs[0]
+        session=HellSession(row,None,self.manager.gallery,'test')
+        bank=session.make_assembler()
+        self.assertEqual(len(bank.assemblers),7)
+        low,high=session.bandpass()
+        self.assertGreater(low,0);self.assertLessEqual(high,5100)
+        with patch.object(self.manager.gallery,'classify'):
+            bank.feed(bytes(12000*2));bank.flush()
+        images=self.manager.image_snapshot()
+        self.assertEqual({r['mode'] for r in images},set(MODES))
+        self.assertEqual({r['session_id'] for r in images},{key})
+        self.assertEqual({r['rf_hz'] for r in images},{14063000})
+        self.assertEqual(len({id(a.session) for a in bank.assemblers}),1)
+        # A legacy singular-mode edit must override a saved multiselect.
+        self.manager.update(key,'Local','http://kiwi.local',dict(PRESETS[4],hell_mode='FSKH105'))
+        self.assertEqual(self.manager.configs[0]['hell_modes'],['FSKH105'])
+
+    def test_mode_list_validation_and_native_multiselect(self):
+        for invalid in ([],None,'HELL',['INVALID'],[{}],['HELL']*8):
+            with self.assertRaises(ValueError):settings(dict(hell_modes=invalid),PRESETS[4])
+        from hell_workspace import HellWorkspace
+        ui=SimpleNamespace(contains=lambda b,x,y:True)
+        w=HellWorkspace(ui,self.manager)
+        w.actions=[((0,0,10,10),('hell_all',None))]
+        w.tap(5,5,[])
+        self.assertEqual(len(w.preset['hell_modes']),7)
+        self.assertEqual(w.preset['freq_khz']*1000+w.preset['tone_hz'],14063000)
+
+
+class OCRTests(unittest.TestCase):
+    def test_one_letter_or_digit_is_sufficient_but_punctuation_is_not(self):
+        from hell_ocr import recognize
+        for token,confidence,expected in [('A',20,'A'),('7',20,'7'),('',99,''),('/',99,''),('fake',0,'')]:
+            result=SimpleNamespace(returncode=0,stdout='level\tconf\ttext\n5\t'+str(confidence)+'\t'+token+'\n')
+            with patch('hell_ocr.shutil.which',return_value='/usr/bin/tesseract'),patch('hell_ocr.subprocess.run',return_value=result):
+                self.assertEqual(recognize(Path('test.png')),expected)
+
+    def test_negative_previews_roll_over_without_deleting_candidates_or_legacy(self):
+        from hell_ocr import HellGallery
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            gallery=HellGallery(tmp)
+            try:
+                for i in range(5):
+                    key=f'{i:032x}';path=Path(tmp)/(key+'.working.png')
+                    Image.new('L',(16,56),255).save(path)
+                    gallery.publish(path,dict(id=key,session_id='rx',mode='HELL' if i<4 else 'FSKH105',kind='saved',received_at=i,capture_utc=str(i)))
+                gallery.complete(f'{0:032x}','A')
+                gallery.complete(f'{1:032x}','')
+                gallery.complete(f'{2:032x}','')
+                gallery.complete(f'{4:032x}','')
+                self.assertEqual({r['id'] for r in gallery.snapshot()},{f'{i:032x}' for i in (0,2,3,4)})
+                self.assertFalse(gallery.image_path(f'{1:032x}').exists())
+                # OCR failure keeps its original image, and the worker continues.
+                with patch('hell_ocr.recognize',side_effect=RuntimeError('missing')):
+                    gallery.classify(f'{3:032x}');gallery.pending.join()
+                self.assertTrue(gallery.image_path(f'{3:032x}').exists())
+                self.assertEqual(next(r for r in gallery.snapshot() if r['id']==f'{3:032x}')['ocr_status'],'unchecked')
+            finally:gallery.close()
+
+    def test_real_ocr_on_single_character_and_blank(self):
+        import shutil
+        if not shutil.which('tesseract'):self.skipTest('Tesseract not installed')
+        from hell_ocr import recognize
+        from PIL import Image,ImageDraw,ImageFont
+        font_path='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+        if not Path(font_path).exists():self.skipTest('Reference font not installed')
+        with tempfile.TemporaryDirectory() as tmp:
+            for char in ('A','7',''):
+                image=Image.new('L',(300,100),255)
+                ImageDraw.Draw(image).text((30,10),char,font=ImageFont.truetype(font_path,60),fill=0)
+                path=Path(tmp)/'single.png';image.save(path)
+                self.assertEqual(bool(recognize(path)),bool(char))
+            # A single 5x7 glyph, independently modulated as Feld Hell, must
+            # survive retention even if OCR mistakes its exact identity.
+            pattern=np.array([[int(c) for c in row] for row in
+                ['01110','10001','10001','11111','10001','10001','10001']])
+            raster=np.zeros((14,70));raster[:,20:25]=np.repeat(pattern,2,axis=0)
+            bits=raster[::-1].T.reshape(-1)
+            t=np.arange(int(len(bits)/245*12000))/12000
+            b=bits[np.minimum((t*245).astype(int),len(bits)-1)]
+            pcm=(np.sin(2*np.pi*1500*t)*b*.65*32767).astype('<i2').tobytes()
+            decoded=HellDecoder().feed(pcm)
+            image=Image.fromarray(decoded).resize((decoded.shape[1]*4,112),Image.Resampling.NEAREST)
+            image.save(path)
+            self.assertTrue(recognize(path))
 
 
 class ReportingTests(unittest.TestCase):
