@@ -195,3 +195,8 @@ WSPR spots survive decoder restarts and card removal. Browse sessions, dates
 and receiver/band archives on the touchscreen or `/wspr`, export CSV, and
 optionally upload new spots to WSPRnet with a separate identity per receiver.
 See [history and reporting setup](docs/WSPR_HISTORY.md).
+
+## Hell RX
+
+Seven Hellschreiber receive variants, local/web live strips and optional manual
+PSK Reporter spots: see [Hell RX setup and operation](docs/HELL.md).

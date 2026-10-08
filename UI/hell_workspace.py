@@ -1,0 +1,175 @@
+"""Hell RX touchscreen: five full-width strips on the 1280 x 800 display."""
+import math
+import socket
+from sstv_workspace import SSTVWorkspace
+from hell_modes import MODES, PRESETS, settings
+
+
+class HellWorkspace(SSTVWorkspace):
+    def __init__(self, ui, manager):
+        super().__init__(ui, manager)
+        self.preset = dict(PRESETS[4])
+        self.field = None
+        self.entry = ''
+        self.reporting = None
+        self.report_field = 'call'
+
+    def preview(self, cache, item, box):
+        self.image(item['id'], box)
+
+    def kiwi_receivers(self, receivers):
+        kind_of = getattr(self.ui, 'station_receiver_type', lambda row: 'kiwi')
+        return [row for row in receivers if kind_of(row) == 'kiwi']
+
+    def draw(self, cache, receivers):
+        receivers = self.kiwi_receivers(receivers)
+        self.actions = []
+        self.ui.draw_logical_rect(0,0,1280,800,(7,18,25,255))
+        if self.reporting is not None:
+            self.draw_report(cache)
+            return
+        if self.field is not None:
+            self.draw_number(cache)
+            return
+        if self.add_open:
+            self.draw_add(cache, receivers)
+            return
+        if self.enlarged:
+            item = next((r for r in self.manager.image_snapshot() if r['id']==self.enlarged),None)
+            if item:
+                self.text(cache,24,34,f"{MODES[item['mode']]['label']} · {item['band']} · {item['rf_hz']/1e6:.6f} MHz RF",25)
+                self.text(cache,24,72,item['receiver']+' · '+item['capture_utc'],18,width=1000)
+                self.image(item['id'],(20,110,1260,650))
+                self.button(cache,(1060,16,1258,76),'BACK',('back_image',None))
+                self.button(cache,(24,704,330,770),'REPORT STATION',('report',item['id']))
+                self.text(cache,354,730,'Read the callsign from the strip; reporting is optional.',18,width=890)
+                self.text(cache,354,761,self.message,16,width=890)
+                return
+            self.enlarged = None
+        self.text(cache,20,36,'Hell RX',29,(104,234,194))
+        self.text(cache,175,36,'Receivers' if self.decoders_open else 'Live & saved strips',23)
+        self.button(cache,(654,14,842,70),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
+        self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
+        self.button(cache,(1102,14,1258,70),'HOME',('home',None))
+        if self.decoders_open:
+            self.draw_decoders(cache)
+            return
+        images = self.manager.image_snapshot(self.filter_id)
+        pages = max(1,math.ceil(len(images)/5))
+        self.page = min(self.page,pages-1)
+        if not images:
+            self.text(cache,180,310,'Add a Hell decoder to receive scrolling text images.',26)
+            self.text(cache,180,355,'Choose Feld Hell or an FSK Hell variant; there is no automatic mode header.',20)
+            self.text(cache,180,395,'Noise is displayed too. A strip is not proof of a decoded transmission.',19)
+        for i,item in enumerate(images[self.page*5:self.page*5+5]):
+            y = 86+i*124
+            self.ui.draw_logical_rect(16,y,1260,y+118,(17,34,42,255))
+            live = 'LIVE' if item['kind']=='receiving' else 'SAVED'
+            self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']}",16,width=1215)
+            self.image(item['id'],(24,y+32,1252,y+113))
+            self.actions.append(((16,y,1260,y+118),('image',item['id'])))
+        self.button(cache,(16,730,168,786),'< PREV',('page',-1))
+        self.text(cache,188,758,f'{self.page+1} / {pages}',19)
+        self.button(cache,(282,730,434,786),'NEXT >',('page',1))
+        self.button(cache,(450,730,650,786),'ALL STRIPS',('filter',None))
+        self.text(cache,676,743,self.message or 'Tap a strip to enlarge or report a station.',16,width=580)
+        self.text(cache,676,773,f'{socket.gethostname().split(".")[0]}.local:{self.manager.web_port}/hell',16,width=580)
+
+    def draw_add(self,cache,receivers):
+        p = self.preset
+        self.text(cache,24,32,'EDIT HELL DECODER' if self.edit_id else 'ADD HELL DECODER',27)
+        self.receiver_page = min(self.receiver_page,max(0,math.ceil(len(receivers)/2)-1))
+        for i,row in enumerate(receivers[self.receiver_page*2:self.receiver_page*2+2]):
+            name,location,server,*_ = self.ui.station_fields(row)
+            y = 65+i*65
+            self.button(cache,(24,y,1256,y+57),name,('receiver',server),location or server,server==self.selected_server)
+        self.button(cache,(24,201,250,246),'< RECEIVERS',('rxpage',-1))
+        self.text(cache,490,224,f'Receivers {self.receiver_page+1}/{max(1,math.ceil(len(receivers)/2))}',18)
+        self.button(cache,(1020,201,1256,246),'RECEIVERS >',('rxpage',1))
+        for i,preset in enumerate(PRESETS):
+            x,y=24+i%6*208,260+i//6*60
+            self.button(cache,(x,y,x+198,y+53),preset['band'],('hell_preset',preset),active=p['band']==preset['band'])
+        if self.current and 0<self.current[1]<30000 and self.current[2]=='usb':
+            self.button(cache,(1064,320,1254,373),'CURRENT USB',('current',None))
+        self.text(cache,24,400,'HELL VARIANT · select the transmitted mode',18)
+        for i,(key,spec) in enumerate(MODES.items()):
+            x,y=24+i%4*312,420+i//4*59
+            self.button(cache,(x,y,x+300,y+51),spec['label'],('hell_mode',key),active=p['hell_mode']==key)
+        self.button(cache,(24,548,420,610),f"Dial: {p['freq_khz']:g} kHz USB",('number','freq_khz'))
+        self.button(cache,(440,548,830,610),f"Audio center: {p['tone_hz']:g} Hz",('number','tone_hz'))
+        self.button(cache,(850,548,1256,610),'REVERSE: '+('ON' if p.get('reverse') else 'OFF'),('reverse',None))
+        self.text(cache,24,639,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · one Kiwi audio channel per decoder",19)
+        self.text(cache,24,674,'EU net presets: Saturday 10:00 UTC, 30 m odd weeks / 20 m even weeks; verify announcements.',16)
+        self.button(cache,(24,714,244,780),'CANCEL',('cancel_add',None))
+        self.text(cache,265,748,self.message,17,width=715)
+        self.button(cache,(990,714,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
+
+    def draw_number(self,cache):
+        self.text(cache,24,48,'USB dial frequency (kHz)' if self.field=='freq_khz' else 'Audio center (Hz)',28)
+        self.text(cache,24,110,self.entry or '0',36)
+        for i,c in enumerate('123456789.0'):
+            x,y=24+i%3*185,160+i//3*105
+            self.button(cache,(x,y,x+170,y+90),c,('digit',c))
+        self.button(cache,(620,160,1000,250),'DELETE',('erase_number',None))
+        self.button(cache,(620,280,1000,370),'APPLY',('apply_number',None))
+        self.button(cache,(620,400,1000,490),'CANCEL',('cancel_number',None))
+        self.text(cache,24,660,self.message,22,width=1230)
+
+    def draw_report(self,cache):
+        p=self.reporting
+        self.text(cache,24,36,'Report a station to PSK Reporter',28)
+        self.text(cache,24,83,p['receiver']+' · '+p['server'],18,width=1230)
+        self.text(cache,24,121,'Use the receiving antenna’s identity and location, not your own for a remote Kiwi.',18)
+        for i,(key,label) in enumerate((('call','Heard callsign'),('reporter','Receiver callsign'),('grid','Receiver grid'))):
+            self.button(cache,(24+i*416,151,424+i*416,211),label+': '+p[key],('report_field',key),active=self.report_field==key)
+        self.button(cache,(24,234,1256,293),('[YES] ' if p['confirmed'] else '[NO] ')+'Callsign is correct; I may report for this receiver and its location is correct',('confirm_report',None))
+        for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/')):
+            for x,c in enumerate(row):
+                self.button(cache,(24+x*92,322+y*67,108+x*92,381+y*67),c,('report_key',c))
+        self.button(cache,(970,322,1256,380),'DELETE CHARACTER',('report_erase',None))
+        self.button(cache,(970,416,1256,478),'QUEUE REPORT',('send_report',None))
+        self.button(cache,(970,510,1256,572),'CANCEL',('cancel_report',None))
+        self.text(cache,24,650,self.message,19,width=1230)
+        self.text(cache,24,700,'Only confirmed station reports are sent. Images are never uploaded.',18)
+        self.text(cache,24,742,'Sends about every five minutes. PSK Reporter uses UDP; delivery is unconfirmed.',18)
+
+    def tap(self,x,y,receivers):
+        receivers = self.kiwi_receivers(receivers)
+        action=next((a for box,a in reversed(self.actions) if self.ui.contains(box,x,y)),None)
+        if action is None:return
+        key,value=action
+        try:
+            if key=='hell_preset':self.preset=dict(value)
+            elif key=='hell_mode':
+                self.preset['hell_mode']=value
+                self.preset['tone_hz']=max(self.preset['tone_hz'],MODES[value]['bandwidth']/2+150)
+            elif key=='reverse':self.preset['reverse']=not self.preset.get('reverse',False)
+            elif key=='current':self.preset.update(band='Current dial',freq_khz=self.current[1])
+            elif key=='number':self.field=value;self.entry='';self.message=''
+            elif key=='digit':self.entry=(self.entry+value)[:12]
+            elif key=='erase_number':self.entry=self.entry[:-1]
+            elif key=='cancel_number':self.field=None
+            elif key=='apply_number':
+                updated=dict(self.preset,**{self.field:float(self.entry)})
+                self.preset.update(settings(updated,updated));self.field=None
+            elif key=='edit':
+                row=next(r for r in self.manager.configs if r['id']==value)
+                self.preset={k:row[k] for k in ('band','freq_khz','mode','tone_hz','hell_mode','reverse')}
+                self.edit_id=value;self.selected_server=row['server'];self.add_open=True;self.delete_armed=None
+                self.receiver_page=next((i//2 for i,r in enumerate(receivers) if self.ui.station_fields(r)[2]==row['server']),0)
+            elif key=='report':
+                item=next(r for r in self.manager.image_snapshot() if r['id']==value)
+                profile=self.manager.reporter.snapshot()['profiles'].get(item['server'],{})
+                self.reporting=dict(image=value,call='',reporter=profile.get('reporter',''),grid=profile.get('grid',''),confirmed=False,receiver=item['receiver'],server=item['server'])
+                self.message='';self.report_field='call'
+            elif key=='report_field':self.report_field=value
+            elif key=='report_key':self.reporting[self.report_field]=(self.reporting[self.report_field]+value)[:16]
+            elif key=='report_erase':self.reporting[self.report_field]=self.reporting[self.report_field][:-1]
+            elif key=='confirm_report':self.reporting['confirmed']=not self.reporting['confirmed']
+            elif key=='cancel_report':self.reporting=None
+            elif key=='send_report':
+                self.manager.reporter.submit(self.reporting);self.reporting=None;self.message='Report queued. Delivery status is available on the Hell web page.'
+            else:
+                super().tap(x,y,receivers)
+        except (ValueError,StopIteration,OSError) as exc:
+            self.message=str(exc) or 'Image is no longer available'

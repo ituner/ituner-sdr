@@ -248,10 +248,19 @@ class Session:
         if meta['kind'] == 'full':
             self.capture_times.pop(key, None)
 
+    receiver_label = 'SSTV'
+    listening_message = 'Waiting for an SSTV header'
+
+    def make_assembler(self):
+        from sstv_decoder import FrameAssembler
+        return FrameAssembler(self.emit, self.report, self.progress)
+
+    def bandpass(self):
+        return (-2700, -500) if self.config['mode'] == 'lsb' else (500, 2700)
+
     def run(self):
         try:
-            from sstv_decoder import FrameAssembler
-            assembler = FrameAssembler(self.emit, self.report, self.progress)
+            assembler = self.make_assembler()
         except ImportError as exc:
             self.report('DEPENDENCY MISSING', str(exc))
             return
@@ -267,7 +276,7 @@ class Session:
                 self.ws = ws
                 if self.stop_event.is_set():
                     break
-                self.kiwi.send_kiwi_setup(ws, 'kiwi', self.user+'-SSTV')
+                self.kiwi.send_kiwi_setup(ws, 'kiwi', self.user+'-'+self.receiver_label)
                 authenticated = False
                 rate_seen = False
                 configured = False
@@ -300,11 +309,11 @@ class Session:
                             if abs(actual_rate-RATE) > 1:
                                 raise PermissionError(f'Unsupported receiver sample rate: {actual_rate:g} Hz')
                             mode = self.config['mode']
-                            low, high = (-2700, -500) if mode == 'lsb' else (500, 2700)
+                            low, high = self.bandpass()
                             self.kiwi.send_snd_setup(ws, self.config['freq_khz'], mode, low, high,
                                 {'agc': True, 'mute': False, 'nr_algo': 0, 'denoise_level': 0})
                             configured = True
-                            self.report('LISTENING', 'Waiting for an SSTV header')
+                            self.report('LISTENING', self.listening_message)
                         continue
                     if not configured or message[:3] != b'SND' or len(message) < 10:
                         continue
@@ -316,7 +325,7 @@ class Session:
                         raise RuntimeError('Malformed audio packet')
                     if previous_seq is not None and seq != (previous_seq+1) % 2**32:
                         assembler.reset()
-                        self.report('LISTENING', 'Audio gap; waiting for a fresh header')
+                        self.report('LISTENING', 'Audio gap; decoder restarted')
                     previous_seq = seq
                     if not flags & self.kiwi.SND_FLAG_LITTLE_ENDIAN:
                         pcm = self.kiwi.swap_s16_bytes(pcm)
@@ -335,6 +344,11 @@ class Session:
                 if self.stop_event.wait(delay):
                     break
             finally:
+                try:
+                    if hasattr(assembler, "flush"):
+                        assembler.flush()
+                except Exception as exc:
+                    self.report("SAVE ERROR", str(exc)[:120])
                 self.progress(None)
                 self.ws = None
                 if ws:
@@ -491,6 +505,7 @@ class GalleryServer(ThreadingHTTPServer):
         self.gallery, self.sessions = gallery, sessions
         self.bridge = None
         self.wspr_history = None
+        self.hell = None
         self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
 
@@ -505,6 +520,29 @@ class GalleryHandler(BaseHTTPRequestHandler):
             if path.path in ('/', '/sstv', '/sstv/'):
                 data = Path(__file__).with_name('sstv_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path in ('/hell', '/hell/'):
+                data = Path(__file__).with_name('hell_gallery.html').read_bytes()
+                content_type = 'text/html; charset=utf-8'
+            elif path.path.startswith('/hell-images/') and path.path.endswith('.png'):
+                if self.server.hell is None:
+                    self.send_error(503)
+                    return
+                data = self.server.hell.gallery.image_path(path.path[13:-4]).read_bytes()
+                content_type = 'image/png'
+            elif path.path in ('/api/hell', '/api/hell/reporting'):
+                if self.server.hell is None:
+                    self.send_error(503)
+                    return
+                if path.path.endswith('/reporting'):
+                    state = self.server.hell.reporter.snapshot()
+                else:
+                    if self.server.bridge is None:
+                        self.send_error(503)
+                        return
+                    state = dict(images=self.server.hell.image_snapshot(), decoders=self.server.bridge.snapshot('hell')['decoders'])
+                state['control_token'] = self.server.control_token
+                data = json.dumps(state).encode()
+                content_type = 'application/json'
             elif path.path in ('/wspr', '/wspr/'):
                 data = Path(__file__).with_name('wspr_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
@@ -579,7 +617,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting'):
+            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting'):
                 raise ControlError(404, 'Unknown control endpoint')
             origin = self.headers.get('Origin')
             if origin and origin != 'http://' + self.headers.get('Host', ''):
@@ -604,7 +642,15 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 raise ControlError(400, 'Invalid control request')
             if self.server.bridge is None:
                 raise ControlError(503, 'Receiver controls unavailable')
-            if path == '/api/wspr/reporting':
+            if path == '/api/hell/reporting':
+                if self.server.hell is None:
+                    raise ControlError(503, 'Hell reporting unavailable')
+                try:
+                    reporter = self.server.hell.reporter
+                    result = reporter.cancel(payload.get('id')) if payload.get('action')=='cancel' else reporter.submit(payload)
+                except (ValueError, TypeError) as exc:
+                    raise ControlError(400, str(exc))
+            elif path == '/api/wspr/reporting':
                 if self.server.wspr_history is None:
                     raise ControlError(503, 'History unavailable')
                 try:

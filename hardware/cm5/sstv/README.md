@@ -188,3 +188,38 @@ and Stop/Start. The archive imported 51 real spots, kept all 51 across the live
 states remained one running and one stopped. The app had zero automatic
 restarts and unchanged protected boot/display/audio configuration hashes.
 Uploads remained disabled; no synthetic spots were sent to WSPRnet.
+
+## Hell RX (2026-10-08)
+
+Apply `hell-ui.patch` after `wspr-history-ui.patch`. Install `UI/hell_*.py`,
+`UI/hell_gallery.html`, `UI/digital_web.py`, `UI/sstv_monitor.py`, both updated
+SSTV/WSPR HTML pages and `licenses/fldigi-GPL-3.txt`. The patch preserves PR #12
+and adds **HELL RX** below WSPR/SSTV in the Modes drawer. Main's normal Digital
+tools menu receives the same feature through its own UI changes.
+
+Expected input UI SHA-256:
+`4b04b49fe7b08edb287dec0b794dee3c1fe222483e93a4cf67dcf48b11c75b11`.
+Final installed UI SHA-256:
+`b6b12ec88cbd632f0c478f5cadd3c6583f0ac7dc276dce9e37d43898eb9c75ed`.
+
+Original pre-Hell backup:
+`/var/backups/ituner-sdr/before-hell-20261008-123928/`.
+Staging: `/home/ituner/hell-deploy/`. The installer checks the live UI and every
+payload checksum, backs up changed files, preserves protected configuration
+hashes, and restores the previous application if startup fails.
+
+Validation: 81 local tests completed (79 passed, two optional SSTV encoder tests
+skipped); all ten new Hell cases passed on CM5. Seven independently modulated
+signals exercised the actual receive DSP. Local gallery/editor/report screens
+were rendered at 1280×800; the PR #12 Modes launcher and hit targets were
+verified separately. Browser tests covered settings, live audio/image reception,
+Stop, image retention, enlargement and the explicit report form. No synthetic
+reports were sent to PSK Reporter. No readable on-air Hell transmission is
+claimed from the short live audio check.
+
+A local 40 m Feld Hell decoder (7083.5 kHz USB + 1500 Hz audio) was created for
+the live test and left stopped. Its captured strips remain. The user's two
+WSPR and two SSTV decoder configurations and active states were retained.
+The running service had no automatic restarts and unchanged boot configuration,
+app configuration and display/audio launcher checksums. See
+[Hell operation and reporting](../../../docs/HELL.md).
