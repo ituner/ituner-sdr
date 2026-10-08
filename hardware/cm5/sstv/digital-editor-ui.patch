@@ -1,0 +1,73 @@
+diff --git a/UI/kiwi_gl_display.py b/UI/kiwi_gl_display.py
+index d519e53..4e21b4d 100644
+--- a/UI/kiwi_gl_display.py
++++ b/UI/kiwi_gl_display.py
+@@ -20238,12 +20238,13 @@ def main():
+     from sstv_monitor import SSTVManager
+     from sstv_workspace import SSTVWorkspace
+     sstv_manager = SSTVManager(kiwi, args.user)
+-    from digital_web import DigitalWebBridge, wspr_snapshot, set_wspr_running
++    from digital_web import DigitalWebBridge, wspr_snapshot, receiver_options, ReceiverController
+     digital_web = DigitalWebBridge()
+     sstv_manager.ensure_web()
+     if sstv_manager.web:
+         sstv_manager.web.bridge = digital_web
+     digital_web_next_snapshot = 0.0
++    digital_web_next_options = 0.0
+     sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+     wspr_mini_textures = {}
+     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
+@@ -21054,19 +21055,33 @@ def main():
+         drain_queue(line_queue)
+         wf_texture.clear()
+ 
+-    def apply_web_receiver_control(mode, key, running):
+-        nonlocal preferences_dirty, digital_web_next_snapshot
+-        if mode == 'sstv':
+-            sstv_manager.set_running(key, running)
+-        else:
+-            tile = set_wspr_running(wspr_tiles, wspr_monitor, key, running)
+-            write_wspr_local_log(
+-                'monitor_session_started' if running else 'monitor_session_stopped',
+-                band_m=tile.get('band'), receiver=tile.get('name'), server=tile.get('server'),
+-            )
++    def digital_receiver_options():
++        from sstv_monitor import PRESETS
++        _server, frequency, *_rest = state.snapshot()
++        mode, *_radio = state.radio_snapshot()
++        return receiver_options(wspr_receiver_choices(), WSPR_BANDS, PRESETS,
++                                [*sstv_manager.configs, *wspr_tiles],
++                                ('Current dial', frequency, mode.lower()))
++
++    receiver_controller = ReceiverController(sstv_manager, wspr_tiles, wspr_monitor, digital_receiver_options)
++    digital_web.publish_options(digital_receiver_options())
++
++    def apply_web_receiver_control(mode, key, action, config):
++        nonlocal preferences_dirty, digital_web_next_snapshot, wspr_sessions, wspr_workspace_scroll
++        tile = receiver_controller.apply(mode, key, action, config)
++        if mode == 'wspr':
++            wspr_sessions = {item['band'] for item in wspr_tiles}
++            wspr_workspace_scroll = clamp(wspr_workspace_scroll, 0.0, wspr_workspace_scroll_max(wspr_tiles))
++            if action in ('edit', 'delete'):
++                texture = wspr_mini_textures.pop(key, None)
++                if texture is not None:
++                    texture.close()
++            write_wspr_local_log('monitor_web_' + action, band_m=tile.get('band'),
++                                 receiver=tile.get('name'), server=tile.get('server'))
+             preferences_dirty = True
+             write_remembered_view(force=True)
+         digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor))
++        digital_web.publish_options(digital_receiver_options())
+         digital_web_next_snapshot = time.monotonic() + 1
+ 
+     def refresh_wspr_waterfalls():
+@@ -25282,6 +25297,9 @@ def main():
+             # after a reboot even if the operator is currently on the radio
+             # screen, then keep their slow W/F or audio-FFT rows advancing
+             # while the workspace is hidden.
++            if time.monotonic() >= digital_web_next_options:
++                digital_web.publish_options(digital_receiver_options())
++                digital_web_next_options = time.monotonic() + 10
+             digital_web.drain(apply_web_receiver_control)
+             sstv_manager.tick()
+             if time.monotonic() >= digital_web_next_snapshot:

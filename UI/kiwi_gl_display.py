@@ -2379,6 +2379,7 @@ SETTINGS_MENU_ITEMS = (
 )
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
+    ("sstv", "SSTV"),
     ("digital_back", "HOME"),
 )
 WATERFALL_TUNE_X0 = 88
@@ -6075,28 +6076,38 @@ class WSPRDecodeWorker:
             if osd_depth:
                 detail += f" · OSD {osd_depth}"
             self.session._set_decode_state("DECODING", detail=detail)
+            # wsprd writes ALL_WSPR.TXT and its hash table in the working
+            # directory. The installed UI is root-owned; each capture already
+            # has a private, writable directory that is cleaned up afterward.
+            wav_path = Path(wav_path).resolve()
             process = subprocess.Popen(
                 wsprd_background_command(wsprd_command(frequency_khz, wav_path, profile, osd_depth)),
+                cwd=str(wav_path.parent),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
             deadline = time.monotonic() + WSPR_DECODE_TIMEOUT_SECONDS
-            while process.poll() is None:
+            while True:
                 if self.stop_event.is_set() or self.session.stop_event.is_set():
-                    process.terminate()
-                    try:
-                        process.wait(timeout=2.0)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
                     return None
-                if time.monotonic() >= deadline:
-                    process.kill()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise RuntimeError("wsprd decode timeout")
-                time.sleep(0.10)
-            output, _unused = process.communicate(timeout=2.0)
-            if process.returncode not in (0, None):
-                raise RuntimeError(f"wsprd exited {process.returncode}")
+                try:
+                    # Drain output while waiting so a full pipe cannot stall
+                    # the decoder. communicate retains output between retries.
+                    output, _unused = process.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode != 0:
+                detail = " ".join(output.split())[-240:]
+                raise RuntimeError(f"wsprd exited {process.returncode}" + (f": {detail}" if detail else ""))
             return parse_wsprd_output(output)
         finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
             WSPR_DECODE_SEMAPHORE.release()
 
     def _capture_cycle(self, ws, frequency_khz, configured=False):
@@ -6231,7 +6242,7 @@ class WSPRDecodeWorker:
                         self.session._stand_down_decoder(detail)
                         break
                     retry_seconds = receiver_retry_delay(audio_failures, outage_started_at)
-                    self.session._set_decode_state("RETRY", detail=f"audio retry in {retry_seconds:.0f}s")
+                    self.session._set_decode_state("RETRY", detail=f"Retry in {retry_seconds:.0f}s: {message}")
                     if self.stop_event.wait(retry_seconds):
                         break
             finally:
@@ -6393,7 +6404,10 @@ class WSPRMonitorSession:
     def _set_decode_state(self, status, detail="", cycle_start=None, audio_seconds=None):
         with self.lock:
             self.decode_status = str(status)
-            self.decode_detail = str(detail)[:62]
+            self.decode_detail = str(detail)[:240]
+            if status in ("CONNECTING", "ARMED", "RETRY", "ERROR", "STOPPED", "NO AUDIO"):
+                self.decode_audio_seconds = 0.0
+                self.decode_cycle_start = 0.0
             if cycle_start is not None:
                 self.decode_cycle_start = float(cycle_start)
             if audio_seconds is not None:
@@ -12992,6 +13006,10 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
             node = pygame.Rect(node_x - 7, cy + 7, 14, 11)
             pygame.draw.line(surface, mono, (node_x, bus_y), (node_x, node.top - 3), stroke)
             pygame.draw.rect(surface, mono, node, stroke, border_radius=4)
+    elif kind == "sstv":
+        pygame.draw.rect(surface, color, (cx-29, cy-23, 58, 43), 3, border_radius=4)
+        pygame.draw.circle(surface, dim, (cx+15, cy-11), 5)
+        pygame.draw.lines(surface, color, False, ((cx-25, cy+14), (cx-10, cy-5), (cx+1, cy+7), (cx+10, cy-2), (cx+25, cy+14)), 3)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
@@ -13098,7 +13116,10 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112):
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("local_rx", "network"):
+        if kind == "sstv":
+            draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
+                           (232, 248, 250, 232), (82, 235, 231, 150))
+        elif kind in ("local_rx", "network"):
             # Network is the configuration side of the same local-LAN path
             # represented by LOCAL RX, so reuse that exact hub glyph.
             draw_menu_icon(surface, "local_rx", width // 2, max(24, height // 2 - 12),
@@ -20227,6 +20248,17 @@ def main():
     # sidecar retains personal best hourly decode rates across reboots.
     wspr_decode_rates = WSPRDecodeRateTracker(args.wspr_log_file)
     wspr_decode_rates.start()
+    from sstv_monitor import SSTVManager
+    from sstv_workspace import SSTVWorkspace
+    sstv_manager = SSTVManager(kiwi, args.user)
+    from digital_web import DigitalWebBridge, wspr_snapshot, receiver_options, ReceiverController
+    digital_web = DigitalWebBridge()
+    sstv_manager.ensure_web()
+    if sstv_manager.web:
+        sstv_manager.web.bridge = digital_web
+    digital_web_next_snapshot = 0.0
+    digital_web_next_options = 0.0
+    sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
@@ -21036,6 +21068,35 @@ def main():
         drain_queue(line_queue)
         wf_texture.clear()
 
+    def digital_receiver_options():
+        from sstv_monitor import PRESETS
+        _server, frequency, *_rest = state.snapshot()
+        mode, *_radio = state.radio_snapshot()
+        return receiver_options(wspr_receiver_choices(), WSPR_BANDS, PRESETS,
+                                [*sstv_manager.configs, *wspr_tiles],
+                                ('Current dial', frequency, mode.lower()))
+
+    receiver_controller = ReceiverController(sstv_manager, wspr_tiles, wspr_monitor, digital_receiver_options)
+    digital_web.publish_options(digital_receiver_options())
+
+    def apply_web_receiver_control(mode, key, action, config):
+        nonlocal preferences_dirty, digital_web_next_snapshot, wspr_sessions, wspr_workspace_scroll
+        tile = receiver_controller.apply(mode, key, action, config)
+        if mode == 'wspr':
+            wspr_sessions = {item['band'] for item in wspr_tiles}
+            wspr_workspace_scroll = clamp(wspr_workspace_scroll, 0.0, wspr_workspace_scroll_max(wspr_tiles))
+            if action in ('edit', 'delete'):
+                texture = wspr_mini_textures.pop(key, None)
+                if texture is not None:
+                    texture.close()
+            write_wspr_local_log('monitor_web_' + action, band_m=tile.get('band'),
+                                 receiver=tile.get('name'), server=tile.get('server'))
+            preferences_dirty = True
+            write_remembered_view(force=True)
+        digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor))
+        digital_web.publish_options(digital_receiver_options())
+        digital_web_next_snapshot = time.monotonic() + 1
+
     def refresh_wspr_waterfalls():
         """Keep active WSPR cards current even while their workspace is hidden."""
         wspr_monitor.sync(wspr_tiles)
@@ -21061,6 +21122,7 @@ def main():
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
+        sstv_workspace.open = False
         wake_controls()
         menu_open = False
         # Navigating away from Dual must release its extra SND/W/F pair before
@@ -21233,6 +21295,13 @@ def main():
                 dual_vfo_sources["A"] = dict(live_source)
                 dual_vfo_profiles["A"] = dict(carried_profile)
             start_dual_vfo_clients()
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "sstv":
+            settings_menu_open = digital_menu_open = False
+            active_server, active_freq, *_ = state.snapshot()
+            active_mode, *_ = state.radio_snapshot()
+            sstv_workspace.show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
@@ -21858,7 +21927,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if waterfall_focus_progress() > 0.01 and not (
+                            if sstv_workspace.open:
+                                gesture = "sstv_workspace"
+                            elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
                                 or globe_open
                                 or rtl_lab_open
@@ -23168,6 +23239,10 @@ def main():
                                     write_remembered_view(force=True)
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "sstv_workspace":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                sstv_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "wspr_add":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -25235,6 +25310,14 @@ def main():
             # after a reboot even if the operator is currently on the radio
             # screen, then keep their slow W/F or audio-FFT rows advancing
             # while the workspace is hidden.
+            if time.monotonic() >= digital_web_next_options:
+                digital_web.publish_options(digital_receiver_options())
+                digital_web_next_options = time.monotonic() + 10
+            digital_web.drain(apply_web_receiver_control)
+            sstv_manager.tick()
+            if time.monotonic() >= digital_web_next_snapshot:
+                digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor))
+                digital_web_next_snapshot = time.monotonic() + 1
             if wspr_tiles or wspr_monitor.sessions:
                 refresh_wspr_waterfalls()
             if wspr_panel_open:
@@ -25428,6 +25511,8 @@ def main():
                 or filter_panel_open or frequency_entry_open or dual_vfo_open
             ):
                 draw_utc_clock(text_cache)
+            if sstv_workspace.open:
+                sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -25458,6 +25543,9 @@ def main():
         scout_probe.stop()
         rtl_lab.stop()
         stop_dual_vfo_clients()
+        digital_web.close()
+        sstv_manager.stop()
+        sstv_workspace.close()
         wspr_monitor.stop()
         for texture in wspr_mini_textures.values():
             texture.close()

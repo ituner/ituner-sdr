@@ -68,6 +68,8 @@ awk '/^# BEGIN ITUNER SDR$/ {skip=1; next} /^# END ITUNER SDR$/ {skip=0; next} !
 } >"${config_txt}"
 
 install -m 0644 "${repo_dir}"/UI/*.py "${repo_dir}"/UI/*.json /opt/ituner-sdr/UI/
+cp -a "${repo_dir}/UI/sstv_vendor" /opt/ituner-sdr/UI/
+install -m 0644 "${repo_dir}/UI/sstv_gallery.html" /opt/ituner-sdr/UI/
 install -d -m 0755 /opt/ituner-sdr/UI/assets
 cp -a "${repo_dir}/UI/assets/." /opt/ituner-sdr/UI/assets/
 install -m 0755 "${repo_dir}/scripts/start-opengl.sh" /usr/local/lib/ituner-sdr/start-opengl.sh

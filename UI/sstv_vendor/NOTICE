@@ -1,0 +1,10 @@
+SSTV decoder by colaclanth (James), GPL-3.0.
+Source: https://github.com/colaclanth/sstv
+Pinned revision: 3e556eee8ad4c4425799cb652bac26ee58f8e113
+See LICENSE for the full license. Source is included here.
+Changes by iTuner: PCM16 WAV loading with the standard library, and NumPy
+hanning in place of SciPy hann (symmetric window). This removes the extra
+SoundFile/libsndfile and SciPy dependencies; the decoding algorithm is intact.
+The integration reuses the trusted-mode/quality checks from the local P4
+ft8hub_decode_sstv_daemon.py, with strict VIS parity and no guessed modes.
+The package initializer omits the unused upstream command-line frontend.

@@ -94,3 +94,17 @@ Implications:
   ```sh
   systemctl is-active ituner-sdr-lcd-kms.service
   ```
+
+## Installed decoder runtime fix (2026-10-08)
+
+`wsprd` writes auxiliary files even when it is only decoding a WAV. Launch it
+in the capture's private temporary directory, not the root-owned application
+directory. Files are removed with that capture. The process output is drained
+while it runs; timeout and Stop kill and reap the child before releasing the
+single decoder slot. Failures retain the decoder's diagnostic text, and retry
+states reset stale capture progress rather than displaying an old full cycle.
+
+A retry caused by an unreachable Kiwi is separate from a decoder error. Check
+its `/status` endpoint as well as connectivity: accepting a TCP connection does
+not establish that the Kiwi is serving HTTP or supplying audio. A configured
+and enabled receiver can remain in RETRY without capturing or decoding audio.
