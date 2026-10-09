@@ -59,7 +59,7 @@ class MorseTiming:
 class QRSSDecoder:
     def __init__(self,config):
         self.config=config
-        dot=config['dot_seconds']
+        dot=3 if config['qrss_mode']=='AUTO' else config['dot_seconds']
         # <= half a dot of integration: slow traces remain spectrally narrow
         # without smearing adjacent Morse elements into one continuous line.
         self.n=2**int(np.floor(np.log2(RATE*dot/2)))
@@ -74,6 +74,10 @@ class QRSSDecoder:
         self.space_mask=abs(self.frequencies-(center-config['shift_hz']))<=self.df
         if config['reverse'] and config['qrss_mode']=='FSKCW':self.mark_mask,self.space_mask=self.space_mask,self.mark_mask
         self.morse=MorseTiming(dot)
+        self.auto=None
+        if config['qrss_mode']=='AUTO':
+            from qrss_acquisition import AutoAcquisition
+            self.auto=AutoAcquisition(self.frequencies,MorseTiming,self.hop/RATE)
         self.reset()
 
     def reset(self):
@@ -81,6 +85,7 @@ class QRSSDecoder:
         self.samples=0;self.on=False
         self.morse.reset()
         self.morse.events.clear()
+        if self.auto:self.auto.reset()
 
     def feed(self,pcm):
         self.buffer=np.concatenate((self.buffer,np.frombuffer(pcm,'<i2').astype(float)/32768))
@@ -107,7 +112,11 @@ class QRSSDecoder:
                     if ratio>2:self.on=True
                     elif ratio<-2:self.on=False
                     self.morse.feed(self.on,when)
-            frames.append((when,10*np.log10(np.maximum(spectrum,1e-18))))
+            db=10*np.log10(np.maximum(spectrum,1e-18))
+            if self.auto:
+                self.auto.feed(when,db)
+                self.morse.events=self.auto.events
+            frames.append((when,db))
             self.buffer=self.buffer[self.hop:]
             self.samples+=self.hop
         return frames

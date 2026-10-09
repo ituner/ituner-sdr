@@ -2,10 +2,10 @@
 import math
 
 DOTS = (3, 6, 10, 30, 60)
-KINDS = ('CW', 'FSKCW', 'VISUAL')
+KINDS = ('AUTO', 'CW', 'FSKCW', 'VISUAL')
 PRESETS = tuple(dict(id=band, band=band+' m', mode='usb', freq_khz=rf-1.5,
     tone_hz=1500, span_hz=200, dot_seconds=6, shift_hz=5,
-    qrss_mode='FSKCW', reverse=False, minutes=10) for band, rf in
+    qrss_mode='AUTO', reverse=False, minutes=10) for band, rf in
     (('80',3500.85),('40',7000.85),('30',10140.0),('20',14096.9)))
 
 
@@ -20,7 +20,7 @@ def settings(payload, preset):
         if not math.isfinite(result[key]):
             raise ValueError('Enter finite QRSS values')
     mode = payload.get('qrss_mode',preset.get('qrss_mode','FSKCW'))
-    if mode not in KINDS:raise ValueError('Choose CW, FSKCW or visual only')
+    if mode not in KINDS:raise ValueError('Choose Auto, CW, FSKCW or visual only')
     reverse = payload.get('reverse',preset.get('reverse',False))
     if type(reverse) is not bool:raise ValueError('Invalid reverse setting')
     if result['dot_seconds'] not in DOTS:raise ValueError('Choose 3, 6, 10, 30 or 60 seconds per dot')

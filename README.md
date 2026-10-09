@@ -204,4 +204,5 @@ PSK Reporter spots: see [Hell RX setup and operation](docs/HELL.md).
 ## QRSS
 
 Slow waterfall captures and tentative CW / FSKCW Morse text share one Kiwi
-channel, with local and web receiver controls. See [QRSS setup and limits](docs/QRSS.md).
+channel. AUTO finds a keyed signal and estimates its frequency, FSK shift and
+Morse timing, with local and web receiver controls. See [QRSS setup and limits](docs/QRSS.md).

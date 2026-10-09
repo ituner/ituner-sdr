@@ -1,0 +1,164 @@
+"""Bounded QRSS acquisition from spectrum history; never confirms a callsign.
+
+Searches for keyed carriers and complementary FSK tone pairs across the visible
+band. Fits mark/space run lengths to Morse's 1:3:7 timing, then replays the
+buffered signal so acquisition does not discard the beginning of a message.
+"""
+from collections import deque
+import numpy as np
+
+
+def runs(states, times):
+    """Complete runs only: a capture may begin/end halfway through an element."""
+    edges=np.flatnonzero(np.diff(states)!=0)+1
+    return [(int(states[a]),float(times[b]-times[a])) for a,b in zip(edges[:-1],edges[1:])]
+
+
+def timing(states,times):
+    values=runs(states,times)
+    values=[(s,d) for s,d in values if s>=0 and d>=.8]
+    if len(values)<6 or sum(s==1 for s,d in values)<3 or sum(s==0 for s,d in values)<3:return None
+    s=np.array([s for s,d in values]);d=np.array([d for s,d in values])
+    candidates=np.unique(np.round(np.concatenate([d,d/3,d/7]),2))
+    candidates=candidates[(candidates>=2)&(candidates<=90)]
+    best=None
+    for dot in candidates:
+        ratios=d/dot
+        expected=np.where(s[:,None]==1,np.array([1.,3.,3.]),np.array([1.,3.,7.]))
+        distance=np.abs(ratios[:,None]-expected)
+        closest=expected[np.arange(len(d)),distance.argmin(axis=1)]
+        error=np.min(distance,axis=1)/np.sqrt(closest)
+        good=error<.42
+        if np.mean(good)<.80:continue
+        # Reject subharmonic timing: real single-dot marks AND gaps must exist.
+        if not np.any(good&(s==1)&(closest==1)) or not np.any(good&(s==0)&(closest==1)):continue
+        loss=float(np.mean(np.minimum(error,2)))
+        if best is None or loss<best[0]:
+            # Keyed CW FFT edges lengthen marks and shorten spaces (or vice
+            # versa). Fit that opposite edge bias separately from dot time.
+            design=np.stack([closest[good],2*s[good]-1],axis=1)
+            solution=np.linalg.lstsq(design,d[good],rcond=None)[0]
+            refined=float(solution[0])
+            if not 2<=refined<=90:continue
+            best=(loss,refined,float(np.mean(good)))
+    return None if best is None else dict(dot=best[1],fit=best[2],loss=best[0],runs=len(values))
+
+
+class AutoAcquisition:
+    def __init__(self,frequencies,morse_factory,hop_seconds):
+        self.frequencies=np.asarray(frequencies)
+        self.df=float(np.median(np.diff(frequencies)))
+        self.factory=morse_factory
+        self.capacity=int(1200/hop_seconds)+1
+        self.reset()
+
+    def reset(self):
+        self.history=deque(maxlen=self.capacity);self.times=deque(maxlen=self.capacity)
+        self.next_analysis=0;self.lock=None
+        self.events=deque(maxlen=2000)
+        self.status=dict(state='searching',detail='Searching the waterfall for a keyed signal')
+
+    def feed(self,when,db):
+        # Relative spectral level; independent of Kiwi AGC's absolute level.
+        self.history.append((db-np.median(db)).astype(np.float32));self.times.append(when)
+        if when>=self.next_analysis and len(self.times)>30:
+            self.next_analysis=when+10
+            self.analyze()
+
+    @staticmethod
+    def clean(states):
+        # A three-frame median removes isolated FFT transition/impulse glitches.
+        result=states.copy()
+        if len(states)>2:result[1:-1]=np.median(np.stack([states[:-2],states[1:-1],states[2:]]),axis=0)
+        return result
+
+    def analyze(self):
+        times=np.array(self.times);data=np.stack(self.history)
+        strength=np.percentile(data,85,axis=0)
+        # Maximum twelve local maxima, separated by >= three bins.
+        peaks=[]
+        for i in np.argsort(strength)[::-1]:
+            if strength[i]<12:break
+            if i<1 or i>=len(strength)-1:continue
+            if any(abs(i-j)<=2 for j in peaks):continue
+            if strength[i]<max(strength[i-1],strength[i+1]):continue
+            peaks.append(int(i))
+            if len(peaks)==12:break
+        envelopes={i:np.max(data[:,max(0,i-1):i+2],axis=1) for i in peaks}
+        candidates=[]
+        for a,i in enumerate(peaks):
+            high=envelopes[i]
+            for j in peaks[a+1:]:
+                shift=abs(self.frequencies[i]-self.frequencies[j])
+                if not 2.5*self.df<=shift<=25:continue
+                low=envelopes[j]
+                present=np.maximum(high,low)>10
+                exclusive=np.abs(high-low)>6
+                if np.mean(present&exclusive)<.72:continue
+                states=self.clean(np.where(present,np.where(high>low,1,0),-1))
+                if min(np.mean(states==0),np.mean(states==1))<.08:continue
+                # Without a long inter-word gap the polarities can fit
+                # equally well. Prefer conventional high-tone marks, but
+                # allow better timing evidence to override that small prior.
+                for reverse in (False,True):
+                    seq=np.where(states<0,-1,1-states) if reverse else states
+                    fit=timing(seq,times)
+                    if not fit:continue
+                    level=min(float(np.median(high[states==1])),float(np.median(low[states==0])))
+                    mark_bin,space_bin=(j,i) if reverse else (i,j)
+                    polarity_prior=.04 if self.frequencies[mark_bin]>self.frequencies[space_bin] else 0
+                    score=fit['fit']-fit['loss']+min(level,80)/100
+                    score+=.15*float(np.mean(present&exclusive))+.15+polarity_prior
+                    candidates.append(dict(fit,mode='FSKCW',mark=mark_bin,
+                        space=space_bin,states=seq,score=score))
+            # On/off keying needs a real low level, not just fluctuations in
+            # a continuously transmitting carrier's strength.
+            if np.mean(high<6)<.15 or np.mean(high>12)<.08:continue
+            threshold=max(9,float(np.percentile(high,85))-6)
+            states=self.clean((high>threshold).astype(int));fit=timing(states,times)
+            if fit:
+                level=float(np.median(high[high>12]))
+                candidates.append(dict(fit,mode='CW',mark=i,space=None,states=states,
+                    score=fit['fit']-fit['loss']+min(level,80)/100))
+        # Ignore stale candidates before ranking, so a disappeared strong
+        # station cannot prevent acquisition of a new, weaker station.
+        fresh=[]
+        for row in candidates:
+            edges=np.flatnonzero(np.diff(row['states'])!=0)
+            limit=max(90,row['dot']*12)
+            if not len(edges) or times[-1]-times[edges[-1]]>limit:continue
+            tail=times>=times[-1]-limit
+            active=envelopes[row['mark']]>10
+            if row['space'] is not None:active|=envelopes[row['space']]>10
+            if np.any(active&tail):fresh.append(row)
+        candidates=fresh
+        # Keep a good current signal rather than jump whenever another peaks.
+        for row in candidates:
+            if self.lock and row['mode']==self.lock['mode'] and min(abs(self.frequencies[row['mark']]-self.lock['tone_hz']),abs(self.frequencies[row['mark']]-self.lock['space_hz']))<3:
+                row['score']+=.08
+        best=max(candidates,key=lambda r:r['score'],default=None)
+        if best is None:
+            self.status=dict(state='searching',detail='Searching: waiting for consistent Morse transitions')
+            self.lock=None
+            return
+        tone=float(self.frequencies[best['mark']]);space=best['space']
+        shift=0. if space is None else abs(tone-float(self.frequencies[space]))
+        # Old observations must not masquerade as a currently locked signal.
+        tail=times>=times[-1]-max(90,best['dot']*12)
+        active=(envelopes[best['mark']]>10)
+        if space is not None:active|=envelopes[space]>10
+        if not np.any(active&tail):
+            self.lock=None;self.status=dict(state='searching',detail='Signal faded; searching again');return
+        same=self.lock is not None and self.lock['mode']==best['mode'] and abs(tone-self.lock['tone_hz'])<3
+        decoder=self.factory(best['dot'])
+        for t,state in zip(times,best['states']):decoder.feed(None if state<0 else bool(state),float(t))
+        # Replay only within this history, replacing provisional decisions.
+        boundary=times[0]+20*best['dot'] if times[0]>2 else times[0]
+        older=[e for e in self.events if e[0]<boundary] if same else []
+        replay=[e for e in decoder.events if not older or e[0]>=boundary]
+        self.events=deque(older+replay,maxlen=2000)
+        self.lock=dict(mode=best['mode'],tone_hz=tone,shift_hz=shift,space_hz=tone if space is None else float(self.frequencies[space]),dot=best['dot'])
+        self.status=dict(state='locked',mode=best['mode'],tone_hz=round(tone,2),
+            shift_hz=round(shift,2),dot_seconds=round(best['dot'],2),
+            timing_fit=round(best['fit'],2),reverse=bool(space is not None and tone<self.frequencies[space]),
+            detail=f"Auto {best['mode']} · {tone:.2f} Hz audio · {best['dot']:.2f} s/dot · shift {shift:.2f} Hz")

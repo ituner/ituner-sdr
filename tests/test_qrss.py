@@ -44,7 +44,7 @@ class DSPTests(unittest.TestCase):
                     self.assertEqual(''.join(c for t,c in d.morse.events).strip(),'A')
 
     def test_sos_chunk_invariance_and_visual_only(self):
-        pcm=b''.join(audio());config=dict(PRESETS[2],dot_seconds=3)
+        pcm=b''.join(audio());config=dict(PRESETS[2],dot_seconds=3,qrss_mode='FSKCW')
         whole=QRSSDecoder(config);frames=whole.feed(pcm)
         split=QRSSDecoder(config);parts=[]
         for i in range(0,len(pcm),10018):parts+=split.feed(pcm[i:i+10018])
@@ -80,7 +80,7 @@ class IntegrationTests(unittest.TestCase):
     def tearDown(self):self.manager.stop();self.temp.cleanup()
 
     def test_crud_capture_text_persistence_and_no_deletion_on_stop(self):
-        payload=dict(server='http://kiwi.local',preset='30',start=False,dot_seconds=3)
+        payload=dict(server='http://kiwi.local',preset='30',start=False,dot_seconds=3,qrss_mode='FSKCW')
         self.controller.apply('qrss','test','add',payload);self.controller.apply('qrss','test','add',payload)
         self.assertEqual(len(self.manager.configs),1)
         c=self.manager.configs[0];a=QRSSAssembler(QRSSSession(c,None,self.manager.gallery,'test'),self.manager.gallery)
@@ -98,7 +98,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(self.manager.gallery.image_path(image['id']).exists())
 
     def test_rollover_keeps_morse_timing_audio_gap_resets_it(self):
-        c=dict(PRESETS[2],id='test',name='Local',server='http://kiwi.local',dot_seconds=3)
+        c=dict(PRESETS[2],id='test',name='Local',server='http://kiwi.local',dot_seconds=3,qrss_mode='FSKCW')
         session=QRSSSession(c,None,self.manager.gallery,'test');a=QRSSAssembler(session,self.manager.gallery)
         # Test a 30-second rollover, with a letter spanning the boundary.
         session.config['minutes']=.5
@@ -115,7 +115,7 @@ class IntegrationTests(unittest.TestCase):
         w.actions=[((0,0,1,1),('create',None))]
         with unittest.mock.patch.object(self.manager,'start'):
             w.tap(0,0,[('Local','','http://kiwi.local')])
-        self.assertEqual(self.manager.configs[0]['qrss_mode'],'FSKCW')
+        self.assertEqual(self.manager.configs[0]['qrss_mode'],'AUTO')
         self.assertFalse(w.add_open)
 
     def test_http_gallery_controls_and_path_guards(self):

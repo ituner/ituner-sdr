@@ -16,6 +16,7 @@ class QRSSAssembler:
         self.session,self.gallery=session,gallery
         self.decoder=QRSSDecoder(session.config)
         self.columns=[];self.times=[];self.key=None;self.next_publish=0
+        self.stream_id=uuid.uuid4().hex
         # Bound memory even at wide spans / very slow integration.
         self.rows=min(320,len(self.decoder.frequencies))
         self.groups=np.array_split(np.arange(len(self.decoder.frequencies)),self.rows)
@@ -23,6 +24,7 @@ class QRSSAssembler:
     def reset(self):
         self.flush()
         self.decoder.reset()
+        self.stream_id=uuid.uuid4().hex
 
     def feed(self, pcm):
         for when,spectrum in self.decoder.feed(pcm):
@@ -35,7 +37,7 @@ class QRSSAssembler:
                 self.flush()
         if self.columns and time.monotonic()>=self.next_publish:
             self.publish('receiving');self.next_publish=time.monotonic()+5
-        self.session.report('RECEIVING','Waterfall + tentative text · one Kiwi channel')
+        self.session.report('RECEIVING',self.decoder.auto.status['detail'] if self.decoder.auto else 'Waterfall + tentative text · one Kiwi channel')
 
     def publish(self, kind):
         if not self.columns:return
@@ -60,7 +62,13 @@ class QRSSAssembler:
         draw.text((width+30,365),f'{duration:.0f} s',fill='white')
         # Frequency labels are exact band edges only to the selected FFT bins.
         # Crosshair marks the selected mark tone, not an automatic station pick.
-        draw.line((86,195,94,195),fill=(255,150,40),width=2)
+        acquisition=dict(self.decoder.auto.status) if self.decoder.auto else {}
+        if acquisition.get('state')=='locked':
+            acquisition['rf_hz']=c['freq_khz']*1000+acquisition['tone_hz']
+            y=35+320*(center+half-acquisition['rf_hz'])/c['span_hz']
+            draw.line((86,y,98,y),fill=(255,150,40),width=2)
+            draw.text((400,13),f"AUTO {acquisition['mode']} {acquisition['dot_seconds']:.2f}s/dot",fill=(255,190,90))
+        else:draw.line((86,195,94,195),fill=(255,150,40),width=2)
         text=''.join(char for t,char in self.decoder.morse.events if self.start_sample<=t<=self.times[-1]).strip()
         path=self.gallery.root/(self.key+'.working.png');canvas.save(path)
         item=dict(id=self.key,session_id=c['id'],receiver=c['name'],server=c['server'],
@@ -70,8 +78,19 @@ class QRSSAssembler:
             capture_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(self.started)),
             received_at=self.started,updated_ns=time.time_ns(),has_image=True,
             duration_seconds=round(duration,1),width=canvas.width,height=canvas.height,
-            tentative_text=text[-500:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
+            stream_id=self.stream_id,sample_start=self.start_sample,sample_end=self.times[-1],
+            acquisition=acquisition,tentative_text=text[-500:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
         self.gallery.publish(path,item)
+        # A slow signal can be acquired after a capture rolled over. Fill text
+        # into those recent captures too, without changing their images.
+        if self.decoder.auto and self.decoder.auto.events:
+            with self.gallery.lock:
+                for row in self.gallery.items:
+                    if row.get('stream_id')!=self.stream_id or row['id']==self.key:continue
+                    old_text=''.join(char for t,char in self.decoder.auto.events if row['sample_start']<=t<=row['sample_end']).strip()
+                    if old_text and old_text!=row.get('tentative_text'):
+                        row.update(tentative_text=old_text[-500:],acquisition=acquisition,updated_ns=time.time_ns())
+                        atomic_json(self.gallery.root/(row['id']+'.json'),row)
 
     def flush(self):
         if self.columns:self.publish('saved')

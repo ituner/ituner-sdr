@@ -238,3 +238,12 @@ retains its capture. Existing two WSPR, two SSTV and seven-mode Hell receiver
 sessions resumed. Backup: `/var/backups/ituner-sdr/before-qrss-20261008-135223`.
 The service remained active without automatic restarts and installed hashes
 matched the deployment manifest. No on-air Morse text is claimed from this test.
+
+Automatic QRSS acquisition updates the `qrss_*` modules without changing the
+main UI launcher. The 30 m receiver was switched to AUTO through the shared
+control API. Final backup:
+`/var/backups/ituner-sdr/before-qrss-auto-20261008-230553`.
+All five automatic-acquisition tests pass on CM5, including the saved-raster
+regression and a short real PCM spectrum fixture. The full local suite runs
+99 tests, with 96 passing and three optional dependency skips. Boot/display/audio
+configuration remains unchanged; the application has no automatic restarts.

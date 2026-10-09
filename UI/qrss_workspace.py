@@ -35,7 +35,7 @@ class QRSSWorkspace(SSTVWorkspace):
                 self.image(item['id'],(20,115,1260,620))
                 self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
                 self.text(cache,24,696,item.get('tentative_text') or 'No text recognized yet',23,width=1210)
-                self.text(cache,24,745,f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18)
+                self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None));return
             self.enlarged=None
         self.text(cache,20,36,'QRSS · waterfall + text',27,(104,234,194))
@@ -46,7 +46,7 @@ class QRSSWorkspace(SSTVWorkspace):
         pages=max(1,math.ceil(len(images)/4));self.page=min(self.page,pages-1)
         if not images:
             self.text(cache,120,300,'Add a QRSS receiver: waterfall and Morse text share one Kiwi channel.',23)
-            self.text(cache,120,352,'Start with 30 m. Select the signal tone and seconds per dot for text.',20)
+            self.text(cache,120,352,'Start with 30 m and AUTO to find a keyed signal and estimate its timing.',20)
             self.text(cache,120,402,'DFCW and other patterns remain visible; their text is not decoded.',20)
         for i,item in enumerate(images[self.page*4:self.page*4+4]):
             x,y=16+(i%2)*630,90+(i//2)*305
@@ -77,21 +77,22 @@ class QRSSWorkspace(SSTVWorkspace):
             x=24+i*312
             self.button(cache,(x,260,x+300,313),preset['band'],('preset',dict(preset)),active=p['band']==preset['band'])
         for i,mode in enumerate(KINDS):
+            x=24+i*246
+            self.button(cache,(x,329,x+234,382),'Visual only' if mode=='VISUAL' else mode,('set',('qrss_mode',mode)),active=p['qrss_mode']==mode)
+        self.button(cache,(1008,329,1260,382),'POLARITY: AUTO' if p['qrss_mode']=='AUTO' else 'REVERSE '+('ON' if p['reverse'] else 'OFF'),('noop',None) if p['qrss_mode']=='AUTO' else ('set',('reverse',not p['reverse'])))
+        for i,(key,label) in enumerate((('freq_khz','USB dial kHz'),('tone_hz','Band center Hz' if p['qrss_mode']=='AUTO' else 'Mark tone Hz'),('span_hz','Span Hz'),('shift_hz','FSK shift Hz'))):
             x=24+i*312
-            self.button(cache,(x,329,x+300,382),'Visual only' if mode=='VISUAL' else mode,('set',('qrss_mode',mode)),active=p['qrss_mode']==mode)
-        self.button(cache,(960,329,1260,382),'REVERSE '+('ON' if p['reverse'] else 'OFF'),('set',('reverse',not p['reverse'])))
-        for i,(key,label) in enumerate((('freq_khz','USB dial kHz'),('tone_hz','Mark tone Hz'),('span_hz','Span Hz'),('shift_hz','FSK shift Hz'))):
-            x=24+i*312
-            self.button(cache,(x,399,x+300,454),f'{label}: {p[key]:g}',('number',key))
-        self.text(cache,24,480,'Seconds per dot · match the signal for tentative text',18)
-        for i,dot in enumerate(DOTS):
+            self.button(cache,(x,399,x+300,454),('FSK shift: AUTO' if key=='shift_hz' and p['qrss_mode']=='AUTO' else f'{label}: {p[key]:g}'),('noop',None) if key=='shift_hz' and p['qrss_mode']=='AUTO' else ('number',key))
+        self.text(cache,24,480,'AUTO: searches the full span and learns frequency, shift, polarity and dot time' if p['qrss_mode']=='AUTO' else 'Seconds per dot · match the signal for tentative text',18)
+        if p['qrss_mode']=='AUTO':self.text(cache,24,529,'One signal at a time · allow several Morse characters for acquisition',20,(104,234,194))
+        for i,dot in enumerate(() if p['qrss_mode']=='AUTO' else DOTS):
             x=24+i*246
             self.button(cache,(x,499,x+234,551),f'{dot} s',('set',('dot_seconds',dot)),active=p['dot_seconds']==dot)
         for i,minutes in enumerate((5,10,20,30)):
             x=24+i*312
             self.button(cache,(x,570,x+300,623),f'{minutes} min capture',('set',('minutes',minutes)),active=p['minutes']==minutes)
-        self.text(cache,24,651,f"Selected RF: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · both outputs use one Kiwi channel",19)
-        self.text(cache,24,684,'CW / FSKCW text follows one tone. DFCW and other patterns: choose visual only.',17)
+        self.text(cache,24,651,f"Band center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · both outputs use one Kiwi channel",19)
+        self.text(cache,24,684,'AUTO finds CW / FSKCW in the span. DFCW and other patterns remain visual only.',17)
         self.button(cache,(24,714,244,780),'CANCEL',('cancel_add',None))
         self.text(cache,265,748,self.message,17,width=715)
         self.button(cache,(990,714,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
