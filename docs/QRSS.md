@@ -162,3 +162,9 @@ loss, and persistence of independent text through capture rollover. Passing gene
 The main UI includes QRSS directly. On the existing PR12 CM5 UI, the incremental
 compatibility patch is `hardware/cm5/sstv/qrss-ui.patch`, applied after
 `hell-ui.patch`. Do not replace the CM5's display/touch/audio configuration.
+
+### Partial text and capture completion
+
+A saved 600-second image is a completed recording window, not a validated message. Ordinary QRSS Morse has no CRC gate. Completed Morse characters are emitted individually; no complete callsign or full message is required. When timing acquisition succeeds, unfinished dot/dash sequences are also exposed as `partial_morse`, labelled **Unfinished Morse** in both interfaces. An ellipsis indicates a mark still in progress; it is not guessed as a dot, dash or letter. Carrier loss resets unfinished elements, and starting midway through a mark never invents its beginning.
+
+Saved captures without an acquired AUTO track say **Capture saved · no Morse timing lock; inspect the visible traces** rather than indefinitely saying they are waiting. Visible patterns can remain readable to a person even when automatic timing acquisition fails. Old images without stored text or acquired tracks cannot gain partial characters merely from this display change; they would require reprocessing.

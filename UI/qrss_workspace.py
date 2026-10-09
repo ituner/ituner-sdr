@@ -75,7 +75,7 @@ class QRSSWorkspace(SSTVWorkspace):
                     for j,r in enumerate(tracks[self.track_page*6:self.track_page*6+6]):
                         label=f"{r['id']} · {r['rf_hz']/1e6:.6f} MHz · {r['mode']} · {r['dot_seconds']:g} s/dot"
                         self.text(cache,24,564+j*28,label,17,width=570)
-                        self.text(cache,608,564+j*28,r['tentative_text'] or 'Waiting for a complete character…',19,width=640)
+                        self.text(cache,608,564+j*28,r.get('display_text') or item['empty_text_message'],19,width=640)
                     self.text(cache,24,767,f'{len(tracks)} signals · text {self.track_page+1}/{pages}',18)
                     if pages>1:
                         self.button(cache,(728,16,880,70),'< TEXT',('track_page',-1))
@@ -83,8 +83,8 @@ class QRSSWorkspace(SSTVWorkspace):
                 else:
                     self.draw_plot(cache,item,(20,115,1260,620))
                     self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
-                    self.text(cache,24,696,item.get('tentative_text') or 'No text recognized yet',23,width=1210)
-                    self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
+                    self.text(cache,24,696,item['text_message'],23,width=1210)
+                    self.text(cache,24,745,item.get('reception_detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None));return
             self.enlarged=None
         if self.decoders_open:
@@ -118,14 +118,14 @@ class QRSSWorkspace(SSTVWorkspace):
         if self.message:self.text(cache,20,70,self.message,12,width=1220)
 
     def preview_lines(self,cache,item):
-        tracks=[t for t in item.get('tracks',[]) if t.get('tentative_text')]
+        tracks=[t for t in item.get('tracks',[]) if t.get('display_text') or t.get('tentative_text')]
         if tracks:
             parts=[]
             for track in tracks:
-                text=' '.join(track['tentative_text'].split())
+                text=' '.join((track.get('display_text') or track['tentative_text']).split())
                 parts.append(track['id']+': '+(('… '+text[-160:]) if len(text)>160 else text))
             value='Tentative · '+'  |  '.join(parts)
-        else:value='Tentative · '+(' '.join(item.get('tentative_text','').split()) or 'Waiting for complete Morse characters…')
+        else:value='Tentative · '+item['text_message']
         # Use two measured lines; the expanded view retains every track's text.
         words=value.split();first=[]
         while words:

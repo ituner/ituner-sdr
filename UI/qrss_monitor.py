@@ -72,6 +72,7 @@ class QRSSAssembler:
             duration_seconds=round(duration,1),window_seconds=window_seconds,
             **rendering_metadata(),
             stream_id=self.stream_id,sample_start=self.start_sample,sample_end=self.times[-1],
+            partial_morse=self.decoder.morse.partial().strip() if not self.decoder.auto and c['qrss_mode']!='VISUAL' else '',
             acquisition=acquisition,tracks=tracks,tentative_text=text[-4000:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
         canvas=annotate_plot(plot,item)
         path=self.gallery.root/(self.key+'.working.png');canvas.save(path)
@@ -86,7 +87,7 @@ class QRSSAssembler:
                     # Tracks no longer in bounded acquisition history still
                     # belong to saved captures. Refresh only known IDs.
                     merged={r['id']:r for r in row.get('tracks',[]) if r['id'] not in self.decoder.auto.superseded}
-                    merged.update({r['id']:r for r in updates if r['tentative_text'] or r['id'] in merged})
+                    merged.update({r['id']:r for r in updates if r['tentative_text'] or r.get('partial_morse') or r['id'] in merged})
                     old_tracks=sorted(merged.values(),key=lambda r:r['tone_hz'],reverse=True)
                     old_text=self.track_text(old_tracks)
                     if old_tracks!=row.get('tracks',[]):
@@ -198,7 +199,8 @@ class QRSSManager(SSTVManager):
             self.start(config)
 
     def image_snapshot(self, session_id=None):
-        return [dict(row, has_image=True) for row in self.gallery.snapshot(session_id)]
+        from qrss_text import presentation
+        return [presentation(dict(row, has_image=True)) for row in self.gallery.snapshot(session_id)]
 
     def stop(self):
         for session in self.sessions.values():

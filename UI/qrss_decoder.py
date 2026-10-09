@@ -26,6 +26,10 @@ class MorseTiming:
         self.mark=False;self.since=None;self.pattern='';self.emitted=False;self.spaced=False
         self.blocked=False
 
+    def partial(self):
+        # Completed elements only; an open mark has unknown dot/dash length.
+        return self.pattern+(' …' if self.mark and not self.blocked else '')
+
     def emit(self,when):
         if self.pattern:
             self.events.append((when,MORSE.get(self.pattern,'?')))

@@ -187,6 +187,7 @@ class AutoAcquisition:
             track.update(mode=row['mode'],tone_hz=tone,space_hz=space,
                 shift_hz=abs(tone-space),dot=row['dot'],timing_fit=round(row['fit'],2),
                 reverse=bool(tone<space),active=True,last_seen=float(times[-1]),
+                partial_morse=decoder.partial().strip(),partial_when=float(times[-1]),
                 events=deque(older+replay,maxlen=2000))
             used.add(track['id']);active.append(track)
         # Retain recent text after a signal fades. Both history and bookkeeping
@@ -234,6 +235,7 @@ class AutoAcquisition:
             text=''.join(c for t,c in events).strip()
             if not text and not track['active']:continue
             row=self.track_status(track)
-            row.update(tentative_text=text[-500:])
+            row.update(tentative_text=text[-500:],partial_morse=track.get('partial_morse','')
+                if start<=track.get('partial_when',-1)<=end else '')
             result.append(row)
         return result
