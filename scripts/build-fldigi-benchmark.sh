@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Optional offline-file decoder; does not install a service or touch audio/display settings.
+# Optional file/live PCM decoder; does not touch audio or display settings.
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 set -euo pipefail
 version=4.2.13
 sha=a1e8d990359ce9c0cce3ceb5116fd0cf72c95528969766898640ca6ca2dba8d4
@@ -33,6 +34,7 @@ s=p.read_text().replace('dlgViewer->visible() || progStatus.show_channels',
     '(dlgViewer && dlgViewer->visible()) || progStatus.show_channels')
 p.write_text(s)
 PYFIX
+python3 "$script_dir/patch-fldigi-stream.py" "$PWD"
 ./configure --enable-benchmark --disable-flarq --without-pulseaudio \
     --without-hamlib --without-flxmlrpc --without-libmbedtls --without-asciidoc
 make -j"${ITUNER_BUILD_JOBS:-2}"

@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 from PIL import Image
 from sstv_monitor import Session, SSTVManager, atomic_json
-from cw_modes import settings
+from cw_modes import bounds,settings
 from cw_decoder import CWDecoder, RATE
 
 
@@ -27,6 +27,8 @@ class CWHistory:
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('CREATE TABLE IF NOT EXISTS text_log (id TEXT PRIMARY KEY, session_id TEXT, receiver TEXT, server TEXT, band TEXT, rf_hz REAL, wpm REAL, start_utc TEXT, end_utc TEXT, text TEXT)')
         self.db.execute('CREATE INDEX IF NOT EXISTS text_time ON text_log(end_utc DESC)');self.db.commit()
+        if 'engine' not in {r[1] for r in self.db.execute('PRAGMA table_info(text_log)')}:
+            self.db.execute("ALTER TABLE text_log ADD COLUMN engine TEXT DEFAULT 'ggmorse'");self.db.commit()
         self.streams={}
 
     def append(self,config,track,text,stamp):
@@ -35,8 +37,8 @@ class CWHistory:
             key,length=self.streams.get(track['id'],(uuid.uuid4().hex,0))
             if length+len(text)>8192:key,length=uuid.uuid4().hex,0
             if not length:
-                self.db.execute('INSERT INTO text_log VALUES (?,?,?,?,?,?,?,?,?,?)',
-                    (key,config['id'],config['name'],config['server'],config['band'],track['rf_hz'],track['wpm'],stamp,stamp,text))
+                self.db.execute('INSERT INTO text_log (id,session_id,receiver,server,band,rf_hz,wpm,start_utc,end_utc,text,engine) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    (key,config['id'],config['name'],config['server'],config['band'],track['rf_hz'],track['wpm'],stamp,stamp,text,config.get('engine','ggmorse')))
             else:
                 self.db.execute('UPDATE text_log SET text=text||?,end_utc=?,wpm=? WHERE id=?',(text,stamp,track['wpm'],key))
             self.streams[track['id']]=(key,length+len(text));self.db.commit()
@@ -52,7 +54,7 @@ class CWHistory:
 
     def export(self):
         rows=self.rows(limit=10000);out=io.StringIO()
-        keys=('start_utc','end_utc','receiver','server','band','rf_hz','wpm','text')
+        keys=('start_utc','end_utc','receiver','server','band','rf_hz','wpm','engine','text')
         writer=csv.DictWriter(out,fieldnames=keys,extrasaction='ignore');writer.writeheader()
         for row in reversed(rows):
             # Spreadsheet-safe export; keep raw unmodified text in the database.
@@ -102,6 +104,7 @@ class CWAssembler:
             path=self.store.image_path(self.session.config['id']);tmp=path.with_suffix('.tmp')
             image.save(tmp,format='PNG');tmp.replace(path)
         with self.session.lock:
+            self.session.capacity_limited=self.decoder.capacity_limited
             self.session.tracks=tracks
             self.session.image_version+=1
             self.session.audio_seconds=round(self.decoder.samples/RATE,1)
@@ -115,12 +118,12 @@ class CWSession(Session):
     receiver_label='CW'
     listening_message='Scanning 1 kHz for Morse signals · automatic speed'
     def __init__(self,*args):
-        super().__init__(*args);self.tracks=[];self.image_version=0;self.audio_seconds=0
+        super().__init__(*args);self.listening_message=f"{self.config.get('engine','ggmorse')} · scanning {(bounds(self.config)[1]-200)/1000:g} kHz · up to 4 signals";self.tracks=[];self.image_version=0;self.audio_seconds=0;self.capacity_limited=False
     def make_assembler(self):return CWAssembler(self,self.queue)
-    def bandpass(self):return 150,1250
+    def bandpass(self):return 150,bounds(self.config)[1]+50
     def snapshot(self):
         with self.lock:
-            return dict(self.config,status=self.status,detail=self.detail,last_decode=self.last_decode,
+            return dict(self.config,status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
                         tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds)
 
 
@@ -167,7 +170,7 @@ class CWManager(SSTVManager):
         config=next(r for r in self.configs if r['id']==key)
         updated=dict(config,**{k:v for k,v in preset.items() if k not in ('id','paused','name','server')})
         updated.update(name=name,server=server);updated.update(settings(preset,updated));self.validate(updated)
-        changed=any(updated[k]!=config.get(k) for k in ('server','freq_khz','tone_hz','cw_mode','wpm','squelch_db','max_tracks'))
+        changed=any(updated[k]!=config.get(k) for k in ('server','freq_khz','tone_hz','cw_mode','wpm','squelch_db','max_tracks','engine'))
         if changed:
             old=self.sessions.get(key)
             if old:

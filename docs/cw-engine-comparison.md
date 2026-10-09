@@ -1,7 +1,6 @@
 # CW engine comparison
 
-This is an optional evaluation tool. The installed CW receiver still uses
-GGMorse. The comparison does not replace its backend, start receivers, alter
+This is an optional evaluation tool. GGMorse remains the default; live fldigi is now optional (see [CW setup](cw.md)). The comparison does not replace its backend, start receivers, alter
 hardware drivers, or change speaker routing. It runs the actual upstream
 fldigi decoder against files in its benchmark-only build.
 
@@ -19,7 +18,7 @@ Do not generalize them to all operating conditions or the live receiver's gate.
 
 A fresh local-Kiwi recording attempt returned no audio and was closed without
 stopping existing receivers. Off-air comparison and live CPU/latency evaluation
-therefore remain outstanding. The production backend remains GGMorse.
+therefore remain outstanding. These benchmark results predate the optional live integration.
 
 ## Repeat on CM5 / Debian
 
@@ -37,7 +36,7 @@ python3 scripts/decoder_bench.py --generate /tmp/cw-corpus \
 ```
 
 The builder downloads official fldigi 4.2.13, verifies its pinned SHA-256, and
-compiles under a user cache directory. Three upstream benchmark compatibility fixes are applied: qualify
+compiles under a user cache directory. The builder also adds the receive-only PCM pipe used by the live adapter. Three upstream benchmark compatibility fixes are applied: qualify
 `std::ofstream` in `src/misc/benchmark.cxx` for GCC 14, and guard the optional
 signal-browser dialog pointer in `src/cw/cw.cxx` (it is absent in batch mode),
 and synchronize the waterfall carrier with `--benchmark-frequency` so CW does
@@ -98,7 +97,7 @@ without a reference the outputs are retained but no accuracy score is invented.
 The `FldigiBatch` adapter separates modem selection, settings and decoded text
 from the rest of the comparison. This is the first reusable boundary for other
 fldigi modes. It currently validates 8 kHz inputs; modes with another sample rate
-need explicit support. It is a file-decoding adapter, not yet a live integration.
+need explicit support. This class remains file-only; `UI/cw_fldigi.py` separately provides persistent live CW streaming.
 
 Next evaluation stages:
 
