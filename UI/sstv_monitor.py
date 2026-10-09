@@ -594,7 +594,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 if self.server.hell is None:
                     self.send_error(503)
                     return
-                data = self.server.hell.gallery.image_path(path.path[13:-4]).read_bytes()
+                data = self.server.hell.gallery.display_path(path.path[13:-4]).read_bytes()
                 content_type = 'image/png'
             elif path.path in ('/api/hell', '/api/hell/reporting'):
                 if self.server.hell is None:

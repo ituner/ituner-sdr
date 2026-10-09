@@ -52,6 +52,10 @@ class HellGallery(Gallery):
         self.worker = threading.Thread(target=self.run, name='hell-ocr', daemon=True)
         self.worker.start()
 
+    def display_path(self, key):
+        from hell_palette import display_path
+        return display_path(self.image_path(key))
+
     def annotate(self, key, **values):
         with self.lock:
             row = next((r for r in self.items if r['id'] == key), None)

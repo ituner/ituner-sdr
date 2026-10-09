@@ -51,7 +51,7 @@ class HellWorkspace(SSTVWorkspace):
             self.strip_offset=max(0,min(self.strip_offset,self.strip_max))
             self.strip_step=source_width*.8
             offset=self.strip_offset
-        self.ui.draw_logical_rect(*box,(255,255,255,255))
+        self.ui.draw_logical_rect(*box,(0,0,0,255))
         super().image(item['id'],(x0,y0,x0+source_width*scale,y1),fill=True,
                       source_box=(offset,0,offset+source_width,height))
 

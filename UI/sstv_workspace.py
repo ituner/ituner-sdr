@@ -83,7 +83,7 @@ class SSTVWorkspace:
         ui = self.ui
         cached = self.textures.get(key)
         try:
-            path = self.manager.gallery.image_path(key)
+            path = getattr(self.manager.gallery, 'display_path', self.manager.gallery.image_path)(key)
             try:
                 stamp = path.stat().st_mtime_ns
                 if not cached or cached[0] != stamp:

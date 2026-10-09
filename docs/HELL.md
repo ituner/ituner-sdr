@@ -176,3 +176,5 @@ scale instead of shrinking and recentering all existing columns on each update.
 Previews show the start of a strip; open one to pan across its full length.
 Use Left/Right on the touchscreen or horizontal scrolling in the web viewer.
 The web strip height is 180 pixels; the local plot height is 158 logical pixels.
+
+Hell strips use the same black/blue/cyan/white palette as QRSS in local previews, enlarged views, search results and web PNGs. The mapping represents relative raster intensity, not calibrated RF strength. Original grayscale captures remain on disk for OCR; display copies are cached separately and refreshed when a live strip changes.
