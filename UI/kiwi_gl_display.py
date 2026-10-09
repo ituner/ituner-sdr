@@ -789,7 +789,8 @@ MOONSHINE_SMALL_STREAMING_TRIAL = os.environ.get("ITUNER_MOONSHINE_SMALL_STREAMI
 WHISPER_CLI = vendor_path("whisper.cpp", "build", "bin", "whisper-cli")
 WHISPER_LANGUAGE = os.environ.get("ITUNER_WHISPER_LANGUAGE", "auto").strip() or "auto"
 _WHISPER_MODEL_NAMES = (
-    os.environ.get("ITUNER_WHISPER_MODEL", "ggml-tiny.bin"),
+    os.environ.get("ITUNER_WHISPER_MODEL", "ggml-base-q5_1.bin"),
+    "ggml-tiny.bin",
     "ggml-tiny.en.bin",
 )
 WHISPER_MODEL = next(
@@ -9920,7 +9921,7 @@ def whisper_transcribe(pcm16, translate=False):
         ]
         if translate:
             # Whisper's multilingual models translate the source speech to
-            # English locally. The installer defaults to ggml-tiny.bin (not
+            # English locally. The installer defaults to multilingual Base Q5_1 (not
             # the English-only ggml-tiny.en.bin fallback).
             command.append("--translate")
         result = subprocess.run(

@@ -37,13 +37,17 @@ driver/overlay setup, high-quality sample-rate conversion, volume/mute controls
 and automatic speaker shutdown when headphones are inserted. It preserves the
 working display/touch drivers. See [CM5 audio setup and required board repairs](docs/cm5-audio.md).
 
-The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet
-and HF-enhancement models automatically, using fixed versions and verified
+The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet,
+Whisper Base Q5_1 and HF-enhancement models automatically, using fixed versions and verified
 checksums. It requires 64-bit Raspberry Pi OS Trixie / Python 3.13. See
 [dependency setup and version policy](docs/runtime-dependencies.md). This is an
 application/model baseline, not a complete OS image; experimental engines and
 hardware setup remain separate. The reference LCD's running source matches this
 baseline, but its old dirty Git checkout has not been reset or replaced.
+
+Whisper uses a pinned CPU-only `whisper.cpp` build and multilingual Base Q5_1,
+including Chinese and Romanian transcription. Installation makes the engine
+available; it preserves the selected ASR engine. See [Whisper installation](docs/whisper.md).
 
 ## CM5 / JD9365DA-H3 30-pin LCD hardware setup
 
