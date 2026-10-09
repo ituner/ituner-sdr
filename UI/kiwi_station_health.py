@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from local_receivers import read_local_status
 
 sys.path.insert(0, str(Path(__file__).parent))
 import kiwi_live_display_fb as kiwi
@@ -102,9 +103,11 @@ def probe_time_limit(server):
     try:
         parsed = urlparse(server if "://" in server else "http://" + server)
         endpoint = parsed._replace(path="/status", params="", query="", fragment="").geturl()
-        request = Request(endpoint, headers={"User-Agent": "iTuner-SDR-health/1.0"})
-        with urlopen(request, timeout=STATUS_TIMEOUT_SECONDS) as response:
-            status = response.read(32768).decode("utf-8", "replace")
+        status = read_local_status(endpoint, timeout=STATUS_TIMEOUT_SECONDS)
+        if status is None:
+            request = Request(endpoint, headers={"User-Agent": "iTuner-SDR-health/1.0"})
+            with urlopen(request, timeout=STATUS_TIMEOUT_SECONDS) as response:
+                status = response.read(32768).decode("utf-8", "replace")
         return "⏳ Limits" in status or "Limits" in status.split("sdr_hw=", 1)[-1].split("\n", 1)[0]
     except Exception:
         return None

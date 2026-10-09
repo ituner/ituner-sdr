@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from PIL import Image, ImageDraw
 
 import render_sdr_frontend_mockup as sdr_ui
+from local_receivers import create_connection as local_connection, read_local_status
 
 
 FB = Path("/dev/fb0")
@@ -111,7 +112,7 @@ class KiwiWebSocket:
             ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
             raw = None
             try:
-                raw = socket.create_connection((host, port), timeout=timeout)
+                raw = local_connection(host, port, timeout=timeout, secure=ws_scheme == "wss")
                 raw.settimeout(timeout)
                 if ws_scheme == "wss":
                     raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)

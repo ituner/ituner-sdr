@@ -9909,9 +9909,11 @@ def kiwi_status_metadata(server):
     if not url.startswith(("http://", "https://")):
         raise ValueError("receiver URL is invalid")
     try:
-        request = Request(url, headers={"User-Agent": "KiwiTouch/1.0"})
-        with urlopen(request, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS) as response:
-            status = response.read().decode("utf-8", "replace")
+        status = kiwi.read_local_status(server, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS)
+        if status is None:
+            request = Request(url, headers={"User-Agent": "KiwiTouch/1.0"})
+            with urlopen(request, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS) as response:
+                status = response.read().decode("utf-8", "replace")
     except OSError:
         raise
     users = re.search(r"(?:^|\s)users=(\d+)", status)
