@@ -99,7 +99,12 @@ The web gallery uses one full-width spectrogram per row, giving long captures
 more horizontal space. Plot and text areas keep stable heights during live
 updates; long text scrolls inside its own area. Existing image nodes are reused
 and new pixels replace the old only after loading, including in the enlarged
-viewer. Time and frequency axes scale independently to fill the plot area. Web cards and the enlarged local view show separate text rows labelled with
+viewer. Receiver controls also update in place. All gallery views hold their
+current capture order while polling; use **Show latest captures** when notified
+of new arrivals, or change a filter/page, to load the new list. Live pixels and
+text still update in the captures already on screen. This preserves the capture
+and scroll position being read, including at image rollover. Time and frequency
+axes scale independently to fill the plot area. Web cards and the enlarged local view show separate text rows labelled with
 track ID, RF frequency and dot timing. The local enlarged view pages through
 six text rows at a time. Text from different stations is never joined into one
 message. Manual modes and older captures keep their single-text display.
