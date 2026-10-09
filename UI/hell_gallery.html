@@ -1,19 +1,19 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>iTuner · Hell RX</title>
 <style>
-[hidden]{display:none!important}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1{color:#68eac2;margin:0}header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}a{color:#68eac2}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}#decoders{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px;margin:18px 0}.receiver,article{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:12px}article{margin:12px 0}article button{display:block;width:100%;background:#fff;border:0;padding:0;overflow:hidden}article img{display:block;width:100%;height:110px;object-fit:contain;image-rendering:pixelated}article p{margin:6px 0 0;font-size:14px}.live{color:#68eac2}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{display:block;width:100%;min-height:130px;max-height:55vh;object-fit:contain;image-rendering:pixelated;background:white;margin:16px 0}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.report-form{width:620px;box-sizing:border-box}.report-form label{display:block;margin:14px 0}.report-form input:not([type=checkbox]){display:block;width:100%;margin-top:6px}.report-form input[type=checkbox]{min-height:0}.error{color:#ffcf8b}#reports p{overflow-wrap:anywhere}#filter{max-width:100%}#notice{min-height:1.5em}
+[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1{color:#68eac2;margin:0}header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}a{color:#68eac2}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}#decoders{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px;margin:18px 0}.receiver,article{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:12px}article{margin:12px 0}article button{display:block;width:100%;background:#fff;border:0;padding:0;overflow:hidden}article img{display:block;width:100%;height:110px;object-fit:contain;object-position:left center;image-rendering:pixelated}article p{margin:6px 0 0;font-size:14px}.live{color:#68eac2}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{display:block;width:100%;height:clamp(130px,35vh,300px);object-fit:contain;object-position:left center;image-rendering:pixelated;background:white;margin:16px 0}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.report-form{width:620px;box-sizing:border-box}.report-form label{display:block;margin:14px 0}.report-form input:not([type=checkbox]){display:block;width:100%;margin-top:6px}.report-form input[type=checkbox]{min-height:0}.error{color:#ffcf8b}#reports p{overflow-wrap:anywhere}#filter{max-width:100%}#notice{min-height:1.5em}.capture-updates{height:48px}article p{height:3em;overflow:auto;overflow-wrap:anywhere}.receiver strong{display:block;height:3em;overflow:auto}.receiver-detail{height:4.5em;overflow:auto}#detail{height:4.5em;overflow:auto}
 #hell-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px}#hell-modes label{margin:3px 0}#hell-modes input{min-height:0}
 </style>
 <header><div><h1>Hell RX</h1><p>Latest previews & saved possible text · tap a strip to enlarge</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell" aria-current="page">Hell RX</a> · <a href="/qrss">QRSS</a></nav></header>
 <div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders"></div>
 <p>Hell has no frame header or automatic callsign decoding. Several modes can share one Kiwi channel at the same RF center. OCR keeps a strip when it finds even one letter or digit; this is possible text, not a confirmed decode. Otherwise only the latest preview per mode is retained.</p>
-<label>Receiver <select id="filter"><option value="">All receivers</option></select></label><label>View <select id="view"><option value="latest">Latest per receiver / mode</option><option value="text">Possible text</option><option value="saved">Saved strips</option><option value="all">Everything</option></select></label><label>Mode <select id="mode-filter"><option value="">All modes</option></select></label><p id="status" role="status">Loading…</p><main id="gallery"></main>
+<label>Receiver <select id="filter"><option value="">All receivers</option></select></label><label>View <select id="view"><option value="latest">Latest per receiver / mode</option><option value="text">Possible text</option><option value="saved">Saved strips</option><option value="all">Everything</option></select></label><label>Mode <select id="mode-filter"><option value="">All modes</option></select></label><p id="status" role="status">Loading…</p><div class="capture-updates"><button id="refresh-captures" hidden>Show latest strips</button></div><main id="gallery"></main>
 <div class="buttons"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
 <details><summary>PSK Reporter · queued and recent reports</summary><p>Only stations you explicitly confirm are reported. No images are uploaded. UDP delivery cannot be confirmed.</p><div id="reports"></div></details>
 <dialog id="viewer"><div class="buttons"><button id="close">Close</button><button id="report">Report station</button><a id="download" download>Download PNG</a></div><img id="large" alt="Hell text raster"><p id="detail"></p></dialog>
 <dialog id="report-dialog" class="report-form"><form id="report-form"><h2>Report a station</h2><p id="report-source"></p><p>Enter the callsign you can read. Use the receiving antenna’s identity and grid, especially for remote Kiwi receivers.</p><label>Heard callsign<input id="heard" required maxlength="24" autocomplete="off"></label><label>Receiver callsign<input id="reporter" required maxlength="24" autocomplete="off"></label><label>Receiver grid<input id="grid" required maxlength="6" autocomplete="off"></label><label><input id="confirmed" type="checkbox" required> The callsign is correct. I may report for this receiver and its receiving location is correct.</label><p id="report-error" class="error" role="status"></p><div class="buttons"><button type="button" id="report-cancel">Cancel</button><button type="submit">Queue report</button></div></form></dialog>
 <script src="/digital-controls.js"></script><script>
-const $=id=>document.getElementById(id);let timer,busy=false,images=[],page=0,selectedImage=null,reportImage=null,reportState={profiles:{},reports:[]};
+const $=id=>document.getElementById(id);let timer,busy=false,images=[],page=0,selectedImage=null,visibleCaptures=null,reportImage=null,reportState={profiles:{},reports:[]};
 class HellControls extends DigitalControls{
  constructor(){
   super('hell',refresh);
@@ -56,16 +56,121 @@ class HellControls extends DigitalControls{
 }
 const controls=new HellControls();
 for(const mode of ['HELL','SLOWHELL','HELLX5','HELLX9','FSKH245','FSKH105','HELL80'])$('mode-filter').add(new Option(mode,mode));
-$('view').onchange=$('mode-filter').onchange=()=>{page=0;renderImages()};
+
 function statusLabel(i){return i.kind==='receiving'?'LIVE':i.ocr_status==='possible_text'?'POSSIBLE TEXT':i.ocr_status==='pending'?'CHECKING TEXT':i.kind==='preview'?'LATEST PREVIEW · no text recognized':'SAVED · unchecked'}
 function url(item){return '/hell-images/'+item.id+'.png?v='+item.updated_ns}
 function describe(i){return i.mode+' · '+i.receiver+' · '+i.band+' · '+(i.rf_hz/1e6).toFixed(6)+' MHz RF · '+i.capture_utc+' · '+i.duration_seconds+' s'}
-function show(i){selectedImage=i.id;$('large').src=url(i);$('detail').textContent=describe(i)+(i.ocr_text?' · OCR guess: '+i.ocr_text:'');$('download').href=url(i);if(!$('viewer').open)$('viewer').showModal()}
-$('close').onclick=()=>$('viewer').close();$('previous').onclick=()=>{page=Math.max(0,page-1);renderImages()};$('next').onclick=()=>{page++;renderImages()};$('filter').onchange=()=>{page=0;renderImages()};
-function renderImages(){let rows=images.filter(i=>(!$('filter').value||i.session_id===$('filter').value)&&(!$('mode-filter').value||i.mode===$('mode-filter').value));const view=$('view').value;if(view==='latest'){const seen=new Set();rows=rows.filter(i=>{const key=i.session_id+':'+i.mode;if(seen.has(key))return false;seen.add(key);return true})}else if(view==='text')rows=rows.filter(i=>i.ocr_status==='possible_text');else if(view==='saved')rows=rows.filter(i=>i.kind==='saved');const pages=Math.max(1,Math.ceil(rows.length/20));page=Math.min(page,pages-1);$('gallery').replaceChildren();for(const i of rows.slice(page*20,page*20+20)){const card=document.createElement('article'),b=document.createElement('button'),img=document.createElement('img'),caption=document.createElement('p');img.src=url(i);img.alt='Hell raster from '+i.receiver;img.loading='lazy';b.append(img);b.onclick=()=>show(i);b.ariaLabel='Enlarge '+i.mode+' strip';caption.textContent=statusLabel(i)+' · '+describe(i);if(i.kind==='receiving')caption.className='live';card.append(b,caption);$('gallery').append(card)}$('page').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page===pages-1;$('status').textContent=rows.length?rows.length+' strips · newest first · up to 300 retained':'Use Add decoder to choose a receiver, band and Hell variant.';if($('viewer').open){const i=images.find(i=>i.id===selectedImage);if(i&&$('large').getAttribute('src')!==url(i))show(i)}}
+function updateImage(img,src){
+ if(img.getAttribute('src')===src){delete img.dataset.pending;return}
+ if(img.dataset.pending===src)return;
+ img.dataset.pending=src;
+ const next=new Image();
+ next.onload=()=>{if(img.dataset.pending===src){img.src=src;delete img.dataset.pending}};
+ next.onerror=()=>{if(img.dataset.pending===src)delete img.dataset.pending};
+ next.src=src;
+}
+function setText(el,value){
+ if(el.textContent===value)return;
+ const top=el.scrollTop,left=el.scrollLeft;el.textContent=value;el.scrollTop=top;el.scrollLeft=left;
+}
+function show(i){
+ const viewer=$('viewer'),top=viewer.scrollTop;
+ selectedImage=i.id;updateImage($('large'),url(i));
+ setText($('detail'),describe(i)+(i.ocr_text?' · OCR guess: '+i.ocr_text:''));$('download').href=url(i);
+ if(!viewer.open)viewer.showModal();else viewer.scrollTop=top;
+}
+function browse(){visibleCaptures=null;renderImages()}
+$('close').onclick=()=>$('viewer').close();
+$('previous').onclick=()=>{page=Math.max(0,page-1);browse()};
+$('next').onclick=()=>{page++;browse()};
+$('filter').onchange=$('view').onchange=$('mode-filter').onchange=$('refresh-captures').onclick=()=>{page=0;browse()};
+function viewportAnchor(){
+ const cards=[...$('gallery').children],card=cards.find(c=>c.getBoundingClientRect().bottom>0&&c.getBoundingClientRect().top<innerHeight);
+ return {card,top:card?.getBoundingClientRect().top,x:scrollX,y:scrollY};
+}
+function restoreViewport(anchor){
+ const dy=anchor.card?.isConnected?anchor.card.getBoundingClientRect().top-anchor.top:0;
+ if(dy)window.scrollBy(0,dy);
+ else if(scrollY!==anchor.y)window.scrollTo(anchor.x,anchor.y);
+}
+function renderImages(){
+ let rows=images.filter(i=>(!$('filter').value||i.session_id===$('filter').value)&&(!$('mode-filter').value||i.mode===$('mode-filter').value));
+ const view=$('view').value,latest=view==='latest',key=i=>latest?i.session_id+':'+i.mode:i.id;
+ if(latest){const seen=new Set();rows=rows.filter(i=>{const k=key(i);if(seen.has(k))return false;seen.add(k);return true})}
+ else if(view==='text')rows=rows.filter(i=>i.ocr_status==='possible_text');
+ else if(view==='saved')rows=rows.filter(i=>i.kind==='saved');
+ const pages=Math.max(1,Math.ceil(rows.length/20));if(visibleCaptures===null)page=Math.min(page,pages-1);
+ const desired=rows.slice(page*20,page*20+20),available=new Map((latest?rows:images).map(i=>[key(i),i]));
+ if(visibleCaptures===null)visibleCaptures=desired;
+ else visibleCaptures=visibleCaptures.map(i=>available.get(key(i))||i);
+ // A latest receiver/mode owns a stable slot, even when its strip rolls over.
+ // Saved views hold membership until the reader chooses to see new arrivals.
+ const want=desired.map(key),shown=visibleCaptures.map(key);
+ $('refresh-captures').hidden=latest?want.length===shown.length&&want.every(k=>shown.includes(k)):want.join(',')===shown.join(',');
+ const gallery=$('gallery'),existing=new Map([...gallery.children].map(c=>[c.dataset.key,c]));
+ for(const [index,i] of visibleCaptures.entries()){
+  let card=existing.get(key(i));
+  if(!card){
+   card=document.createElement('article');card.dataset.key=key(i);
+   const b=document.createElement('button'),img=document.createElement('img'),caption=document.createElement('p');
+   img.alt='Hell raster from '+i.receiver;b.append(img);b.onclick=()=>show(card.capture);
+   card.append(b,caption);
+  }
+  card.capture=i;card.dataset.id=i.id;existing.delete(key(i));
+  card.children[0].ariaLabel='Enlarge '+i.mode+' strip';updateImage(card.querySelector('img'),url(i));
+  const caption=card.children[1];setText(caption,statusLabel(i)+' · '+describe(i));caption.className=i.kind==='receiving'?'live':'';
+  if(gallery.children[index]!==card)gallery.insertBefore(card,gallery.children[index]||null);
+ }
+ for(const card of existing.values())card.remove();
+ $('page').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page>=pages-1;
+ $('status').textContent=rows.length?rows.length+' strips · '+(latest?'stable receiver / mode positions':'newest first')+' · up to 300 retained':'Use Add decoder to choose a receiver, band and Hell variant.';
+ if($('viewer').open){const i=images.find(i=>i.id===selectedImage);if(i)show(i)}
+}
+function updateReceivers(rows){
+ const parent=$('decoders'),existing=new Map([...parent.children].map(e=>[e.dataset.id,e]));
+ for(const [index,row] of rows.entries()){
+  let el=existing.get(row.id);
+  if(!el){
+   el=document.createElement('section');el.className='receiver';el.dataset.id=row.id;
+   const title=document.createElement('strong'),detail=document.createElement('p'),latest=document.createElement('button');
+   detail.className='receiver-detail';latest.textContent='View latest strip';
+   latest.onclick=()=>{const i=images.find(i=>i.session_id===el.receiverRow.id);if(i)show(i)};
+   const actions=controls.buttons(row),[start,edit]=actions.children;
+   start.onclick=()=>controls.toggle(el.receiverRow,start);edit.onclick=()=>controls.open(el.receiverRow);
+   el.append(title,detail,actions,latest);
+  }
+  el.receiverRow=row;existing.delete(row.id);
+  const [title,detail,actions,latest]=el.children,[start,edit]=actions.children;
+  setText(title,row.name+' · '+row.band);
+  setText(detail,(row.hell_modes||[row.hell_mode]).join(', ')+' · one Kiwi channel · '+(row.freq_khz/1000).toFixed(6)+' MHz USB + '+row.tone_hz+' Hz · '+row.status);detail.title=row.detail||'';
+  setText(start,controls.pending.has(row.id)?'Applying…':row.running?'Stop':'Start');
+  start.disabled=edit.disabled=!controls.token||controls.pending.has(row.id);
+  start.ariaLabel=(row.running?'Stop ':'Start ')+row.name+' '+row.band;edit.ariaLabel='Edit '+row.name+' '+row.band;
+  latest.disabled=!images.some(i=>i.session_id===row.id);
+  if(parent.children[index]!==el)parent.insertBefore(el,parent.children[index]||null);
+ }
+ for(const el of existing.values())el.remove();
+}
 async function reporting(){try{const r=await fetch('/api/hell/reporting',{cache:'no-store'});if(!r.ok)return;reportState=await r.json();$('reports').replaceChildren();for(const row of reportState.reports){const p=document.createElement('p');p.textContent=row.call+' · '+row.mode+' · '+row.reporter+' / '+row.grid+' · '+row.status+(row.error?' · '+row.error:'');if(row.status==='queued'){const b=document.createElement('button');b.textContent='Cancel';b.onclick=async()=>{try{await reportRequest({action:'cancel',id:row.id});await reporting()}catch(e){controls.notice(e.message)}};p.append(' ',b)}$('reports').append(p)}if(!reportState.reports.length)$('reports').textContent='No reports submitted.'}catch(e){}}
 async function reportRequest(payload){const r=await fetch('/api/hell/reporting',{method:'POST',headers:{'Content-Type':'application/json','X-SDR-Control':controls.token},body:JSON.stringify(payload)});const data=await r.json();if(!r.ok)throw Error(data.error||'Could not queue report');return data}
 $('report').onclick=()=>{const i=images.find(i=>i.id===selectedImage);if(!i)return;reportImage=i.id;const p=reportState.profiles[i.server]||{};$('heard').value='';$('reporter').value=p.reporter||'';$('grid').value=p.grid||'';$('confirmed').checked=false;$('report-source').textContent=i.receiver+' · '+i.server;$('report-error').textContent='';$('report-dialog').showModal()};$('report-cancel').onclick=()=>$('report-dialog').close();
 $('report-form').onsubmit=async e=>{e.preventDefault();const button=$('report-form').querySelector('[type=submit]');button.disabled=true;try{const result=await reportRequest({image:reportImage,call:$('heard').value,reporter:$('reporter').value,grid:$('grid').value,confirmed:$('confirmed').checked});$('report-dialog').close();controls.notice(result.message);await reporting()}catch(e){$('report-error').textContent=e.message}finally{button.disabled=false}};
-async function refresh(){clearTimeout(timer);if(busy)return;busy=true;try{const r=await fetch('/api/hell',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();controls.setData(d);images=d.images;const old=$('filter').value,names=new Map(images.map(i=>[i.session_id,i.receiver+' · '+i.band]));for(const row of d.decoders)names.set(row.id,row.name+' · '+row.band);$('filter').replaceChildren(new Option('All receivers',''));for(const[k,n]of names)$('filter').add(new Option(n,k));$('filter').value=names.has(old)?old:'';$('decoders').replaceChildren();for(const row of d.decoders){const el=document.createElement('section');el.className='receiver';const title=document.createElement('strong');title.textContent=row.name+' · '+row.band;const detail=document.createElement('p');detail.textContent=(row.hell_modes||[row.hell_mode]).join(', ')+' · one Kiwi channel · '+(row.freq_khz/1000).toFixed(6)+' MHz USB + '+row.tone_hz+' Hz · '+row.status;detail.title=row.detail;el.append(title,detail,controls.buttons(row));const i=images.find(i=>i.session_id===row.id);if(i){const b=document.createElement('button');b.textContent='View latest strip';b.onclick=()=>show(i);el.append(b)}$('decoders').append(el)}renderImages();await reporting()}catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}finally{busy=false;timer=setTimeout(refresh,3000)}}refresh();
+async function refresh(){
+ clearTimeout(timer);if(busy)return;busy=true;
+ try{
+  const r=await fetch('/api/hell',{cache:'no-store'});if(!r.ok)throw Error();
+  const d=await r.json(),anchor=viewportAnchor();controls.setData(d);images=d.images;
+  const old=$('filter').value,names=new Map(images.map(i=>[i.session_id,i.receiver+' · '+i.band]));
+  for(const row of d.decoders)names.set(row.id,row.name+' · '+row.band);
+  const entries=[...names].sort(([a],[b])=>a.localeCompare(b)),signature=JSON.stringify(entries);
+  if($('filter').dataset.options!==signature){
+   $('filter').replaceChildren(new Option('All receivers',''));
+   for(const[k,n]of entries)$('filter').add(new Option(n,k));
+   $('filter').value=names.has(old)?old:'';$('filter').dataset.options=signature;
+  }
+  updateReceivers(d.decoders);renderImages();restoreViewport(anchor);await reporting();
+ }catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}
+ finally{busy=false;timer=setTimeout(refresh,3000)}
+}
+refresh();
 </script></html>

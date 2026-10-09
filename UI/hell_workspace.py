@@ -62,7 +62,12 @@ class HellWorkspace(SSTVWorkspace):
             latest = {}
             for item in images:
                 latest.setdefault((item['session_id'],item['mode']),item)
-            images = list(latest.values())
+            # New timestamps must not make simultaneous modes trade places.
+            receivers_order = {r['id']:i for i,r in enumerate(self.manager.configs)}
+            modes_order = {mode:i for i,mode in enumerate(MODES)}
+            images = sorted(latest.values(), key=lambda r:(
+                receivers_order.get(r['session_id'],len(receivers_order)),
+                r['session_id'],modes_order.get(r['mode'],len(modes_order))))
         pages = max(1,math.ceil(len(images)/5))
         self.page = min(self.page,pages-1)
         if not images:

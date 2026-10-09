@@ -156,3 +156,14 @@ on-air reception:
 ![Local Hell gallery with test-signal strips](images/hell-workspace.png)
 
 ![Local Hell receiver editor](images/hell-editor.png)
+
+### Stable live previews
+
+The web gallery reuses image and receiver cards during polling, keeps plot and
+caption heights fixed, and loads replacement pixels before displaying them.
+Latest previews keep each receiver/mode in the same slot across strip rollover.
+Saved, possible-text and everything views hold the strips being read; use
+**Show latest strips** to load new arrivals. Filters and page buttons also load
+the latest list. Enlarged strips keep a fixed image box and scroll position.
+The touchscreen latest view orders receivers and modes consistently rather
+than rearranging them by the time each mode last published.
