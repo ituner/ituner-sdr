@@ -86,3 +86,8 @@ Tests synthesize Morse independently of GGMorse at 8/20/35/50 WPM, verify
 known callsigns at independently acquired pitches, two simultaneous signals,
 noise/fading, locked-tone exclusion, history persistence, and shared receiver
 controls. Passing synthetic tests does not guarantee exact off-air copy.
+
+## Comparing decoder engines
+
+See [the repeatable fldigi/GGMorse comparison](cw-engine-comparison.md). This
+optional file-based evaluation is separate from the installed live receiver.
