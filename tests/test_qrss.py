@@ -108,6 +108,34 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('A',''.join(r['tentative_text'] for r in self.manager.image_snapshot()))
         a.reset();self.assertFalse(a.decoder.morse.events)
 
+    def test_new_capture_grows_on_fixed_time_axis(self):
+        from PIL import Image
+        import time
+        c=dict(PRESETS[2],id='scale',name='Local',server='http://kiwi.local',
+               minutes=10,qrss_mode='VISUAL')
+        a=QRSSAssembler(QRSSSession(c,None,self.manager.gallery,'test'),self.manager.gallery)
+        a.key='a'*32;a.started=time.time();a.start_sample=0
+        column=np.zeros(a.rows,dtype=np.float32)
+        column[a.rows//3:2*a.rows//3]=35
+        a.columns=[column.copy() for _ in range(101)]
+        for duration,expected_width in ((0,1),(60,160),(180,480),(600,1600)):
+            with self.subTest(duration=duration):
+                a.times=list(np.linspace(0,duration,101));a.publish('receiving')
+                row=self.manager.image_snapshot()[0]
+                self.assertEqual(row['window_seconds'],600)
+                with Image.open(self.manager.gallery.image_path(a.key)) as im:
+                    self.assertEqual(im.size,(1700,390))
+                    # Bright keyed data occupies only elapsed time; future is blank.
+                    self.assertNotEqual(im.getpixel((90+expected_width-1,150)),(7,18,25))
+                    if duration<600:
+                        self.assertEqual(im.getpixel((90+expected_width+2,150)),(7,18,25))
+        # Stopping early saves the same time scale, rather than stretching it.
+        a.times=list(np.linspace(0,60,101));a.flush()
+        row=self.manager.image_snapshot()[0]
+        self.assertEqual(row['kind'],'saved')
+        with Image.open(self.manager.gallery.image_path(row['id'])) as im:
+            self.assertEqual(im.getpixel((900,150)),(7,18,25))
+
     def test_local_editor_updates_same_manager(self):
         from qrss_workspace import QRSSWorkspace
         ui=SimpleNamespace(contains=lambda box,x,y:True,station_fields=lambda r:(*r,0,8))

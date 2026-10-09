@@ -97,7 +97,12 @@ and local editors control the same saved sessions: Add, Edit, Start, Stop and
 Remove. Web views can show all captures, latest per receiver, or captures with
 some tentative text. Click an image to enlarge it or download its PNG.
 The web gallery and enlarged viewer use the available browser width, with no
-fixed desktop width cap. Each gallery row contains one full-width spectrogram. Plot and text areas keep stable heights during live
+fixed desktop width cap. Each gallery row contains one full-width spectrogram.
+New captures use a fixed time axis covering the configured capture duration.
+Received data grows from left to right with blank space for time not yet
+received (one minute fills 10% of a ten-minute plot). Early keying is never
+stretched across a whole window, and existing characters retain their width.
+This applies to web, local and downloaded images; older saved PNGs are unchanged. Plot and text areas keep stable heights during live
 updates; long text scrolls inside its own area. Existing image nodes are reused
 and new pixels replace the old only after loading, including in the enlarged
 viewer. Receiver controls also update in place. All gallery views hold their

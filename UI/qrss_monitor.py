@@ -48,8 +48,13 @@ class QRSSAssembler:
         level=np.clip((data-floor)/35,0,1)
         rgb=np.stack((np.clip(3*level-1,0,1),np.clip(2*level,0,1),np.clip(3*level,0,1)),axis=2)
         im=Image.fromarray((rgb*255).astype('uint8'))
-        width=min(1600,max(600,im.width))
-        im=im.resize((width,320),Image.Resampling.BOX)
+        # Keep seconds per pixel constant from the first update to rollover.
+        # Stretching a few early columns across the whole plot hides keying.
+        duration=max(0,self.times[-1]-self.start_sample)
+        window_seconds=c['minutes']*60
+        width=1600
+        received_width=max(1,min(width,round(width*duration/window_seconds)))
+        im=im.resize((received_width,320),Image.Resampling.BOX)
         canvas=Image.new('RGB',(width+100,390),(7,18,25));canvas.paste(im,(90,35))
         draw=ImageDraw.Draw(canvas)
         center=c['freq_khz']*1000+c['tone_hz'];half=c['span_hz']/2
@@ -57,9 +62,12 @@ class QRSSAssembler:
             draw.text((4,y),f'{hz/1e6:.6f}',fill='white')
         draw.text((4,15),'MHz RF',fill='white')
         draw.text((90,13),time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime(self.started)),fill='white')
-        duration=self.times[-1]-self.start_sample
         draw.text((90,365),'Time ->   0 s',fill='white')
-        draw.text((width+30,365),f'{duration:.0f} s',fill='white')
+        draw.text((90+width/2-20,365),f'{window_seconds/2:g} s',fill='white')
+        draw.text((width+30,365),f'{window_seconds:g} s',fill='white')
+        draw.text((width-140,13),f'Received {duration:.0f} / {window_seconds:g} s',fill='white')
+        if received_width<width:
+            draw.line((90+received_width,35,90+received_width,354),fill=(62,106,115))
         acquisition=dict(self.decoder.auto.status) if self.decoder.auto else {}
         tracks=self.track_snapshot(self.start_sample,self.times[-1])
         if acquisition.get('state')=='locked':
@@ -79,7 +87,8 @@ class QRSSAssembler:
             kind=kind,progress_pct=min(100,round(duration/(c['minutes']*60)*100)),
             capture_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(self.started)),
             received_at=self.started,updated_ns=time.time_ns(),has_image=True,
-            duration_seconds=round(duration,1),width=canvas.width,height=canvas.height,
+            duration_seconds=round(duration,1),window_seconds=window_seconds,
+            width=canvas.width,height=canvas.height,
             stream_id=self.stream_id,sample_start=self.start_sample,sample_end=self.times[-1],
             acquisition=acquisition,tracks=tracks,tentative_text=text[-4000:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
         self.gallery.publish(path,item)
