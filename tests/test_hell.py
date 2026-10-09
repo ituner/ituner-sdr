@@ -162,6 +162,43 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(w.preset['freq_khz']*1000+w.preset['tone_hz'],14063000)
 
 
+class GalleryLayoutTests(unittest.TestCase):
+    def test_saved_page_survives_arrivals_and_pruning_until_refresh(self):
+        from hell_workspace import HellWorkspace
+        w=HellWorkspace(SimpleNamespace(),SimpleNamespace())
+        w.saved_view=True
+        rows=[dict(id=str(n),session_id='rx',mode='HELL') for n in range(6)]
+        initial,changed=w.gallery_page(rows)
+        self.assertEqual([r['id'] for r in initial],['0','1','2'])
+        latest=[dict(id='new',session_id='rx',mode='HELL')]+rows[1:]
+        current,changed=w.gallery_page(latest)
+        self.assertTrue(changed)
+        self.assertEqual([r['id'] for r in current],['0','1','2'])
+        w.visible_strips=None
+        current,changed=w.gallery_page(latest)
+        self.assertEqual([r['id'] for r in current],['new','1','2'])
+
+    def test_latest_modes_update_without_reordering_visible_slots(self):
+        from hell_workspace import HellWorkspace
+        w=HellWorkspace(SimpleNamespace(),SimpleNamespace())
+        rows=[dict(id='old-'+mode,session_id='rx',mode=mode) for mode in ['HELL','SLOWHELL','HELLX5']]
+        w.gallery_page(rows)
+        updated=[dict(r,id='new-'+r['mode']) for r in reversed(rows)]
+        current,_=w.gallery_page(updated)
+        self.assertEqual([r['id'] for r in current],['new-HELL','new-SLOWHELL','new-HELLX5'])
+
+    def test_pruned_image_retains_cached_texture(self):
+        from sstv_workspace import SSTVWorkspace
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'missing.png'
+            draw=Mock()
+            ui=SimpleNamespace(draw_textured_quad=draw,pygame=SimpleNamespace(error=RuntimeError))
+            manager=SimpleNamespace(gallery=SimpleNamespace(image_path=lambda key:path))
+            w=SSTVWorkspace(ui,manager);w.textures['old']=(123,7,100,50)
+            w.image('old',(0,0,200,100))
+            draw.assert_called_once_with(7,0,0,200,100,0,0,1,1)
+
+
 class OCRTests(unittest.TestCase):
     def test_one_letter_or_digit_is_sufficient_but_punctuation_is_not(self):
         from hell_ocr import recognize

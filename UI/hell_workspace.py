@@ -1,6 +1,5 @@
-"""Hell RX touchscreen: five full-width strips on the 1280 x 800 display."""
+"""Hell RX touchscreen: three full-width strips on the 1280 x 800 display."""
 import math
-import socket
 from sstv_workspace import SSTVWorkspace
 from hell_modes import MODES, PRESETS, settings, selected_modes, fit_modes
 
@@ -14,9 +13,44 @@ class HellWorkspace(SSTVWorkspace):
         self.reporting = None
         self.report_field = 'call'
         self.saved_view = False
+        self.visible_strips = None
+        self.strip_offset = 0
+        self.strip_step = 1
+        self.strip_max = 0
 
     def preview(self, cache, item, box):
-        self.image(item['id'], box)
+        self.strip_image(item, box)
+
+    def strip_image(self,item,box,expanded=False):
+        # Preserve raster proportions at a fixed height. Long strips are
+        # clipped in previews and explicitly panned in the expanded view.
+        x0,y0,x1,y1=box
+        width,height=item['width'],item['height']
+        scale=(y1-y0)/height
+        source_width=min(width,(x1-x0)/scale)
+        offset=0
+        if expanded:
+            self.strip_max=max(0,width-source_width)
+            self.strip_offset=max(0,min(self.strip_offset,self.strip_max))
+            self.strip_step=source_width*.8
+            offset=self.strip_offset
+        self.ui.draw_logical_rect(*box,(255,255,255,255))
+        super().image(item['id'],(x0,y0,x0+source_width*scale,y1),fill=True,
+                      source_box=(offset,0,offset+source_width,height))
+
+    def show(self,*args):
+        self.visible_strips=None
+        super().show(*args)
+
+    def gallery_page(self,images):
+        key=(lambda i:i['id']) if self.saved_view else (lambda i:(i['session_id'],i['mode']))
+        desired=images[self.page*3:self.page*3+3]
+        if self.visible_strips is None:self.visible_strips=desired
+        else:
+            available={key(i):i for i in images}
+            self.visible_strips=[available.get(key(i),i) for i in self.visible_strips]
+        changed=[key(i) for i in desired]!=[key(i) for i in self.visible_strips]
+        return self.visible_strips,changed
 
     def kiwi_receivers(self, receivers):
         kind_of = getattr(self.ui, 'station_receiver_type', lambda row: 'kiwi')
@@ -36,11 +70,16 @@ class HellWorkspace(SSTVWorkspace):
             self.draw_add(cache, receivers)
             return
         if self.enlarged:
-            item = next((r for r in self.manager.image_snapshot() if r['id']==self.enlarged),None)
+            item = next((r for r in self.manager.image_snapshot() if r['id']==self.enlarged),
+                        next((r for r in (self.visible_strips or []) if r['id']==self.enlarged),None))
             if item:
                 self.text(cache,24,34,f"{MODES[item['mode']]['label']} · {item['band']} · {item['rf_hz']/1e6:.6f} MHz RF",25)
                 self.text(cache,24,72,item['receiver']+' · '+item['capture_utc'],18,width=1000)
-                self.image(item['id'],(20,110,1260,650))
+                self.strip_image(item,(20,160,1260,400),expanded=True)
+                self.button(cache,(24,430,244,486),'< LEFT',('pan_strip',-1))
+                self.button(cache,(1036,430,1256,486),'RIGHT >',('pan_strip',1))
+                self.text(cache,280,458,'Scroll across the strip · fixed letter size',20,width=710)
+                self.text(cache,24,530,'Start' if self.strip_offset==0 else 'End' if self.strip_offset>=self.strip_max else 'Middle of strip',18)
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None))
                 self.button(cache,(24,704,330,770),'REPORT STATION',('report',item['id']))
                 self.text(cache,354,730,'Read the callsign from the strip; reporting is optional.',18,width=890)
@@ -68,28 +107,28 @@ class HellWorkspace(SSTVWorkspace):
             images = sorted(latest.values(), key=lambda r:(
                 receivers_order.get(r['session_id'],len(receivers_order)),
                 r['session_id'],modes_order.get(r['mode'],len(modes_order))))
-        pages = max(1,math.ceil(len(images)/5))
-        self.page = min(self.page,pages-1)
+        pages = max(1,math.ceil(len(images)/3))
+        if self.visible_strips is None:self.page = min(self.page,pages-1)
+        visible,changed=self.gallery_page(images)
         if not images:
             self.text(cache,180,310,'Add a Hell decoder to receive scrolling text images.',26)
             self.text(cache,180,355,'Choose Feld Hell or an FSK Hell variant; there is no automatic mode header.',20)
             self.text(cache,180,395,'Noise is displayed too. A strip is not proof of a decoded transmission.',19)
-        for i,item in enumerate(images[self.page*5:self.page*5+5]):
-            y = 86+i*124
-            self.ui.draw_logical_rect(16,y,1260,y+118,(17,34,42,255))
+        for i,item in enumerate(visible):
+            y = 86+i*210
+            self.ui.draw_logical_rect(16,y,1260,y+202,(17,34,42,255))
             live = ('LIVE' if item['kind']=='receiving' else
                     'POSSIBLE TEXT' if item.get('ocr_status')=='possible_text' else
                     'LATEST PREVIEW' if item['kind']=='preview' else 'SAVED')
-            self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']}",16,width=1215)
-            self.image(item['id'],(24,y+32,1252,y+113))
-            self.actions.append(((16,y,1260,y+118),('image',item['id'])))
+            self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']} · tap to scroll",16,width=1215)
+            self.strip_image(item,(24,y+34,1252,y+192))
+            self.actions.append(((16,y,1260,y+202),('image',item['id'])))
         self.button(cache,(16,730,168,786),'< PREV',('page',-1))
         self.text(cache,188,758,f'{self.page+1} / {pages}',19)
         self.button(cache,(282,730,434,786),'NEXT >',('page',1))
         self.button(cache,(450,730,658,786),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
         self.button(cache,(670,730,870,786),'ALL RECEIVERS',('filter',None))
-        self.text(cache,890,743,self.message or 'Tap a strip to enlarge.',16,width=370)
-        self.text(cache,890,773,f'{socket.gethostname().split(".")[0]}.local:{self.manager.web_port}/hell',16,width=370)
+        self.button(cache,(890,730,1260,786),'SHOW NEW STRIPS' if changed else 'REFRESH STRIPS',('refresh_strips',None))
 
     def draw_add(self,cache,receivers):
         p = self.preset
@@ -155,8 +194,12 @@ class HellWorkspace(SSTVWorkspace):
         action=next((a for box,a in reversed(self.actions) if self.ui.contains(box,x,y)),None)
         if action is None:return
         key,value=action
+        if key=='image':self.strip_offset=0
+        if key in ('page','filter','gallery','saved_view','refresh_strips'):self.visible_strips=None
         try:
-            if key=='hell_preset':self.preset=dict(value)
+            if key=='refresh_strips':return
+            elif key=='pan_strip':self.strip_offset=max(0,min(self.strip_max,self.strip_offset+value*self.strip_step))
+            elif key=='hell_preset':self.preset=dict(value)
             elif key=='hell_mode':
                 modes=selected_modes(self.preset)
                 if value in modes:

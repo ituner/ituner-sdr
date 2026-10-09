@@ -167,3 +167,12 @@ Saved, possible-text and everything views hold the strips being read; use
 the latest list. Enlarged strips keep a fixed image box and scroll position.
 The touchscreen latest view orders receivers and modes consistently rather
 than rearranging them by the time each mode last published.
+
+The touchscreen now shows three taller strips per page. Saved-page membership
+is held while receiving; use **Show new strips** or navigate to load newer
+items. Existing pixels remain available if a file is pruned while being read.
+Both interfaces draw incoming strips from the left at a stable, proportional
+scale instead of shrinking and recentering all existing columns on each update.
+Previews show the start of a strip; open one to pan across its full length.
+Use Left/Right on the touchscreen or horizontal scrolling in the web viewer.
+The web strip height is 180 pixels; the local plot height is 158 logical pixels.

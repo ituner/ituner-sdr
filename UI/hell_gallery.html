@@ -1,8 +1,9 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>iTuner · Hell RX</title>
 <style>
-[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1{color:#68eac2;margin:0}header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}a{color:#68eac2}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}#decoders{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px;margin:18px 0}.receiver,article{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:12px}article{margin:12px 0}article button{display:block;width:100%;background:#fff;border:0;padding:0;overflow:hidden}article img{display:block;width:100%;height:110px;object-fit:contain;object-position:left center;image-rendering:pixelated}article p{margin:6px 0 0;font-size:14px}.live{color:#68eac2}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{display:block;width:100%;height:clamp(130px,35vh,300px);object-fit:contain;object-position:left center;image-rendering:pixelated;background:white;margin:16px 0}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.report-form{width:620px;box-sizing:border-box}.report-form label{display:block;margin:14px 0}.report-form input:not([type=checkbox]){display:block;width:100%;margin-top:6px}.report-form input[type=checkbox]{min-height:0}.error{color:#ffcf8b}#reports p{overflow-wrap:anywhere}#filter{max-width:100%}#notice{min-height:1.5em}.capture-updates{height:48px}article p{height:3em;overflow:auto;overflow-wrap:anywhere}.receiver strong{display:block;height:3em;overflow:auto}.receiver-detail{height:4.5em;overflow:auto}#detail{height:4.5em;overflow:auto}
+[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1{color:#68eac2;margin:0}header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}a{color:#68eac2}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}#decoders{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px;margin:18px 0}.receiver,article{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:12px}article{margin:12px 0}article button{display:block;width:100%;background:#fff;border:0;padding:0;overflow:hidden}article img{display:block;width:auto;max-width:none;height:180px;object-fit:fill;object-position:left top;image-rendering:pixelated}article p{margin:6px 0 0;font-size:14px}.live{color:#68eac2}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{display:block;width:auto;max-width:none;height:clamp(200px,40vh,340px);object-fit:fill;object-position:left top;image-rendering:pixelated;background:white;margin:16px 0}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.report-form{width:620px;box-sizing:border-box}.report-form label{display:block;margin:14px 0}.report-form input:not([type=checkbox]){display:block;width:100%;margin-top:6px}.report-form input[type=checkbox]{min-height:0}.error{color:#ffcf8b}#reports p{overflow-wrap:anywhere}#filter{max-width:100%}#notice{min-height:1.5em}.capture-updates{height:48px}article p{height:3em;overflow:auto;overflow-wrap:anywhere}.receiver strong{display:block;height:3em;overflow:auto}.receiver-detail{height:4.5em;overflow:auto}#detail{height:4.5em;overflow:auto}
 #hell-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px}#hell-modes label{margin:3px 0}#hell-modes input{min-height:0}
+.large-strip{background:white;overflow-x:auto;overflow-y:hidden;margin:16px 0}#large{margin:0}
 </style>
 <header><div><h1>Hell RX</h1><p>Latest previews & saved possible text · tap a strip to enlarge</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell" aria-current="page">Hell RX</a> · <a href="/qrss">QRSS</a></nav></header>
 <div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders"></div>
@@ -10,7 +11,7 @@
 <label>Receiver <select id="filter"><option value="">All receivers</option></select></label><label>View <select id="view"><option value="latest">Latest per receiver / mode</option><option value="text">Possible text</option><option value="saved">Saved strips</option><option value="all">Everything</option></select></label><label>Mode <select id="mode-filter"><option value="">All modes</option></select></label><p id="status" role="status">Loading…</p><div class="capture-updates"><button id="refresh-captures" hidden>Show latest strips</button></div><main id="gallery"></main>
 <div class="buttons"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
 <details><summary>PSK Reporter · queued and recent reports</summary><p>Only stations you explicitly confirm are reported. No images are uploaded. UDP delivery cannot be confirmed.</p><div id="reports"></div></details>
-<dialog id="viewer"><div class="buttons"><button id="close">Close</button><button id="report">Report station</button><a id="download" download>Download PNG</a></div><img id="large" alt="Hell text raster"><p id="detail"></p></dialog>
+<dialog id="viewer"><div class="buttons"><button id="close">Close</button><button id="report">Report station</button><a id="download" download>Download PNG</a></div><p>Scroll sideways to read the full strip.</p><div class="large-strip" tabindex="0" role="region" aria-label="Scrollable Hell strip"><img id="large" alt="Hell text raster"></div><p id="detail"></p></dialog>
 <dialog id="report-dialog" class="report-form"><form id="report-form"><h2>Report a station</h2><p id="report-source"></p><p>Enter the callsign you can read. Use the receiving antenna’s identity and grid, especially for remote Kiwi receivers.</p><label>Heard callsign<input id="heard" required maxlength="24" autocomplete="off"></label><label>Receiver callsign<input id="reporter" required maxlength="24" autocomplete="off"></label><label>Receiver grid<input id="grid" required maxlength="6" autocomplete="off"></label><label><input id="confirmed" type="checkbox" required> The callsign is correct. I may report for this receiver and its receiving location is correct.</label><p id="report-error" class="error" role="status"></p><div class="buttons"><button type="button" id="report-cancel">Cancel</button><button type="submit">Queue report</button></div></form></dialog>
 <script src="/digital-controls.js"></script><script>
 const $=id=>document.getElementById(id);let timer,busy=false,images=[],page=0,selectedImage=null,visibleCaptures=null,reportImage=null,reportState={profiles:{},reports:[]};
@@ -73,9 +74,15 @@ function setText(el,value){
  if(el.textContent===value)return;
  const top=el.scrollTop,left=el.scrollLeft;el.textContent=value;el.scrollTop=top;el.scrollLeft=left;
 }
+function stripImage(img,i){
+ // A fixed height and natural aspect ratio keep each column the same size.
+ // The preview clips overflow; the expanded strip can be scrolled sideways.
+ updateImage(img,url(i));
+}
 function show(i){
  const viewer=$('viewer'),top=viewer.scrollTop;
- selectedImage=i.id;updateImage($('large'),url(i));
+ if(selectedImage!==i.id)document.querySelector('.large-strip').scrollLeft=0;
+ selectedImage=i.id;stripImage($('large'),i);
  setText($('detail'),describe(i)+(i.ocr_text?' · OCR guess: '+i.ocr_text:''));$('download').href=url(i);
  if(!viewer.open)viewer.showModal();else viewer.scrollTop=top;
 }
@@ -117,7 +124,7 @@ function renderImages(){
    card.append(b,caption);
   }
   card.capture=i;card.dataset.id=i.id;existing.delete(key(i));
-  card.children[0].ariaLabel='Enlarge '+i.mode+' strip';updateImage(card.querySelector('img'),url(i));
+  card.children[0].ariaLabel='Enlarge '+i.mode+' strip';stripImage(card.querySelector('img'),i);
   const caption=card.children[1];setText(caption,statusLabel(i)+' · '+describe(i));caption.className=i.kind==='receiving'?'live':'';
   if(gallery.children[index]!==card)gallery.insertBefore(card,gallery.children[index]||null);
  }

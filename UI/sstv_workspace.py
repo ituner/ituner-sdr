@@ -58,26 +58,28 @@ class SSTVWorkspace:
 
     def image(self, key, box, *, fill=False, source_box=None):
         ui = self.ui
+        cached = self.textures.get(key)
         try:
             path = self.manager.gallery.image_path(key)
-            stamp = path.stat().st_mtime_ns
-            cached = self.textures.get(key)
-            if not cached or cached[0] != stamp:
-                if cached:
-                    ui.GL.glDeleteTextures([cached[1]])
-                surface = ui.pygame.image.load(str(path)).convert_alpha()
-                width, height = surface.get_size()
-                tex = ui.GL.glGenTextures(1)
-                ui.GL.glBindTexture(ui.GL.GL_TEXTURE_2D, tex)
-                for flag in (ui.GL.GL_TEXTURE_MIN_FILTER, ui.GL.GL_TEXTURE_MAG_FILTER):
-                    ui.GL.glTexParameteri(ui.GL.GL_TEXTURE_2D, flag, ui.GL.GL_LINEAR)
-                ui.GL.glTexImage2D(ui.GL.GL_TEXTURE_2D, 0, ui.GL.GL_RGBA, width, height, 0,
-                                  ui.GL.GL_RGBA, ui.GL.GL_UNSIGNED_BYTE, ui.pygame.image.tostring(surface, 'RGBA', False))
-                cached = stamp, tex, width, height
-                self.textures[key] = cached
-                while len(self.textures) > 2 * GALLERY_PAGE_SIZE + 1:
-                    _, old = self.textures.popitem(last=False)
-                    ui.GL.glDeleteTextures([old[1]])
+            try:
+                stamp = path.stat().st_mtime_ns
+                if not cached or cached[0] != stamp:
+                    surface = ui.pygame.image.load(str(path)).convert_alpha()
+                    width, height = surface.get_size()
+                    tex = ui.GL.glGenTextures(1)
+                    ui.GL.glBindTexture(ui.GL.GL_TEXTURE_2D, tex)
+                    for flag in (ui.GL.GL_TEXTURE_MIN_FILTER, ui.GL.GL_TEXTURE_MAG_FILTER):
+                        ui.GL.glTexParameteri(ui.GL.GL_TEXTURE_2D, flag, ui.GL.GL_LINEAR)
+                    ui.GL.glTexImage2D(ui.GL.GL_TEXTURE_2D, 0, ui.GL.GL_RGBA, width, height, 0,
+                                      ui.GL.GL_RGBA, ui.GL.GL_UNSIGNED_BYTE, ui.pygame.image.tostring(surface, 'RGBA', False))
+                    if cached:ui.GL.glDeleteTextures([cached[1]])
+                    cached = stamp, tex, width, height
+                    self.textures[key] = cached
+                    while len(self.textures) > 2 * GALLERY_PAGE_SIZE + 1:
+                        _, old = self.textures.popitem(last=False)
+                        ui.GL.glDeleteTextures([old[1]])
+            except (OSError, ValueError, ui.pygame.error):
+                if not cached:return
             self.textures.move_to_end(key)
             _, tex, width, height = cached
             x0, y0, x1, y1 = box
