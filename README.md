@@ -206,3 +206,12 @@ PSK Reporter spots: see [Hell RX setup and operation](docs/HELL.md).
 Slow waterfall captures and tentative CW / FSKCW Morse text share one Kiwi
 channel. AUTO follows up to six keyed signals with independent frequency, FSK shift and
 Morse timing, with local and web receiver controls. See [QRSS setup and limits](docs/QRSS.md).
+
+## CW Morse
+
+Digital tools → CW Morse (CM5 Modes → CW) adds automatic Morse signal acquisition,
+independent speed estimation for up to four signals on one Kiwi channel, a live
+waterfall and persistent text history. Add/Edit/Start/Stop controls are shared
+with `/cw`; history can be exported as CSV. The pinned GGMorse engine builds
+locally during dependency installation without models or display-driver changes.
+See [CW setup, engine choice and limits](docs/cw.md).

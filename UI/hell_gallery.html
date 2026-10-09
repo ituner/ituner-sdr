@@ -5,7 +5,7 @@
 #hell-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px}#hell-modes label{margin:3px 0}#hell-modes input{min-height:0}
 .large-strip{background:white;overflow-x:auto;overflow-y:hidden;margin:16px 0}#large{margin:0}
 </style>
-<header><div><h1>Hell RX</h1><p>Latest previews & saved possible text · tap a strip to enlarge</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell" aria-current="page">Hell RX</a> · <a href="/qrss">QRSS</a></nav></header>
+<header><div><h1>Hell RX</h1><p>Latest previews & saved possible text · tap a strip to enlarge</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell" aria-current="page">Hell RX</a> · <a href="/qrss">QRSS</a> <a href="/cw">CW Morse</a></nav></header>
 <div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders"></div>
 <p>Hell has no frame header or automatic callsign decoding. Several modes can share one Kiwi channel at the same RF center. OCR keeps a strip when it finds even one letter or digit; this is possible text, not a confirmed decode. Otherwise only the latest preview per mode is retained.</p>
 <label>Receiver <select id="filter"><option value="">All receivers</option></select></label><label>View <select id="view"><option value="latest">Latest per receiver / mode</option><option value="text">Possible text</option><option value="saved">Saved strips</option><option value="all">Everything</option></select></label><label>Mode <select id="mode-filter"><option value="">All modes</option></select></label><p id="status" role="status">Loading…</p><div class="capture-updates"><button id="refresh-captures" hidden>Show latest strips</button></div><main id="gallery"></main>

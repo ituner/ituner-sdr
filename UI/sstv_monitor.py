@@ -296,6 +296,8 @@ class Session:
                     message = ws.recv()
                     if message[:3] == b'MSG':
                         params = self.kiwi.parse_msg_params(message)
+                        if 'too_busy' in params:
+                            raise PermissionError('All Kiwi channels are occupied; free one channel, then press Start')
                         if 'badp' in params:
                             if str(params['badp']) != '0':
                                 raise PermissionError('Receiver busy or password required; press Start to retry')
@@ -507,6 +509,7 @@ class GalleryServer(ThreadingHTTPServer):
         self.wspr_history = None
         self.hell = None
         self.qrss = None
+        self.cw = None
         self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
 
@@ -521,6 +524,29 @@ class GalleryHandler(BaseHTTPRequestHandler):
             if path.path in ('/', '/sstv', '/sstv/'):
                 data = Path(__file__).with_name('sstv_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path in ('/cw','/cw/'):
+                data = Path(__file__).with_name('cw_gallery.html').read_bytes()
+                content_type = 'text/html; charset=utf-8'
+            elif path.path == '/api/cw':
+                if self.server.cw is None or self.server.bridge is None:
+                    self.send_error(503)
+                    return
+                state = dict(decoders=self.server.bridge.snapshot('cw')['decoders'],
+                             history=self.server.cw.history(),control_token=self.server.control_token)
+                data = json.dumps(state).encode()
+                content_type = 'application/json'
+            elif path.path == '/cw-history.csv':
+                if self.server.cw is None:
+                    self.send_error(503)
+                    return
+                data = self.server.cw.gallery.export()
+                content_type = 'text/csv; charset=utf-8'
+            elif path.path.startswith('/cw-images/') and path.path.endswith('.png'):
+                if self.server.cw is None:
+                    self.send_error(503)
+                    return
+                data = self.server.cw.gallery.image_path(path.path[11:-4]).read_bytes()
+                content_type = 'image/png'
             elif path.path in ('/qrss','/qrss/'):
                 data = Path(__file__).with_name('qrss_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
@@ -634,7 +660,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting', '/api/qrss/control'):
+            if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting', '/api/qrss/control', '/api/cw/control'):
                 raise ControlError(404, 'Unknown control endpoint')
             origin = self.headers.get('Origin')
             if origin and origin != 'http://' + self.headers.get('Host', ''):

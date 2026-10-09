@@ -11,3 +11,4 @@ vendor/
 *.bak
 *.bak-*
 *.log
+UI/cw_vendor/libituner_cw.*

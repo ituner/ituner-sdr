@@ -16,14 +16,14 @@ class DigitalWebBridge:
     def __init__(self):
         self.commands = queue.Queue(maxsize=32)
         self.lock = threading.Lock()
-        self.state = {'sstv': [], 'wspr': [], 'hell': [], 'qrss': []}
+        self.state = {'sstv': [], 'wspr': [], 'hell': [], 'qrss': [], 'cw': []}
         self.options = {"receivers": [], "presets": {"sstv": [], "wspr": []}}
         self.updated_at = 0
         self.closed = False
 
-    def publish(self, sstv, wspr, hell=(), qrss=()):
+    def publish(self, sstv, wspr, hell=(), qrss=(), cw=()):
         with self.lock:
-            self.state = copy.deepcopy({'sstv': sstv, 'wspr': wspr, 'hell': list(hell), 'qrss': list(qrss)})
+            self.state = copy.deepcopy({'sstv': sstv, 'wspr': wspr, 'hell': list(hell), 'qrss': list(qrss), 'cw': list(cw)})
             self.updated_at = time.time()
 
     def snapshot(self, mode):
@@ -39,7 +39,7 @@ class DigitalWebBridge:
             return copy.deepcopy(self.options)
 
     def request(self, mode, key, action, timeout=5, config=None):
-        if mode not in ('sstv', 'wspr', 'hell', 'qrss') or action not in ('start', 'stop', 'add', 'edit', 'delete') or not isinstance(key, str) or not 0 < len(key) <= 100:
+        if mode not in ('sstv', 'wspr', 'hell', 'qrss', 'cw') or action not in ('start', 'stop', 'add', 'edit', 'delete') or not isinstance(key, str) or not 0 < len(key) <= 100:
             raise ControlError(400, 'Choose a decoder and a valid action')
         if action in ('add', 'edit') and not isinstance(config, dict):
             raise ControlError(400, 'Choose a receiver and band')
@@ -138,7 +138,7 @@ def receiver_options(receivers, wspr_bands, sstv_presets, configured=(), current
     for row in sstv_presets:
         add_preset(*row)
     for row in configured:
-        if row.get('mode') in ('usb', 'lsb') and not row.get('hell_mode') and not row.get('qrss_mode'):
+        if row.get('mode') in ('usb', 'lsb') and not row.get('hell_mode') and not row.get('qrss_mode') and not row.get('cw_mode'):
             add_preset(row['band'], row['freq_khz'], row['mode'])
     if current and current[2] in ('usb', 'lsb') and 0 < current[1] <= 30000:
         add_preset(*current)
@@ -150,18 +150,20 @@ def resolve_receiver_config(mode, payload, options):
     server, preset = payload.get('server'), payload.get('preset')
     if not isinstance(server, str) or not isinstance(preset, str):
         raise ControlError(400, 'Choose a receiver and band')
-    choices = options.get('hell_receivers', options['receivers']) if mode in ('hell','qrss') else options['receivers']
+    choices = options.get('hell_receivers', options['receivers']) if mode in ('hell','qrss','cw') else options['receivers']
     receiver = next((row for row in choices if row['server'] == server), None)
     band = next((row for row in options['presets'][mode] if row['id'] == preset), None)
     if not receiver or not band:
         raise ControlError(400, 'Receiver or band is no longer available; reopen the editor')
     result = dict(name=receiver['name'], server=receiver['server'], location=receiver.get('location', ''),
                 band=band['band'], freq_khz=band['freq_khz'], mode=band['mode'])
-    if mode in ('hell','qrss'):
+    if mode in ('hell','qrss','cw'):
         if mode == 'hell':
             from hell_modes import settings
-        else:
+        elif mode == 'qrss':
             from qrss_modes import settings
+        else:
+            from cw_modes import settings
         try:
             result.update(settings(payload, band))
         except ValueError as exc:
@@ -171,14 +173,15 @@ def resolve_receiver_config(mode, payload, options):
 
 class ReceiverController:
     """Called only on the UI thread, shared by both browser modes."""
-    def __init__(self, sstv, tiles, wspr, options, hell=None, qrss=None):
+    def __init__(self, sstv, tiles, wspr, options, hell=None, qrss=None, cw=None):
         self.sstv, self.tiles, self.wspr, self.options = sstv, tiles, wspr, options
         self.hell = hell
         self.qrss = qrss
+        self.cw = cw
 
     def apply(self, mode, key, action, payload):
-        if mode in ('hell','qrss'):
-            manager = self.hell if mode=='hell' else self.qrss
+        if mode in ('hell','qrss','cw'):
+            manager = {'hell':self.hell, 'qrss':self.qrss, 'cw':self.cw}[mode]
             if manager is None:
                 raise ControlError(503, mode.upper()+' receiver unavailable')
             existing = next((r for r in manager.configs if r['id']==key), None)
