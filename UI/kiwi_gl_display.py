@@ -20312,6 +20312,10 @@ def main():
                 ('hell', hell_workspace), ('qrss', qrss_workspace), ('cw', cw_workspace)):
             install_search(search_workspace, search_mode, log_search_service)
 
+    from gallery_motion import GalleryMotion
+    gallery_motions = [GalleryMotion(workspace, mode) for mode, workspace in (
+        ('sstv', sstv_workspace), ('hell', hell_workspace),
+        ('qrss', qrss_workspace), ('cw', cw_workspace))]
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
@@ -21999,12 +22003,16 @@ def main():
                             # underlying waterfall controls settle.
                             if cw_workspace.open:
                                 gesture = "cw_workspace"
+                                cw_workspace.drag_begin(x, y)
                             elif qrss_workspace.open:
                                 gesture = "qrss_workspace"
+                                qrss_workspace.drag_begin(x, y)
                             elif hell_workspace.open:
                                 gesture = "hell_workspace"
+                                hell_workspace.drag_begin(x, y)
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
+                                sstv_workspace.drag_begin(x, y)
                             elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
                                 or globe_open
@@ -22433,6 +22441,9 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                        elif gesture in ("sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
+                            {"sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
+                             "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
                                 wspr_workspace_dragged = True
@@ -23335,7 +23346,9 @@ def main():
                                 hell_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "sstv_workspace":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if sstv_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 sstv_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "wspr_add":

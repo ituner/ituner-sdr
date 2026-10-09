@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'UI'))
+from sstv_workspace import SSTVWorkspace
+from gallery_motion import GalleryMotion
 from hell_workspace import HellWorkspace
 from qrss_workspace import QRSSWorkspace
 
@@ -28,6 +30,40 @@ class GallerySwipeTests(unittest.TestCase):
         down();down();self.assertTrue(w.saved_view);self.assertEqual(w.page,0)
         down();self.assertFalse(w.saved_view);self.assertEqual(w.page,0)
         down();self.assertFalse(w.saved_view)
+
+    def test_sstv_swipes_and_bounds(self):
+        w=self.workspace(SSTVWorkspace,31)
+        for _ in range(4):self.assertTrue(w.swipe(500,600,500,300))
+        self.assertEqual(w.page,2)
+        for _ in range(4):w.swipe(500,300,500,600)
+        self.assertEqual(w.page,0)
+        w.enlarged='image';self.assertFalse(w.swipe(500,600,500,300))
+
+    def test_motion_follows_finger_commits_once_and_settles(self):
+        w=self.workspace(QRSSWorkspace,5);clock=[0.]
+        m=GalleryMotion(w,'qrss',lambda:clock[0])
+        m.begin(500,600);clock[0]=.1;m.move(500,600,500,450);m.prepare()
+        self.assertEqual(m.offset,-150);self.assertEqual(w.page,0)
+        self.assertEqual(m.target_state['page'],1)
+        self.assertTrue(w.swipe(500,600,500,450));self.assertTrue(m.commit)
+        m.finish();self.assertEqual(w.page,1);self.assertFalse(m.active)
+
+    def test_small_drag_bounces_and_buttons_stay_taps(self):
+        w=self.workspace(QRSSWorkspace);m=GalleryMotion(w,'qrss')
+        m.begin(500,400)
+        self.assertFalse(w.swipe(500,400,503,403));self.assertEqual(w.page,0)
+        m.begin(500,400);m.move(500,400,500,420);m.prepare()
+        self.assertFalse(m.has_target());self.assertAlmostEqual(m.display_offset(),4.4)
+        self.assertTrue(w.swipe(500,400,500,420));self.assertFalse(m.commit)
+        m.finish();self.assertEqual(w.page,0)
+        m.begin(500,25);m.move(500,25,500,300);self.assertFalse(m.active)
+
+    def test_hell_first_live_page_cannot_swipe_below_start(self):
+        w=self.workspace(HellWorkspace);w.visible_strips=['cached']
+        m=GalleryMotion(w,'hell');m.begin(500,300);m.move(500,300,500,600);m.prepare()
+        self.assertFalse(m.has_target())
+        w.swipe(500,300,500,600);self.assertFalse(m.commit)
+        m.finish();self.assertEqual(w.visible_strips,['cached'])
 
     def test_qrss_older_and_newer_pages_filtered(self):
         w=self.workspace(QRSSWorkspace,5);w.filter_id='receiver'

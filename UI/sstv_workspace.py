@@ -38,6 +38,15 @@ class SSTVWorkspace:
         self.selected_server = self.ui.LOCAL_KIWI_SERVER or server
         self.manager.ensure_web()
 
+    def swipe(self, start_x, start_y, x, y):
+        direction = self.gallery_swipe_direction(start_x, start_y, x, y, (16, 80, 1260, 720))
+        if not direction:
+            return False
+        images = self.manager.image_snapshot(self.filter_id)
+        last = max(0, (len(images)-1)//GALLERY_PAGE_SIZE)
+        self.page = max(0, min(last, self.page+direction))
+        return True
+
     def gallery_swipe_direction(self, start_x, start_y, x, y, bounds):
         """One deliberate vertical swipe, starting in the gallery, per release."""
         if (not self.open or self.add_open or self.decoders_open or self.enlarged
