@@ -1,0 +1,11 @@
+# Merge into /boot/firmware/config.txt; do not replace the entire file.
+# Keep only one vc4-kms-v3d entry and disable conflicting panel/touch overlays.
+[all]
+display_auto_detect=0
+dtoverlay=vc4-kms-v3d
+
+[cm5]
+dtoverlay=cm5-main-fpc2-yx80030
+dtoverlay=cm5-main-fpc2-gt911
+
+[all]

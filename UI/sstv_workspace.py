@@ -38,6 +38,29 @@ class SSTVWorkspace:
         self.selected_server = self.ui.LOCAL_KIWI_SERVER or server
         self.manager.ensure_web()
 
+    def swipe(self, start_x, start_y, x, y):
+        direction = self.gallery_swipe_direction(start_x, start_y, x, y, (16, 80, 1260, 720))
+        if not direction:
+            return False
+        images = self.manager.image_snapshot(self.filter_id)
+        last = max(0, (len(images)-1)//GALLERY_PAGE_SIZE)
+        self.page = max(0, min(last, self.page+direction))
+        return True
+
+    def gallery_swipe_direction(self, start_x, start_y, x, y, bounds):
+        """One deliberate vertical swipe, starting in the gallery, per release."""
+        if (not self.open or self.add_open or self.decoders_open or self.enlarged
+                or getattr(self, 'field', None) is not None
+                or getattr(self, 'reporting', None) is not None):
+            return 0
+        x0, y0, x1, y1 = bounds
+        dx, dy = x-start_x, y-start_y
+        if not (x0 <= start_x <= x1 and y0 <= start_y <= y1):
+            return 0
+        if abs(dy) < 60 or abs(dy) < abs(dx)*1.5:
+            return 0
+        return 1 if dy < 0 else -1
+
     def text(self, cache, x, y, value, size=18, color=(217, 233, 238), width=None):
         if width:
             value = self.ui.fit_station_text(cache, str(value), width, size, False, False, 'Liberation Sans')
@@ -56,35 +79,43 @@ class SSTVWorkspace:
                               (160, 197, 202), 15, False, False, 'cm', family='Liberation Sans')
         self.actions.append((box, action))
 
-    def image(self, key, box):
+    def image(self, key, box, *, fill=False, source_box=None):
         ui = self.ui
+        cached = self.textures.get(key)
         try:
-            path = self.manager.gallery.image_path(key)
-            stamp = path.stat().st_mtime_ns
-            cached = self.textures.get(key)
-            if not cached or cached[0] != stamp:
-                if cached:
-                    ui.GL.glDeleteTextures([cached[1]])
-                surface = ui.pygame.image.load(str(path)).convert_alpha()
-                width, height = surface.get_size()
-                tex = ui.GL.glGenTextures(1)
-                ui.GL.glBindTexture(ui.GL.GL_TEXTURE_2D, tex)
-                for flag in (ui.GL.GL_TEXTURE_MIN_FILTER, ui.GL.GL_TEXTURE_MAG_FILTER):
-                    ui.GL.glTexParameteri(ui.GL.GL_TEXTURE_2D, flag, ui.GL.GL_LINEAR)
-                ui.GL.glTexImage2D(ui.GL.GL_TEXTURE_2D, 0, ui.GL.GL_RGBA, width, height, 0,
-                                  ui.GL.GL_RGBA, ui.GL.GL_UNSIGNED_BYTE, ui.pygame.image.tostring(surface, 'RGBA', False))
-                cached = stamp, tex, width, height
-                self.textures[key] = cached
-                while len(self.textures) > 2 * GALLERY_PAGE_SIZE + 1:
-                    _, old = self.textures.popitem(last=False)
-                    ui.GL.glDeleteTextures([old[1]])
+            path = getattr(self.manager.gallery, 'display_path', self.manager.gallery.image_path)(key)
+            try:
+                stamp = path.stat().st_mtime_ns
+                if not cached or cached[0] != stamp:
+                    surface = ui.pygame.image.load(str(path)).convert_alpha()
+                    width, height = surface.get_size()
+                    tex = ui.GL.glGenTextures(1)
+                    ui.GL.glBindTexture(ui.GL.GL_TEXTURE_2D, tex)
+                    for flag in (ui.GL.GL_TEXTURE_MIN_FILTER, ui.GL.GL_TEXTURE_MAG_FILTER):
+                        ui.GL.glTexParameteri(ui.GL.GL_TEXTURE_2D, flag, ui.GL.GL_LINEAR)
+                    ui.GL.glTexImage2D(ui.GL.GL_TEXTURE_2D, 0, ui.GL.GL_RGBA, width, height, 0,
+                                      ui.GL.GL_RGBA, ui.GL.GL_UNSIGNED_BYTE, ui.pygame.image.tostring(surface, 'RGBA', False))
+                    if cached:ui.GL.glDeleteTextures([cached[1]])
+                    cached = stamp, tex, width, height
+                    self.textures[key] = cached
+                    while len(self.textures) > 2 * GALLERY_PAGE_SIZE + 1:
+                        _, old = self.textures.popitem(last=False)
+                        ui.GL.glDeleteTextures([old[1]])
+            except (OSError, ValueError, ui.pygame.error):
+                if not cached:return
             self.textures.move_to_end(key)
             _, tex, width, height = cached
             x0, y0, x1, y1 = box
-            scale = min((x1-x0)/width, (y1-y0)/height)
-            w, h = width*scale, height*scale
-            x, y = (x0+x1-w)/2, (y0+y1-h)/2
-            ui.draw_textured_quad(tex, x, y, x+w, y+h, 0, 0, 1, 1)
+            if fill:
+                x, y, w, h = x0, y0, x1-x0, y1-y0
+            else:
+                scale = min((x1-x0)/width, (y1-y0)/height)
+                w, h = width*scale, height*scale
+                x, y = (x0+x1-w)/2, (y0+y1-h)/2
+            uv = (0, 0, 1, 1) if source_box is None else (
+                source_box[0]/width, source_box[1]/height,
+                source_box[2]/width, source_box[3]/height)
+            ui.draw_textured_quad(tex, x, y, x+w, y+h, *uv)
         except (OSError, ValueError, ui.pygame.error):
             pass  # An image may be pruned between snapshot and paint.
 

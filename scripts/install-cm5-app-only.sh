@@ -29,7 +29,7 @@ for unit in ituner-sdr.service ituner-sdr-health.service; do
 done
 
 install -d /opt/ituner-sdr /usr/local/lib/ituner-sdr /var/lib/ituner-sdr
-cp -a "$repo/UI" "$repo/assets" /opt/ituner-sdr/
+cp -a "$repo/UI" "$repo/assets" "$repo/licenses" /opt/ituner-sdr/
 chown -R root:root /opt/ituner-sdr/UI /opt/ituner-sdr/assets
 [[ -f /etc/ituner-sdr.conf ]] || install -m 0644 "$repo/config/cm5-existing-display.conf" /etc/ituner-sdr.conf
 install -d /usr/local/share/fonts/ituner-sdr

@@ -223,7 +223,7 @@ class WSPRHistory:
                 self.db.execute("UPDATE outbox SET state='cancelled',error='Uploading disabled or identity changed' WHERE source=? AND state IN ('queued','retry')", (source,))
         return {'ok': True, 'enabled': enabled}
 
-    def query(self, source='', band='', scope='all', run='', since=None, until=None, offset=0, limit=50, _max_rowid=None):
+    def query(self, source='', band='', scope='all', run='', since=None, until=None, offset=0, limit=50, _max_rowid=None, q=''):
         limit = min(200, max(1, int(limit)))
         offset = max(0, min(10000000, int(offset)))
         if scope not in ('all', 'today', '24h', 'session', 'range'):
@@ -251,6 +251,8 @@ class WSPRHistory:
                 if not math.isfinite(val):
                     raise ValueError('Invalid date')
                 where.append('cycle'+op+'?'); args.append(val)
+        if q:
+            where.append("instr(upper(coalesce(json_extract(data,'$.callsign'),'')),?)>0"); args.append(str(q).strip().upper()[:80])
         if _max_rowid is not None:
             where.append('rowid<=?'); args.append(int(_max_rowid))
         clause = ' WHERE ' + ' AND '.join(where) if where else ''

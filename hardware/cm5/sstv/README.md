@@ -1,5 +1,10 @@
 # SSTV on the existing CM5 PR #12 installation
 
+**Historical deployment record:** the October consolidation combines PR #12
+and the current decoders directly in `UI/kiwi_gl_display.py`. New installations
+use the shared source and must not apply the patches below on top of it.
+See [the consolidation record](../../../docs/consolidation-2026-10.md).
+
 CM5 was updated on 2026-10-05 with the SSTV source from commit `4083d38` while
 retaining its installed PR #12 (`de457b1b2889d12fd25f4ad8c87c5f453bb04088`) UI,
 FM-DX support, audio setup and display/touch configuration.
@@ -188,3 +193,71 @@ and Stop/Start. The archive imported 51 real spots, kept all 51 across the live
 states remained one running and one stopped. The app had zero automatic
 restarts and unchanged protected boot/display/audio configuration hashes.
 Uploads remained disabled; no synthetic spots were sent to WSPRnet.
+
+## Hell RX (2026-10-08)
+
+Apply `hell-ui.patch` after `wspr-history-ui.patch`. Install `UI/hell_*.py`,
+`UI/hell_gallery.html`, `UI/digital_web.py`, `UI/sstv_monitor.py`, both updated
+SSTV/WSPR HTML pages and `licenses/fldigi-GPL-3.txt`. The patch preserves PR #12
+and adds **HELL RX** below WSPR/SSTV in the Modes drawer. Main's normal Digital
+tools menu receives the same feature through its own UI changes.
+
+Expected input UI SHA-256:
+`4b04b49fe7b08edb287dec0b794dee3c1fe222483e93a4cf67dcf48b11c75b11`.
+Final installed UI SHA-256:
+`b6b12ec88cbd632f0c478f5cadd3c6583f0ac7dc276dce9e37d43898eb9c75ed`.
+
+Original pre-Hell backup:
+`/var/backups/ituner-sdr/before-hell-20261008-123928/`.
+Staging: `/home/ituner/hell-deploy/`. The installer checks the live UI and every
+payload checksum, backs up changed files, preserves protected configuration
+hashes, and restores the previous application if startup fails.
+
+Validation: 81 local tests completed (79 passed, two optional SSTV encoder tests
+skipped); all ten new Hell cases passed on CM5. Seven independently modulated
+signals exercised the actual receive DSP. Local gallery/editor/report screens
+were rendered at 1280×800; the PR #12 Modes launcher and hit targets were
+verified separately. Browser tests covered settings, live audio/image reception,
+Stop, image retention, enlargement and the explicit report form. No synthetic
+reports were sent to PSK Reporter. No readable on-air Hell transmission is
+claimed from the short live audio check.
+
+A local 40 m Feld Hell decoder (7083.5 kHz USB + 1500 Hz audio) was created for
+the live test and left stopped. Its captured strips remain. The user's two
+WSPR and two SSTV decoder configurations and active states were retained.
+The running service had no automatic restarts and unchanged boot configuration,
+app configuration and display/audio launcher checksums. See
+[Hell operation and reporting](../../../docs/HELL.md).
+
+QRSS adds visual captures and tentative CW / FSKCW text. For a PR12 UI already
+carrying `hell-ui.patch`, apply `qrss-ui.patch` next. Copy the `UI/qrss_*` files,
+updated `digital_web.py`, `sstv_monitor.py`, digital gallery pages and
+`licenses/qrsspig-GPL-3.txt`. The main-branch UI has these hooks directly.
+See [QRSS operation](../../../docs/QRSS.md). No display or audio driver changes
+are involved.
+
+QRSS was validated on CM5 with eight passing tests, including generated
+CW/FSKCW at all five dot speeds and saved-text/image continuity. The live 30 m
+check receives a waterfall using one additional Kiwi audio session; stopping
+retains its capture. Existing two WSPR, two SSTV and seven-mode Hell receiver
+sessions resumed. Backup: `/var/backups/ituner-sdr/before-qrss-20261008-135223`.
+The service remained active without automatic restarts and installed hashes
+matched the deployment manifest. No on-air Morse text is claimed from this test.
+
+Automatic QRSS acquisition updates the `qrss_*` modules without changing the
+main UI launcher. The 30 m receiver was switched to AUTO through the shared
+control API. Final backup:
+`/var/backups/ituner-sdr/before-qrss-auto-20261008-230553`.
+All five automatic-acquisition tests pass on CM5, including the saved-raster
+regression and a short real PCM spectrum fixture. The full local suite runs
+99 tests, with 96 passing and three optional dependency skips. Boot/display/audio
+configuration remains unchanged; the application has no automatic restarts.
+
+
+The multi-signal QRSS update replaces the same `qrss_*` modules and follows up
+to six independent signals from one audio stream. The CM5 backup is
+`/var/backups/ituner-sdr/before-qrss-multi-20261009-025826`. Sixteen QRSS tests
+passed on CM5, including concurrent unequal-level CW/FSKCW, independent
+cadences, track limits, signal loss, and saved multi-track text. The full local
+suite passed 102 tests with three optional dependency skips. The 1280×800
+enlarged view shows six separate text rows, with paging for recent tracks.
