@@ -510,8 +510,22 @@ class GalleryServer(ThreadingHTTPServer):
         self.hell = None
         self.qrss = None
         self.cw = None
+        self.log_search = None
+        self.search_lock = threading.Lock()
         self.control_token = secrets.token_urlsafe(32)
         super().__init__(address, GalleryHandler)
+
+
+    def search_history(self):
+        with self.search_lock:
+            if self.log_search is None:
+                from log_search import LogSearch
+                self.log_search = LogSearch(self)
+            return self.log_search
+
+    def server_close(self):
+        if self.log_search: self.log_search.close()
+        super().server_close()
 
 
 class GalleryHandler(BaseHTTPRequestHandler):
@@ -521,7 +535,17 @@ class GalleryHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path)
         try:
-            if path.path in ('/', '/sstv', '/sstv/'):
+            if path.path in ('/search', '/search/'):
+                data = Path(__file__).with_name('log_search.html').read_bytes()
+                content_type = 'text/html; charset=utf-8'
+            elif path.path == '/log-search.js':
+                data = Path(__file__).with_name('log_search.js').read_bytes()
+                content_type = 'text/javascript; charset=utf-8'
+            elif path.path == '/api/logs/search':
+                filters = {k:v[0] for k,v in parse_qs(path.query).items() if k in ('q','mode','offset','limit')}
+                data = json.dumps(self.server.search_history().query(**filters)).encode()
+                content_type = 'application/json'
+            elif path.path in ('/', '/sstv', '/sstv/'):
                 data = Path(__file__).with_name('sstv_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
             elif path.path in ('/cw','/cw/'):
@@ -606,7 +630,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
                 if path.path == '/api/wspr/reporting':
                     data = json.dumps({'sources': history.sources(), 'control_token': self.server.control_token}).encode()
                 else:
-                    filters = {k:v[0] for k,v in parse_qs(path.query).items() if k in ('source','band','scope','run','since','until','offset','limit')}
+                    filters = {k:v[0] for k,v in parse_qs(path.query).items() if k in ('source','band','scope','run','since','until','offset','limit','q')}
                     if path.path.endswith('.csv'):
                         filters.pop('offset',None); filters.pop('limit',None)
                         # Freeze the displayed time window; the CSV iterator also

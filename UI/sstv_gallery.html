@@ -25,3 +25,5 @@ async function refresh(){clearTimeout(refreshTimer);if(refreshing)return;refresh
  $('status').textContent=images.length?images.length+' images · newest first · updates every 5 seconds':'Waiting for an SSTV transmission. Use Add decoder above to choose a receiver and band, or Start an existing decoder.';
  }catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}finally{refreshing=false;refreshTimer=setTimeout(refresh,5000)}}refresh();
 </script></html>
+
+<script src="/log-search.js"></script>

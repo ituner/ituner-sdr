@@ -21,3 +21,5 @@ function draw(){$('receivers').replaceChildren();for(const row of rows){const ca
 async function refresh(){clearTimeout(timer);if(refreshing)return;refreshing=true;try{const response=await fetch('/api/wspr',{cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();rows=data.decoders;controls.setData(data);draw();await historyUI.refreshProfiles();await historyUI.load();$('connection').textContent='Connected · '+rows.filter(r=>r.running).length+' enabled receivers · updates every 5 seconds'}catch(e){$('connection').textContent='Cannot reach the SDR. Retrying…';controls.setData({});draw()}finally{refreshing=false;timer=setTimeout(refresh,5000)}}
 const historyUI=new WSPRHistoryUI(refresh);refresh();
 </script></html>
+
+<script src="/log-search.js"></script>

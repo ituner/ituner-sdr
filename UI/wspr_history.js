@@ -2,9 +2,9 @@
 class WSPRHistoryUI {
  constructor(refresh){
   this.sources=[];this.rows=[];this.offset=0;this.total=0;this.token='';this.revision=0;this.busy=false;this.refresh=refresh;
-  document.getElementById('history-filter').innerHTML=`<label>Receiver <select id="history-source"><option value="">All receivers</option></select></label><label>Band <select id="history-band"><option value="">All bands</option></select></label><label>Period <select id="history-scope"><option value="24h">Last 24 hours</option><option value="today">Today (UTC)</option><option value="session">Latest session</option><option value="all">All history</option><option value="range">Date range (UTC)</option></select></label><span id="history-dates" hidden><label>From <input type="date" id="history-from"></label><label>Through <input type="date" id="history-to"></label></span><a id="history-csv" href="/api/wspr/history.csv">Export CSV</a><button id="report-open">WSPRnet uploads</button>`;
+  document.getElementById('history-filter').innerHTML=`<label>Callsign <input id="history-q" type="search" placeholder="Callsign or part"></label><label>Receiver <select id="history-source"><option value="">All receivers</option></select></label><label>Band <select id="history-band"><option value="">All bands</option></select></label><label>Period <select id="history-scope"><option value="24h">Last 24 hours</option><option value="today">Today (UTC)</option><option value="session">Latest session</option><option value="all">All history</option><option value="range">Date range (UTC)</option></select></label><span id="history-dates" hidden><label>From <input type="date" id="history-from"></label><label>Through <input type="date" id="history-to"></label></span><a id="history-csv" href="/api/wspr/history.csv">Export CSV</a><button id="report-open">WSPRnet uploads</button>`;
   document.getElementById('history-paging').innerHTML='<button id="history-prev">Previous</button> <span id="history-count"></span> <button id="history-next">Next</button>';
-  for(const id of ['history-source','history-band','history-scope','history-from','history-to'])document.getElementById(id).onchange=()=>{
+  for(const id of ['history-q','history-source','history-band','history-scope','history-from','history-to'])document.getElementById(id).onchange=()=>{
    if(id==='history-source'){this.bands();const p=this.profile();if(p)document.getElementById('history-scope').value=p.is_local?'24h':'session'}
    document.getElementById('history-dates').hidden=document.getElementById('history-scope').value!=='range';this.offset=0;this.revision++;this.load();
   };
@@ -22,7 +22,7 @@ class WSPRHistoryUI {
  }
  bands(){const s=document.getElementById('history-band'),chosen=s.value,p=this.profile();s.replaceChildren(new Option('All bands',''));const bands=[...new Set((p?[p]:this.sources).flatMap(r=>r.bands))].sort((a,b)=>Number(b)-Number(a));for(const b of bands)s.add(new Option(b+' m',b));s.value=bands.includes(chosen)?chosen:''}
  params(){
-  const q=new URLSearchParams();for(const k of ['source','band','scope']){const v=document.getElementById('history-'+k).value;if(v)q.set(k,v)}
+  const q=new URLSearchParams();for(const k of ['source','band','scope','q']){const v=document.getElementById('history-'+k).value;if(v)q.set(k,v)}
   if(q.get('scope')==='range')for(const [id,k,extra] of [['history-from','since',0],['history-to','until',86400]]){const value=document.getElementById(id).value;if(value)q.set(k,Date.parse(value+'T00:00:00Z')/1000+extra)}
   return q;
  }

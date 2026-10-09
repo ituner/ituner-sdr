@@ -36,3 +36,5 @@ el('search').oninput=()=>{historyPage=0;historyIDs=null;drawHistory()};el('prev'
 async function refresh(){if(refreshing)return;refreshing=true;try{const response=await fetch('/api/cw',{cache:'no-store'});if(!response.ok)throw Error('CW receiver unavailable');data=await response.json();controls.setData(data);const ids=new Set(data.decoders.map(r=>r.id));for(const [id,c] of cards)if(!ids.has(id)){c.root.remove();cards.delete(id)}data.decoders.forEach(updateCard);if(!el('history').hidden)drawHistory()}catch(e){text(el('notice'),'Connection: '+e.message)}finally{refreshing=false}}
 refresh();setInterval(refresh,1500);
 </script></html>
+
+<script src="/log-search.js"></script>

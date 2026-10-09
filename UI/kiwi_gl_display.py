@@ -20304,6 +20304,14 @@ def main():
     digital_web_next_snapshot = 0.0
     digital_web_next_options = 0.0
     sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+    if sstv_manager.web:
+        from log_search_workspace import install_search
+        log_search_service = sstv_manager.web.search_history()
+        for search_mode, search_workspace in (
+                ('wspr', wspr_history_view), ('sstv', sstv_workspace),
+                ('hell', hell_workspace), ('qrss', qrss_workspace), ('cw', cw_workspace)):
+            install_search(search_workspace, search_mode, log_search_service)
+
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
