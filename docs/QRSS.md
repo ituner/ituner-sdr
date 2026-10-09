@@ -95,7 +95,8 @@ The 1280 × 800 local gallery displays four captures with tentative text. Web
 and local editors control the same saved sessions: Add, Edit, Start, Stop and
 Remove. Web views can show all captures, latest per receiver, or captures with
 some tentative text. Click an image to enlarge it or download its PNG.
-Web cards and the enlarged local view show separate text rows labelled with
+The web gallery uses one full-width spectrogram per row, giving long captures
+more horizontal space. Web cards and the enlarged local view show separate text rows labelled with
 track ID, RF frequency and dot timing. The local enlarged view pages through
 six text rows at a time. Text from different stations is never joined into one
 message. Manual modes and older captures keep their single-text display.
