@@ -10,11 +10,33 @@ class QRSSWorkspace(SSTVWorkspace):
         super().__init__(ui,manager)
         self.preset=dict(PRESETS[2]);self.field=None;self.entry='';self.track_page=0
 
-    def image(self,key,box):
-        # Time and frequency axes scale independently within a stable plot box.
-        super().image(key,box,fill=True)
+    def preview(self,cache,item,box):self.draw_plot(cache,item,box)
 
-    def preview(self,cache,item,box):self.image(item['id'],box)
+    def draw_plot(self,cache,item,box):
+        # Only the spectrum is stretched. Legends use the UI's regular fonts.
+        x0,y0,x1,y1=box
+        size=16 if y1-y0<250 else 20
+        left,top,right,bottom=x0+124,y0+30,x1-6,y1-28
+        source=item.get('plot_box',(90,35,item.get('width',1700)-10,355))
+        super().image(item['id'],(left,top,right,bottom),fill=True,source_box=source)
+        center,half=item['rf_hz'],item['span_hz']/2
+        self.text(cache,x0+4,y0+12,'MHz RF',size)
+        self.text(cache,left,y0+12,item['capture_utc'].replace('T',' ').replace('Z',' UTC'),size,width=420)
+        window=item.get('window_seconds',item['duration_seconds']) or 1
+        self.text(cache,right-250,y0+12,f"Received {item['duration_seconds']:.0f} / {window:g} s",size,width=250)
+        for fraction,hz in ((0,center+half),(.5,center),(1,center-half)):
+            y=max(top+size/2,min(bottom-size/2,top+fraction*(bottom-top)))
+            self.text(cache,x0+4,y,f'{hz/1e6:.6f}',size,width=116)
+        self.text(cache,left,y1-12,'Time → 0 s',size)
+        self.text(cache,(left+right)/2-24,y1-12,f'{window/2:g} s',size)
+        self.text(cache,right-90,y1-12,f'{window:g} s',size,width=90)
+        for track in item.get('tracks',[]):
+            if not track['active']:continue
+            fraction=(center+half-track['rf_hz'])/item['span_hz']
+            if not 0<=fraction<=1:continue
+            y=top+fraction*(bottom-top)
+            self.ui.draw_logical_rect(left,y-1,left+8,y+1,(255,150,40,255))
+            self.text(cache,left+10,max(top+size/2,min(bottom-size/2,y-size)),track['id'],size,(255,190,90))
 
     def draw(self,cache,receivers):
         self.actions=[]
@@ -38,7 +60,7 @@ class QRSSWorkspace(SSTVWorkspace):
                 self.text(cache,24,78,item['receiver']+' · '+item['capture_utc'],18,width=1200)
                 tracks=item.get('tracks',[])
                 if tracks:
-                    self.image(item['id'],(20,115,1260,500))
+                    self.draw_plot(cache,item,(20,115,1260,500))
                     self.text(cache,24,529,'TENTATIVE TEXT · independent signal frequencies and dot timing',19,(104,234,194))
                     pages=max(1,math.ceil(len(tracks)/6));self.track_page=min(self.track_page,pages-1)
                     for j,r in enumerate(tracks[self.track_page*6:self.track_page*6+6]):
@@ -50,7 +72,7 @@ class QRSSWorkspace(SSTVWorkspace):
                         self.button(cache,(720,733,972,788),'< TEXT',('track_page',-1))
                         self.button(cache,(990,733,1258,788),'TEXT >',('track_page',1))
                 else:
-                    self.image(item['id'],(20,115,1260,620))
+                    self.draw_plot(cache,item,(20,115,1260,620))
                     self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
                     self.text(cache,24,696,item.get('tentative_text') or 'No text recognized yet',23,width=1210)
                     self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
@@ -70,7 +92,7 @@ class QRSSWorkspace(SSTVWorkspace):
             x,y=16,90+i*305
             self.ui.draw_logical_rect(x,y,x+1248,y+293,(17,34,42,255))
             self.text(cache,x+12,y+22,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=1224)
-            self.image(item['id'],(x+8,y+40,x+1240,y+235))
+            self.draw_plot(cache,item,(x+8,y+40,x+1240,y+235))
             self.text(cache,x+12,y+256,(f"{len(item['tracks'])} signals · tap for separate text" if item.get('tracks') else 'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…')),18,width=1224)
             self.text(cache,x+12,y+280,item['capture_utc'],15,width=1224)
             self.actions.append(((x,y,x+1248,y+293),('image',item['id'])))

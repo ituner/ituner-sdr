@@ -7,7 +7,7 @@ PLOT_WIDTH, PLOT_HEIGHT = 1600, 280
 PLOT_LEFT, PLOT_TOP = 190, 55
 CANVAS_SIZE = (1808, 390)
 BACKGROUND = (7, 18, 25)
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 
 
 @lru_cache(maxsize=1)
@@ -72,8 +72,8 @@ def annotate_plot(plot, item):
             y = PLOT_TOP+PLOT_HEIGHT*(center+half-track['rf_hz'])/item['span_hz']
             if not PLOT_TOP<=y<=PLOT_TOP+PLOT_HEIGHT: continue
             draw.line((PLOT_LEFT-5,y,PLOT_LEFT+8,y), fill=(255,150,40), width=3)
-            label(PLOT_LEFT+12, max(PLOT_TOP,min(PLOT_TOP+PLOT_HEIGHT-32,y-32)),
-                  track['id'], (255,190,90))
+            label(PLOT_LEFT-12, max(PLOT_TOP,min(PLOT_TOP+PLOT_HEIGHT-32,y-32)),
+                  track['id'], (255,190,90), anchor='rt')
     else:
         y = PLOT_TOP+PLOT_HEIGHT/2
         draw.line((PLOT_LEFT-5,y,PLOT_LEFT+5,y), fill=(255,150,40), width=3)

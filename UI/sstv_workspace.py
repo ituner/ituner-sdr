@@ -56,7 +56,7 @@ class SSTVWorkspace:
                               (160, 197, 202), 15, False, False, 'cm', family='Liberation Sans')
         self.actions.append((box, action))
 
-    def image(self, key, box, *, fill=False):
+    def image(self, key, box, *, fill=False, source_box=None):
         ui = self.ui
         try:
             path = self.manager.gallery.image_path(key)
@@ -87,7 +87,10 @@ class SSTVWorkspace:
                 scale = min((x1-x0)/width, (y1-y0)/height)
                 w, h = width*scale, height*scale
                 x, y = (x0+x1-w)/2, (y0+y1-h)/2
-            ui.draw_textured_quad(tex, x, y, x+w, y+h, 0, 0, 1, 1)
+            uv = (0, 0, 1, 1) if source_box is None else (
+                source_box[0]/width, source_box[1]/height,
+                source_box[2]/width, source_box[3]/height)
+            ui.draw_textured_quad(tex, x, y, x+w, y+h, *uv)
         except (OSError, ValueError, ui.pygame.error):
             pass  # An image may be pruned between snapshot and paint.
 

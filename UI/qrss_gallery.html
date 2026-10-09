@@ -1,13 +1,16 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>iTuner · QRSS</title>
 <style>
-[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{margin:0;padding:clamp(8px,1.5vw,22px)}h1,a{color:#68eac2}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:14px;margin:18px 0}#gallery{grid-template-columns:minmax(0,1fr)}article,.receiver{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:14px}article button{width:100%;padding:0;border:0}article img{display:block;width:100%;height:clamp(240px,30vw,400px);object-fit:fill;background:#071219}article p{overflow-wrap:anywhere}.text{color:#d9e9ee;white-space:pre-wrap;overflow-wrap:anywhere}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{box-sizing:border-box;width:calc(100vw - 32px);max-width:calc(100vw - 32px)}#large{width:100%;height:clamp(240px,50vh,520px);object-fit:fill;display:block;margin:16px 0;background:#071219}#gallery article>p:not(.text){height:3em;overflow:auto}#gallery .text{height:9em;overflow:auto;margin-bottom:0}.receiver .text{height:7em;overflow:auto}.receiver .receiver-detail{height:3em;overflow:auto}#detail{height:3em;overflow:auto}#text{height:9em;overflow:auto}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}#notice{min-height:1.5em}.capture-updates{height:48px}
+[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{margin:0;padding:clamp(8px,1.5vw,22px)}h1,a{color:#68eac2}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:14px;margin:18px 0}#gallery{grid-template-columns:minmax(0,1fr)}article,.receiver{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:14px}article button{width:100%;padding:0;border:0}article p{overflow-wrap:anywhere}.text{color:#d9e9ee;white-space:pre-wrap;overflow-wrap:anywhere}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{box-sizing:border-box;width:calc(100vw - 32px);max-width:calc(100vw - 32px)}#large{height:clamp(240px,50vh,520px);margin:16px 0}#gallery article>p:not(.text){height:3em;overflow:auto}#gallery .text{height:9em;overflow:auto;margin-bottom:0}.receiver .text{height:7em;overflow:auto}.receiver .receiver-detail{height:3em;overflow:auto}#detail{height:3em;overflow:auto}#text{height:9em;overflow:auto}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}#notice{min-height:1.5em}.capture-updates{height:48px}
+.qrss-plot{height:clamp(240px,30vw,400px);background:#071219;display:grid;grid-template-columns:112px minmax(0,1fr);grid-template-rows:36px minmax(0,1fr) 28px;font:18px system-ui;text-align:left;color:#d9e9ee;padding:4px;box-sizing:border-box}
+.plot-head{display:flex;justify-content:space-between;gap:12px;overflow:hidden;white-space:nowrap;align-items:center}.plot-date{overflow:hidden;text-overflow:ellipsis}.plot-progress{flex-shrink:0}.plot-unit{align-self:center}.plot-frequency{display:flex;flex-direction:column;justify-content:space-between;font-variant-numeric:tabular-nums;padding:0 8px 0 0}.plot-viewport{position:relative;overflow:hidden;min-width:0;min-height:0}.plot-viewport img{position:absolute;display:block;max-width:none;max-height:none;object-fit:fill}.plot-time{grid-column:2;display:flex;justify-content:space-between;align-items:end;font-variant-numeric:tabular-nums}.plot-tracks{position:absolute;inset:0;pointer-events:none}.plot-track{position:absolute;left:5px;color:#ffbe5a;font:inherit;background:#071219a0}
+@media(max-width:600px){.qrss-plot{font-size:14px;grid-template-columns:94px minmax(0,1fr)}.plot-date{display:none}}
 </style>
 <header><div><h1>QRSS</h1><p>Slow waterfall captures + tentative Morse text</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell">Hell RX</a> · <a href="/qrss" aria-current="page">QRSS</a></nav></header>
 <div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders" class="grid"></div>
 <p>Both outputs share one Kiwi channel. AUTO follows up to six separate CW / FSKCW signals in the displayed span, each with its own frequency, shift and dot duration. Paired FSK tones count as one signal. Allow several characters to acquire a signal. Text remains tentative; fading, drift and overlapping stations can cause errors. DFCW and other patterns are visual only. Captures are kept even when no text is recognized.</p>
 <label>Receiver <select id="filter"><option value="">All receivers</option></select></label> <label>View <select id="view"><option value="all">All captures</option><option value="latest">Latest per receiver</option><option value="text">With tentative text</option></select></label>
 <p id="status" role="status">Loading…</p><div class="capture-updates"><button id="refresh-captures" hidden>Show latest captures</button></div><main id="gallery" class="grid"></main><div class="buttons"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
-<dialog id="viewer"><div class="buttons"><button id="close">Close</button><a id="download" download>Download PNG</a></div><img id="large" alt="QRSS waterfall"><p id="detail"></p><strong>Tentative Morse text</strong><p id="text" class="text"></p></dialog>
+<dialog id="viewer"><div class="buttons"><button id="close">Close</button><a id="download" download>Download PNG</a></div><div id="large" class="qrss-plot"></div><p id="detail"></p><strong>Tentative Morse text</strong><p id="text" class="text"></p></dialog>
 <script src="/digital-controls.js"></script><script>
 const $=id=>document.getElementById(id);let timer,busy=false,images=[],page=0,selectedImage=null,visibleCaptures=null;
 const numeric={freq_khz:'USB dial frequency (kHz)',tone_hz:'Audio center (Hz; mark tone in manual modes)',span_hz:'Waterfall span (Hz)',shift_hz:'FSK mark / space separation (Hz)'};
@@ -44,9 +47,32 @@ function setText(el,value){
  if(el.textContent===value)return;
  const top=el.scrollTop,left=el.scrollLeft;el.textContent=value;el.scrollTop=top;el.scrollLeft=left;
 }
+function updatePlot(root,i){
+ if(!root.children.length){
+  root.classList.add('qrss-plot');
+  root.innerHTML='<span class="plot-unit">MHz RF</span><div class="plot-head"><span class="plot-date"></span><span class="plot-progress"></span></div><div class="plot-frequency"><span></span><span></span><span></span></div><div class="plot-viewport"><img alt="QRSS spectrum"><div class="plot-tracks"></div></div><div class="plot-time"><span>Time → 0 s</span><span></span><span></span></div>';
+ }
+ const box=i.plot_box||[90,35,(i.width||1700)-10,355],width=box[2]-box[0],height=box[3]-box[1],img=root.querySelector('img');
+ img.style.width=((i.width||1700)/width*100)+'%';img.style.height=((i.height||390)/height*100)+'%';
+ img.style.left=(-box[0]/width*100)+'%';img.style.top=(-box[1]/height*100)+'%';
+ updateImage(img,url(i));
+ const windowSeconds=i.window_seconds||i.duration_seconds||1;
+ setText(root.querySelector('.plot-date'),i.capture_utc.replace('T',' ').replace('Z',' UTC'));
+ setText(root.querySelector('.plot-progress'),'Received '+Math.round(i.duration_seconds)+' / '+windowSeconds+' s');
+ const frequencies=[i.rf_hz+i.span_hz/2,i.rf_hz,i.rf_hz-i.span_hz/2];
+ [...root.querySelector('.plot-frequency').children].forEach((el,n)=>setText(el,(frequencies[n]/1e6).toFixed(6)));
+ const times=root.querySelector('.plot-time').children;setText(times[1],(windowSeconds/2)+' s');setText(times[2],windowSeconds+' s');
+ const parent=root.querySelector('.plot-tracks'),tracks=(i.tracks||[]).filter(t=>t.active&&Math.abs(t.rf_hz-i.rf_hz)<=i.span_hz/2),existing=new Map([...parent.children].map(e=>[e.dataset.id,e]));
+ for(const track of tracks){
+  let label=existing.get(track.id);if(!label){label=document.createElement('span');label.className='plot-track';label.dataset.id=track.id;parent.append(label)}
+  existing.delete(track.id);setText(label,track.id);const fraction=(i.rf_hz+i.span_hz/2-track.rf_hz)/i.span_hz;
+  label.style.top='clamp(0px, calc('+fraction*100+'% - 22px), calc(100% - 22px))';
+ }
+ for(const label of existing.values())label.remove();
+}
 function show(i){
  const viewer=$('viewer'),top=viewer.scrollTop;
- selectedImage=i.id;updateImage($('large'),url(i));$('download').href=url(i);
+ selectedImage=i.id;updatePlot($('large'),i);$('download').href=url(i);
  setText($('detail'),describe(i));setText($('text'),(i.tracks?.length?trackText(i):i.tentative_text)||(i.text_status==='visual_only'?'Visual-only capture':'No text recognized yet'));
  if(!viewer.open)viewer.showModal();else viewer.scrollTop=top;
 }
@@ -88,13 +114,13 @@ function render(){
   let card=existing.get(i.id);
   if(!card){
    card=document.createElement('article');card.dataset.id=i.id;
-   const b=document.createElement('button'),img=document.createElement('img'),caption=document.createElement('p'),text=document.createElement('p');
-   img.alt='QRSS waterfall from '+i.receiver;
-   b.append(img);b.onclick=()=>show(images.find(row=>row.id===card.dataset.id)||i);b.ariaLabel='Enlarge QRSS capture';
+   const b=document.createElement('button'),plot=document.createElement('div'),caption=document.createElement('p'),text=document.createElement('p');
+   plot.className='qrss-plot';
+   b.append(plot);b.onclick=()=>show(images.find(row=>row.id===card.dataset.id)||i);b.ariaLabel='Enlarge QRSS capture';
    text.className='text';card.append(b,caption,text);
   }
   existing.delete(i.id);
-  updateImage(card.querySelector('img'),url(i));
+  updatePlot(card.querySelector('.qrss-plot'),i);
   const caption=card.children[1],text=card.children[2],description=describe(i),decoded='Tentative text:\n'+trackText(i);
   setText(caption,description);setText(text,decoded);
   // Preserve nodes and scroll anchoring on ordinary five-second updates.

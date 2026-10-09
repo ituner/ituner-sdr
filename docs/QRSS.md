@@ -103,9 +103,11 @@ Received data grows from left to right with blank space for time not yet
 received (one minute fills 10% of a ten-minute plot). Early keying is never
 stretched across a whole window, and existing characters retain their width.
 This applies to web, local and downloaded images. Older captures retain their
-original time span when relabelled. Plot legends use a 30-pixel font and wider
-margins so frequency, time and capture status remain readable in compact and
-expanded views. Plot and text areas keep stable heights during live
+original time span when relabelled. Interactive plot legends are separate text elements: normal browser fonts
+on the web and native text on the touchscreen. Only the spectrum raster
+stretches to fill its plot box; frequency, time, status and track labels retain
+normal letter proportions in compact and expanded views. Downloaded PNGs
+retain their annotated legends. Plot and text areas keep stable heights during live
 updates; long text scrolls inside its own area. Existing image nodes are reused
 and new pixels replace the old only after loading, including in the enlarged
 viewer. Receiver controls also update in place. All gallery views hold their
