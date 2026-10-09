@@ -92,7 +92,11 @@ and [QRP Labs mode descriptions](https://www.qrp-labs.com/qrsskitmm.html).
 ## Galleries and persistence
 
 The 1280 × 800 local gallery displays two full-width captures per page, one
-per row, with tentative text. Web
+per row, with two lines of tentative decoded text directly below each plot.
+Gallery navigation, receiver filtering, decoder management and Home share a
+single top toolbar. Compact legends avoid repeating the timestamp and free
+more height for the actual spectrum. Web pagination is also above the images;
+preview text is compact while the expanded view retains full per-track details. Web
 and local editors control the same saved sessions: Add, Edit, Start, Stop and
 Remove. Web views can show all captures, latest per receiver, or captures with
 some tentative text. Click an image to enlarge it or download its PNG.

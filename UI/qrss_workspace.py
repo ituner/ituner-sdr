@@ -1,6 +1,5 @@
 """QRSS visual/text gallery and receiver controls for a 1280 x 800 touchscreen."""
 import math
-import socket
 from sstv_workspace import SSTVWorkspace
 from qrss_modes import PRESETS, DOTS, KINDS, settings
 
@@ -12,16 +11,17 @@ class QRSSWorkspace(SSTVWorkspace):
 
     def preview(self,cache,item,box):self.draw_plot(cache,item,box)
 
-    def draw_plot(self,cache,item,box):
+    def draw_plot(self,cache,item,box,compact=False):
         # Only the spectrum is stretched. Legends use the UI's regular fonts.
         x0,y0,x1,y1=box
-        size=16 if y1-y0<250 else 20
-        left,top,right,bottom=x0+124,y0+30,x1-6,y1-28
+        size=16 if compact or y1-y0<250 else 20
+        left,top,right,bottom=x0+118,y0+(24 if compact else 30),x1-6,y1-(22 if compact else 28)
         source=item.get('plot_box',(90,35,item.get('width',1700)-10,355))
         super().image(item['id'],(left,top,right,bottom),fill=True,source_box=source)
         center,half=item['rf_hz'],item['span_hz']/2
         self.text(cache,x0+4,y0+12,'MHz RF',size)
-        self.text(cache,left,y0+12,item['capture_utc'].replace('T',' ').replace('Z',' UTC'),size,width=420)
+        if not compact:self.text(cache,left,y0+12,item['capture_utc'].replace('T',' ').replace('Z',' UTC'),size,width=420)
+        elif item.get('tracks'):self.text(cache,left,y0+12,f"{len(item['tracks'])} signal{'s' if len(item['tracks'])!=1 else ''} · tentative text below",size,width=540)
         window=item.get('window_seconds',item['duration_seconds']) or 1
         self.text(cache,right-250,y0+12,f"Received {item['duration_seconds']:.0f} / {window:g} s",size,width=250)
         for fraction,hz in ((0,center+half),(.5,center),(1,center-half)):
@@ -69,8 +69,8 @@ class QRSSWorkspace(SSTVWorkspace):
                         self.text(cache,608,564+j*28,r['tentative_text'] or 'Waiting for a complete character…',19,width=640)
                     self.text(cache,24,767,f'{len(tracks)} signals · text {self.track_page+1}/{pages}',18)
                     if pages>1:
-                        self.button(cache,(720,733,972,788),'< TEXT',('track_page',-1))
-                        self.button(cache,(990,733,1258,788),'TEXT >',('track_page',1))
+                        self.button(cache,(728,16,880,70),'< TEXT',('track_page',-1))
+                        self.button(cache,(892,16,1044,70),'TEXT >',('track_page',1))
                 else:
                     self.draw_plot(cache,item,(20,115,1260,620))
                     self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
@@ -78,30 +78,52 @@ class QRSSWorkspace(SSTVWorkspace):
                     self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None));return
             self.enlarged=None
-        self.text(cache,20,36,'QRSS · waterfall + text',27,(104,234,194))
-        self.button(cache,(654,14,842,70),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
-        self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
-        self.button(cache,(1102,14,1258,70),'HOME',('home',None))
-        if self.decoders_open:self.draw_decoders(cache);return
+        if self.decoders_open:
+            self.text(cache,20,36,'QRSS · decoders',27,(104,234,194))
+            self.button(cache,(654,14,842,70),'GALLERY',('gallery',None))
+            self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
+            self.button(cache,(1102,14,1258,70),'HOME',('home',None))
+            self.draw_decoders(cache);return
         pages=max(1,math.ceil(len(images)/2));self.page=min(self.page,pages-1)
+        self.text(cache,16,35,'QRSS',26,(104,234,194))
+        self.button(cache,(116,10,222,62),'< PREV',('page',-1))
+        self.text(cache,236,36,f'{self.page+1}/{pages}',19,width=78)
+        self.button(cache,(320,10,426,62),'NEXT >',('page',1))
+        self.button(cache,(438,10,626,62),'ALL RECEIVERS',('filter',None))
+        self.button(cache,(638,10,816,62),'DECODERS',('decoders',None))
+        self.button(cache,(828,10,1090,62),'+ ADD DECODER',('add',None))
+        self.button(cache,(1102,10,1264,62),'HOME',('home',None))
         if not images:
             self.text(cache,120,300,'Add a QRSS receiver: waterfall and Morse text share one Kiwi channel.',23)
             self.text(cache,120,352,'Start with 30 m and AUTO to find a keyed signal and estimate its timing.',20)
             self.text(cache,120,402,'DFCW and other patterns remain visible; their text is not decoded.',20)
         for i,item in enumerate(images[self.page*2:self.page*2+2]):
-            x,y=16,90+i*305
-            self.ui.draw_logical_rect(x,y,x+1248,y+293,(17,34,42,255))
-            self.text(cache,x+12,y+22,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=1224)
-            self.draw_plot(cache,item,(x+8,y+40,x+1240,y+235))
-            self.text(cache,x+12,y+256,(f"{len(item['tracks'])} signals · tap for separate text" if item.get('tracks') else 'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…')),18,width=1224)
-            self.text(cache,x+12,y+280,item['capture_utc'],15,width=1224)
-            self.actions.append(((x,y,x+1248,y+293),('image',item['id'])))
-        self.button(cache,(16,730,168,786),'< PREV',('page',-1))
-        self.text(cache,188,758,f'{self.page+1} / {pages}',19)
-        self.button(cache,(282,730,434,786),'NEXT >',('page',1))
-        self.button(cache,(450,730,670,786),'ALL RECEIVERS',('filter',None))
-        self.text(cache,700,749,self.message or 'Tap a capture to enlarge. Text is tentative.',16,width=550)
-        self.text(cache,700,779,f'{socket.gethostname().split(".")[0]}.local:{self.manager.web_port}/qrss',16,width=550)
+            x,y=16,76+i*360
+            self.ui.draw_logical_rect(x,y,x+1248,y+352,(17,34,42,255))
+            self.text(cache,x+12,y+17,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=890)
+            self.text(cache,x+936,y+17,item['capture_utc'][11:19]+' UTC · tap to enlarge',15,width=300)
+            self.draw_plot(cache,item,(x+8,y+34,x+1240,y+294),compact=True)
+            for n,line in enumerate(self.preview_lines(cache,item)):
+                self.text(cache,x+12,y+314+n*23,line,18,(217,233,238),width=1224)
+            self.actions.append(((x,y,x+1248,y+352),('image',item['id'])))
+        if self.message:self.text(cache,20,70,self.message,12,width=1220)
+
+    def preview_lines(self,cache,item):
+        tracks=[t for t in item.get('tracks',[]) if t.get('tentative_text')]
+        if tracks:
+            parts=[]
+            for track in tracks:
+                text=' '.join(track['tentative_text'].split())
+                parts.append(track['id']+': '+(('… '+text[-160:]) if len(text)>160 else text))
+            value='Tentative · '+'  |  '.join(parts)
+        else:value='Tentative · '+(' '.join(item.get('tentative_text','').split()) or 'Waiting for complete Morse characters…')
+        # Use two measured lines; the expanded view retains every track's text.
+        words=value.split();first=[]
+        while words:
+            candidate=' '.join(first+[words[0]])
+            if first and self.ui.fit_station_text(cache,candidate,1224,18,False,False,'Liberation Sans')!=candidate:break
+            first.append(words.pop(0))
+        return [' '.join(first),' '.join(words)]
 
     def draw_add(self,cache,receivers):
         p=self.preset
