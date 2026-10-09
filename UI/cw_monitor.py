@@ -83,7 +83,9 @@ class CWAssembler:
         if self.decoder:
             self.publish();self.decoder.close()
         self.decoder=CWDecoder(self.session.config);self.next_publish=0;self.started=time.time()
-        with self.session.lock:self.session.tracks=[]
+        with self.session.lock:
+            self.session.tracks=[];self.session.image_version=0;self.session.audio_seconds=0
+            self.session.capacity_limited=False
 
     def feed(self,pcm):
         self.decoder.feed(pcm)
@@ -106,7 +108,7 @@ class CWAssembler:
         with self.session.lock:
             self.session.capacity_limited=self.decoder.capacity_limited
             self.session.tracks=tracks
-            self.session.image_version+=1
+            if self.decoder.waterfall:self.session.image_version+=1
             self.session.audio_seconds=round(self.decoder.samples/RATE,1)
             self.session.last_decode=next((r['text'][-100:].strip() for r in tracks if r['text'].strip()),'')
 

@@ -12,7 +12,7 @@ sys.path[:0]=[str(Path(__file__).resolve().parents[1]/'UI'),str(Path(__file__).p
 from cw_modes import PRESETS,settings,center_offset
 from cw_fldigi import FldigiEngine,VirtualDisplay
 from cw_decoder import CWDecoder
-from cw_monitor import CWManager
+from cw_monitor import CWManager,CWSession,CWAssembler
 from test_cw import signal
 
 class SelectionTests(unittest.TestCase):
@@ -25,6 +25,19 @@ class SelectionTests(unittest.TestCase):
         self.assertAlmostEqual(old['freq_khz'],original['freq_khz'])
         for p in ({'engine':'invalid'},{'engine':'ggmorse','tone_hz':2500},{'engine':'fldigi','rf_khz':29999}):
             with self.assertRaises(ValueError):settings(p,original)
+
+    def test_no_stale_waterfall_after_reset_without_audio(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager=CWManager(None,'test',root)
+            config=dict(PRESETS[3],id='test',name='test',server='http://kiwi.local')
+            session=CWSession(config,None,manager.gallery,'test')
+            assembler=CWAssembler(session,manager.gallery)
+            assembler.feed(np.zeros(12000,dtype='<i2').tobytes())
+            self.assertGreater(session.image_version,0)
+            assembler.reset();assembler.publish();assembler.flush()
+            self.assertEqual(session.image_version,0)
+            self.assertEqual(session.audio_seconds,0)
+            manager.stop()
 
     def test_history_retains_engine_across_restart(self):
         with tempfile.TemporaryDirectory() as root:
