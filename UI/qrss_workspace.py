@@ -10,6 +10,10 @@ class QRSSWorkspace(SSTVWorkspace):
         super().__init__(ui,manager)
         self.preset=dict(PRESETS[2]);self.field=None;self.entry='';self.track_page=0
 
+    def image(self,key,box):
+        # Time and frequency axes scale independently within a stable plot box.
+        super().image(key,box,fill=True)
+
     def preview(self,cache,item,box):self.image(item['id'],box)
 
     def draw(self,cache,receivers):
@@ -57,19 +61,19 @@ class QRSSWorkspace(SSTVWorkspace):
         self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
         self.button(cache,(1102,14,1258,70),'HOME',('home',None))
         if self.decoders_open:self.draw_decoders(cache);return
-        pages=max(1,math.ceil(len(images)/4));self.page=min(self.page,pages-1)
+        pages=max(1,math.ceil(len(images)/2));self.page=min(self.page,pages-1)
         if not images:
             self.text(cache,120,300,'Add a QRSS receiver: waterfall and Morse text share one Kiwi channel.',23)
             self.text(cache,120,352,'Start with 30 m and AUTO to find a keyed signal and estimate its timing.',20)
             self.text(cache,120,402,'DFCW and other patterns remain visible; their text is not decoded.',20)
-        for i,item in enumerate(images[self.page*4:self.page*4+4]):
-            x,y=16+(i%2)*630,90+(i//2)*305
-            self.ui.draw_logical_rect(x,y,x+612,y+293,(17,34,42,255))
-            self.text(cache,x+12,y+22,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=590)
-            self.image(item['id'],(x+8,y+40,x+604,y+235))
-            self.text(cache,x+12,y+256,(f"{len(item['tracks'])} signals · tap for separate text" if item.get('tracks') else 'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…')),18,width=590)
-            self.text(cache,x+12,y+280,item['capture_utc'],15,width=590)
-            self.actions.append(((x,y,x+612,y+293),('image',item['id'])))
+        for i,item in enumerate(images[self.page*2:self.page*2+2]):
+            x,y=16,90+i*305
+            self.ui.draw_logical_rect(x,y,x+1248,y+293,(17,34,42,255))
+            self.text(cache,x+12,y+22,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=1224)
+            self.image(item['id'],(x+8,y+40,x+1240,y+235))
+            self.text(cache,x+12,y+256,(f"{len(item['tracks'])} signals · tap for separate text" if item.get('tracks') else 'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…')),18,width=1224)
+            self.text(cache,x+12,y+280,item['capture_utc'],15,width=1224)
+            self.actions.append(((x,y,x+1248,y+293),('image',item['id'])))
         self.button(cache,(16,730,168,786),'< PREV',('page',-1))
         self.text(cache,188,758,f'{self.page+1} / {pages}',19)
         self.button(cache,(282,730,434,786),'NEXT >',('page',1))

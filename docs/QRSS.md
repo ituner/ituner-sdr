@@ -91,12 +91,13 @@ and [QRP Labs mode descriptions](https://www.qrp-labs.com/qrsskitmm.html).
 
 ## Galleries and persistence
 
-The 1280 × 800 local gallery displays four captures with tentative text. Web
+The 1280 × 800 local gallery displays two full-width captures per page, one
+per row, with tentative text. Web
 and local editors control the same saved sessions: Add, Edit, Start, Stop and
 Remove. Web views can show all captures, latest per receiver, or captures with
 some tentative text. Click an image to enlarge it or download its PNG.
-The web gallery uses one full-width spectrogram per row, giving long captures
-more horizontal space. Plot and text areas keep stable heights during live
+The web gallery and enlarged viewer use the available browser width, with no
+fixed desktop width cap. Each gallery row contains one full-width spectrogram. Plot and text areas keep stable heights during live
 updates; long text scrolls inside its own area. Existing image nodes are reused
 and new pixels replace the old only after loading, including in the enlarged
 viewer. Receiver controls also update in place. All gallery views hold their
