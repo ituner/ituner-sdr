@@ -60,16 +60,18 @@ class QRSSAssembler:
         duration=self.times[-1]-self.start_sample
         draw.text((90,365),'Time ->   0 s',fill='white')
         draw.text((width+30,365),f'{duration:.0f} s',fill='white')
-        # Frequency labels are exact band edges only to the selected FFT bins.
-        # Crosshair marks the selected mark tone, not an automatic station pick.
         acquisition=dict(self.decoder.auto.status) if self.decoder.auto else {}
+        tracks=self.track_snapshot(self.start_sample,self.times[-1])
         if acquisition.get('state')=='locked':
             acquisition['rf_hz']=c['freq_khz']*1000+acquisition['tone_hz']
-            y=35+320*(center+half-acquisition['rf_hz'])/c['span_hz']
-            draw.line((86,y,98,y),fill=(255,150,40),width=2)
-            draw.text((400,13),f"AUTO {acquisition['mode']} {acquisition['dot_seconds']:.2f}s/dot",fill=(255,190,90))
+            for track in tracks:
+                if not track['active']:continue
+                y=35+320*(center+half-track['rf_hz'])/c['span_hz']
+                draw.line((86,y,98,y),fill=(255,150,40),width=2)
+                draw.text((101,y-10),track['id'],fill=(255,190,90))
+            draw.text((400,13),f"AUTO · {acquisition['track_count']} signals",fill=(255,190,90))
         else:draw.line((86,195,94,195),fill=(255,150,40),width=2)
-        text=''.join(char for t,char in self.decoder.morse.events if self.start_sample<=t<=self.times[-1]).strip()
+        text=self.track_text(tracks) if tracks else ''.join(char for t,char in self.decoder.morse.events if self.start_sample<=t<=self.times[-1]).strip()
         path=self.gallery.root/(self.key+'.working.png');canvas.save(path)
         item=dict(id=self.key,session_id=c['id'],receiver=c['name'],server=c['server'],
             band=c['band'],freq_khz=c['freq_khz'],tone_hz=c['tone_hz'],rf_hz=center,
@@ -79,18 +81,37 @@ class QRSSAssembler:
             received_at=self.started,updated_ns=time.time_ns(),has_image=True,
             duration_seconds=round(duration,1),width=canvas.width,height=canvas.height,
             stream_id=self.stream_id,sample_start=self.start_sample,sample_end=self.times[-1],
-            acquisition=acquisition,tentative_text=text[-500:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
+            acquisition=acquisition,tracks=tracks,tentative_text=text[-4000:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
         self.gallery.publish(path,item)
         # A slow signal can be acquired after a capture rolled over. Fill text
         # into those recent captures too, without changing their images.
-        if self.decoder.auto and self.decoder.auto.events:
+        if self.decoder.auto and self.decoder.auto.tracks:
             with self.gallery.lock:
                 for row in self.gallery.items:
                     if row.get('stream_id')!=self.stream_id or row['id']==self.key:continue
-                    old_text=''.join(char for t,char in self.decoder.auto.events if row['sample_start']<=t<=row['sample_end']).strip()
-                    if old_text and old_text!=row.get('tentative_text'):
-                        row.update(tentative_text=old_text[-500:],acquisition=acquisition,updated_ns=time.time_ns())
+                    updates=self.track_snapshot(row['sample_start'],row['sample_end'])
+                    # Tracks no longer in bounded acquisition history still
+                    # belong to saved captures. Refresh only known IDs.
+                    merged={r['id']:r for r in row.get('tracks',[]) if r['id'] not in self.decoder.auto.superseded}
+                    merged.update({r['id']:r for r in updates if r['tentative_text'] or r['id'] in merged})
+                    old_tracks=sorted(merged.values(),key=lambda r:r['tone_hz'],reverse=True)
+                    old_text=self.track_text(old_tracks)
+                    if old_tracks!=row.get('tracks',[]):
+                        row.update(tracks=old_tracks,tentative_text=old_text[-4000:],updated_ns=time.time_ns())
                         atomic_json(self.gallery.root/(row['id']+'.json'),row)
+
+    def track_snapshot(self,start,end):
+        if not self.decoder.auto:return []
+        rows=self.decoder.auto.snapshot(start,end)
+        for row in rows:row['rf_hz']=self.session.config['freq_khz']*1000+row['tone_hz']
+        return rows
+
+    @staticmethod
+    def track_text(tracks):
+        # Compatibility summary also carries identity; never concatenate
+        # unrelated stations into what looks like one Morse message.
+        return '\n'.join(f"{r['id']} {r['rf_hz']/1e6:.6f} MHz ({r['dot_seconds']:g} s/dot): {r['tentative_text']}"
+            for r in tracks if r['tentative_text'])
 
     def flush(self):
         if self.columns:self.publish('saved')

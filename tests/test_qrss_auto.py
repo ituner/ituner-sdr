@@ -38,6 +38,19 @@ def transmit(dot=4.3,mode='FSKCW',reverse=False,tone=1585,shift=10,noise=.005,ca
             yield (np.clip(signal,-1,1)*32767).astype('<i2').tobytes()
 
 
+def keying(t,dot,text='SOS A SOS'):
+    codes={'S':'...','O':'---','A':'.-'}
+    lengths=[7];states=[False]
+    for letter in text:
+        if letter==' ':lengths[-1]=7;continue
+        for symbol in codes[letter]:
+            lengths.extend([1 if symbol=='.' else 3,1]);states.extend([True,False])
+        lengths[-1]=3
+    lengths[-1]=10
+    edges=np.cumsum(lengths)*dot
+    return np.array(states)[np.searchsorted(edges,np.asarray(t)%edges[-1],side='right')]
+
+
 class AutoTests(unittest.TestCase):
     def test_off_center_unknown_speed_shift_and_reverse(self):
         for mode,reverse,dot in [('FSKCW',False,4.3),('FSKCW',True,7.2),('CW',False,4.3),('FSKCW',False,30)]:
@@ -52,6 +65,67 @@ class AutoTests(unittest.TestCase):
                 if mode=='FSKCW':self.assertAlmostEqual(status['shift_hz'],10,delta=1)
                 self.assertIn('SOS', ''.join(c for t,c in d.morse.events))
 
+    def test_three_raw_audio_stations_with_independent_cadences_and_levels(self):
+        # Strong FSK, 18 dB weaker reversed FSK, 24 dB weaker CW, plus
+        # a louder unkeyed carrier. All share one actual PCM/FFT stream.
+        d=QRSSDecoder(dict(PRESETS[2],qrss_mode='AUTO'))
+        rng=np.random.default_rng(718);phases=[0.,0.,0.]
+        specs=[(1585,4.3,.24,'FSKCW',False),(1485,7.2,.03,'FSKCW',True),(1435,12.5,.015,'CW',False)]
+        identities={}
+        for sec in range(720):
+            t=sec+np.arange(12000)/12000
+            pcm=rng.normal(0,.005,12000)+.32*np.sin(2*np.pi*1540*t)
+            for i,(tone,dot,amp,mode,reverse) in enumerate(specs):
+                marks=keying(t,dot)
+                freq=tone-10*(marks==reverse) if mode=='FSKCW' else np.full(len(t),tone)
+                phase=phases[i]+np.cumsum(2*np.pi*freq/12000)
+                pcm+=amp*np.sin(phase)*(marks if mode=='CW' else 1)
+                phases[i]=phase[-1]%(2*np.pi)
+            d.feed((pcm*32767).astype('<i2').tobytes())
+            if sec==500:identities={round(r['tone_hz']):r['id'] for r in d.auto.tracks if r['active']}
+        rows=[r for r in d.auto.tracks if r['active']]
+        self.assertEqual(len(rows),3,[(r['mode'],r['tone_hz'],r['dot']) for r in rows])
+        for tone,dot,amp,mode,reverse in specs:
+            mark=tone-10 if reverse else tone
+            row=min(rows,key=lambda r:abs(r['tone_hz']-mark))
+            self.assertAlmostEqual(row['tone_hz'],mark,delta=1)
+            self.assertAlmostEqual(row['dot'],dot,delta=.5)
+            self.assertEqual(row['mode'],mode)
+            self.assertIn('SOS',''.join(c for t,c in row['events']))
+            self.assertEqual(row['id'],identities[round(row['tone_hz'])])
+        # Taking one station away must not interrupt the other cadences or
+        # erase that station's already decoded text.
+        removed=min(rows,key=lambda r:abs(r['tone_hz']-1585))['id']
+        before={r['id']:r['dot'] for r in rows}
+        for sec in range(720,930):
+            t=sec+np.arange(12000)/12000;pcm=rng.normal(0,.005,12000)
+            for i,(tone,dot,amp,mode,reverse) in enumerate(specs[1:],1):
+                marks=keying(t,dot)
+                freq=tone-10*(marks==reverse) if mode=='FSKCW' else np.full(len(t),tone)
+                phase=phases[i]+np.cumsum(2*np.pi*freq/12000)
+                pcm+=amp*np.sin(phase)*(marks if mode=='CW' else 1);phases[i]=phase[-1]%(2*np.pi)
+            d.feed((pcm*32767).astype('<i2').tobytes())
+        active=[r for r in d.auto.tracks if r['active']]
+        self.assertEqual(len(active),2)
+        self.assertNotIn(removed,[r['id'] for r in active])
+        self.assertTrue(any(r['id']==removed and r['tentative_text'] for r in d.auto.snapshot(0,930)))
+        for r in active:self.assertAlmostEqual(r['dot'],before[r['id']],delta=.5)
+
+    def test_nearby_unrelated_cw_is_not_paired_and_track_limit(self):
+        frequencies=np.arange(1400.,1600.,.75)
+        a=AutoAcquisition(frequencies,MorseTiming,.5)
+        rng=np.random.default_rng(418)
+        for k in range(1600):
+            t=k*.5;db=rng.normal(0,2,len(frequencies))
+            for j in range(8):
+                if keying(t,3+j*.7):db[abs(frequencies-(1420+10*j))<1]=20+j*2
+            a.feed(t,db)
+        rows=[r for r in a.tracks if r['active']]
+        self.assertEqual(len(rows),a.MAX_TRACKS)
+        self.assertTrue(all(r['mode']=='CW' for r in rows))
+        self.assertEqual(len(set(r['id'] for r in rows)),a.MAX_TRACKS)
+        a.reset();self.assertFalse(a.tracks)
+
     def test_late_acquisition_backfills_saved_captures(self):
         import tempfile
         from qrss_monitor import QRSSManager,QRSSSession,QRSSAssembler
@@ -65,6 +139,39 @@ class AutoTests(unittest.TestCase):
             early=[r for r in m.image_snapshot() if r['sample_end']<100]
             self.assertTrue(any('S' in r['tentative_text'] for r in early),early)
             m.stop()
+
+    def test_multiple_track_text_survives_capture_rollover_and_reload(self):
+        import tempfile,time,uuid
+        from qrss_monitor import QRSSManager,QRSSSession,QRSSAssembler
+        with tempfile.TemporaryDirectory() as root:
+            m=QRSSManager(None,'test',root)
+            c=dict(PRESETS[2],id='test',name='Synthetic multi-signal',server='http://kiwi.local')
+            a=QRSSAssembler(QRSSSession(c,None,m.gallery,'test'),m.gallery)
+            freq=a.decoder.frequencies
+            rng=np.random.default_rng(75)
+            for k in range(1600):
+                t=k*.5;db=rng.normal(0,2,len(freq))
+                for f,dot in [(1585,4.3),(1465,12.5)]:
+                    mark=keying(t,dot);db[abs(freq-(f if mark else f-10))<1]=30
+                a.decoder.auto.feed(t,db)
+                if a.key is None:
+                    a.key=uuid.uuid4().hex;a.start_sample=t;a.started=time.time()
+                a.times.append(t);a.columns.append(db)
+                if k%400==399:a.flush()
+            rows=m.image_snapshot()
+            self.assertEqual(len(rows),4)
+            self.assertTrue(any(len(r['tracks'])==2 for r in rows))
+            ids={r['id'] for row in rows for r in row['tracks']}
+            self.assertEqual(len(ids),2)
+            for row in rows:
+                for r in row['tracks']:
+                    self.assertAlmostEqual(r['rf_hz'],c['freq_khz']*1000+r['tone_hz'])
+                    if r['tentative_text']:
+                        self.assertIn(r['id']+' ',row['tentative_text'])
+                        self.assertIn(r['tentative_text'],row['tentative_text'])
+            restored=QRSSManager(None,'test',root)
+            self.assertEqual({r['id']:r['tracks'] for r in restored.image_snapshot()},{r['id']:r['tracks'] for r in rows})
+            restored.stop();m.stop()
 
     def test_noise_and_steady_carriers_do_not_lock(self):
         rng=np.random.default_rng(84)

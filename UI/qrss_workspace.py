@@ -8,7 +8,7 @@ from qrss_modes import PRESETS, DOTS, KINDS, settings
 class QRSSWorkspace(SSTVWorkspace):
     def __init__(self,ui,manager):
         super().__init__(ui,manager)
-        self.preset=dict(PRESETS[2]);self.field=None;self.entry=''
+        self.preset=dict(PRESETS[2]);self.field=None;self.entry='';self.track_page=0
 
     def preview(self,cache,item,box):self.image(item['id'],box)
 
@@ -32,10 +32,24 @@ class QRSSWorkspace(SSTVWorkspace):
             if item:
                 self.text(cache,24,34,f"QRSS · {item['band']} · {item['rf_hz']/1e6:.6f} MHz",25)
                 self.text(cache,24,78,item['receiver']+' · '+item['capture_utc'],18,width=1200)
-                self.image(item['id'],(20,115,1260,620))
-                self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
-                self.text(cache,24,696,item.get('tentative_text') or 'No text recognized yet',23,width=1210)
-                self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
+                tracks=item.get('tracks',[])
+                if tracks:
+                    self.image(item['id'],(20,115,1260,500))
+                    self.text(cache,24,529,'TENTATIVE TEXT · independent signal frequencies and dot timing',19,(104,234,194))
+                    pages=max(1,math.ceil(len(tracks)/6));self.track_page=min(self.track_page,pages-1)
+                    for j,r in enumerate(tracks[self.track_page*6:self.track_page*6+6]):
+                        label=f"{r['id']} · {r['rf_hz']/1e6:.6f} MHz · {r['mode']} · {r['dot_seconds']:g} s/dot"
+                        self.text(cache,24,564+j*28,label,17,width=570)
+                        self.text(cache,608,564+j*28,r['tentative_text'] or 'Waiting for a complete character…',19,width=640)
+                    self.text(cache,24,767,f'{len(tracks)} signals · text {self.track_page+1}/{pages}',18)
+                    if pages>1:
+                        self.button(cache,(720,733,972,788),'< TEXT',('track_page',-1))
+                        self.button(cache,(990,733,1258,788),'TEXT >',('track_page',1))
+                else:
+                    self.image(item['id'],(20,115,1260,620))
+                    self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
+                    self.text(cache,24,696,item.get('tentative_text') or 'No text recognized yet',23,width=1210)
+                    self.text(cache,24,745,item.get('acquisition',{}).get('detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
                 self.button(cache,(1060,16,1258,76),'BACK',('back_image',None));return
             self.enlarged=None
         self.text(cache,20,36,'QRSS · waterfall + text',27,(104,234,194))
@@ -53,7 +67,7 @@ class QRSSWorkspace(SSTVWorkspace):
             self.ui.draw_logical_rect(x,y,x+612,y+293,(17,34,42,255))
             self.text(cache,x+12,y+22,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=590)
             self.image(item['id'],(x+8,y+40,x+604,y+235))
-            self.text(cache,x+12,y+256,'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…'),18,width=590)
+            self.text(cache,x+12,y+256,(f"{len(item['tracks'])} signals · tap for separate text" if item.get('tracks') else 'Tentative: '+(item.get('tentative_text') or 'Waiting for Morse…')),18,width=590)
             self.text(cache,x+12,y+280,item['capture_utc'],15,width=590)
             self.actions.append(((x,y,x+612,y+293),('image',item['id'])))
         self.button(cache,(16,730,168,786),'< PREV',('page',-1))
@@ -84,7 +98,7 @@ class QRSSWorkspace(SSTVWorkspace):
             x=24+i*312
             self.button(cache,(x,399,x+300,454),('FSK shift: AUTO' if key=='shift_hz' and p['qrss_mode']=='AUTO' else f'{label}: {p[key]:g}'),('noop',None) if key=='shift_hz' and p['qrss_mode']=='AUTO' else ('number',key))
         self.text(cache,24,480,'AUTO: searches the full span and learns frequency, shift, polarity and dot time' if p['qrss_mode']=='AUTO' else 'Seconds per dot · match the signal for tentative text',18)
-        if p['qrss_mode']=='AUTO':self.text(cache,24,529,'One signal at a time · allow several Morse characters for acquisition',20,(104,234,194))
+        if p['qrss_mode']=='AUTO':self.text(cache,24,529,'Up to six signals with independent timing · one Kiwi channel',20,(104,234,194))
         for i,dot in enumerate(() if p['qrss_mode']=='AUTO' else DOTS):
             x=24+i*246
             self.button(cache,(x,499,x+234,551),f'{dot} s',('set',('dot_seconds',dot)),active=p['dot_seconds']==dot)
@@ -103,7 +117,8 @@ class QRSSWorkspace(SSTVWorkspace):
         if not action:return
         key,value=action
         try:
-            if key=='set':
+            if key=='track_page':self.track_page=max(0,self.track_page+value)
+            elif key=='set':
                 updated=dict(self.preset,**{value[0]:value[1]});self.preset.update(settings(updated,updated))
             elif key=='number':self.field=value;self.entry='';self.message=''
             elif key=='digit':self.entry=(self.entry+value)[:12]
@@ -116,5 +131,7 @@ class QRSSWorkspace(SSTVWorkspace):
                 row=next(r for r in self.manager.configs if r['id']==value)
                 self.preset=dict(row);self.edit_id=value;self.selected_server=row['server'];self.add_open=True;self.delete_armed=None
                 self.receiver_page=next((i//2 for i,r in enumerate(receivers) if self.ui.station_fields(r)[2]==row['server']),0)
-            else:super().tap(x,y,receivers)
+            else:
+                if key=='image':self.track_page=0
+                super().tap(x,y,receivers)
         except (ValueError,StopIteration,OSError) as exc:self.message=str(exc) or 'Capture no longer available'

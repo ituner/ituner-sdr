@@ -247,3 +247,12 @@ All five automatic-acquisition tests pass on CM5, including the saved-raster
 regression and a short real PCM spectrum fixture. The full local suite runs
 99 tests, with 96 passing and three optional dependency skips. Boot/display/audio
 configuration remains unchanged; the application has no automatic restarts.
+
+
+The multi-signal QRSS update replaces the same `qrss_*` modules and follows up
+to six independent signals from one audio stream. The CM5 backup is
+`/var/backups/ituner-sdr/before-qrss-multi-20261009-025826`. Sixteen QRSS tests
+passed on CM5, including concurrent unequal-level CW/FSKCW, independent
+cadences, track limits, signal loss, and saved multi-track text. The full local
+suite passed 102 tests with three optional dependency skips. The 1280×800
+enlarged view shows six separate text rows, with paging for recent tracks.

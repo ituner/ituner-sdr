@@ -8,24 +8,32 @@ needed for text. Existing WSPR, SSTV and Hell receivers remain independent.
 ## Automatic acquisition (default for new receivers)
 
 Choose **AUTO** in the receiver editor. It searches the displayed frequency
-span for a keyed CW carrier or a complementary FSK tone pair, estimates dot
-duration from mark/space runs, and tries both FSK polarities. No manual mark
+span for up to **six simultaneous signals**: keyed CW carriers or complementary
+FSK tone pairs. Each track estimates its own dot duration from mark/space runs
+and tries both FSK polarities. Fast and slow stations can be decoded together. No manual mark
 frequency, shift or dot setting is needed. The band/audio center remains the
 center of the search window, not necessarily the detected station.
 
 The receiver reports **Searching** until it has enough consistent transitions,
-then **Locked** with mode, frequency, FSK shift and estimated seconds per dot.
-Allow several characters: slow stations may take minutes. The orange marker
-moves to the detected mark frequency. A stronger continuous carrier is not
+then lists independently acquired tracks with mode, frequency, FSK shift and
+estimated seconds per dot.
+Allow several characters: slow stations may take minutes. Orange markers label each acquired mark frequency with a track ID. A stronger continuous carrier is not
 preferred over a keyed signal. After a signal disappears it searches again.
-It selects **one signal at a time**, not every transmitter in the waterfall.
+Each complementary FSK pair owns both tones and is decoded only once. Up to
+24 spectral peaks are considered; the best six non-overlapping candidates are
+tracked. This is a bounded search, not a promise to decode every visible trace.
+Track IDs remain stable as relative signal strengths change and are local to
+one uninterrupted receiver stream. Recent faded tracks retain their text;
+up to 12 active/recent tracks are held in memory.
 Short sequences can leave polarity or speed ambiguous; text stays tentative.
 When both FSK polarities fit almost equally well, higher-tone marks are preferred;
 stronger timing evidence, such as long word gaps, can override that preference.
 
 A bounded 20-minute spectrum history is revisited approximately every ten
 seconds. Morse's 1:3:7 element/gap timing is fitted continuously, including
-fractional dot times such as 4.3 seconds. Buffered observations are replayed
+fractional dot times such as 4.3 seconds. Brief glitches shorter than a quarter
+of a fitted dot are filtered separately for each track, without bridging
+unknown carrier loss. Buffered observations are replayed
 after acquisition. Recent captures from the same uninterrupted stream can gain
 text after they were saved; older images from before this software update are
 not retrospectively decoded. Audio discontinuities discard the acquisition
@@ -45,6 +53,8 @@ This fixture reconstructs observations from a rendered PNG, not raw RF/audio,
 and does not prove a station identity or calibrated sensitivity. A second
 fixture contains FFT observations from a 120-second live PCM capture and
 checks the tentative fragment AB without supplied tuning or timing.
+
+![Six independent synthetic QRSS signals on the local display](images/qrss-multi-track.png)
 
 ## Manual receiving and waterfall
 
@@ -85,6 +95,10 @@ The 1280 × 800 local gallery displays four captures with tentative text. Web
 and local editors control the same saved sessions: Add, Edit, Start, Stop and
 Remove. Web views can show all captures, latest per receiver, or captures with
 some tentative text. Click an image to enlarge it or download its PNG.
+Web cards and the enlarged local view show separate text rows labelled with
+track ID, RF frequency and dot timing. The local enlarged view pages through
+six text rows at a time. Text from different stations is never joined into one
+message. Manual modes and older captures keep their single-text display.
 
 Live images update approximately every five seconds. Choose 5, 10, 20 or 30
 minutes per capture. Text timing continues across image boundaries. Audio gaps
@@ -116,7 +130,10 @@ external decoder executable or model download is needed.
 Validation includes independently generated CW/FSKCW with all five dot speeds,
 reversed FSK, random chunk boundaries, silence, noise, continuous carrier,
 interrupted audio, image rollover, persistent settings/text and shared web/local
-controls. Passing generated-signal tests is not evidence of an on-air station.
+controls. Multi-signal tests mix strong FSK, reversed FSK 18 dB weaker and CW
+24 dB weaker at 4.3/7.2/12.5 seconds per dot, with a louder continuous carrier.
+They also check separate nearby CW signals, track limits, stable IDs, signal
+loss, and persistence of independent text through capture rollover. Passing generated-signal tests is not evidence of an on-air station.
 
 The main UI includes QRSS directly. On the existing PR12 CM5 UI, the incremental
 compatibility patch is `hardware/cm5/sstv/qrss-ui.patch`, applied after

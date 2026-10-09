@@ -44,7 +44,29 @@ def timing(states,times):
     return None if best is None else dict(dot=best[1],fit=best[2],loss=best[0],runs=len(values))
 
 
+def fit_timing(states,times):
+    """Fit first, then reject dropouts too short for this station's cadence.
+
+    A strong neighbor's keying edge can briefly lift the band noise floor.
+    Filtering uses the individual dot estimate, never a shared fixed speed.
+    Unknown carrier-loss states are not bridged into invented Morse elements.
+    """
+    fit=timing(states,times)
+    if fit is None:return states,None
+    cleaned=states.copy()
+    edges=np.r_[0,np.flatnonzero(np.diff(states)!=0)+1,len(states)]
+    for k in range(1,len(edges)-2):
+        a,b=edges[k:k+2]
+        if times[b]-times[a]>=.25*fit['dot']:continue
+        if states[a]>=0 and states[a-1]>=0 and states[a-1]==states[b]:cleaned[a:b]=states[a-1]
+    refined=timing(cleaned,times)
+    return (cleaned,refined) if refined is not None else (states,fit)
+
+
 class AutoAcquisition:
+    MAX_TRACKS = 6
+    MAX_RECENT = 12
+
     def __init__(self,frequencies,morse_factory,hop_seconds):
         self.frequencies=np.asarray(frequencies)
         self.df=float(np.median(np.diff(frequencies)))
@@ -55,6 +77,7 @@ class AutoAcquisition:
     def reset(self):
         self.history=deque(maxlen=self.capacity);self.times=deque(maxlen=self.capacity)
         self.next_analysis=0;self.lock=None
+        self.tracks=[];self.next_track_id=1;self.superseded=deque(maxlen=128)
         self.events=deque(maxlen=2000)
         self.status=dict(state='searching',detail='Searching the waterfall for a keyed signal')
 
@@ -75,7 +98,7 @@ class AutoAcquisition:
     def analyze(self):
         times=np.array(self.times);data=np.stack(self.history)
         strength=np.percentile(data,85,axis=0)
-        # Maximum twelve local maxima, separated by >= three bins.
+        # Bounded search includes weaker peaks, not only the loudest station.
         peaks=[]
         for i in np.argsort(strength)[::-1]:
             if strength[i]<12:break
@@ -83,7 +106,7 @@ class AutoAcquisition:
             if any(abs(i-j)<=2 for j in peaks):continue
             if strength[i]<max(strength[i-1],strength[i+1]):continue
             peaks.append(int(i))
-            if len(peaks)==12:break
+            if len(peaks)==24:break
         envelopes={i:np.max(data[:,max(0,i-1):i+2],axis=1) for i in peaks}
         candidates=[]
         for a,i in enumerate(peaks):
@@ -102,7 +125,7 @@ class AutoAcquisition:
                 # allow better timing evidence to override that small prior.
                 for reverse in (False,True):
                     seq=np.where(states<0,-1,1-states) if reverse else states
-                    fit=timing(seq,times)
+                    seq,fit=fit_timing(seq,times)
                     if not fit:continue
                     level=min(float(np.median(high[states==1])),float(np.median(low[states==0])))
                     mark_bin,space_bin=(j,i) if reverse else (i,j)
@@ -115,7 +138,7 @@ class AutoAcquisition:
             # a continuously transmitting carrier's strength.
             if np.mean(high<6)<.15 or np.mean(high>12)<.08:continue
             threshold=max(9,float(np.percentile(high,85))-6)
-            states=self.clean((high>threshold).astype(int));fit=timing(states,times)
+            states,fit=fit_timing(self.clean((high>threshold).astype(int)),times)
             if fit:
                 level=float(np.median(high[high>12]))
                 candidates.append(dict(fit,mode='CW',mark=i,space=None,states=states,
@@ -132,33 +155,85 @@ class AutoAcquisition:
             if row['space'] is not None:active|=envelopes[row['space']]>10
             if np.any(active&tail):fresh.append(row)
         candidates=fresh
-        # Keep a good current signal rather than jump whenever another peaks.
+        # Prefer existing tracks slightly, without binding one station to
+        # another station's cadence or keeping a stale signal selected.
+        previous=[r for r in self.tracks if r['active']]
         for row in candidates:
-            if self.lock and row['mode']==self.lock['mode'] and min(abs(self.frequencies[row['mark']]-self.lock['tone_hz']),abs(self.frequencies[row['mark']]-self.lock['space_hz']))<3:
-                row['score']+=.08
-        best=max(candidates,key=lambda r:r['score'],default=None)
-        if best is None:
-            self.status=dict(state='searching',detail='Searching: waiting for consistent Morse transitions')
+            if any(self.matches(row,track) for track in previous):row['score']+=.08
+        selected=[];occupied=[]
+        for row in sorted(candidates,key=lambda r:r['score'],reverse=True):
+            bins=[row['mark']]+([] if row['space'] is None else [row['space']])
+            # A complementary FSK pair owns BOTH tones. Never emit it again
+            # as reverse polarity, two CW tracks, or a nearby spectral peak.
+            if any(abs(i-j)<=2 for i in bins for j in occupied):continue
+            selected.append(row);occupied.extend(bins)
+            if len(selected)>=self.MAX_TRACKS:break
+        for track in self.tracks:track['active']=False
+        used=set();active=[]
+        for row in selected:
+            matches=[r for r in self.tracks if r['id'] not in used and self.matches(row,r)]
+            track=min(matches,key=lambda r:abs(r['tone_hz']-self.frequencies[row['mark']]),default=None)
+            tone=float(self.frequencies[row['mark']])
+            space=tone if row['space'] is None else float(self.frequencies[row['space']])
+            same=track is not None and abs(tone-track['tone_hz'])<3
+            if track is None:
+                track=dict(id=f"T{self.next_track_id}",events=deque(maxlen=2000))
+                self.next_track_id+=1;self.tracks.append(track)
+            decoder=self.factory(row['dot'])
+            for t,state in zip(times,row['states']):decoder.feed(None if state<0 else bool(state),float(t))
+            boundary=times[0]+20*row['dot'] if times[0]>2 else times[0]
+            older=[e for e in track['events'] if e[0]<boundary] if same else []
+            replay=[e for e in decoder.events if not older or e[0]>=boundary]
+            track.update(mode=row['mode'],tone_hz=tone,space_hz=space,
+                shift_hz=abs(tone-space),dot=row['dot'],timing_fit=round(row['fit'],2),
+                reverse=bool(tone<space),active=True,last_seen=float(times[-1]),
+                events=deque(older+replay,maxlen=2000))
+            used.add(track['id']);active.append(track)
+        # Retain recent text after a signal fades. Both history and bookkeeping
+        # remain bounded even if stations repeatedly enter and leave the span.
+        for r in self.tracks:
+            if not r['active'] and any(min(abs(f-r['tone_hz']),abs(f-r['space_hz']))<=2*self.df for f in self.frequencies[occupied]):
+                self.superseded.append(r['id'])
+        recent=sorted((r for r in self.tracks if not r['active'] and r['id'] not in self.superseded and
+            times[-1]-r['last_seen']<1200),key=lambda r:r['last_seen'],reverse=True)
+        self.tracks=active+recent[:self.MAX_RECENT-len(active)]
+        if not active:
             self.lock=None
+            self.status=dict(state='searching',track_count=0,detail='Searching: waiting for consistent Morse transitions')
             return
-        tone=float(self.frequencies[best['mark']]);space=best['space']
-        shift=0. if space is None else abs(tone-float(self.frequencies[space]))
-        # Old observations must not masquerade as a currently locked signal.
-        tail=times>=times[-1]-max(90,best['dot']*12)
-        active=(envelopes[best['mark']]>10)
-        if space is not None:active|=envelopes[space]>10
-        if not np.any(active&tail):
-            self.lock=None;self.status=dict(state='searching',detail='Signal faded; searching again');return
-        same=self.lock is not None and self.lock['mode']==best['mode'] and abs(tone-self.lock['tone_hz'])<3
-        decoder=self.factory(best['dot'])
-        for t,state in zip(times,best['states']):decoder.feed(None if state<0 else bool(state),float(t))
-        # Replay only within this history, replacing provisional decisions.
-        boundary=times[0]+20*best['dot'] if times[0]>2 else times[0]
-        older=[e for e in self.events if e[0]<boundary] if same else []
-        replay=[e for e in decoder.events if not older or e[0]>=boundary]
-        self.events=deque(older+replay,maxlen=2000)
-        self.lock=dict(mode=best['mode'],tone_hz=tone,shift_hz=shift,space_hz=tone if space is None else float(self.frequencies[space]),dot=best['dot'])
-        self.status=dict(state='locked',mode=best['mode'],tone_hz=round(tone,2),
-            shift_hz=round(shift,2),dot_seconds=round(best['dot'],2),
-            timing_fit=round(best['fit'],2),reverse=bool(space is not None and tone<self.frequencies[space]),
-            detail=f"Auto {best['mode']} · {tone:.2f} Hz audio · {best['dot']:.2f} s/dot · shift {shift:.2f} Hz")
+        # Single-track fields stay compatible with saved captures and manual
+        # callers. Multi-signal text is ALWAYS stored separately, never mixed.
+        best=active[0]
+        self.events=best['events']
+        self.lock={k:best[k] for k in ('mode','tone_hz','space_hz','shift_hz','dot')}
+        self.status=self.track_status(best)
+        self.status.update(state='locked',track_count=len(active),
+            detail='Auto · '+str(len(active))+' signal'+('s' if len(active)!=1 else '')+' · '+
+            ' / '.join(f"{r['id']} {r['tone_hz']:.1f} Hz {r['dot']:.2f} s/dot" for r in active))
+
+    def matches(self,row,track):
+        if row['mode']!=track['mode']:return False
+        tone=float(self.frequencies[row['mark']])
+        space=tone if row['space'] is None else float(self.frequencies[row['space']])
+        # Pair identity survives a polarity correction; its provisional text
+        # does not (the replay above then replaces it).
+        old=sorted([track['tone_hz'],track['space_hz']]);new=sorted([tone,space])
+        return max(abs(a-b) for a,b in zip(old,new))<3
+
+    @staticmethod
+    def track_status(track):
+        return dict(id=track['id'],mode=track['mode'],tone_hz=round(track['tone_hz'],2),
+            shift_hz=round(track['shift_hz'],2),dot_seconds=round(track['dot'],2),
+            timing_fit=track['timing_fit'],reverse=track['reverse'],active=track['active'])
+
+    def snapshot(self,start,end):
+        """Independent text for a capture interval; times are stream seconds."""
+        result=[]
+        for track in sorted(self.tracks,key=lambda r:r['tone_hz'],reverse=True):
+            events=[(t,c) for t,c in track['events'] if start<=t<=end]
+            text=''.join(c for t,c in events).strip()
+            if not text and not track['active']:continue
+            row=self.track_status(track)
+            row.update(tentative_text=text[-500:])
+            result.append(row)
+        return result
