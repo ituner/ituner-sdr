@@ -30,6 +30,7 @@ from openwebrx_recorder import (
     SyncedImaAdpcmDecoder,
     WebSocket,
 )
+from receiver_catalog import ReceiverCapabilities
 
 
 class OpenWebRxError(RuntimeError):
@@ -152,6 +153,43 @@ class OpenWebRxSession:
         except (KeyError, TypeError, ValueError):
             return None
 
+    @property
+    def effective_frequency_hz(self) -> Optional[float]:
+        """Frequency accepted by the active profile after initial negotiation."""
+        return self.frequency_hz
+
+    def advertised_modes(self) -> tuple:
+        """Map the server's advertised demodulators onto implemented modes."""
+        advertised = self.config.get("modes")
+        if isinstance(advertised, (list, tuple)):
+            mapped = tuple(
+                str(mode).lower() for mode in advertised
+                if str(mode).lower() in DEFAULT_FILTERS
+            )
+            if mapped:
+                return mapped
+        return tuple(sorted(DEFAULT_FILTERS))
+
+    def negotiated_capabilities(self) -> ReceiverCapabilities:
+        """Describe what this OpenWebRX server actually negotiated.
+
+        The profile window (``center_freq`` +/- ``samp_rate``/2) bounds tuning
+        and the waterfall pan; passband stays per-session. Until the config
+        arrives the range is empty rather than guessed.
+        """
+        center = self.center_frequency_hz
+        sample_rate = self.sample_rate_hz or 0.0
+        if center is None or sample_rate <= 0:
+            ranges = ()
+        else:
+            ranges = (((center - sample_rate / 2.0) / 1000.0,
+                       (center + sample_rate / 2.0) / 1000.0),)
+        return ReceiverCapabilities.openwebrx(
+            modes=self.advertised_modes(),
+            frequency_ranges_khz=ranges,
+            source_span_khz=sample_rate / 1000.0,
+        )
+
     def connect(self) -> None:
         self.close()
         self.ws = WebSocket.connect(self.endpoint, timeout=self.connect_timeout)
@@ -195,13 +233,21 @@ class OpenWebRxSession:
         center = self.center_frequency_hz
         if center is None:
             raise OpenWebRxError("receiver did not provide center_freq")
-        if self.frequency_hz is not None:
-            return self.frequency_hz
         sample_rate = self.sample_rate_hz or 0.0
         start_offset = float(self.config.get("start_offset_freq", 0.0) or 0.0)
         if sample_rate and abs(start_offset) > sample_rate / 2:
             start_offset = 0.0
-        return center + start_offset
+        requested = self.frequency_hz
+        # Receiver switches commonly carry a frequency from an unrelated
+        # Kiwi or FM-DX band. OpenWebRX announces its active profile only
+        # after the socket opens, so use that profile's browser default when
+        # the carried frequency cannot exist in its capture window.
+        if requested is None or (
+            sample_rate and abs(float(requested) - center) > sample_rate / 2
+        ):
+            requested = center + start_offset
+        self.frequency_hz = float(requested)
+        return self.frequency_hz
 
     def _send_dsp_control(self) -> None:
         if self.ws is None:

@@ -1,5 +1,10 @@
 # SSTV on the existing CM5 PR #12 installation
 
+**Historical deployment record:** the October consolidation combines PR #12
+and the current decoders directly in `UI/kiwi_gl_display.py`. New installations
+use the shared source and must not apply the patches below on top of it.
+See [the consolidation record](../../../docs/consolidation-2026-10.md).
+
 CM5 was updated on 2026-10-05 with the SSTV source from commit `4083d38` while
 retaining its installed PR #12 (`de457b1b2889d12fd25f4ad8c87c5f453bb04088`) UI,
 FM-DX support, audio setup and display/touch configuration.

@@ -1,0 +1,19 @@
+[Unit]
+Description=CM5 overnight hang flight recorder
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/ituner-sdr/cm5-hang-watcher.py --interval 10
+Restart=always
+RestartSec=2
+StateDirectory=ituner-sdr
+LogsDirectory=ituner-sdr
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/ituner-sdr /var/log/ituner-sdr
+
+[Install]
+WantedBy=multi-user.target

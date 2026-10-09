@@ -6,6 +6,12 @@ PR #9 and accepted on both machines on 2026-09-27. PR #8 three-knob controls are
 not included. See [the baseline guide](docs/consolidated-baseline.md) and
 [validation results](docs/cm5-pr9-validation.md).
 
+The subsequent board interface, FM-DX, digital decoders, callsign search and
+local receiver recovery are consolidated in the shared source. See the
+[October consolidation record](docs/consolidation-2026-10.md) for the older
+PRs it incorporates or supersedes. Fresh builds do not need the historical
+CM5 decoder compatibility patches.
+
 For a CM5 with the verified working display, use:
 
 ```sh
@@ -38,6 +44,15 @@ checksums. It requires 64-bit Raspberry Pi OS Trixie / Python 3.13. See
 application/model baseline, not a complete OS image; experimental engines and
 hardware setup remain separate. The reference LCD's running source matches this
 baseline, but its old dirty Git checkout has not been reset or replaced.
+
+## CM5 / JD9365DA-H3 30-pin LCD hardware setup
+
+For a fresh system using the r2 main board's **YX80030ACT3 on FPC2**, see the
+[JD9365DA-H3 + GT911 build kit](hardware/cm5/reference-display/README.md).
+It includes the verified LCD module source, LCD/touch overlays, Makefile,
+boot and desktop configuration examples, installation and recovery steps.
+Touch uses the kernel's Goodix driver. Hardware setup is separate from the
+application installer; other panels using JD9365 may need different initialization.
 
 ## Legacy Raspberry Pi 5 / YX45011A hardware installation
 
@@ -136,6 +151,22 @@ Because desktop windows are borderless, use `Esc` or `q` instead of a macOS clos
 
 The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
 
+### FM-DX receivers
+
+The receiver picker also includes available public FM-DX Webservers. Select
+the **FMDX** route to see only those receivers. FM-DX tuning stays within the
+band limits published by each server and is shown as the server-controlled
+`FM-FMDX` mode; the saved Kiwi demodulator is retained for the next Kiwi
+receiver.
+
+FM-DX programme audio arrives as MP3 and is decoded locally with `ffmpeg` into
+the existing audio, captions/callsign, scope, and audio-waterfall paths. The
+Pi installer now installs `ffmpeg` automatically. For macOS development,
+install it separately (for example with `brew install ffmpeg`) before opening
+an FM-DX receiver. Live RDS programme-service names and server presets are
+kept in the local receiver-state cache; they are not committed to the
+repository.
+
 ## Boot services and status
 
 After reboot, the following services are enabled:
@@ -165,6 +196,18 @@ It draws a green circle that follows your finger. Press `Ctrl+C` to exit, then r
 ```bash
 sudo systemctl restart ituner-sdr.service
 ```
+
+## Receivers
+
+The receiver browser is one catalog of KiwiSDR, OpenWebRX, local, and FM-DX
+receivers with a single source segment row (`KIWI`, `OPENWEBRX`, `LOCAL`,
+`FM-DX`, `ALL`). KiwiSDR is the default and most complete receiver type.
+OpenWebRX uses the same browser and adapts its controls to the active server
+profile. Local receivers show only controls implemented by the connected
+hardware. FM-DX servers use a shared tuner: iTuner listens without retuning by
+default, and any shared frequency control requires an explicit acknowledgement
+for the current session only. See the [board_v1 changelog](docs/board-v1-changelog.md)
+for the full list of browser and interface changes.
 
 ## Uninstall
 

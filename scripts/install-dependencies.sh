@@ -11,7 +11,7 @@ PY
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    python3-pip python3-pygame python3-opengl python3-pil \
+    ffmpeg python3-pip python3-pygame python3-opengl python3-pil \
     pipewire-audio pipewire-bin wireplumber alsa-utils fontconfig \
     libspeexdsp1 libportaudio2 librtlsdr0 libairspyhf1 libgomp1 libatomic1 \
     g++ wsjtx tesseract-ocr tesseract-ocr-eng network-manager ca-certificates
