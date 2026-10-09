@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>iTuner · QRSS</title>
 <style>
-[hidden]{display:none!important}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1,a{color:#68eac2}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:14px;margin:18px 0}#gallery{grid-template-columns:minmax(0,1fr)}article,.receiver{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:14px}article button{width:100%;padding:0;border:0}article img{display:block;width:100%;height:auto}article p{overflow-wrap:anywhere}.text{color:#d9e9ee;white-space:pre-wrap;overflow-wrap:anywhere}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{width:100%;display:block;margin:16px 0}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}#notice{min-height:1.5em}
+[hidden]{display:none!important}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{max-width:1300px;margin:auto;padding:22px}h1,a{color:#68eac2}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:14px;margin:18px 0}#gallery{grid-template-columns:minmax(0,1fr)}article,.receiver{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:14px}article button{width:100%;padding:0;border:0}article img{display:block;width:100%;height:clamp(240px,30vw,400px);object-fit:fill;background:#071219}article p{overflow-wrap:anywhere}.text{color:#d9e9ee;white-space:pre-wrap;overflow-wrap:anywhere}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{width:1200px}#large{width:100%;height:clamp(240px,50vh,520px);object-fit:fill;display:block;margin:16px 0;background:#071219}#gallery article>p:not(.text){height:3em;overflow:auto}#gallery .text{height:9em;overflow:auto;margin-bottom:0}.receiver .text{height:7em;overflow:auto}.receiver .receiver-detail{height:3em;overflow:auto}#detail{height:3em;overflow:auto}#text{height:9em;overflow:auto}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}#notice{min-height:1.5em}
 </style>
 <header><div><h1>QRSS</h1><p>Slow waterfall captures + tentative Morse text</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell">Hell RX</a> · <a href="/qrss" aria-current="page">QRSS</a></nav></header>
 <div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders" class="grid"></div>
@@ -29,8 +29,48 @@ function url(i){return '/qrss-images/'+i.id+'.png?v='+i.updated_ns}
 function acquisition(i){const a=i.acquisition;if(!a)return '';if(i.tracks?.length)return i.tracks.length+' tracked signals';return a.state==='locked'?a.mode+' · '+(a.rf_hz/1e6).toFixed(6)+' MHz · '+a.dot_seconds+' s/dot · shift '+a.shift_hz+' Hz':a.detail}
 function trackText(i){if(!i.tracks?.length)return i.tentative_text||'—';return i.tracks.map(t=>t.id+' · '+(t.rf_hz/1e6).toFixed(6)+' MHz · '+t.mode+' · '+t.dot_seconds+' s/dot · shift '+t.shift_hz+' Hz'+(t.active?'':' · last seen')+'\n'+(t.tentative_text||'Waiting for a complete character…')).join('\n\n')}
 function describe(i){return (i.kind==='receiving'?'LIVE':'SAVED')+' · '+i.receiver+' · '+i.band+' · '+(i.rf_hz/1e6).toFixed(6)+' MHz center · '+(acquisition(i)||i.mode+' · '+i.dot_seconds+' s/dot')+' · '+i.capture_utc}
-function show(i){selectedImage=i.id;$('large').src=url(i);$('download').href=url(i);$('detail').textContent=describe(i);$('text').textContent=(i.tracks?.length?trackText(i):i.tentative_text)||(i.text_status==='visual_only'?'Visual-only capture':'No text recognized yet');if(!$('viewer').open)$('viewer').showModal()}
+// Keep the previous pixels until the next image has loaded. A newer refresh
+// cancels an older pending result; unchanged saved images are not reloaded.
+function updateImage(img,src){
+ if(img.getAttribute('src')===src){delete img.dataset.pending;return}
+ if(img.dataset.pending===src)return;
+ img.dataset.pending=src;
+ const next=new Image();
+ next.onload=()=>{if(img.dataset.pending===src){img.src=src;delete img.dataset.pending}};
+ next.onerror=()=>{if(img.dataset.pending===src)delete img.dataset.pending};
+ next.src=src;
+}
+function show(i){selectedImage=i.id;updateImage($('large'),url(i));$('download').href=url(i);$('detail').textContent=describe(i);$('text').textContent=(i.tracks?.length?trackText(i):i.tentative_text)||(i.text_status==='visual_only'?'Visual-only capture':'No text recognized yet');if(!$('viewer').open)$('viewer').showModal()}
 $('close').onclick=()=>$('viewer').close();$('previous').onclick=()=>{page=Math.max(0,page-1);render()};$('next').onclick=()=>{page++;render()};$('view').onchange=$('filter').onchange=()=>{page=0;render()};
-function render(){let rows=images.filter(i=>!$('filter').value||i.session_id===$('filter').value);if($('view').value==='latest'){const seen=new Set();rows=rows.filter(i=>{if(seen.has(i.session_id))return false;seen.add(i.session_id);return true})}else if($('view').value==='text')rows=rows.filter(i=>i.tentative_text);const pages=Math.max(1,Math.ceil(rows.length/12));page=Math.min(page,pages-1);$('gallery').replaceChildren();for(const i of rows.slice(page*12,page*12+12)){const card=document.createElement('article'),b=document.createElement('button'),img=document.createElement('img'),caption=document.createElement('p'),text=document.createElement('p');img.src=url(i);img.alt='QRSS waterfall from '+i.receiver;img.loading='lazy';b.append(img);b.onclick=()=>show(i);b.ariaLabel='Enlarge QRSS capture';caption.textContent=describe(i);text.className='text';text.textContent='Tentative text:\n'+trackText(i);card.append(b,caption,text);$('gallery').append(card)}$('page').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page===pages-1;$('status').textContent=rows.length?rows.length+' captures · newest first · up to 300 retained':'Add a receiver to begin. QRSS characters can take minutes.';if($('viewer').open){const i=images.find(i=>i.id===selectedImage);if(i&&$('large').getAttribute('src')!==url(i))show(i)}}
-async function refresh(){clearTimeout(timer);if(busy)return;busy=true;try{const r=await fetch('/api/qrss',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();controls.setData(d);images=d.images;const old=$('filter').value,names=new Map(images.map(i=>[i.session_id,i.receiver+' · '+i.band]));for(const row of d.decoders)names.set(row.id,row.name+' · '+row.band);$('filter').replaceChildren(new Option('All receivers',''));for(const[k,n]of names)$('filter').add(new Option(n,k));$('filter').value=names.has(old)?old:'';$('decoders').replaceChildren();for(const row of d.decoders){const el=document.createElement('section');el.className='receiver';const title=document.createElement('strong'),detail=document.createElement('p');title.textContent=row.name+' · '+row.band;detail.textContent=row.qrss_mode+' · '+((row.freq_khz*1000+row.tone_hz)/1e6).toFixed(6)+' MHz center · '+row.status+' · '+(row.detail||'');detail.title=row.detail;el.append(title,detail,controls.buttons(row));const i=images.find(i=>i.session_id===row.id);if(i){const t=document.createElement('p');t.className='text';t.textContent='Tentative text:\n'+trackText(i);el.append(t)}$('decoders').append(el)}render()}catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}finally{busy=false;timer=setTimeout(refresh,5000)}}refresh();
+function render(){
+ let rows=images.filter(i=>!$('filter').value||i.session_id===$('filter').value);
+ if($('view').value==='latest'){
+  const seen=new Set();rows=rows.filter(i=>{if(seen.has(i.session_id))return false;seen.add(i.session_id);return true});
+ }else if($('view').value==='text')rows=rows.filter(i=>i.tentative_text);
+ const pages=Math.max(1,Math.ceil(rows.length/12));page=Math.min(page,pages-1);
+ const gallery=$('gallery'),existing=new Map([...gallery.children].map(c=>[c.dataset.id,c]));
+ const visible=rows.slice(page*12,page*12+12);
+ for(const [index,i] of visible.entries()){
+  let card=existing.get(i.id);
+  if(!card){
+   card=document.createElement('article');card.dataset.id=i.id;
+   const b=document.createElement('button'),img=document.createElement('img'),caption=document.createElement('p'),text=document.createElement('p');
+   img.alt='QRSS waterfall from '+i.receiver;
+   b.append(img);b.onclick=()=>show(images.find(row=>row.id===card.dataset.id)||i);b.ariaLabel='Enlarge QRSS capture';
+   text.className='text';card.append(b,caption,text);
+  }
+  existing.delete(i.id);
+  updateImage(card.querySelector('img'),url(i));
+  const caption=card.children[1],text=card.children[2],description=describe(i),decoded='Tentative text:\n'+trackText(i);
+  if(caption.textContent!==description)caption.textContent=description;
+  if(text.textContent!==decoded)text.textContent=decoded;
+  // Preserve nodes and scroll anchoring on ordinary five-second updates.
+  if(gallery.children[index]!==card)gallery.insertBefore(card,gallery.children[index]||null);
+ }
+ for(const card of existing.values())card.remove();
+ $('page').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page===pages-1;
+ $('status').textContent=rows.length?rows.length+' captures · newest first · up to 300 retained':'Add a receiver to begin. QRSS characters can take minutes.';
+ if($('viewer').open){const i=images.find(i=>i.id===selectedImage);if(i)show(i)}
+}
+async function refresh(){clearTimeout(timer);if(busy)return;busy=true;try{const r=await fetch('/api/qrss',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();controls.setData(d);images=d.images;const old=$('filter').value,names=new Map(images.map(i=>[i.session_id,i.receiver+' · '+i.band]));for(const row of d.decoders)names.set(row.id,row.name+' · '+row.band);$('filter').replaceChildren(new Option('All receivers',''));for(const[k,n]of names)$('filter').add(new Option(n,k));$('filter').value=names.has(old)?old:'';$('decoders').replaceChildren();for(const row of d.decoders){const el=document.createElement('section');el.className='receiver';const title=document.createElement('strong'),detail=document.createElement('p');title.textContent=row.name+' · '+row.band;detail.textContent=row.qrss_mode+' · '+((row.freq_khz*1000+row.tone_hz)/1e6).toFixed(6)+' MHz center · '+row.status+' · '+(row.detail||'');detail.title=row.detail;detail.className='receiver-detail';el.append(title,detail,controls.buttons(row));const i=images.find(i=>i.session_id===row.id);if(i){const t=document.createElement('p');t.className='text';t.textContent='Tentative text:\n'+trackText(i);el.append(t)}$('decoders').append(el)}render()}catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}finally{busy=false;timer=setTimeout(refresh,5000)}}refresh();
 </script></html>
