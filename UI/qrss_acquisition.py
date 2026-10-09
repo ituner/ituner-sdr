@@ -39,7 +39,8 @@ def timing(states,times):
             design=np.stack([closest[good],2*s[good]-1],axis=1)
             solution=np.linalg.lstsq(design,d[good],rcond=None)[0]
             refined=float(solution[0])
-            if not 2<=refined<=90:continue
+            if not 2-1e-8<=refined<=90+1e-8:continue
+            refined=float(np.clip(refined,2,90))
             best=(loss,refined,float(np.mean(good)))
     return None if best is None else dict(dot=best[1],fit=best[2],loss=best[0],runs=len(values))
 
@@ -95,8 +96,8 @@ class AutoAcquisition:
         if len(states)>2:result[1:-1]=np.median(np.stack([states[:-2],states[1:-1],states[2:]]),axis=0)
         return result
 
-    def analyze(self):
-        times=np.array(self.times);data=np.stack(self.history)
+    def candidates(self,times,data):
+        """Apply the same signal/timing gates independently to one interval."""
         strength=np.percentile(data,85,axis=0)
         # Bounded search includes weaker peaks, not only the loudest station.
         peaks=[]
@@ -154,7 +155,34 @@ class AutoAcquisition:
             active=envelopes[row['mark']]>10
             if row['space'] is not None:active|=envelopes[row['space']]>10
             if np.any(active&tail):fresh.append(row)
-        candidates=fresh
+        for row in fresh:
+            row['times']=times
+            row['window_seconds']=float(times[-1]-times[0])
+            # Prefer more timing evidence when otherwise equally convincing.
+            row['score']+=.025*np.log1p(row['runs'])
+        return fresh
+
+    def analyze(self):
+        times=np.array(self.times);data=np.stack(self.history)
+        candidates=[];starts=set()
+        # Revisited every ten seconds: adjacent windows overlap, allowing a
+        # recent readable burst to acquire despite older interference. Keep
+        # the complete history for QRSS30/60/90, which needs longer evidence.
+        for seconds in (120,240,480,1200):
+            start=int(np.searchsorted(times,times[-1]-seconds))
+            if start in starts:continue
+            starts.add(start)
+            candidates.extend(self.candidates(times[start:],data[start:]))
+        # If the same station fits a longer interval, use its greater timing
+        # evidence. A short fragment can fit both FSK polarities perfectly;
+        # it must not override the word gaps seen in the longer interval.
+        supported=[]
+        for row in sorted(candidates,key=lambda r:r['window_seconds'],reverse=True):
+            pair=tuple(sorted([row['mark'],row['space'] if row['space'] is not None else row['mark']]))
+            if any(key==pair and duration>row['window_seconds'] for key,duration in supported):continue
+            supported.append((pair,row['window_seconds']))
+            row['supported']=True
+        candidates=[r for r in candidates if r.get('supported')]
         # Prefer existing tracks slightly, without binding one station to
         # another station's cadence or keeping a stale signal selected.
         previous=[r for r in self.tracks if r['active']]
@@ -180,13 +208,26 @@ class AutoAcquisition:
                 track=dict(id=f"T{self.next_track_id}",events=deque(maxlen=2000))
                 self.next_track_id+=1;self.tracks.append(track)
             decoder=self.factory(row['dot'])
-            for t,state in zip(times,row['states']):decoder.feed(None if state<0 else bool(state),float(t))
-            boundary=times[0]+20*row['dot'] if times[0]>2 else times[0]
+            window_times=row['times']
+            for t,state in zip(window_times,row['states']):decoder.feed(None if state<0 else bool(state),float(t))
+            boundary=window_times[0]
+            if boundary>2:
+                # A window may begin inside a letter. Stitch only after its
+                # first character gap, preserving older text before that seam.
+                # A fixed 20-dot margin could swallow an entire short window.
+                edges=np.r_[0,np.flatnonzero(np.diff(row['states'])!=0)+1,len(window_times)]
+                boundary=float(window_times[-1])+1
+                for a,b in zip(edges[:-1],edges[1:]):
+                    end=window_times[min(b,len(window_times)-1)]
+                    if row['states'][a]==0 and end-window_times[a]>=2.5*row['dot']:
+                        boundary=float(end)
+                        break
             older=[e for e in track['events'] if e[0]<boundary] if same else []
             replay=[e for e in decoder.events if not older or e[0]>=boundary]
             track.update(mode=row['mode'],tone_hz=tone,space_hz=space,
                 shift_hz=abs(tone-space),dot=row['dot'],timing_fit=round(row['fit'],2),
                 reverse=bool(tone<space),active=True,last_seen=float(times[-1]),
+                acquisition_seconds=round(row['window_seconds'],1),
                 partial_morse=decoder.partial().strip(),partial_when=float(times[-1]),
                 events=deque(older+replay,maxlen=2000))
             used.add(track['id']);active.append(track)
@@ -225,7 +266,8 @@ class AutoAcquisition:
     def track_status(track):
         return dict(id=track['id'],mode=track['mode'],tone_hz=round(track['tone_hz'],2),
             shift_hz=round(track['shift_hz'],2),dot_seconds=round(track['dot'],2),
-            timing_fit=track['timing_fit'],reverse=track['reverse'],active=track['active'])
+            timing_fit=track['timing_fit'],reverse=track['reverse'],active=track['active'],
+            acquisition_seconds=track.get('acquisition_seconds'))
 
     def snapshot(self,start,end):
         """Independent text for a capture interval; times are stream seconds."""

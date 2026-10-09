@@ -168,3 +168,17 @@ compatibility patch is `hardware/cm5/sstv/qrss-ui.patch`, applied after
 A saved 600-second image is a completed recording window, not a validated message. Ordinary QRSS Morse has no CRC gate. Completed Morse characters are emitted individually; no complete callsign or full message is required. When timing acquisition succeeds, unfinished dot/dash sequences are also exposed as `partial_morse`, labelled **Unfinished Morse** in both interfaces. An ellipsis indicates a mark still in progress; it is not guessed as a dot, dash or letter. Carrier loss resets unfinished elements, and starting midway through a mark never invents its beginning.
 
 Saved captures without an acquired AUTO track say **Capture saved · no Morse timing lock; inspect the visible traces** rather than indefinitely saying they are waiting. Visible patterns can remain readable to a person even when automatic timing acquisition fails. Old images without stored text or acquired tracks cannot gain partial characters merely from this display change; they would require reprocessing.
+
+### Acquisition across changing conditions
+
+Auto acquisition checks overlapping trailing windows of 2, 4, 8 and 20 minutes
+every ten seconds. A recent readable burst can therefore acquire without old
+noise or interference vetoing it. Each interval uses the same signal and Morse
+timing checks; when a station fits a longer interval, its extra evidence takes
+precedence over an ambiguous short fragment. Long windows remain necessary for
+60–90 second dots. Timing is estimated separately for each of up to six signals.
+
+Text from successive windows is joined at a character gap, retaining earlier
+text through fades and avoiding repeated letters at the overlap. The diagnostic
+`acquisition_seconds` field reports the selected interval. This improves new
+reception; old PNG-only captures are not automatically reprocessed as audio.
