@@ -38,6 +38,20 @@ class SSTVWorkspace:
         self.selected_server = self.ui.LOCAL_KIWI_SERVER or server
         self.manager.ensure_web()
 
+    def gallery_swipe_direction(self, start_x, start_y, x, y, bounds):
+        """One deliberate vertical swipe, starting in the gallery, per release."""
+        if (not self.open or self.add_open or self.decoders_open or self.enlarged
+                or getattr(self, 'field', None) is not None
+                or getattr(self, 'reporting', None) is not None):
+            return 0
+        x0, y0, x1, y1 = bounds
+        dx, dy = x-start_x, y-start_y
+        if not (x0 <= start_x <= x1 and y0 <= start_y <= y1):
+            return 0
+        if abs(dy) < 60 or abs(dy) < abs(dx)*1.5:
+            return 0
+        return 1 if dy < 0 else -1
+
     def text(self, cache, x, y, value, size=18, color=(217, 233, 238), width=None):
         if width:
             value = self.ui.fit_station_text(cache, str(value), width, size, False, False, 'Liberation Sans')

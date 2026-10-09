@@ -18,6 +18,23 @@ class HellWorkspace(SSTVWorkspace):
         self.strip_step = 1
         self.strip_max = 0
 
+    def swipe(self, start_x, start_y, x, y):
+        direction = self.gallery_swipe_direction(start_x, start_y, x, y, (16, 86, 1260, 708))
+        if not direction:
+            return False
+        if not self.saved_view:
+            if direction > 0:
+                self.saved_view = True
+                self.page = 0
+        elif direction < 0 and self.page == 0:
+            self.saved_view = False
+        else:
+            images = [i for i in self.manager.image_snapshot(self.filter_id) if i['kind']=='saved']
+            last = max(0, (len(images)-1)//3)
+            self.page = max(0, min(last, self.page+direction))
+        self.visible_strips = None
+        return True
+
     def preview(self, cache, item, box):
         self.strip_image(item, box)
 

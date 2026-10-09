@@ -23297,11 +23297,15 @@ def main():
                                     wspr_decoder_settings_open = False
                             wake_controls()
                         elif touch_started and gesture == "qrss_workspace":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if qrss_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 qrss_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "hell_workspace":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if hell_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 hell_workspace.tap(x, y, wspr_receiver_choices())
                             wake_controls()
                         elif touch_started and gesture == "sstv_workspace":

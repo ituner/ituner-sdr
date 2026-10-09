@@ -9,6 +9,15 @@ class QRSSWorkspace(SSTVWorkspace):
         super().__init__(ui,manager)
         self.preset=dict(PRESETS[2]);self.field=None;self.entry='';self.track_page=0
 
+    def swipe(self, start_x, start_y, x, y):
+        direction = self.gallery_swipe_direction(start_x, start_y, x, y, (16, 76, 1264, 788))
+        if not direction:
+            return False
+        images = self.manager.image_snapshot(self.filter_id)
+        last = max(0, (len(images)-1)//2)
+        self.page = max(0, min(last, self.page+direction))
+        return True
+
     def preview(self,cache,item,box):self.draw_plot(cache,item,box)
 
     def draw_plot(self,cache,item,box,compact=False):
