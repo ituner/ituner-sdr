@@ -110,6 +110,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_new_capture_grows_on_fixed_time_axis(self):
         from PIL import Image
+        from qrss_render import PLOT_LEFT, CANVAS_SIZE
         import time
         c=dict(PRESETS[2],id='scale',name='Local',server='http://kiwi.local',
                minutes=10,qrss_mode='VISUAL')
@@ -124,11 +125,11 @@ class IntegrationTests(unittest.TestCase):
                 row=self.manager.image_snapshot()[0]
                 self.assertEqual(row['window_seconds'],600)
                 with Image.open(self.manager.gallery.image_path(a.key)) as im:
-                    self.assertEqual(im.size,(1700,390))
+                    self.assertEqual(im.size,CANVAS_SIZE)
                     # Bright keyed data occupies only elapsed time; future is blank.
-                    self.assertNotEqual(im.getpixel((90+expected_width-1,150)),(7,18,25))
+                    self.assertNotEqual(im.getpixel((PLOT_LEFT+expected_width-1,150)),(7,18,25))
                     if duration<600:
-                        self.assertEqual(im.getpixel((90+expected_width+2,150)),(7,18,25))
+                        self.assertEqual(im.getpixel((PLOT_LEFT+expected_width+2,150)),(7,18,25))
         # Stopping early saves the same time scale, rather than stretching it.
         a.times=list(np.linspace(0,60,101));a.flush()
         row=self.manager.image_snapshot()[0]

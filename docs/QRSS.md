@@ -102,7 +102,10 @@ New captures use a fixed time axis covering the configured capture duration.
 Received data grows from left to right with blank space for time not yet
 received (one minute fills 10% of a ten-minute plot). Early keying is never
 stretched across a whole window, and existing characters retain their width.
-This applies to web, local and downloaded images; older saved PNGs are unchanged. Plot and text areas keep stable heights during live
+This applies to web, local and downloaded images. Older captures retain their
+original time span when relabelled. Plot legends use a 30-pixel font and wider
+margins so frequency, time and capture status remain readable in compact and
+expanded views. Plot and text areas keep stable heights during live
 updates; long text scrolls inside its own area. Existing image nodes are reused
 and new pixels replace the old only after loading, including in the enlarged
 viewer. Receiver controls also update in place. All gallery views hold their

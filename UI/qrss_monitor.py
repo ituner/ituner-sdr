@@ -5,7 +5,8 @@ from pathlib import Path
 import time
 import uuid
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
+from qrss_render import annotate_plot, rendering_metadata, PLOT_WIDTH, PLOT_HEIGHT, BACKGROUND
 from qrss_modes import settings
 from qrss_decoder import QRSSDecoder
 from sstv_monitor import Session, SSTVManager, Gallery, atomic_json
@@ -52,35 +53,16 @@ class QRSSAssembler:
         # Stretching a few early columns across the whole plot hides keying.
         duration=max(0,self.times[-1]-self.start_sample)
         window_seconds=c['minutes']*60
-        width=1600
+        width=PLOT_WIDTH
         received_width=max(1,min(width,round(width*duration/window_seconds)))
-        im=im.resize((received_width,320),Image.Resampling.BOX)
-        canvas=Image.new('RGB',(width+100,390),(7,18,25));canvas.paste(im,(90,35))
-        draw=ImageDraw.Draw(canvas)
-        center=c['freq_khz']*1000+c['tone_hz'];half=c['span_hz']/2
-        for y,hz in ((35,center+half),(195,center),(350,center-half)):
-            draw.text((4,y),f'{hz/1e6:.6f}',fill='white')
-        draw.text((4,15),'MHz RF',fill='white')
-        draw.text((90,13),time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime(self.started)),fill='white')
-        draw.text((90,365),'Time ->   0 s',fill='white')
-        draw.text((90+width/2-20,365),f'{window_seconds/2:g} s',fill='white')
-        draw.text((width+30,365),f'{window_seconds:g} s',fill='white')
-        draw.text((width-140,13),f'Received {duration:.0f} / {window_seconds:g} s',fill='white')
-        if received_width<width:
-            draw.line((90+received_width,35,90+received_width,354),fill=(62,106,115))
+        im=im.resize((received_width,PLOT_HEIGHT),Image.Resampling.BOX)
+        plot=Image.new('RGB',(width,PLOT_HEIGHT),BACKGROUND);plot.paste(im,(0,0))
+        center=c['freq_khz']*1000+c['tone_hz']
         acquisition=dict(self.decoder.auto.status) if self.decoder.auto else {}
         tracks=self.track_snapshot(self.start_sample,self.times[-1])
         if acquisition.get('state')=='locked':
             acquisition['rf_hz']=c['freq_khz']*1000+acquisition['tone_hz']
-            for track in tracks:
-                if not track['active']:continue
-                y=35+320*(center+half-track['rf_hz'])/c['span_hz']
-                draw.line((86,y,98,y),fill=(255,150,40),width=2)
-                draw.text((101,y-10),track['id'],fill=(255,190,90))
-            draw.text((400,13),f"AUTO · {acquisition['track_count']} signals",fill=(255,190,90))
-        else:draw.line((86,195,94,195),fill=(255,150,40),width=2)
         text=self.track_text(tracks) if tracks else ''.join(char for t,char in self.decoder.morse.events if self.start_sample<=t<=self.times[-1]).strip()
-        path=self.gallery.root/(self.key+'.working.png');canvas.save(path)
         item=dict(id=self.key,session_id=c['id'],receiver=c['name'],server=c['server'],
             band=c['band'],freq_khz=c['freq_khz'],tone_hz=c['tone_hz'],rf_hz=center,
             mode=c['qrss_mode'],dot_seconds=c['dot_seconds'],shift_hz=c['shift_hz'],span_hz=c['span_hz'],
@@ -88,9 +70,11 @@ class QRSSAssembler:
             capture_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(self.started)),
             received_at=self.started,updated_ns=time.time_ns(),has_image=True,
             duration_seconds=round(duration,1),window_seconds=window_seconds,
-            width=canvas.width,height=canvas.height,
+            **rendering_metadata(),
             stream_id=self.stream_id,sample_start=self.start_sample,sample_end=self.times[-1],
             acquisition=acquisition,tracks=tracks,tentative_text=text[-4000:],text_status='visual_only' if c['qrss_mode']=='VISUAL' else 'tentative')
+        canvas=annotate_plot(plot,item)
+        path=self.gallery.root/(self.key+'.working.png');canvas.save(path)
         self.gallery.publish(path,item)
         # A slow signal can be acquired after a capture rolled over. Fill text
         # into those recent captures too, without changing their images.
