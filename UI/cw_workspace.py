@@ -25,15 +25,31 @@ class CWWorkspace(SSTVWorkspace):
         if index!=self.receiver_index:
             self.receiver_index=index;self.selected_track=None
 
+    def pan_frequency(self,dx):
+        if not self.manager.configs:return
+        self.receiver_index=min(self.receiver_index,len(self.manager.configs)-1)
+        row=self.manager.configs[self.receiver_index]
+        lo,hi=display_bounds(row)
+        # Drag the spectrum with the finger. A full width is one 3 kHz window.
+        shift_hz=round(-dx*(hi-lo)/1240/10)*10
+        freq=round(max(.001,min(30000-hi/1000,row['freq_khz']+shift_hz/1000)),6)
+        if freq==row['freq_khz']:return
+        try:
+            self.manager.update(row['id'],row['name'],row['server'],{'freq_khz':freq})
+            self.selected_track=None
+            self.message=f"Tuned to {freq+center_offset(row):.3f} kHz · acquiring signals"
+        except (ValueError,OSError,StopIteration) as exc:
+            self.message=str(exc) or 'Receiver unavailable'
+
     def swipe(self,sx,sy,x,y):
-        # A horizontal gesture changes the viewed receiver, never its tuning
-        # or audio. Keep vertical live/history navigation independent.
+        # Tune only from the waterfall, once on release. Vertical gestures
+        # remain live/history navigation; the RX buttons select saved receivers.
         dx,dy=x-sx,y-sy
         if (self.open and not self.history_open and not self.add_open
                 and not self.decoders_open and not self.enlarged and self.field is None
-                and 16<=sx<=1260 and 150<=sy<=780
+                and 18<=sx<=1258 and 152<=sy<=524
                 and abs(dx)>=60 and abs(dx)>=abs(dy)*1.5):
-            self.move_receiver(1 if dx<0 else -1)
+            self.pan_frequency(dx)
             return True
         direction=self.gallery_swipe_direction(sx,sy,x,y,(16,150,1260,780))
         if not direction:return False
@@ -119,7 +135,7 @@ class CWWorkspace(SSTVWorkspace):
             bx=max(18,min(1220,x-18));self.ui.draw_logical_rect(bx,154,bx+36,184,(*color,255))
             self.text(cache,bx+10,175,str(marker['slot']),19,(7,18,25))
             self.actions.append(((max(18,x-22),152,min(1258,x+22),490),('track',marker['id'])))
-        self.text(cache,24,543,f"{'Kiwi waterfall' if row.get('waterfall_source')=='kiwi' else 'Audio waterfall (fallback)'} · 3 kHz · 12 s · Yellow: selected · Green: active · Dashed: fading",17)
+        self.text(cache,24,543,f"{'Kiwi waterfall' if row.get('waterfall_source')=='kiwi' else 'Audio waterfall (fallback)'} · 3 kHz · Swipe to tune · Yellow: selected · Green: active",17)
         for i in range(4):
             x=16+i*314
             if i<len(tracks):
