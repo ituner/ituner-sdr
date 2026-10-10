@@ -152,7 +152,7 @@ class KiwiWaterfall:
 
 
 class WaterfallTexture:
-    """GPU ring updated a row at a time, newest at the bottom."""
+    """GPU ring updated a row at a time, newest at the top."""
     def __init__(self,ui):
         self.ui=ui;self.epoch='';self.seq=0;self.row=0
         g=ui.GL;self.tex=g.glGenTextures(1);g.glBindTexture(g.GL_TEXTURE_2D,self.tex)
@@ -169,8 +169,9 @@ class WaterfallTexture:
             g.glTexSubImage2D(g.GL_TEXTURE_2D,0,0,self.row,WIDTH,1,g.GL_RGBA,g.GL_UNSIGNED_BYTE,rgba(np.frombuffer(row,dtype=np.uint8)))
             self.row=(self.row+1)%HEIGHT
         self.epoch,self.seq=data['epoch'],data['seq']
-        x0,y0,x1,y1=box;split=y0+(y1-y0)*(HEIGHT-self.row)/HEIGHT
-        self.ui.draw_textured_quad(self.tex,x0,y0,x1,split,0,self.row/HEIGHT,1,1)
-        if self.row:self.ui.draw_textured_quad(self.tex,x0,split,x1,y1,0,0,1,self.row/HEIGHT)
+        x0,y0,x1,y1=box;split=y0+(y1-y0)*self.row/HEIGHT
+        # Source rows arrive oldest-first; reverse only the vertical mapping.
+        if self.row:self.ui.draw_textured_quad(self.tex,x0,y0,x1,split,0,self.row/HEIGHT,1,0)
+        if self.row<HEIGHT:self.ui.draw_textured_quad(self.tex,x0,split,x1,y1,0,1,1,self.row/HEIGHT)
 
     def close(self):self.ui.GL.glDeleteTextures([self.tex])

@@ -26,10 +26,10 @@ class CWWaterfall {
     finally{clearTimeout(timeout);this.controller=null;this.busy=false;}
   }
   push(row){
-    this.ctx.drawImage(this.canvas,0,1,1024,239,0,0,1024,239);
+    this.ctx.drawImage(this.canvas,0,0,1024,239,0,1,1024,239);
     const line=this.ctx.createImageData(1024,1);
     for(let x=0;x<1024;x++){const v=row[x]/255,i=x*4;line.data[i]=v*v*.7*255;line.data[i+1]=v*.95*255;line.data[i+2]=(v*.8+.035)*255;line.data[i+3]=255;}
-    this.ctx.putImageData(line,0,239);
+    this.ctx.putImageData(line,0,0);
   }
   animate(now){
     if(this.closed)return;

@@ -105,7 +105,7 @@ class CWAssembler:
         live_rows=self.session.waterfall.read()['rows']
         if live_rows:
             rows=np.asarray([np.frombuffer(r,dtype=np.uint8) for r in live_rows],dtype=np.float32)/255
-            values=np.zeros((240,rows.shape[1]),dtype=np.float32);values[-len(rows):]=rows
+            values=np.zeros((240,rows.shape[1]),dtype=np.float32);values[:len(rows)]=rows[::-1]
             rgb=np.stack((values**2*.7,values*.95,values*.8+.035),axis=-1)
             image=Image.fromarray(np.uint8(np.clip(rgb,0,1)*255))
             path=self.store.image_path(self.session.config['id']);tmp=path.with_suffix('.tmp')
@@ -201,6 +201,12 @@ class CWManager(SSTVManager):
                 self.sessions.pop(key,None)
         config.update(updated);self.save()
         if changed and not config.get('paused'):self.start(config)
+
+    def select_track(self,key,track_id):
+        # Selection never turns listening on. Check actual state, not a web
+        # client's potentially stale snapshot after Stop Listening.
+        if self.listener and self.listener.snapshot().get('track_id'):
+            self.listen(key,track_id)
 
     def listen(self,key,track_id=None):
         if self.listener is None:raise ValueError('Local audio output is unavailable')

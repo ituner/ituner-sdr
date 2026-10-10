@@ -31,6 +31,12 @@ class CWListener:
         with self.lock:return dict(receiver_id=self.key,track_id=self.track,error=self.error)
 
     def start(self,key,track):
+        with self.lock:
+            if self.key==key and self.thread and self.thread.is_alive() and not self.stop_event.is_set():
+                # Retune the filter on the playback thread. Keep the DAC and
+                # amplifier open so changing slots cannot briefly play AM.
+                self.track=track['id'];self.tone=track['tone_hz'];self.error=''
+                return
         self.stop()
         if not self.available():raise ValueError('Stop dual listening before listening to a CW slot')
         with self.state.lock:
@@ -39,7 +45,7 @@ class CWListener:
             self.state.external_audio_generation=getattr(self.state,'external_audio_generation',0)+1
             token=self.state.external_audio_generation
         self.stop_event=threading.Event();self.queue=queue.Queue(maxsize=12)
-        with self.lock:self.key=key;self.track=track['id'];self.error=''
+        with self.lock:self.key=key;self.track=track['id'];self.tone=track['tone_hz'];self.error=''
         self.thread=threading.Thread(target=self.run,args=(track['tone_hz'],token),name='cw-listen',daemon=True)
         self.thread.start()
 
@@ -79,6 +85,9 @@ class CWListener:
                 except queue.Empty:
                     if time.monotonic()-last>3:raise RuntimeError('CW audio stopped; normal listening restored')
                     continue
+                with self.lock:new_tone=self.tone
+                if new_tone!=tone:
+                    tone=new_tone;filt=SlotFilter(tone)
                 last=time.monotonic();pcm=filt.feed(pcm)
                 controls,_=self.state.audio_controls_snapshot()
                 muted=bool(controls.get('mute'))

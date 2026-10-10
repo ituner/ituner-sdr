@@ -39,9 +39,9 @@ class DigitalWebBridge:
             return copy.deepcopy(self.options)
 
     def request(self, mode, key, action, timeout=5, config=None):
-        if mode not in ('sstv', 'wspr', 'hell', 'qrss', 'cw') or action not in (('start', 'stop', 'add', 'edit', 'delete', 'listen', 'unlisten') if mode=='cw' else ('start', 'stop', 'add', 'edit', 'delete')) or not isinstance(key, str) or not 0 < len(key) <= 100:
+        if mode not in ('sstv', 'wspr', 'hell', 'qrss', 'cw') or action not in (('start', 'stop', 'add', 'edit', 'delete', 'listen', 'unlisten', 'select') if mode=='cw' else ('start', 'stop', 'add', 'edit', 'delete')) or not isinstance(key, str) or not 0 < len(key) <= 100:
             raise ControlError(400, 'Choose a decoder and a valid action')
-        if action in ('add', 'edit', 'listen') and not isinstance(config, dict):
+        if action in ('add', 'edit', 'listen', 'select') and not isinstance(config, dict):
             raise ControlError(400, 'Choose a receiver and band')
         with self.lock:
             if self.closed:
@@ -200,10 +200,11 @@ class ReceiverController:
                         manager.add(config['name'],config['server'],config,key=key,running=payload.get('start',True))
                     else:
                         manager.update(key,config['name'],config['server'],config)
-                elif mode=='cw' and action in ('listen','unlisten'):
+                elif mode=='cw' and action in ('listen','unlisten','select'):
                     track=payload.get('track_id')
-                    if action=='listen' and (not isinstance(track,str) or not 0<len(track)<=100):raise ValueError('Choose a signal slot')
-                    manager.listen(key,track if action=='listen' else None)
+                    if action in ('listen','select') and (not isinstance(track,str) or not 0<len(track)<=100):raise ValueError('Choose a signal slot')
+                    if action=='select':manager.select_track(key,track)
+                    else:manager.listen(key,track if action=='listen' else None)
                 elif action == 'delete':
                     manager.delete(key)
                 else:

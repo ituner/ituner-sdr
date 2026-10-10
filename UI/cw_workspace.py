@@ -196,7 +196,10 @@ class CWWorkspace(SSTVWorkspace):
             elif key=='decoders':self.history_open=False;super().tap(x,y,receivers)
             elif key=='select_rx':self.receiver_index=next(i for i,r in enumerate(self.manager.configs) if r['id']==value);self.decoders_open=False;self.history_open=False
             elif key=='rx':self.move_receiver(value)
-            elif key=='track':self.selected_track=value
+            elif key=='track':
+                row=self.manager.snapshot()[self.receiver_index]
+                self.manager.select_track(row['id'],value)
+                self.selected_track=value;self.message=''
             elif key=='listen':self.manager.listen(*value);self.message=''
             elif key=='preset':
                 engine=self.preset.get('engine','ggmorse');self.preset=dict(value);self.preset.update(settings({'engine':engine},self.preset))
