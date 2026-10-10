@@ -8,6 +8,8 @@ paginated human-facing list.
 
 from __future__ import annotations
 
+from client_identity import CLIENT_NAME
+
 import html
 import json
 import re
@@ -113,7 +115,7 @@ def save_directory(rows, cache_path=DEFAULT_CACHE) -> None:
 
 
 def fetch_directory(url=DIRECTORY_URL, timeout=15) -> list[dict]:
-    request = Request(url, headers={"User-Agent": "iTuner-SDR/1.0"})
+    request = Request(url, headers={"User-Agent": CLIENT_NAME})
     with urlopen(request, timeout=timeout) as response:
         page = response.read().decode("utf-8", "replace")
     rows = parse_directory_page(page)

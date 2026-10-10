@@ -3,6 +3,8 @@
 SQLite is an index of the retained JSONL log and a durable upload outbox.
 No remote uploads are created by migration or by merely opening a history view.
 """
+from client_identity import CLIENT_NAME
+
 import csv
 import hashlib
 import io
@@ -287,7 +289,7 @@ class WSPRHistory:
 
     @staticmethod
     def _post(fields):
-        req = Request(ENDPOINT, data=urlencode(fields).encode(), headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'iTuner-SDR/1'})
+        req = Request(ENDPOINT, data=urlencode(fields).encode(), headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':CLIENT_NAME})
         with urlopen(req, timeout=10) as response:
             return response.read(4096).decode('utf8', 'replace')
 

@@ -2,6 +2,8 @@
 Public hosts and literal IP endpoints retain the standard connection path.
 No LAN scan, global DNS changes, redirects, or unverified cached-address reuse.
 """
+from client_identity import CLIENT_NAME
+
 import fcntl
 import http.client
 import ipaddress
@@ -33,7 +35,7 @@ def probe_status(host,port,address,secure,timeout):
     try:
         if secure:raw=ssl.create_default_context().wrap_socket(raw,server_hostname=host)
         connection.sock=raw
-        connection.request('GET','/status',headers={'User-Agent':'iTuner-local-receiver/1.0','Connection':'close'})
+        connection.request('GET','/status',headers={'User-Agent':CLIENT_NAME,'Connection':'close'})
         response=connection.getresponse()
         if response.status!=200:raise OSError(f'Kiwi status returned HTTP {response.status}')
         data=response.read(32769)

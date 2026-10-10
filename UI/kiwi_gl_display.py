@@ -3151,7 +3151,7 @@ def detect_receiver_home(result):
     """Locate the device once from its public IP; retain a safe local fallback."""
     profile = dict(RECEIVER_HOME_FALLBACK)
     try:
-        request = Request("https://ipapi.co/json/", headers={"User-Agent": "iTuner-SDR/1.0"})
+        request = Request("https://ipapi.co/json/", headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=8) as response:
             payload = json.loads(response.read(16384).decode("utf-8", "replace"))
         lat, lon = float(payload["latitude"]), float(payload["longitude"])
@@ -3390,7 +3390,7 @@ def lookup_shortwave_frequency(frequency_khz):
         request = Request(
             SHORTWAVE_DB_QUICKSEARCH_URL,
             data=urlencode({"freq": f"{lookup_frequency:.3f}"}).encode("ascii"),
-            headers={"User-Agent": "iTuner-SDR/1.0"},
+            headers={"User-Agent": CLIENT_NAME},
             method="POST",
         )
         with urlopen(request, timeout=10) as response:
@@ -3400,7 +3400,7 @@ def lookup_shortwave_frequency(frequency_khz):
             fallback_frequency = int(round(float(frequency_khz) / 5.0) * 5)
             fallback_request = Request(
                 SHORTWAVE_LIVE_KHZ_URL.format(frequency=fallback_frequency),
-                headers={"User-Agent": "iTuner-SDR/1.0"},
+                headers={"User-Agent": CLIENT_NAME},
             )
             with urlopen(fallback_request, timeout=10) as response:
                 fallback_document = response.read(512 * 1024).decode("utf-8", "replace")
@@ -3648,7 +3648,7 @@ def load_public_stations():
         # The directory returns the full listing to an ordinary HTTP client.
         # Its browser-only authentication marker instead yields an empty
         # response here, so retain the normal request and validate its output.
-        request = Request(PUBLIC_DIRECTORY_URL, headers={"User-Agent": "KiwiTouch/1.0"})
+        request = Request(PUBLIC_DIRECTORY_URL, headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=15) as response:
             stations = parse_public_directory(response.read().decode("utf-8", "replace"))
         if len(stations) >= 20:
@@ -3839,7 +3839,7 @@ def load_globe_receivers():
 def refresh_globe_receivers(result):
     fmdx_receivers = fmdx.load_directory(FMDX_DIRECTORY_CACHE)
     try:
-        request = Request(GLOBE_DIRECTORY_URL, headers={"User-Agent": "KiwiTouch/1.0"})
+        request = Request(GLOBE_DIRECTORY_URL, headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=15) as response:
             receivers = parse_globe_directory(response.read().decode("utf-8", "replace"))
         if len(receivers) >= 100:
@@ -11271,7 +11271,7 @@ def kiwi_status_metadata(server):
     try:
         status = kiwi.read_local_status(server, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS)
         if status is None:
-            request = Request(url, headers={"User-Agent": "KiwiTouch/1.0"})
+            request = Request(url, headers={"User-Agent": CLIENT_NAME})
             with urlopen(request, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS) as response:
                 status = response.read().decode("utf-8", "replace")
     except OSError:

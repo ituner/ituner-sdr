@@ -272,7 +272,7 @@ See [CW setup, engine choice and limits](docs/cw.md).
 
 ### Receiver client identity
 
-Use the exact lowercase client label **`itiuner`** for receiver connections and
+Use the exact lowercase client label **`ituner`** for receiver connections and
 all decoder modes, without mode suffixes. This is the user-selected project
 default, centralized in `UI/client_identity.py`. Kiwi listener names, OpenWebRX
 client identification and FM-DX receiver HTTP/WebSocket user agents share it.
