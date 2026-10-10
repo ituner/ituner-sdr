@@ -269,3 +269,11 @@ waterfall and persistent text history. Add/Edit/Start/Stop controls are shared
 with `/cw`; history can be exported as CSV. The pinned GGMorse engine builds
 locally during dependency installation without models or display-driver changes.
 See [CW setup, engine choice and limits](docs/cw.md).
+
+### Receiver client identity
+
+Use the exact lowercase client label **`itiuner`** for receiver connections and
+all decoder modes, without mode suffixes. This is the user-selected project
+default, centralized in `UI/client_identity.py`. Kiwi listener names, OpenWebRX
+client identification and FM-DX receiver HTTP/WebSocket user agents share it.
+Reporter callsigns and locations for spot uploads remain separate settings.

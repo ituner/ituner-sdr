@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from PIL import Image, ImageDraw
 
 import render_sdr_frontend_mockup as sdr_ui
+from client_identity import CLIENT_NAME
 from local_receivers import create_connection as local_connection, read_local_status
 
 
@@ -132,7 +133,7 @@ class KiwiWebSocket:
                     f"Sec-WebSocket-Key: {key}\r\n"
                     "Sec-WebSocket-Version: 13\r\n"
                     f"Origin: http://{host}:{port}\r\n"
-                    "User-Agent: ituner\r\n"
+                    f"User-Agent: {CLIENT_NAME}\r\n"
                     "\r\n"
                 ).encode("ascii")
                 raw.sendall(request)
@@ -534,7 +535,9 @@ def send_kiwi_setup(ws, client_type, user):
     # ``#`` is the Kiwi web client's explicit marker for an empty public
     # listener password.
     ws.send_text(f"SET auth t={client_type} p=#")
-    ws.send_text(f"SET ident_user={user}")
+    # Keep the legacy user argument for callers; every mode advertises the
+    # same user-requested identity instead of adding decoder/scout suffixes.
+    ws.send_text(f"SET ident_user={CLIENT_NAME}")
     ws.send_text("SET geo=Ituner receiver")
 
 
@@ -1453,7 +1456,7 @@ def main():
     parser.add_argument("--fps", type=float, default=24.0)
     parser.add_argument("--audio", action="store_true")
     parser.add_argument("--audio-rate", type=int, default=12000)
-    parser.add_argument("--user", default="ituner")
+    parser.add_argument("--user", default=CLIENT_NAME)
     parser.add_argument("--invert-x", action="store_true")
     parser.add_argument("--invert-y", action="store_true")
     parser.add_argument("--swap-x-y", action="store_true")

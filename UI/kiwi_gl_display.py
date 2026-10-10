@@ -207,6 +207,7 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 from OpenGL import GL
 
+from client_identity import CLIENT_NAME
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
 import openwebrx_directory
@@ -20867,7 +20868,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 if session:
                     session.close()
                 state.connection_attempt(server_generation, "audio")
-                session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent="iTuner-SDR")
+                session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent=CLIENT_NAME)
                 session.connect()
                 generation = server_generation
                 leveler = mapper = None
@@ -22137,7 +22138,7 @@ def main():
     parser.add_argument("--station-zoom", type=int, default=13)
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
-    parser.add_argument("--user", default="ituner")
+    parser.add_argument("--user", default=CLIENT_NAME)
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the selected local audio backend")
     parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="alsa" if CM5_AUDIO else "pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")

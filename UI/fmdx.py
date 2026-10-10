@@ -6,6 +6,8 @@ is JSON and each receiver exposes independent ``/text``, ``/rds`` and
 OpenGL renderer from teaching its Kiwi client about an unrelated protocol.
 """
 
+from client_identity import CLIENT_NAME
+
 import base64
 import hashlib
 import json
@@ -324,7 +326,7 @@ def station_from_status(payload, fallback_frequency_khz):
 
 def fetch_station_presets(server, timeout=5.0):
     """Fetch the public, owner-configured station presets for one receiver."""
-    request = Request(http_endpoint_url(server, "static_data"), headers={"User-Agent": "iTuner-SDR/1.0"})
+    request = Request(http_endpoint_url(server, "static_data"), headers={"User-Agent": CLIENT_NAME})
     with urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8", "replace"))
     return normalize_station_presets(payload)
@@ -565,7 +567,7 @@ def load_directory(cache_path, timeout=15, minimum_entries=20):
     except (OSError, ValueError, TypeError):
         pass
     try:
-        request = Request(DIRECTORY_URL, headers={"User-Agent": "iTuner-SDR/1.0"})
+        request = Request(DIRECTORY_URL, headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
         receivers = normalize_directory(payload)
@@ -626,7 +628,7 @@ class WebSocket:
                 f"Sec-WebSocket-Key: {key}\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
                 f"Origin: {origin_scheme}://{host}\r\n"
-                "User-Agent: iTuner-SDR/1.0\r\n\r\n"
+                f"User-Agent: {CLIENT_NAME}\r\n\r\n"
             ).encode("ascii")
             raw.sendall(request)
             response = _read_http_header(raw)
