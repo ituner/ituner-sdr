@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 from PIL import Image
 from sstv_monitor import Session, SSTVManager, atomic_json
-from cw_modes import bounds,settings
+from cw_modes import bounds,settings,display_bounds
 from cw_decoder import CWDecoder, RATE
 
 
@@ -122,10 +122,10 @@ class CWSession(Session):
     def __init__(self,*args):
         super().__init__(*args);self.listening_message=f"{self.config.get('engine','ggmorse')} · scanning {(bounds(self.config)[1]-200)/1000:g} kHz · up to 4 signals";self.tracks=[];self.image_version=0;self.audio_seconds=0;self.capacity_limited=False
     def make_assembler(self):return CWAssembler(self,self.queue)
-    def bandpass(self):return 150,bounds(self.config)[1]+50
+    def bandpass(self):return 150,display_bounds(self.config)[1]+50
     def snapshot(self):
         with self.lock:
-            return dict(self.config,status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
+            return dict(self.config,display_low_hz=display_bounds(self.config)[0],display_high_hz=display_bounds(self.config)[1],decode_low_hz=bounds(self.config)[0],decode_high_hz=bounds(self.config)[1],status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
                         tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds)
 
 

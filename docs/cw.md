@@ -142,3 +142,6 @@ acquisition and speed estimation. Both worker processes (including additional
 empty acquired tracks) and the shared virtual display were gone after closing
 the decoder. Settings/history/resampler checks passed as well. These controlled
 fixtures do not establish off-air accuracy.
+
+See [the CW waterfall and signal-slot guide](cw-waterfall.md) for the full-width
+3 kHz overview, selected/active markers, and the engine-specific decoding limits.

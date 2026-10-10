@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import uuid
 import numpy as np
-from cw_modes import bounds
+from cw_modes import bounds,display_bounds
 from cw_fldigi import FldigiEngine,FldigiCapacityError
 
 RATE=12000
@@ -47,6 +47,8 @@ class CWDecoder:
         self.spacing=150 if config.get('engine')=='fldigi' else 85
         self.engine_type=FldigiEngine if config.get("engine")=="fldigi" else MorseEngine
         self.frequency=np.fft.rfftfreq(NFFT,1/RATE);self.mask=(self.frequency>=self.low)&(self.frequency<=self.high)
+        self.view_low,self.view_high=display_bounds(config)
+        self.view_mask=(self.frequency>=self.view_low)&(self.frequency<=self.view_high)
         self.capacity_limited=False
         self.window=np.hanning(NFFT);self.tracks=[];self.events=deque();self.next_scan=RATE;self.frame=0
         # Fail explicitly before consuming a Kiwi channel when native code is absent.
@@ -67,10 +69,10 @@ class CWDecoder:
             self.spectra.append(power)
             self.frame+=1
             if self.frame%2==0:
-                db=10*np.log10(power[self.mask]+1e-12)
+                db=10*np.log10(power[self.view_mask]+1e-12)
                 floor=max(float(np.median(db)),float(db.max())-40)
                 pixels=np.clip((db-floor)/35,0,1)
-                self.waterfall.append(np.interp(np.linspace(self.low,self.high,768),self.frequency[self.mask],pixels))
+                self.waterfall.append(np.interp(np.linspace(self.view_low,self.view_high,768),self.frequency[self.view_mask],pixels))
             self.pending=self.pending[HOP:]
         if self.samples>=self.next_scan and self.spectra:
             self.acquire();self.next_scan=self.samples+RATE//2

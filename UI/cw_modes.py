@@ -14,6 +14,23 @@ def center_offset(config):
 def bounds(config):
     return (200,3200) if config.get("engine")=="fldigi" else (200,1200)
 
+def display_bounds(config=None):
+    """Overview bandwidth, independent of a decoder engine's acquisition range."""
+    return 200,3200
+
+
+def signal_markers(row, selected=None):
+    """Map tracked audio tones into the overview without clamping off-screen signals."""
+    low,high=display_bounds(row)
+    markers=[]
+    for index,track in enumerate(row.get('tracks',[])[:4]):
+        tone=track.get('tone_hz',track['rf_hz']-row['freq_khz']*1000)
+        if low<=tone<=high:
+            markers.append(dict(id=track['id'],slot=index+1,fraction=(tone-low)/(high-low),
+                                selected=track['id']==selected,active=bool(track.get('active'))))
+    return markers
+
+
 def settings(payload,preset):
     engine=payload.get("engine",preset.get("engine","ggmorse"))
     if engine not in ("ggmorse","fldigi"):raise ValueError("Choose GGMorse or fldigi")
@@ -30,7 +47,7 @@ def settings(payload,preset):
     if 'rf_khz' in payload:
         try:result['freq_khz']=float(payload['rf_khz'])-center_offset(result)
         except (ValueError,TypeError):raise ValueError('Enter a valid RF center in kHz')
-    if not math.isfinite(result['freq_khz']) or not .001<=result['freq_khz']<=30000-bounds(result)[1]/1000:raise ValueError('Keep the receiving window within 0–30 MHz')
+    if not math.isfinite(result['freq_khz']) or not .001<=result['freq_khz']<=30000-display_bounds(result)[1]/1000:raise ValueError('Keep the receiving window within 0–30 MHz')
     if not 200<=result['tone_hz']<=bounds(result)[1]:raise ValueError(f'Locked tone must be 200–{bounds(result)[1]} Hz')
     if result['wpm']!=0 and not 5<=result['wpm']<=55:raise ValueError('Use Auto (0), or 5–55 WPM')
     if not 6<=result['squelch_db']<=30:raise ValueError('Signal gate must be 6–30 dB')

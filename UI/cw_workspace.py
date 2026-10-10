@@ -1,7 +1,7 @@
 """1280×800 CW console: stable waterfall, four signal rows and readable text."""
 import math
 from sstv_workspace import SSTVWorkspace
-from cw_modes import PRESETS,settings,center_offset,bounds
+from cw_modes import PRESETS,settings,center_offset,bounds,display_bounds,signal_markers
 
 
 class CWWorkspace(SSTVWorkspace):
@@ -72,19 +72,37 @@ class CWWorkspace(SSTVWorkspace):
         self.text(cache,312,100,f"{row['name']} · {row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz center",21,width=716)
         self.text(cache,312,126,row['status']+' · '+row.get('detail',''),15,width=716)
         self.button(cache,(1050,78,1260,132),'STOP' if row['running'] else 'START',('toggle',row['id']))
-        self.ui.draw_logical_rect(16,150,1260,524,(10,29,38,255))
-        if row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
-        lo,hi=bounds(row)
-        for x,offset in ((26,lo),(568,(lo+hi)/2),(1110,hi)):
-            self.text(cache,x,509,f"{(row['freq_khz']*1000+offset)/1e6:.6f}",18)
-        self.text(cache,24,543,f"{row.get('engine','ggmorse').upper()} · {(hi-lo)/1000:g} kHz · MHz RF → · newest at bottom · about 10 s",17)
         tracks=row.get('tracks',[])
         if not any(t['id']==self.selected_track for t in tracks):self.selected_track=tracks[0]['id'] if tracks else None
+        self.ui.draw_logical_rect(16,150,1260,524,(10,29,38,255))
+        if row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
+        lo,hi=display_bounds(row)
+        decode_lo,decode_hi=bounds(row)
+        if decode_hi<hi:
+            edge=18+1240*(decode_hi-lo)/(hi-lo)
+            self.ui.draw_logical_rect(edge,152,1258,490,(4,12,20,110))
+            self.ui.draw_logical_line(edge,152,edge,490,(144,172,189,220),1)
+            self.text(cache,edge+12,185,'OVERVIEW ONLY',17,(164,185,194))
+        for i in range(7):
+            fraction=i/6;x=18+1240*fraction
+            self.ui.draw_logical_line(x,480,x,490,(172,205,217,255),1)
+            self.text(cache,max(24,min(1130,x-59)),510,
+                      f"{(row['freq_khz']*1000+lo+(hi-lo)*fraction)/1e6:.6f}",17)
+        for marker in signal_markers(row,self.selected_track):
+            x=18+1240*marker['fraction']
+            color=(255,210,103) if marker['selected'] else ((104,234,194) if marker['active'] else (151,163,176))
+            if marker['active']:self.ui.draw_logical_line(x,152,x,490,(*color,220),2 if marker['selected'] else 1)
+            else:
+                for y in range(152,490,16):self.ui.draw_logical_line(x,y,x,min(y+8,490),(*color,210),2 if marker['selected'] else 1)
+            bx=max(18,min(1220,x-18));self.ui.draw_logical_rect(bx,154,bx+36,184,(*color,255))
+            self.text(cache,bx+10,175,str(marker['slot']),19,(7,18,25))
+            self.actions.append(((max(18,x-22),152,min(1258,x+22),490),('track',marker['id'])))
+        self.text(cache,24,543,f"3 kHz view · {row.get('engine','ggmorse').upper()} scans {(decode_hi-decode_lo)/1000:g} kHz · Yellow: selected · Green: active · Dashed: fading",17)
         for i in range(4):
             x=16+i*314
             if i<len(tracks):
                 t=tracks[i]
-                self.button(cache,(x,563,x+302,633),f"{t['rf_hz']/1e6:.6f} MHz",('track',t['id']),
+                self.button(cache,(x,563,x+302,633),f"{i+1} · {t['rf_hz']/1e6:.6f} MHz",('track',t['id']),
                     f"{t['wpm']:g} WPM · "+('TRACKING' if t['active'] else 'FADING'),self.selected_track==t['id'])
             else:
                 self.ui.draw_logical_rect(x,563,x+302,633,(17,34,42,255))
@@ -121,14 +139,14 @@ class CWWorkspace(SSTVWorkspace):
             x=24+i%5*248;y=264+i//5*62
             self.button(cache,(x,y,x+236,y+54),p['band'],('preset',dict(p)),active=self.preset['band']==p['band'])
         p=self.preset
-        self.button(cache,(24,392,616,442),'GGMORSE · 1 kHz',('set',('engine','ggmorse')),active=p.get('engine','ggmorse')=='ggmorse')
-        self.button(cache,(632,392,1256,442),'FLDIGI · 3 kHz',('set',('engine','fldigi')),active=p.get('engine')=='fldigi')
+        self.button(cache,(24,392,616,442),'GGMORSE · 1 kHz decode',('set',('engine','ggmorse')),active=p.get('engine','ggmorse')=='ggmorse')
+        self.button(cache,(632,392,1256,442),'FLDIGI · 3 kHz decode',('set',('engine','fldigi')),active=p.get('engine')=='fldigi')
         self.button(cache,(24,450,616,502),'AUTO SCAN · UP TO 4 SIGNALS',('set',('cw_mode','SCAN')),active=p['cw_mode']=='SCAN')
         self.button(cache,(632,450,1256,502),'LOCK TO ONE TONE',('set',('cw_mode','LOCK')),active=p['cw_mode']=='LOCK')
         for i,(key,label,value) in enumerate((('rf_khz','RF center kHz',p['freq_khz']+center_offset(p)),('tone_hz','Locked tone Hz',p['tone_hz']),('wpm','Speed WPM (0 = Auto)',p['wpm']),('squelch_db','Signal gate dB',p['squelch_db']))):
             x=24+i%2*632;y=514+i//2*64
             self.button(cache,(x,y,x+600,y+58),f'{label}: {value:g}',('number',key))
-        self.text(cache,24,648,f"{(bounds(p)[1]-200)/1000:g} kHz window · up to four signals · speed 5–55 WPM",20)
+        self.text(cache,24,648,f"{(bounds(p)[1]-200)/1000:g} kHz decode · 3 kHz overview · up to four signals · speed 5–55 WPM",20)
         self.text(cache,24,681,'Presets are starting points. CW activity is spread across each band.',18)
         self.button(cache,(24,718,244,780),'CANCEL',('cancel_add',None))
         self.text(cache,266,746,self.message,17,width=690)
