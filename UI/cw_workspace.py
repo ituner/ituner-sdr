@@ -1,7 +1,7 @@
 """1280×800 CW console: stable waterfall, four signal rows and readable text."""
 import math
 from sstv_workspace import SSTVWorkspace
-from cw_modes import PRESETS,settings,center_offset,bounds,display_bounds,signal_markers
+from cw_modes import PRESETS,settings,center_offset,bounds,display_bounds,signal_markers,VIEW_SPANS
 
 
 class CWWorkspace(SSTVWorkspace):
@@ -34,9 +34,10 @@ class CWWorkspace(SSTVWorkspace):
         return True
 
     def pan_target(self,row,dx):
-        lo,hi=display_bounds(row)
+        session=self.manager.sessions.get(row['id'])
+        lo,hi=session.waterfall.display_range() if session else display_bounds(row)
         shift_hz=round(-dx*(hi-lo)/1240/10)*10
-        return round(max(.001,min(30000-hi/1000,row['freq_khz']+shift_hz/1000)),6)
+        return round(max(.001,min(29996.8,row['freq_khz']+shift_hz/1000)),6)
 
     def pan_frequency(self,dx):
         if not self.manager.configs:return
@@ -111,8 +112,9 @@ class CWWorkspace(SSTVWorkspace):
         if self.pan_dx:row['freq_khz']=self.pan_target(row,self.pan_dx)
         # Keep fixed RF signals under the moving scale during preview/pending tuning.
         row['tracks']=[dict(t,tone_hz=t['rf_hz']-row['freq_khz']*1000) for t in row.get('tracks',[])]
-        self.button(cache,(16,78,150,132),'< RX',('rx',-1))
-        self.button(cache,(162,78,296,132),'RX >',('rx',1))
+        self.button(cache,(16,78,74,132),'−',('span',-1))
+        self.button(cache,(84,78,226,132),f"{row.get('view_span_khz',3):g} kHz view",('span',1))
+        self.button(cache,(236,78,296,132),'+',('span',1))
         self.text(cache,312,100,f"{row['name']} · {row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz center",21,width=716)
         self.text(cache,312,126,row['status']+' · '+row.get('detail',''),15,width=716)
         self.button(cache,(1050,78,1260,132),'STOP' if row['running'] else 'START',('toggle',row['id']))
@@ -126,15 +128,18 @@ class CWWorkspace(SSTVWorkspace):
             for key in list(self.live_textures):
                 if key!=row['id']:self.live_textures.pop(key).close()
             if row['id'] not in self.live_textures:self.live_textures[row['id']]=WaterfallTexture(self.ui)
-            self.live_textures[row['id']].draw(session.waterfall,(18,152,1258,490),offset=(stream_freq-row['freq_khz'])*1240/3)
+            self.live_textures[row['id']].draw(session.waterfall,(18,152,1258,490),offset=(stream_freq-row['freq_khz'])*1240000/(row.get('display_high_hz',3200)-row.get('display_low_hz',200)))
         elif row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
-        lo,hi=display_bounds(row)
+        lo,hi=row.get('display_low_hz',200),row.get('display_high_hz',3200)
         decode_lo,decode_hi=bounds(row)
-        if decode_hi<hi:
-            edge=18+1240*(decode_hi-lo)/(hi-lo)
-            self.ui.draw_logical_rect(edge,152,1258,490,(4,12,20,110))
-            self.ui.draw_logical_line(edge,152,edge,490,(144,172,189,220),1)
-            self.text(cache,edge+12,185,'OVERVIEW ONLY',17,(164,185,194))
+        if hi-lo>3001 or decode_hi<hi:
+            left=18+1240*max(0,min(1,(decode_lo-lo)/(hi-lo)))
+            right=18+1240*max(0,min(1,(decode_hi-lo)/(hi-lo)))
+            self.ui.draw_logical_rect(18,152,left,490,(4,12,20,120))
+            self.ui.draw_logical_rect(right,152,1258,490,(4,12,20,120))
+            for edge in (left,right):self.ui.draw_logical_line(edge,152,edge,490,(104,234,194,255),2)
+            self.text(cache,max(22,min(1090,left+6)),478,'DECODE',16,(104,234,194))
+        if hi-lo>3001:self.actions.append(((18,152,1258,490),('tune_point',(row['id'],row['freq_khz'],lo,hi))))
         for i in range(7):
             fraction=i/6;x=18+1240*fraction
             self.ui.draw_logical_line(x,480,x,490,(172,205,217,255),1)
@@ -149,7 +154,10 @@ class CWWorkspace(SSTVWorkspace):
             bx=max(18,min(1220,x-18));self.ui.draw_logical_rect(bx,154,bx+36,184,(*color,255))
             self.text(cache,bx+10,175,str(marker['slot']),19,(7,18,25))
             self.actions.append(((max(18,x-22),152,min(1258,x+22),490),('track',marker['id'])))
-        self.text(cache,24,543,f"{'Kiwi waterfall' if row.get('waterfall_source')=='kiwi' else 'Audio waterfall (fallback)'} · 3 kHz · Swipe to tune · Yellow: selected · Green: active",17)
+        source='Kiwi waterfall' if row.get('waterfall_source')=='kiwi' else 'Audio fallback'
+        limited=row.get('view_span_khz',3)>(hi-lo)/1000+.01
+        hint=' · wider view needs Kiwi waterfall' if limited else ' · Swipe to tune · tap signal to listen/select'
+        self.text(cache,24,543,f"{source} · {(hi-lo)/1000:g} kHz shown · {(decode_hi-decode_lo)/1000:g} kHz decode"+hint,17,width=1210)
         for i in range(4):
             x=16+i*314
             if i<len(tracks):
@@ -183,13 +191,14 @@ class CWWorkspace(SSTVWorkspace):
             self.text(cache,x+14,y+26,f"{row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz · {row['cw_mode']}",22,width=580)
             self.text(cache,x+14,y+60,row['name'],18,width=580)
             self.text(cache,x+14,y+90,row['status']+' · '+row.get('detail',''),16,width=580)
-            for dx,label,action in ((14,'STOP' if row['running'] else 'START','toggle'),(160,'EDIT','edit'),(304,'LIVE','select_rx'),(448,'DELETE','delete')):
+            self.actions.append(((x,y,x+612,y+120),('select_rx',row['id'])))
+            for dx,label,action in ((14,'STOP' if row['running'] else 'START','toggle'),(222,'EDIT','edit'),(448,'DELETE','delete')):
                 self.button(cache,(x+dx,y+126,x+dx+140,y+178),label,(action,row['id']))
         if self.delete_armed:
             self.text(cache,24,748,'Remove receiver? Saved text is kept.',21)
             self.button(cache,(824,716,1020,780),'REMOVE',('confirm_delete',self.delete_armed))
             self.button(cache,(1032,716,1260,780),'CANCEL',('cancel_delete',None))
-        else:self.text(cache,24,744,self.message or 'One Kiwi channel per receiver · all selected signals share its audio.',19,width=1215)
+        else:self.text(cache,24,744,self.message or 'Tap a receiver card to open its live view.',19,width=1215)
 
     def draw_add(self,cache,receivers):
         self.text(cache,24,32,'EDIT CW RECEIVER' if self.edit_id else 'ADD CW RECEIVER',28,(104,234,194))
@@ -226,6 +235,16 @@ class CWWorkspace(SSTVWorkspace):
             elif key=='decoders':self.history_open=False;super().tap(x,y,receivers)
             elif key=='select_rx':self.receiver_index=next(i for i,r in enumerate(self.manager.configs) if r['id']==value);self.decoders_open=False;self.history_open=False
             elif key=='rx':self.move_receiver(value)
+            elif key=='span':
+                row=self.manager.configs[self.receiver_index]
+                index=VIEW_SPANS.index(row.get('view_span_khz',3))
+                self.manager.set_span(row['id'],VIEW_SPANS[max(0,min(len(VIEW_SPANS)-1,index+value))])
+            elif key=='tune_point':
+                key,dial,lo,hi=value
+                row=next(r for r in self.manager.configs if r['id']==key)
+                freq=max(.001,min(29996.8,dial+(lo+(x-18)*(hi-lo)/1240)/1000-center_offset(row)))
+                self.manager.update(key,row['name'],row['server'],{'freq_khz':round(freq,3)})
+                self.selected_track=None
             elif key=='track':
                 row=self.manager.snapshot()[self.receiver_index]
                 self.manager.select_track(row['id'],value)

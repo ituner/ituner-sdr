@@ -4,6 +4,8 @@ Kiwi wire layout follows jks-prv/Beagle_SDR_GPS web/openwebrx/openwebrx.js:
 the header carries the actual starting bin and zoom, not the requested center.
 """
 import base64
+import math
+from cw_modes import overview_bounds
 from collections import deque
 import select
 import socket
@@ -22,15 +24,20 @@ def rgba(row):
     return np.uint8(np.stack((v*v*.7,v*.95,v*.8+.035,np.ones_like(v)),axis=-1)*255).tobytes()
 
 
-def kiwi_row(message,dial_hz,bandwidth=30000000,offset_hz=0):
+def overview_zoom(span_khz,bandwidth=30000000):
+    return max(0,min(14,int(math.floor(math.log2(bandwidth/(span_khz*1000*1.02))))))
+
+
+def kiwi_row(message,dial_hz,bandwidth=30000000,offset_hz=0,span_khz=3):
     if len(message)!=1040 or message[:3]!=b'W/F':return None
     start,flags,_=struct.unpack_from('<III',message,4)
     zoom=flags&0xffff
-    if zoom!=13 or flags&65536:return None  # discard startup/old zoom rows
+    if zoom>14 or flags&65536:return None  # discard startup/old zoom rows
     left=start*bandwidth/(1024*2**14)+offset_hz
     step=bandwidth/(2**zoom*1024)
     frequencies=left+np.arange(1024)*step
-    target=np.linspace(dial_hz+200,dial_hz+3200,WIDTH)
+    low,high=overview_bounds({'freq_khz':dial_hz/1000,'view_span_khz':span_khz})
+    target=np.linspace(dial_hz+low,dial_hz+high,WIDTH)
     if target[0]<left or target[-1]>frequencies[-1]:return None
     values=np.frombuffer(message,dtype=np.uint8,offset=16).astype(np.float32)
     # Kiwi uncompressed values increase with power. Relative contrast is used
@@ -46,18 +53,23 @@ class LiveWaterfall:
         self.frequencies=np.fft.rfftfreq(FFT,1/RATE)
         self.target=np.linspace(200,3200,WIDTH)
         self.rows=deque(maxlen=HEIGHT);self.seq=0;self.epoch=uuid.uuid4().hex
+        self.low,self.high=200,3200;self.kiwi_bounds=(200,3200)
         self.source='audio';self.kiwi=None;self.kiwi_at=-1e9;self.reason='Waiting for Kiwi waterfall'
 
     def reset(self):
         with self.lock:
             self.pending=np.empty(0,dtype=np.float32);self.rows.clear()
-            self.seq=0;self.epoch=uuid.uuid4().hex;self.kiwi=None;self.kiwi_at=-1e9;self.source='audio'
+            self.seq=0;self.epoch=uuid.uuid4().hex;self.kiwi=None;self.kiwi_at=-1e9;self.source='audio';self.low,self.high=200,3200
 
     def unavailable(self,reason):
         with self.lock:self.kiwi=None;self.kiwi_at=-1e9;self.reason=reason
 
-    def receive(self,row):
-        with self.lock:self.kiwi=np.asarray(row,dtype=np.uint8).copy();self.kiwi_at=self.clock()
+    def receive(self,row,view_bounds=(200,3200)):
+        with self.lock:
+            self.kiwi=np.asarray(row,dtype=np.uint8).copy();self.kiwi_at=self.clock();self.kiwi_bounds=view_bounds
+
+    def display_range(self):
+        with self.lock:return self.low,self.high
 
     def feed(self,pcm):
         # Runs on the audio decoder thread. Always calculate the fallback, so
@@ -71,8 +83,9 @@ class LiveWaterfall:
             with self.lock:
                 source='kiwi' if self.kiwi is not None and self.clock()-self.kiwi_at<3 else 'audio'
                 if source=='audio' and self.source=='kiwi':self.reason='Kiwi stream stalled; retrying'
-                if source!=self.source:
-                    self.rows.clear();self.epoch=uuid.uuid4().hex;self.seq=0;self.source=source
+                low,high=self.kiwi_bounds if source=='kiwi' else (200,3200)
+                if source!=self.source or (low,high)!=(self.low,self.high):
+                    self.rows.clear();self.epoch=uuid.uuid4().hex;self.seq=0;self.source=source;self.low,self.high=low,high
                 self.seq+=1
                 self.rows.append(bytes(self.kiwi if source=='kiwi' else audio))
             self.pending=self.pending[HOP:]
@@ -83,7 +96,7 @@ class LiveWaterfall:
             count=len(self.rows) if reset else max(0,min(len(self.rows),self.seq-after))
             rows=list(self.rows)[-count:] if count else []
             result=dict(epoch=self.epoch,seq=self.seq,reset=reset,width=WIDTH,height=HEIGHT,fps=FPS,
-                        source=self.source,detail=('Kiwi waterfall' if self.source=='kiwi' else 'Audio waterfall · '+self.reason),
+                        source=self.source,low_hz=self.low,high_hz=self.high,detail=('Kiwi waterfall' if self.source=='kiwi' else 'Audio waterfall · '+self.reason),
                         rows=base64.b64encode(b''.join(rows)).decode() if encoded else rows)
             return result
 
@@ -109,21 +122,27 @@ class KiwiWaterfall:
                 ws=k.KiwiWebSocket.connect(s.config['server'],'W/F',timeout=5,session_timestamp=self.timestamp)
                 self.ws=ws
                 k.send_kiwi_setup(ws,'kiwi',s.user+'-CW')
-                auth=False;configured=False;bandwidth=30000000;offset_hz=0;configured_freq=None
+                auth=False;configured=False;bandwidth=30000000;offset_hz=0;configured_view=None
                 channel=wf_channels=None;hardware=None
                 last=time.monotonic();keepalive=last;retry_at=last+30
                 while not self.stop_event.is_set():
                     now=time.monotonic()
-                    if configured and configured_freq!=s.config['freq_khz']:
-                        k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4)
-                        configured_freq=s.config['freq_khz'];last=now
+                    with s.lock:config=dict(s.config)
+                    view=(config['freq_khz'],config.get('view_span_khz',3))
+                    low,high=overview_bounds(config)
+                    center=config['freq_khz']+(low+high)/2000-offset_hz/1000
+                    zoom=overview_zoom(view[1],bandwidth)
+                    if configured and configured_view!=view:
+                        s.waterfall.unavailable('Updating waterfall zoom')
+                        k.send_wf_setup(ws,center,zoom,4)
+                        configured_view=view;last=now
                     if not configured and now-last>8:raise RuntimeError('Kiwi waterfall handshake timed out')
                     # Closing an idle paired W/F may also close SND on Kiwi.
                     # Keep it alive while audio fallback runs; retry setup in place.
                     if configured and hardware is not False and now-last>3:
                         s.waterfall.unavailable('Kiwi waterfall unavailable; using audio')
                         if now>=retry_at:
-                            k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4)
+                            k.send_wf_setup(ws,center,zoom,4)
                             retry_at=now+30
                     if now-keepalive>5:ws.send_text('SET keepalive');keepalive=now
                     if not select.select([ws.sock],[],[],.2)[0]:continue
@@ -140,10 +159,10 @@ class KiwiWaterfall:
                         if 'bandwidth' in p:bandwidth=float(p['bandwidth'])
                         if 'freq_offset' in p:offset_hz=float(p['freq_offset'])*1000
                         if auth and not configured:
-                            k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4);configured=True;configured_freq=s.config['freq_khz']
+                            k.send_wf_setup(ws,center,zoom,4);configured=True;configured_view=view
                     elif configured and hardware is not False and message[:3]==b'W/F':
-                        row=kiwi_row(message,s.config['freq_khz']*1000,bandwidth,offset_hz)
-                        if row is not None:s.waterfall.receive(row);last=now
+                        row=kiwi_row(message,view[0]*1000,bandwidth,offset_hz,view[1])
+                        if row is not None:s.waterfall.receive(row,(low,high));last=now
             except Exception as exc:
                 s.waterfall.unavailable(str(exc)[:100])
             finally:

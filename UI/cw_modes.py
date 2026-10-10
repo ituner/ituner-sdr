@@ -8,6 +8,16 @@ PRESETS=tuple(dict(id=band,band=band+' m',mode='usb',freq_khz=rf-.7,
                    ('30',10116),('20',14025),('17',18080),('15',21025),('12',24905),('10',28025)))
 
 
+VIEW_SPANS=(3,5,10,20,50)
+
+
+def overview_bounds(config):
+    span=float(config.get("view_span_khz",3))*1000
+    dial=config.get("freq_khz",7024.3)*1000
+    low=max(-dial,min(1700-span/2,30000000-dial-span))
+    return low,low+span
+
+
 def center_offset(config):
     return 1.7 if config.get("engine")=="fldigi" else .7
 
@@ -21,7 +31,7 @@ def display_bounds(config=None):
 
 def signal_markers(row, selected=None):
     """Map tracked audio tones into the overview without clamping off-screen signals."""
-    low,high=display_bounds(row)
+    low,high=row.get('display_low_hz',200),row.get('display_high_hz',3200)
     markers=[]
     for index,track in enumerate(row.get('tracks',[])[:4]):
         tone=track.get('tone_hz',track['rf_hz']-row['freq_khz']*1000)
@@ -34,7 +44,9 @@ def signal_markers(row, selected=None):
 def settings(payload,preset):
     engine=payload.get("engine",preset.get("engine","ggmorse"))
     if engine not in ("ggmorse","fldigi"):raise ValueError("Choose GGMorse or fldigi")
-    result={"engine":engine}
+    span=payload.get('view_span_khz',preset.get('view_span_khz',3))
+    if isinstance(span,bool) or span not in VIEW_SPANS:raise ValueError('Choose a 3, 5, 10, 20 or 50 kHz view')
+    result={"engine":engine,"view_span_khz":span}
     for key,default in [('freq_khz',7024.3),('tone_hz',700),('wpm',0),('squelch_db',12),('max_tracks',4)]:
         try:result[key]=float(payload.get(key,preset.get(key,default)))
         except (ValueError,TypeError):raise ValueError('Enter numeric CW settings')

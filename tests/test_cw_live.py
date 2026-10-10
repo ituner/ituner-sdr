@@ -58,7 +58,7 @@ class LiveTests(unittest.TestCase):
         measured=dial+200+row.argmax()*3000/(WIDTH-1)
         self.assertAlmostEqual(measured,left+index*step,delta=4)
         self.assertIsNone(kiwi_row(packet,dial+5000))
-        self.assertIsNone(kiwi_row(b'W/F\x00'+struct.pack('<III',start,12,5)+values.tobytes(),dial))
+        self.assertIsNotNone(kiwi_row(b'W/F\x00'+struct.pack('<III',start,12,5)+values.tobytes(),dial)) # lower-resolution Kiwi modes still cover the requested range
         self.assertIsNone(kiwi_row(b'W/F\x00'+struct.pack('<III',start,13|65536,5)+values.tobytes(),dial))
 
     def test_bare_ready_flag_not_required_and_idle_pair_is_kept_open(self):
@@ -73,7 +73,7 @@ class LiveTests(unittest.TestCase):
         ws=Mock();ws.recv.return_value=b'MSG badp=0'
         kiwi=SimpleNamespace(KiwiWebSocket=Mock(),send_kiwi_setup=Mock(),send_wf_setup=Mock(),parse_msg_params=lambda message:{'badp':'0'})
         kiwi.KiwiWebSocket.connect.return_value=ws
-        worker.session=SimpleNamespace(kiwi=kiwi,config={'server':'http://kiwi.local','freq_khz':7023.3},user='test',waterfall=LiveWaterfall())
+        worker.session=SimpleNamespace(lock=threading.Lock(),kiwi=kiwi,config={'server':'http://kiwi.local','freq_khz':7023.3},user='test',waterfall=LiveWaterfall())
         clock=[0.]
         def now():clock[0]+=.5;return clock[0]
         ready=[True]

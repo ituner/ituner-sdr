@@ -4,6 +4,8 @@ import time
 
 class GalleryMotion:
     def __init__(self, workspace, mode, clock=time.monotonic):
+        from digital_navigation import install_navigation
+        install_navigation(workspace)
         self.workspace=workspace;self.mode=mode;self.clock=clock
         self.bounds={'sstv':(0,80,1280,720),'hell':(0,80,1280,720),
                      'qrss':(0,72,1280,800),'cw':(0,150,1280,790)}[mode]

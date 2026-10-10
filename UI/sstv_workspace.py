@@ -201,6 +201,7 @@ class SSTVWorkspace:
             x = 16 + (index % 2) * 630
             y = 96 + (index // 2) * 202
             ui.draw_logical_rect(x, y, x+612, y+188, (17, 40, 47, 255))
+            self.actions.append(((x,y,x+612,y+120),('filter',row['id'])))
             item = next((item for item in images if item['session_id'] == row['id']), None)
             width = 370 if item else 580
             self.text(cache, x+16, y+24, f"{row['band']} · {row['freq_khz']/1000:.3f} MHz {row['mode'].upper()}", 21, width=width)

@@ -175,7 +175,7 @@ class CWSession(Session):
     def bandpass(self):return 150,display_bounds(self.config)[1]+50
     def snapshot(self):
         with self.lock:
-            return dict(self.config,display_low_hz=display_bounds(self.config)[0],display_high_hz=display_bounds(self.config)[1],decode_low_hz=bounds(self.config)[0],decode_high_hz=bounds(self.config)[1],status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
+            return dict(self.config,display_low_hz=self.waterfall.display_range()[0],display_high_hz=self.waterfall.display_range()[1],decode_low_hz=bounds(self.config)[0],decode_high_hz=bounds(self.config)[1],status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
                         tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds,
                         waterfall_source=self.waterfall.source,waterfall_freq_khz=self.config['freq_khz'],listen=self.listener.snapshot() if self.listener else {})
 
@@ -241,7 +241,15 @@ class CWManager(SSTVManager):
                 if old.thread and old.thread.is_alive():raise ValueError('Receiver is still stopping; retry shortly')
                 self.sessions.pop(key,None)
         config.update(updated);self.save()
+        if not changed and session:
+            with session.lock:
+                session.config['view_span_khz']=updated['view_span_khz']
+                if session.pending_tune is not None:session.pending_tune['view_span_khz']=updated['view_span_khz']
         if changed and not config.get('paused'):self.start(config)
+
+    def set_span(self,key,span):
+        row=next(r for r in self.configs if r['id']==key)
+        self.update(key,row['name'],row['server'],{'view_span_khz':span})
 
     def select_track(self,key,track_id):
         # Selection never turns listening on. Check actual state, not a web

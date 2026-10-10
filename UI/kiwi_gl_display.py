@@ -26388,7 +26388,10 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "wspr_expanded_log":
                             if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
-                                if wspr_history_view.tap(x, y) == 'back':
+                                navigation = wspr_history_view.tap(x, y)
+                                if navigation == 'home':
+                                    wspr_panel_open = False
+                                if navigation in ('back', 'home'):
                                     wspr_expanded_log_open = False
                                     wspr_expanded_log_id = ""
                                     wspr_expanded_log_scroll = 0

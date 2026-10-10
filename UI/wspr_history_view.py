@@ -66,7 +66,8 @@ class WSPRHistoryView:
         self.refresh();self.actions=[]
         self.ui.draw_logical_rect(0,0,1280,800,(2,11,16,255))
         self.text(cache,24,30,'WSPR history',28)
-        self.button(cache,(1102,10,1262,66),'Back',('back',))
+        self.button(cache,(1102,10,1178,66),'BACK',('back',))
+        self.button(cache,(1186,10,1262,66),'HOME',('home',))
         if self.settings is not None:
             self.draw_settings(cache)
             return
@@ -121,6 +122,7 @@ class WSPRHistoryView:
         action=next((a for box,a in self.actions if box[0]<=x<=box[2] and box[1]<=y<=box[3]),None)
         if not action:return
         key=action[0]
+        if key=='home':self.settings=None;return 'home'
         if key=='back':
             if self.settings is not None:self.settings=None;return
             return 'back'
