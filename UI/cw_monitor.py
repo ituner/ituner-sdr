@@ -14,6 +14,7 @@ from PIL import Image
 from sstv_monitor import Session, SSTVManager, atomic_json
 from cw_modes import bounds,settings,display_bounds
 from cw_decoder import CWDecoder, RATE
+from cw_waterfall import LiveWaterfall, KiwiWaterfall
 
 
 def utc(stamp=None):
@@ -83,11 +84,14 @@ class CWAssembler:
         if self.decoder:
             self.publish();self.decoder.close()
         self.decoder=CWDecoder(self.session.config);self.next_publish=0;self.started=time.time()
+        self.session.waterfall.reset()
         with self.session.lock:
             self.session.tracks=[];self.session.image_version=0;self.session.audio_seconds=0
             self.session.capacity_limited=False
 
     def feed(self,pcm):
+        self.session.waterfall.feed(pcm)
+        if self.session.listener:self.session.listener.submit(self.session.config['id'],pcm)
         self.decoder.feed(pcm)
         if self.decoder.samples>=self.next_publish:
             self.publish();self.next_publish=self.decoder.samples+RATE
@@ -98,8 +102,9 @@ class CWAssembler:
             self.store.append(self.session.config,track,text,utc(self.started+sample_time))
         self.decoder.events.clear()
         # Pixel-only image: labels are drawn at native size in both interfaces.
-        if self.decoder.waterfall:
-            rows=np.asarray(self.decoder.waterfall)
+        live_rows=self.session.waterfall.read()['rows']
+        if live_rows:
+            rows=np.asarray([np.frombuffer(r,dtype=np.uint8) for r in live_rows],dtype=np.float32)/255
             values=np.zeros((240,rows.shape[1]),dtype=np.float32);values[-len(rows):]=rows
             rgb=np.stack((values**2*.7,values*.95,values*.8+.035),axis=-1)
             image=Image.fromarray(np.uint8(np.clip(rgb,0,1)*255))
@@ -108,7 +113,7 @@ class CWAssembler:
         with self.session.lock:
             self.session.capacity_limited=self.decoder.capacity_limited
             self.session.tracks=tracks
-            if self.decoder.waterfall:self.session.image_version+=1
+            if live_rows:self.session.image_version+=1
             self.session.audio_seconds=round(self.decoder.samples/RATE,1)
             self.session.last_decode=next((r['text'][-100:].strip() for r in tracks if r['text'].strip()),'')
 
@@ -121,12 +126,24 @@ class CWSession(Session):
     listening_message='Scanning 1 kHz for Morse signals · automatic speed'
     def __init__(self,*args):
         super().__init__(*args);self.listening_message=f"{self.config.get('engine','ggmorse')} · scanning {(bounds(self.config)[1]-200)/1000:g} kHz · up to 4 signals";self.tracks=[];self.image_version=0;self.audio_seconds=0;self.capacity_limited=False
+        self.waterfall=LiveWaterfall();self.wf_worker=None;self.listener=None
+    def connection_ready(self,timestamp):
+        self.connection_closed()
+        self.wf_worker=KiwiWaterfall(self,timestamp)
+    def connection_closed(self):
+        if self.wf_worker:self.wf_worker.stop();self.wf_worker=None
+        self.waterfall.unavailable('Kiwi stream disconnected')
+    def stop(self):
+        super().stop()
+        self.connection_closed()
+        if self.listener:self.listener.stop(self.config['id'])
     def make_assembler(self):return CWAssembler(self,self.queue)
     def bandpass(self):return 150,display_bounds(self.config)[1]+50
     def snapshot(self):
         with self.lock:
             return dict(self.config,display_low_hz=display_bounds(self.config)[0],display_high_hz=display_bounds(self.config)[1],decode_low_hz=bounds(self.config)[0],decode_high_hz=bounds(self.config)[1],status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
-                        tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds)
+                        tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds,
+                        waterfall_source=self.waterfall.source,listen=self.listener.snapshot() if self.listener else {})
 
 
 class CWManager(SSTVManager):
@@ -134,6 +151,7 @@ class CWManager(SSTVManager):
         self.root=Path(root or os.environ.get('ITUNER_CW_DIR','~/.local/share/ituner-sdr/cw')).expanduser()
         self.gallery=CWHistory(self.root);self.config_path=self.root/'sessions.json'
         self.kiwi,self.user=kiwi,user;self.configs=[];self.sessions={};self.web=None;self.web_port=8073;self.web_error=''
+        self.listener=None
         self.next_start=time.monotonic()+40
         try:
             for config in json.loads(self.config_path.read_text())[:6]:
@@ -166,6 +184,7 @@ class CWManager(SSTVManager):
             if old.thread:old.thread.join(timeout=3)
             if old.thread and old.thread.is_alive():raise ValueError('Receiver is still stopping; retry shortly')
         session=CWSession(config,self.kiwi,self.gallery,self.user)
+        session.listener=self.listener
         self.sessions[config['id']]=session;session.start()
 
     def update(self,key,name,server,preset):
@@ -183,9 +202,27 @@ class CWManager(SSTVManager):
         config.update(updated);self.save()
         if changed and not config.get('paused'):self.start(config)
 
+    def listen(self,key,track_id=None):
+        if self.listener is None:raise ValueError('Local audio output is unavailable')
+        if track_id is None:self.listener.stop();return
+        session=self.sessions.get(key)
+        if session is None or session.stop_event.is_set():raise ValueError('Start this decoder first')
+        track=next((t for t in session.snapshot()['tracks'] if t['id']==track_id),None)
+        if track is None:raise ValueError('Signal slot expired; select another signal')
+        self.listener.start(key,track)
+
+    def tick(self):
+        super().tick()
+        if self.listener:
+            listening=self.listener.snapshot()
+            if listening['receiver_id']:
+                session=self.sessions.get(listening['receiver_id'])
+                if not session or not any(t['id']==listening['track_id'] for t in session.snapshot()['tracks']):self.listener.stop()
+
     def history(self,session_id=None):return self.gallery.rows(session_id)
 
     def stop(self):
+        if self.listener:self.listener.stop()
         for session in self.sessions.values():session.stop()
         for session in self.sessions.values():
             if session.thread:session.thread.join(timeout=3)

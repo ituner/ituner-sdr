@@ -258,6 +258,12 @@ class Session:
     def bandpass(self):
         return (-2700, -500) if self.config['mode'] == 'lsb' else (500, 2700)
 
+    def connection_ready(self, timestamp):
+        pass
+
+    def connection_closed(self):
+        pass
+
     def run(self):
         try:
             assembler = self.make_assembler()
@@ -271,8 +277,9 @@ class Session:
                 assembler.reset()
                 self.capture_times.clear()
                 self.report('CONNECTING', self.config['server'])
+                timestamp = time.time_ns()//1000
                 ws = self.kiwi.KiwiWebSocket.connect(self.config['server'], 'SND', timeout=7.0,
-                                                     session_timestamp=time.time_ns()//1000)
+                                                     session_timestamp=timestamp)
                 self.ws = ws
                 if self.stop_event.is_set():
                     break
@@ -315,6 +322,7 @@ class Session:
                             self.kiwi.send_snd_setup(ws, self.config['freq_khz'], mode, low, high,
                                 {'agc': True, 'mute': False, 'nr_algo': 0, 'denoise_level': 0})
                             configured = True
+                            self.connection_ready(timestamp)
                             self.report('LISTENING', self.listening_message)
                         continue
                     if not configured or message[:3] != b'SND' or len(message) < 10:
@@ -346,6 +354,7 @@ class Session:
                 if self.stop_event.wait(delay):
                     break
             finally:
+                self.connection_closed()
                 try:
                     if hasattr(assembler, "flush"):
                         assembler.flush()
@@ -538,6 +547,9 @@ class GalleryHandler(BaseHTTPRequestHandler):
             if path.path in ('/search', '/search/'):
                 data = Path(__file__).with_name('log_search.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path == '/cw-waterfall.js':
+                data = Path(__file__).with_name('cw_waterfall.js').read_bytes()
+                content_type = 'text/javascript; charset=utf-8'
             elif path.path == '/log-search.js':
                 data = Path(__file__).with_name('log_search.js').read_bytes()
                 content_type = 'text/javascript; charset=utf-8'
@@ -551,6 +563,15 @@ class GalleryHandler(BaseHTTPRequestHandler):
             elif path.path in ('/cw','/cw/'):
                 data = Path(__file__).with_name('cw_gallery.html').read_bytes()
                 content_type = 'text/html; charset=utf-8'
+            elif path.path == '/api/cw/waterfall':
+                query = parse_qs(path.query)
+                session = self.server.cw.sessions.get(query.get('id',[''])[0]) if self.server.cw else None
+                if session is None:
+                    self.send_error(404)
+                    return
+                state = session.waterfall.read(query.get('epoch',[''])[0],int(query.get('after',['0'])[0]),encoded=True)
+                data = json.dumps(state).encode()
+                content_type = 'application/json'
             elif path.path == '/api/cw':
                 if self.server.cw is None or self.server.bridge is None:
                     self.send_error(503)

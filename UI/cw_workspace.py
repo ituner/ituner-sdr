@@ -8,7 +8,7 @@ class CWWorkspace(SSTVWorkspace):
     def __init__(self,ui,manager):
         super().__init__(ui,manager)
         self.preset=dict(PRESETS[3]);self.field=None;self.entry='';self.history_open=False
-        self.selected_track=None;self.receiver_index=0
+        self.selected_track=None;self.receiver_index=0;self.live_textures={}
 
     def lines(self,cache,value,x,y,width=1210,count=5,size=22):
         words=value.split();lines=[];line=''
@@ -75,7 +75,15 @@ class CWWorkspace(SSTVWorkspace):
         tracks=row.get('tracks',[])
         if not any(t['id']==self.selected_track for t in tracks):self.selected_track=tracks[0]['id'] if tracks else None
         self.ui.draw_logical_rect(16,150,1260,524,(10,29,38,255))
-        if row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
+        session=self.manager.sessions.get(row['id'])
+        if session and row.get('running'):
+            from cw_waterfall import WaterfallTexture
+            # Keep a single GPU texture for the visible receiver.
+            for key in list(self.live_textures):
+                if key!=row['id']:self.live_textures.pop(key).close()
+            if row['id'] not in self.live_textures:self.live_textures[row['id']]=WaterfallTexture(self.ui)
+            self.live_textures[row['id']].draw(session.waterfall,(18,152,1258,490))
+        elif row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
         lo,hi=display_bounds(row)
         decode_lo,decode_hi=bounds(row)
         if decode_hi<hi:
@@ -97,7 +105,7 @@ class CWWorkspace(SSTVWorkspace):
             bx=max(18,min(1220,x-18));self.ui.draw_logical_rect(bx,154,bx+36,184,(*color,255))
             self.text(cache,bx+10,175,str(marker['slot']),19,(7,18,25))
             self.actions.append(((max(18,x-22),152,min(1258,x+22),490),('track',marker['id'])))
-        self.text(cache,24,543,f"3 kHz view · {row.get('engine','ggmorse').upper()} scans {(decode_hi-decode_lo)/1000:g} kHz · Yellow: selected · Green: active · Dashed: fading",17)
+        self.text(cache,24,543,f"{'Kiwi waterfall' if row.get('waterfall_source')=='kiwi' else 'Audio waterfall (fallback)'} · 3 kHz · 12 s · Yellow: selected · Green: active · Dashed: fading",17)
         for i in range(4):
             x=16+i*314
             if i<len(tracks):
@@ -110,7 +118,19 @@ class CWWorkspace(SSTVWorkspace):
         chosen=next((t for t in tracks if t['id']==self.selected_track),None)
         self.ui.draw_logical_rect(16,647,1260,784,(17,34,42,255))
         self.text(cache,30,669,'DECODED TEXT · '+(f"{chosen['rf_hz']/1e6:.6f} MHz" if chosen else 'waiting'),20,(104,234,194))
+        listening=row.get('listen',{})
+        is_listening=bool(listening.get('track_id'))
+        if chosen or is_listening:
+            self.button(cache,(960,646,1258,691),'STOP LISTENING' if is_listening else 'LISTEN TO SLOT',
+                        ('listen',(row['id'],None if is_listening else chosen['id'])),active=is_listening)
+        if self.message or listening.get('error'):
+            self.text(cache,30,770,self.message or listening['error'],16,(255,210,103),width=1180)
         self.lines(cache,(chosen['text'] if chosen else '') or 'Text appears after several seconds of Morse. Tap a signal to follow it.',30,704,count=3,size=22)
+
+    def close(self):
+        for texture in self.live_textures.values():texture.close()
+        self.live_textures.clear()
+        super().close()
 
     def draw_receivers(self,cache):
         for i,row in enumerate(self.manager.snapshot()):
@@ -163,6 +183,7 @@ class CWWorkspace(SSTVWorkspace):
             elif key=='select_rx':self.receiver_index=next(i for i,r in enumerate(self.manager.configs) if r['id']==value);self.decoders_open=False;self.history_open=False
             elif key=='rx':self.receiver_index=max(0,min(len(self.manager.configs)-1,self.receiver_index+value));self.selected_track=None
             elif key=='track':self.selected_track=value
+            elif key=='listen':self.manager.listen(*value);self.message=''
             elif key=='preset':
                 engine=self.preset.get('engine','ggmorse');self.preset=dict(value);self.preset.update(settings({'engine':engine},self.preset))
             elif key=='set':self.preset.update(settings({value[0]:value[1]},self.preset))

@@ -5527,6 +5527,7 @@ class SharedState:
     def set_external_audio(self, enabled):
         with self.lock:
             self.external_audio = bool(enabled)
+            self.external_audio_generation = getattr(self, 'external_audio_generation', 0) + 1
             self.external_audio_sink_released = not self.external_audio
 
     def external_audio_snapshot(self):
@@ -21211,6 +21212,7 @@ def snd_meter_worker(
                 stop_audio_player(player)
                 player = None
                 player_channels = None
+                state.mark_external_audio_sink_released()
                 if stop_event.wait(0.10):
                     break
                 continue
@@ -22875,6 +22877,9 @@ def main():
     from cw_monitor import CWManager
     from cw_workspace import CWWorkspace
     cw_manager = CWManager(kiwi, args.user)
+    from cw_listen import CWListener
+    cw_manager.listener = CWListener(sys.modules[__name__], args, state,
+                                    available=lambda: not dual_audio_mixer.active_snapshot())
     cw_workspace = CWWorkspace(sys.modules[__name__], cw_manager)
     from qrss_monitor import QRSSManager
     from qrss_workspace import QRSSWorkspace
