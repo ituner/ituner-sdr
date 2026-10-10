@@ -264,6 +264,10 @@ class Session:
     def connection_closed(self):
         pass
 
+    def service_commands(self, ws, assembler):
+        """Receiver-specific work, owned by the network thread."""
+        pass
+
     def run(self):
         try:
             assembler = self.make_assembler()
@@ -292,6 +296,8 @@ class Session:
                 last_keepalive = last_audio
                 previous_seq = None
                 while not self.stop_event.is_set():
+                    if configured:
+                        self.service_commands(ws, assembler)
                     now = time.monotonic()
                     if now-last_audio > 20:
                         raise RuntimeError('Audio timeout')

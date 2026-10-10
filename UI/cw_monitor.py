@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from PIL import Image
 from sstv_monitor import Session, SSTVManager, atomic_json
@@ -78,11 +79,20 @@ class CWHistory:
 
 class CWAssembler:
     def __init__(self,session,store):
-        self.session,self.store=session,store;self.decoder=None;self.reset()
+        self.session,self.store=session,store;self.decoder=None;self.retired=ThreadPoolExecutor(max_workers=1,thread_name_prefix="cw-retire");self.retiring=[];self.settle_until=0;self.reset()
 
-    def reset(self):
+    def reset(self, config=None):
+        if self.retired is None:self.retired=ThreadPoolExecutor(max_workers=1,thread_name_prefix="cw-retire")
         if self.decoder:
-            self.publish();self.decoder.close()
+            self.publish()
+            # Old fldigi processes can take seconds to exit. Retirement must
+            # not block new audio/waterfall rows or the UI thread.
+            self.retiring=[f for f in self.retiring if not f.done()]
+            if self.decoder.tracks:self.retiring.append(self.retired.submit(self.decoder.close))
+            else:self.decoder.close()
+        if config is not None:
+            with self.session.lock:self.session.config.update(config)
+            self.settle_until=time.monotonic()+.3
         self.decoder=CWDecoder(self.session.config);self.next_publish=0;self.started=time.time()
         self.session.waterfall.reset()
         with self.session.lock:
@@ -90,6 +100,7 @@ class CWAssembler:
             self.session.capacity_limited=False
 
     def feed(self,pcm):
+        if time.monotonic()<self.settle_until:return
         self.session.waterfall.feed(pcm)
         if self.session.listener:self.session.listener.submit(self.session.config['id'],pcm)
         self.decoder.feed(pcm)
@@ -119,6 +130,7 @@ class CWAssembler:
 
     def flush(self):
         self.publish();self.decoder.close()
+        self.retired.shutdown(wait=True);self.retired=None
 
 
 class CWSession(Session):
@@ -126,7 +138,29 @@ class CWSession(Session):
     listening_message='Scanning 1 kHz for Morse signals · automatic speed'
     def __init__(self,*args):
         super().__init__(*args);self.listening_message=f"{self.config.get('engine','ggmorse')} · scanning {(bounds(self.config)[1]-200)/1000:g} kHz · up to 4 signals";self.tracks=[];self.image_version=0;self.audio_seconds=0;self.capacity_limited=False
-        self.waterfall=LiveWaterfall();self.wf_worker=None;self.listener=None
+        self.waterfall=LiveWaterfall();self.wf_worker=None;self.listener=None;self.pending_tune=None
+    def request_tune(self,config):
+        with self.lock:
+            self.pending_tune=dict(config)
+            self.status='TUNING';self.detail='Retuning existing Kiwi channel'
+
+    def service_commands(self,ws,assembler):
+        with self.lock:
+            config=self.pending_tune;self.pending_tune=None
+        if config is None:return
+        # One pending destination: rapid swipes replace obsolete requests.
+        try:
+            if self.listener:self.listener.stop(self.config['id'])
+            low,high=self.bandpass()
+            self.kiwi.send_snd_setup(ws,config['freq_khz'],'usb',low,high,
+                {'agc':True,'mute':False,'nr_algo':0,'denoise_level':0})
+            assembler.reset(config)
+            self.report('LISTENING',self.listening_message)
+        except Exception:
+            with self.lock:
+                if self.pending_tune is None:self.pending_tune=config
+            raise
+
     def connection_ready(self,timestamp):
         self.connection_closed()
         self.wf_worker=KiwiWaterfall(self,timestamp)
@@ -143,7 +177,7 @@ class CWSession(Session):
         with self.lock:
             return dict(self.config,display_low_hz=display_bounds(self.config)[0],display_high_hz=display_bounds(self.config)[1],decode_low_hz=bounds(self.config)[0],decode_high_hz=bounds(self.config)[1],status=self.status,detail=self.detail+(" · all 4 fldigi signal slots in use" if self.capacity_limited else ""),last_decode=self.last_decode,
                         tracks=[dict(t,active=t['active'] and not self.stop_event.is_set()) for t in self.tracks],image_version=self.image_version,audio_seconds=self.audio_seconds,
-                        waterfall_source=self.waterfall.source,listen=self.listener.snapshot() if self.listener else {})
+                        waterfall_source=self.waterfall.source,waterfall_freq_khz=self.config['freq_khz'],listen=self.listener.snapshot() if self.listener else {})
 
 
 class CWManager(SSTVManager):
@@ -192,6 +226,13 @@ class CWManager(SSTVManager):
         updated=dict(config,**{k:v for k,v in preset.items() if k not in ('id','paused','name','server')})
         updated.update(name=name,server=server);updated.update(settings(preset,updated));self.validate(updated)
         changed=any(updated[k]!=config.get(k) for k in ('server','freq_khz','tone_hz','cw_mode','wpm','squelch_db','max_tracks','engine'))
+        session=self.sessions.get(key)
+        tuning_only=(updated['freq_khz']!=config.get('freq_khz') and
+            all(updated[k]==config.get(k) for k in ('server','tone_hz','cw_mode','wpm','squelch_db','max_tracks','engine')))
+        if tuning_only and session and session.thread and session.thread.is_alive() and not session.stop_event.is_set():
+            session.request_tune(updated)
+            config.update(updated);self.save()
+            return
         if changed:
             old=self.sessions.get(key)
             if old:
@@ -223,7 +264,7 @@ class CWManager(SSTVManager):
             listening=self.listener.snapshot()
             if listening['receiver_id']:
                 session=self.sessions.get(listening['receiver_id'])
-                if not session or not any(t['id']==listening['track_id'] for t in session.snapshot()['tracks']):self.listener.stop()
+                if not session or (not session.pending_tune and not any(t['id']==listening['track_id'] for t in session.snapshot()['tracks'])):self.listener.stop()
 
     def history(self,session_id=None):return self.gallery.rows(session_id)
 

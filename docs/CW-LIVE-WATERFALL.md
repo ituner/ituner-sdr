@@ -2,7 +2,7 @@
 
 The CW overview covers 200–3200 Hz above the USB dial. Slot markers and both waterfall sources share this RF scale. Selecting a marker selects its text and, if already listening, switches the audio to that slot; **Listen to slot** on the touchscreen or **Listen on CM5** on the web page explicitly plays that signal through the CM5 speaker/headphones. Web listening controls the CM5 output, not the browser speaker.
 
-On the touchscreen, swipe left across the live waterfall to tune higher, or right to tune lower. Tuning changes once on release, proportional to the drag distance: half the waterfall width shifts 1.5 kHz, rounded to 10 Hz. The receiving window stays within 0–30 MHz. Retuning saves the frequency and restarts signal acquisition; any selected-slot listening stops because those old slots are no longer valid. The < RX / RX > buttons still select saved receivers. Up/down swipes continue to navigate live view and history.
+On the touchscreen, swipe left across the live waterfall to tune higher, or right to tune lower. The waterfall and frequency scale follow the finger immediately; network tuning changes once on release, proportional to the drag distance: half the waterfall width shifts 1.5 kHz, rounded to 10 Hz. The receiving window stays within 0–30 MHz. Retuning saves the frequency, queues the latest destination on the existing Kiwi connection, and restarts signal acquisition in the receiver worker. Old decoder processes retire in the background; no socket reconnect or decoder shutdown wait runs on the display thread; any selected-slot listening stops because those old slots are no longer valid. The < RX / RX > buttons still select saved receivers. Up/down swipes continue to navigate live view and history.
 
 ## Waterfall sources
 

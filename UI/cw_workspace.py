@@ -8,7 +8,7 @@ class CWWorkspace(SSTVWorkspace):
     def __init__(self,ui,manager):
         super().__init__(ui,manager)
         self.preset=dict(PRESETS[3]);self.field=None;self.entry='';self.history_open=False
-        self.selected_track=None;self.receiver_index=0;self.live_textures={}
+        self.selected_track=None;self.receiver_index=0;self.live_textures={};self.pan_dx=0
 
     def lines(self,cache,value,x,y,width=1210,count=5,size=22):
         words=value.split();lines=[];line=''
@@ -25,14 +25,24 @@ class CWWorkspace(SSTVWorkspace):
         if index!=self.receiver_index:
             self.receiver_index=index;self.selected_track=None
 
+    def pan_cancel(self):self.pan_dx=0
+
+    def pan_preview(self,sx,sy,x,y):
+        if (self.history_open or self.decoders_open or self.add_open or self.enlarged or self.field
+                or not (18<=sx<=1258 and 152<=sy<=524)):return False
+        self.pan_dx=x-sx
+        return True
+
+    def pan_target(self,row,dx):
+        lo,hi=display_bounds(row)
+        shift_hz=round(-dx*(hi-lo)/1240/10)*10
+        return round(max(.001,min(30000-hi/1000,row['freq_khz']+shift_hz/1000)),6)
+
     def pan_frequency(self,dx):
         if not self.manager.configs:return
         self.receiver_index=min(self.receiver_index,len(self.manager.configs)-1)
         row=self.manager.configs[self.receiver_index]
-        lo,hi=display_bounds(row)
-        # Drag the spectrum with the finger. A full width is one 3 kHz window.
-        shift_hz=round(-dx*(hi-lo)/1240/10)*10
-        freq=round(max(.001,min(30000-hi/1000,row['freq_khz']+shift_hz/1000)),6)
+        freq=self.pan_target(row,dx)
         if freq==row['freq_khz']:return
         try:
             self.manager.update(row['id'],row['name'],row['server'],{'freq_khz':freq})
@@ -48,7 +58,7 @@ class CWWorkspace(SSTVWorkspace):
         if (self.open and not self.history_open and not self.add_open
                 and not self.decoders_open and not self.enlarged and self.field is None
                 and 18<=sx<=1258 and 152<=sy<=524
-                and abs(dx)>=60 and abs(dx)>=abs(dy)*1.5):
+                and abs(dx)>=12 and abs(dx)>=abs(dy)*1.5):
             self.pan_frequency(dx)
             return True
         direction=self.gallery_swipe_direction(sx,sy,x,y,(16,150,1260,780))
@@ -96,7 +106,11 @@ class CWWorkspace(SSTVWorkspace):
             self.text(cache,150,330,'Add a receiver · automatic signal acquisition · 5–55 WPM',23)
             self.text(cache,150,378,'Up to four signals share one Kiwi channel. Text is saved locally.',21)
             return
-        self.receiver_index=min(self.receiver_index,len(rows)-1);row=rows[self.receiver_index]
+        self.receiver_index=min(self.receiver_index,len(rows)-1);row=dict(rows[self.receiver_index])
+        stream_freq=row.get('waterfall_freq_khz',row['freq_khz'])
+        if self.pan_dx:row['freq_khz']=self.pan_target(row,self.pan_dx)
+        # Keep fixed RF signals under the moving scale during preview/pending tuning.
+        row['tracks']=[dict(t,tone_hz=t['rf_hz']-row['freq_khz']*1000) for t in row.get('tracks',[])]
         self.button(cache,(16,78,150,132),'< RX',('rx',-1))
         self.button(cache,(162,78,296,132),'RX >',('rx',1))
         self.text(cache,312,100,f"{row['name']} · {row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz center",21,width=716)
@@ -112,7 +126,7 @@ class CWWorkspace(SSTVWorkspace):
             for key in list(self.live_textures):
                 if key!=row['id']:self.live_textures.pop(key).close()
             if row['id'] not in self.live_textures:self.live_textures[row['id']]=WaterfallTexture(self.ui)
-            self.live_textures[row['id']].draw(session.waterfall,(18,152,1258,490))
+            self.live_textures[row['id']].draw(session.waterfall,(18,152,1258,490),offset=(stream_freq-row['freq_khz'])*1240/3)
         elif row.get('image_version'):self.image(row['id'],(18,152,1258,490),fill=True)
         lo,hi=display_bounds(row)
         decode_lo,decode_hi=bounds(row)

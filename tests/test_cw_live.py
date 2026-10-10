@@ -137,6 +137,23 @@ class LiveTests(unittest.TestCase):
         verify([180],True,[180,0,0])
         texture.close()
 
+    def test_gpu_pan_clips_to_waterfall_without_stretching(self):
+        ui=SimpleNamespace(GL=Mock(),draw_textured_quad=Mock())
+        texture=WaterfallTexture(ui);stream=Mock()
+        stream.read.return_value=dict(epoch='test',seq=1,reset=True,rows=[bytes(WIDTH)])
+        texture.draw(stream,(18,152,1258,490),offset=-310)
+        for call in ui.draw_textured_quad.call_args_list:
+            _,left,_,right,_,u0,_,u1,_=call.args
+            self.assertEqual((left,right),(18,948))
+            self.assertEqual((u0,u1),(.25,1))
+        ui.draw_textured_quad.reset_mock()
+        texture.draw(stream,(18,152,1258,490),offset=310)
+        for call in ui.draw_textured_quad.call_args_list:
+            _,left,_,right,_,u0,_,u1,_=call.args
+            self.assertEqual((left,right),(328,1258))
+            self.assertEqual((u0,u1),(0,.75))
+        texture.close()
+
     def test_listener_releases_output_and_preserves_new_owner(self):
         state=SimpleNamespace(lock=threading.Lock(),external_audio=False,external_audio_sink_released=False)
         state.external_audio_sink_released_snapshot=lambda:state.external_audio_sink_released

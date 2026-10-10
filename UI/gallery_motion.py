@@ -8,7 +8,7 @@ class GalleryMotion:
         self.bounds={'sstv':(0,80,1280,720),'hell':(0,80,1280,720),
                      'qrss':(0,72,1280,800),'cw':(0,150,1280,790)}[mode]
         self.height=self.bounds[3]-self.bounds[1]
-        self.down=False;self.active=False;self.offset=0.;self.velocity=0.
+        self.horizontal=False;self.down=False;self.active=False;self.offset=0.;self.velocity=0.
         self.direction=0;self.animation=None;self.textures=[];self.old_state=None;self.target_state=None
         self.draw_original=workspace.draw;self.swipe_original=workspace.swipe
         self.close_original=workspace.close
@@ -32,6 +32,8 @@ class GalleryMotion:
     def begin(self,x,y):
         # A second gesture starts from the completed destination, not a half page.
         if self.animation:self.finish()
+        self.horizontal=False
+        if hasattr(self.workspace,'pan_cancel'):self.workspace.pan_cancel()
         self.down=self.eligible(x,y);self.active=False;self.offset=0;self.direction=0
         self.sx,self.sy=x,y;self.last_y=y;self.last_t=self.clock();self.velocity=0
         self.old_state=None;self.target_state=None
@@ -39,6 +41,11 @@ class GalleryMotion:
     def move(self,sx,sy,x,y):
         if not self.down:return
         dx,dy=x-self.sx,y-self.sy
+        preview=getattr(self.workspace,'pan_preview',None)
+        if not self.active and preview and (self.horizontal or (abs(dx)>=12 and abs(dx)>=abs(dy)*1.5)):
+            if preview(self.sx,self.sy,x,y):
+                self.horizontal=True
+                return
         if not self.active:
             if abs(dy)<12 or abs(dy)<abs(dx)*1.5:return
             self.active=True;self.old_state=self.state()
@@ -60,12 +67,19 @@ class GalleryMotion:
         self.needs_capture=True
 
     def release(self,sx,sy,x,y):
+        if self.horizontal:
+            self.down=False;self.horizontal=False
+            try:return self.swipe_original(sx,sy,x,y)
+            finally:self.workspace.pan_cancel()
         if not self.down:return self.swipe_original(sx,sy,x,y)
         if self.last_y!=y:self.move(sx,sy,x,y)
         self.down=False
         # Only consume gestures that actually started vertical paging. CW
         # horizontal tuning (and ordinary taps) belongs to the workspace.
-        if not self.active:return self.swipe_original(sx,sy,x,y)
+        if not self.active:
+            try:return self.swipe_original(sx,sy,x,y)
+            finally:
+                if hasattr(self.workspace,'pan_cancel'):self.workspace.pan_cancel()
         self.prepare()
         changed=self.has_target()
         recent=self.clock()-self.last_t<.12

@@ -1,11 +1,11 @@
 """CW waterfall drags retune the receiver, not the receiver selection."""
-import sys,tempfile,unittest
+import sys,tempfile,unittest,threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'UI'))
 from cw_workspace import CWWorkspace
-from cw_monitor import CWManager
+from cw_monitor import CWManager,CWSession,CWAssembler
 from cw_modes import PRESETS
 from gallery_motion import GalleryMotion
 from log_search_workspace import install_search
@@ -55,7 +55,11 @@ class CWSwipeTests(unittest.TestCase):
             self.w.drag_begin(900,300)
             self.w.drag_move(900,300,650,305)
             self.w.drag_move(900,300,280,310)
+            self.assertEqual(self.w.pan_dx,-620)
+            self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7023.3)
+            self.assertAlmostEqual(self.w.pan_target(self.manager.configs[0],self.w.pan_dx),7024.8)
             self.assertTrue(self.w.swipe(900,300,280,310))
+            self.assertEqual(self.w.pan_dx,0)
             self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7024.8)
             self.assertFalse(motion.active);self.assertIsNone(motion.animation)
             self.w.drag_begin(280,300)
@@ -74,6 +78,46 @@ class CWSwipeTests(unittest.TestCase):
             self.assertTrue(self.w.swipe(900,300,280,300))
             self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7023.3)
         finally:self.w.close()
+
+    def test_retune_coalesces_without_stopping_receiver_on_ui_thread(self):
+        row=self.manager.configs[0];row['paused']=False
+        session=CWSession(row,Mock(),self.manager.gallery,'test')
+        session.thread=Mock();session.thread.is_alive.return_value=True
+        session.stop=Mock()
+        self.manager.sessions['rx']=session
+        self.w.swipe(900,300,280,300)
+        self.w.swipe(900,300,280,300)
+        self.assertEqual(session.pending_tune['freq_khz'],7026.3)
+        self.assertEqual(session.config['freq_khz'],7023.3)
+        session.stop.assert_not_called();self.manager.start.assert_not_called()
+        assembler=Mock();ws=Mock()
+        session.service_commands(ws,assembler)
+        self.assertIsNone(session.pending_tune)
+        session.kiwi.send_snd_setup.assert_called_once()
+        self.assertEqual(session.kiwi.send_snd_setup.call_args.args[1],7026.3)
+        assembler.reset.assert_called_once()
+        self.assertEqual(assembler.reset.call_args.args[0]['freq_khz'],7026.3)
+        session.kiwi.KiwiWebSocket.connect.assert_not_called()
+        self.manager.sessions.clear()
+
+    def test_decoder_retirement_does_not_block_new_window_and_reconnect(self):
+        session=CWSession(self.manager.configs[0],Mock(),self.manager.gallery,'test')
+        old=Mock(tracks=[{}],events=[],samples=0);old.snapshot.return_value=[]
+        new=Mock(tracks=[],events=[],samples=0);new.snapshot.return_value=[]
+        closing=threading.Event();release=threading.Event()
+        def slow_close():closing.set();release.wait(2)
+        old.close.side_effect=slow_close
+        with patch('cw_monitor.CWDecoder',side_effect=[old,new,new]):
+            assembler=CWAssembler(session,self.manager.gallery)
+            try:
+                assembler.reset({'freq_khz':7024.8})
+                self.assertTrue(closing.wait(.5));self.assertFalse(release.is_set())
+                self.assertIs(assembler.decoder,new)
+                self.assertEqual(session.config['freq_khz'],7024.8)
+                self.assertEqual(session.tracks,[])
+            finally:release.set();assembler.flush()
+            # Network reconnect reuses the assembler after flushing it.
+            assembler.reset();assembler.flush()
 
     def test_retune_errors_stay_in_ui(self):
         with patch.object(self.manager,'update',side_effect=ValueError('Receiver is still stopping')):

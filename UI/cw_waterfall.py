@@ -109,11 +109,14 @@ class KiwiWaterfall:
                 ws=k.KiwiWebSocket.connect(s.config['server'],'W/F',timeout=5,session_timestamp=self.timestamp)
                 self.ws=ws
                 k.send_kiwi_setup(ws,'kiwi',s.user+'-CW')
-                auth=False;configured=False;bandwidth=30000000;offset_hz=0
+                auth=False;configured=False;bandwidth=30000000;offset_hz=0;configured_freq=None
                 channel=wf_channels=None;hardware=None
                 last=time.monotonic();keepalive=last;retry_at=last+30
                 while not self.stop_event.is_set():
                     now=time.monotonic()
+                    if configured and configured_freq!=s.config['freq_khz']:
+                        k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4)
+                        configured_freq=s.config['freq_khz'];last=now
                     if not configured and now-last>8:raise RuntimeError('Kiwi waterfall handshake timed out')
                     # Closing an idle paired W/F may also close SND on Kiwi.
                     # Keep it alive while audio fallback runs; retry setup in place.
@@ -137,7 +140,7 @@ class KiwiWaterfall:
                         if 'bandwidth' in p:bandwidth=float(p['bandwidth'])
                         if 'freq_offset' in p:offset_hz=float(p['freq_offset'])*1000
                         if auth and not configured:
-                            k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4);configured=True
+                            k.send_wf_setup(ws,s.config['freq_khz']+1.7-offset_hz/1000,13,4);configured=True;configured_freq=s.config['freq_khz']
                     elif configured and hardware is not False and message[:3]==b'W/F':
                         row=kiwi_row(message,s.config['freq_khz']*1000,bandwidth,offset_hz)
                         if row is not None:s.waterfall.receive(row);last=now
@@ -160,7 +163,7 @@ class WaterfallTexture:
         for flag in (g.GL_TEXTURE_WRAP_S,g.GL_TEXTURE_WRAP_T):g.glTexParameteri(g.GL_TEXTURE_2D,flag,g.GL_CLAMP_TO_EDGE)
         g.glTexImage2D(g.GL_TEXTURE_2D,0,g.GL_RGBA,WIDTH,HEIGHT,0,g.GL_RGBA,g.GL_UNSIGNED_BYTE,bytes(WIDTH*HEIGHT*4))
 
-    def draw(self,stream,box):
+    def draw(self,stream,box,offset=0):
         data=stream.read(self.epoch,self.seq);g=self.ui.GL;g.glBindTexture(g.GL_TEXTURE_2D,self.tex)
         if data['reset']:
             self.row=0
@@ -170,8 +173,12 @@ class WaterfallTexture:
             self.row=(self.row+1)%HEIGHT
         self.epoch,self.seq=data['epoch'],data['seq']
         x0,y0,x1,y1=box;split=y0+(y1-y0)*self.row/HEIGHT
+        width=x1-x0;left=max(x0,x0+offset);right=min(x1,x1+offset)
+        if left>=right:return
+        u0=(left-x0-offset)/width;u1=(right-x0-offset)/width
+        x0,x1=left,right
         # Source rows arrive oldest-first; reverse only the vertical mapping.
-        if self.row:self.ui.draw_textured_quad(self.tex,x0,y0,x1,split,0,self.row/HEIGHT,1,0)
-        if self.row<HEIGHT:self.ui.draw_textured_quad(self.tex,x0,split,x1,y1,0,1,1,self.row/HEIGHT)
+        if self.row:self.ui.draw_textured_quad(self.tex,x0,y0,x1,split,u0,self.row/HEIGHT,u1,0)
+        if self.row<HEIGHT:self.ui.draw_textured_quad(self.tex,x0,split,x1,y1,u0,1,u1,self.row/HEIGHT)
 
     def close(self):self.ui.GL.glDeleteTextures([self.tex])
