@@ -132,7 +132,7 @@ class KiwiWebSocket:
                     f"Sec-WebSocket-Key: {key}\r\n"
                     "Sec-WebSocket-Version: 13\r\n"
                     f"Origin: http://{host}:{port}\r\n"
-                    "User-Agent: Codex-KiwiSDR-display\r\n"
+                    "User-Agent: ituner\r\n"
                     "\r\n"
                 ).encode("ascii")
                 raw.sendall(request)
@@ -1453,7 +1453,7 @@ def main():
     parser.add_argument("--fps", type=float, default=24.0)
     parser.add_argument("--audio", action="store_true")
     parser.add_argument("--audio-rate", type=int, default=12000)
-    parser.add_argument("--user", default="Codex SDR display")
+    parser.add_argument("--user", default="ituner")
     parser.add_argument("--invert-x", action="store_true")
     parser.add_argument("--invert-y", action="store_true")
     parser.add_argument("--swap-x-y", action="store_true")

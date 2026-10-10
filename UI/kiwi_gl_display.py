@@ -22137,7 +22137,7 @@ def main():
     parser.add_argument("--station-zoom", type=int, default=13)
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
-    parser.add_argument("--user", default="Codex OpenGL SDR display")
+    parser.add_argument("--user", default="ituner")
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the selected local audio backend")
     parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="alsa" if CM5_AUDIO else "pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
