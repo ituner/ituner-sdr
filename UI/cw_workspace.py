@@ -192,7 +192,7 @@ class CWWorkspace(SSTVWorkspace):
             self.text(cache,x+14,y+60,row['name'],18,width=580)
             self.text(cache,x+14,y+90,row['status']+' · '+row.get('detail',''),16,width=580)
             self.actions.append(((x,y,x+612,y+120),('select_rx',row['id'])))
-            for dx,label,action in ((14,'STOP' if row['running'] else 'START','toggle'),(222,'EDIT','edit'),(448,'DELETE','delete')):
+            for dx,label,action in ((14,'STOP' if row['running'] else 'START','toggle'),(160,'EDIT','edit'),(304,'LIVE','select_rx'),(448,'DELETE','delete')):
                 self.button(cache,(x+dx,y+126,x+dx+140,y+178),label,(action,row['id']))
         if self.delete_armed:
             self.text(cache,24,748,'Remove receiver? Saved text is kept.',21)

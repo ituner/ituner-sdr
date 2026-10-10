@@ -70,11 +70,12 @@ class NavigationTests(unittest.TestCase):
             w.tap(1130,35,[]);self.assertTrue(w.decoders_open);self.assertTrue(w.open)
             w.add_open=True;w.tap(1130,35,[]);self.assertFalse(w.add_open)
             w.tap(1220,35,[]);self.assertFalse(w.open)
-    def test_receiver_card_opens_live_and_buttons_do_not(self):
+    def test_receiver_card_and_live_button_open_live(self):
         w=self.make(CWWorkspace);w.decoders_open=True;w.draw_receivers(None)
-        self.assertFalse(any(a[0]=='select_rx' for b,a in w.actions if b[1]>210))
+        self.assertTrue(any(a[0]=='select_rx' for b,a in w.actions if b[1]>210))
         w.tap(200,140,[]);self.assertFalse(w.decoders_open);self.assertEqual(w.receiver_index,0)
         w.decoders_open=True;w.actions=[];w.draw_receivers(None)
-        w.tap(300,245,[]);self.assertTrue(w.add_open);self.assertTrue(w.decoders_open)
+        w.tap(230,245,[]);self.assertTrue(w.add_open);self.assertTrue(w.decoders_open)
+        w.add_open=False;w.tap(370,245,[]);self.assertFalse(w.decoders_open)
 
 if __name__=='__main__':unittest.main()
