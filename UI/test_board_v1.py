@@ -2,7 +2,7 @@
 import math
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 import kiwi_gl_display as ui
 
 
@@ -588,6 +588,42 @@ class WaterfallPresentationTests(unittest.TestCase):
         back.assert_called_once_with(None,ui.lcd_drawer_back_box())
 
 class NavigationAndLandingBoundaryTests(unittest.TestCase):
+    def test_touch_keyboards_keep_the_shared_back_target_reachable(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        back = ui.lcd_drawer_back_box()
+        x = (back[0] + back[2]) / 2
+        y = (back[1] + back[3]) / 2
+
+        self.assertEqual(ui.keyboard_modal_back_box(), back)
+        self.assertEqual(ui.deepgram_setup_action_at(x, y, "lower"), "CANCEL")
+        self.assertEqual(ui.station_search_back_box(), back)
+        self.assertTrue(ui.network_password_back_requested(x, y))
+        self.assertIn(("CANCEL", back), ui.frequency_entry_layout()[2])
+
+    def test_touch_keyboards_draw_the_shared_back_sidebar(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        with patch.object(ui, "draw_logical_rect"), \
+                patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_text"), \
+                patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_network_password_eye"), \
+                patch.object(ui, "fit_station_text", side_effect=lambda _cache, text, *_args, **_kwargs: text), \
+                patch.object(ui, "draw_keyboard_modal_sidebar") as sidebar:
+            ui.draw_deepgram_setup(None, "", "lower")
+            ui.draw_network_password(None, "TEST", "", "lower", False, False, False)
+            ui.draw_station_search(None, (), "", "location", "lower")
+
+        self.assertEqual(
+            sidebar.call_args_list,
+            [
+                call(None, "ASR", "DEEPGRAM API KEY"),
+                call(None, "NETWORK", "WI-FI KEY"),
+                call(None, "SEARCH", "RECEIVERS"),
+            ],
+        )
+
     def test_all_primary_back_targets_match_after_configuration(self):
         ui.configure_output(True)
         ui.configure_popup_layout()

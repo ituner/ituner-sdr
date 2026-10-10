@@ -15758,6 +15758,27 @@ def deepgram_keyboard_rows(mode):
     return DEEPGRAM_KEY_ROWS
 
 
+def keyboard_modal_back_box():
+    """The persistent escape target shared by every touch keyboard."""
+    return lcd_drawer_back_box()
+
+
+def station_search_back_box():
+    """Use the common rail Back control on the 1280x800 interface."""
+    return keyboard_modal_back_box() if LCD_800_MODE else SEARCH_EXIT_BOX
+
+
+def network_password_back_requested(x, y):
+    """Keep Wi-Fi secret entry escapable even while its modal owns input."""
+    return LCD_800_MODE and contains(keyboard_modal_back_box(), x, y)
+
+
+def draw_keyboard_modal_sidebar(text_cache, title, detail):
+    """Draw a visible, touch-safe escape rail beside a modal keyboard."""
+    if LCD_800_MODE:
+        draw_settings_leaf_sidebar(text_cache, title, detail)
+
+
 def deepgram_key_at(x, y, mode):
     for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
         if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
@@ -15767,6 +15788,8 @@ def deepgram_key_at(x, y, mode):
 
 
 def deepgram_setup_action_at(x, y, mode):
+    if LCD_800_MODE and contains(keyboard_modal_back_box(), x, y):
+        return "CANCEL"
     if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
         return "PASTE"
     if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
@@ -15814,6 +15837,7 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
         else "Saved only on this device. The key is never shown again."
     )
     draw_text(text_cache, x0 + 30, y1 - 18, message, (246, 163, 116) if error else (124, 184, 187), 14, False, False, "lm", family="Cantarell")
+    draw_keyboard_modal_sidebar(text_cache, "ASR", "DEEPGRAM API KEY")
 
 
 def network_panel_boxes():
@@ -15996,6 +16020,7 @@ def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, e
             draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 14 if key == "<" else 22)
     message = error or "Password stays on this Pi only. Ethernet remains preferred."
     draw_text(text_cache, x0 + 26, y1 - 18, message, (244, 165, 117) if error else (143, 183, 187), 14, False, False, "lm", family="Liberation Sans")
+    draw_keyboard_modal_sidebar(text_cache, "NETWORK", "WI-FI KEY")
 
 
 def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mode):
@@ -16006,13 +16031,15 @@ def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mod
     draw_text(text_cache, 34, 36, query or "Country, city, call sign, or station name", (240, 242, 244) if query else (166, 171, 175), 23, False, False, "lm")
     draw_picker_button(text_cache, SEARCH_CASE_BOX, "aA", 16, keyboard_mode != "numeric")
     draw_picker_button(text_cache, SEARCH_MODE_BOX, "123" if keyboard_mode != "numeric" else "ABC", 14, keyboard_mode == "numeric")
-    draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
-    draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
+    if not LCD_800_MODE:
+        draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
+        draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
     for keys, x0, y0, key_w in keyboard_rows(keyboard_mode):
         for index, key in enumerate(keys):
             box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
             label = "BACK" if key == "<" else ("ENTER" if key == ">" else ("SPACE" if key == "~" else key))
             draw_picker_button(text_cache, box, label, 19 if key in "<>~" else 26)
+    draw_keyboard_modal_sidebar(text_cache, "SEARCH", "RECEIVERS")
 
 
 def draw_frequency_keypad(text_cache, value, invalid=False):
@@ -24711,7 +24738,13 @@ def main():
                                 frequency_drawer_pressed = frequency_drawer_action_at(
                                     x, y, state.receiver_type_snapshot()
                                 )
-                            elif deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y):
+                            elif deepgram_setup_open and (
+                                contains(DEEPGRAM_SETUP_BOX, x, y)
+                                or (
+                                    LCD_800_MODE
+                                    and contains(keyboard_modal_back_box(), x, y)
+                                )
+                            ):
                                 gesture = "deepgram_setup"
                             elif deepgram_setup_open:
                                 gesture = "deepgram_setup_outside"
@@ -26949,7 +26982,14 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 boxes = network_password_boxes()
-                                if contains(boxes["mode"], x, y):
+                                if network_password_back_requested(x, y):
+                                    network_password_open = False
+                                    network_password_value = ""
+                                    network_password_placeholder_visible = True
+                                    network_password_revealed = False
+                                    network_keyboard_caps = False
+                                    network_notice = ""
+                                elif contains(boxes["mode"], x, y):
                                     network_keyboard_mode = "symbols" if network_keyboard_mode != "symbols" else "lower"
                                 elif contains(boxes["reveal"], x, y):
                                     network_password_revealed = not network_password_revealed
@@ -27152,7 +27192,13 @@ def main():
                         elif touch_started and gesture == "search":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                if contains(SEARCH_EXIT_BOX, x, y) or contains(SEARCH_LEFT_EXIT_BOX, x, y):
+                                if (
+                                    contains(station_search_back_box(), x, y)
+                                    or (
+                                        not LCD_800_MODE
+                                        and contains(SEARCH_LEFT_EXIT_BOX, x, y)
+                                    )
+                                ):
                                     search_open = False
                                     station_scroll = 0
                                 elif contains(SEARCH_CASE_BOX, x, y):
