@@ -7,6 +7,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'UI'))
 from cw_workspace import CWWorkspace
 from cw_monitor import CWManager
 from cw_modes import PRESETS
+from gallery_motion import GalleryMotion
+from log_search_workspace import install_search
 
 class CWSwipeTests(unittest.TestCase):
     def setUp(self):
@@ -45,6 +47,34 @@ class CWSwipeTests(unittest.TestCase):
         self.assertTrue(self.w.swipe(500,450,510,200));self.assertTrue(self.w.history_open)
         self.assertTrue(self.w.swipe(500,200,510,450));self.assertFalse(self.w.history_open)
         self.w.move_receiver(1);self.assertEqual(self.w.receiver_index,1)
+    def test_real_touch_route_through_search_and_gallery_animation(self):
+        # Production installs search first, then replaces swipe with GalleryMotion.release.
+        install_search(self.w,'cw',Mock())
+        motion=GalleryMotion(self.w,'cw')
+        try:
+            self.w.drag_begin(900,300)
+            self.w.drag_move(900,300,650,305)
+            self.w.drag_move(900,300,280,310)
+            self.assertTrue(self.w.swipe(900,300,280,310))
+            self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7024.8)
+            self.assertFalse(motion.active);self.assertIsNone(motion.animation)
+            self.w.drag_begin(280,300)
+            self.w.drag_move(280,300,900,300)
+            self.assertTrue(self.w.swipe(280,300,900,300))
+            self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7023.3)
+            # A tap remains a tap; vertical swipes still animate history.
+            self.w.drag_begin(500,300)
+            self.assertFalse(self.w.swipe(500,300,502,302))
+            self.w.drag_begin(500,450);self.w.drag_move(500,450,505,200)
+            self.assertTrue(self.w.swipe(500,450,505,200));motion.finish()
+            self.assertTrue(self.w.history_open)
+            self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7023.3)
+            self.w.history_open=False;self.w.log_search_view.open=True
+            self.w.drag_begin(900,300)
+            self.assertTrue(self.w.swipe(900,300,280,300))
+            self.assertAlmostEqual(self.manager.configs[0]['freq_khz'],7023.3)
+        finally:self.w.close()
+
     def test_retune_errors_stay_in_ui(self):
         with patch.object(self.manager,'update',side_effect=ValueError('Receiver is still stopping')):
             self.assertTrue(self.w.swipe(900,300,280,300))

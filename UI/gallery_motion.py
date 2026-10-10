@@ -63,7 +63,9 @@ class GalleryMotion:
         if not self.down:return self.swipe_original(sx,sy,x,y)
         if self.last_y!=y:self.move(sx,sy,x,y)
         self.down=False
-        if not self.active:return False
+        # Only consume gestures that actually started vertical paging. CW
+        # horizontal tuning (and ordinary taps) belongs to the workspace.
+        if not self.active:return self.swipe_original(sx,sy,x,y)
         self.prepare()
         changed=self.has_target()
         recent=self.clock()-self.last_t<.12
