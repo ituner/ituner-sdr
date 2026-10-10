@@ -24,12 +24,10 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
-Both installation paths include automatic local KiwiSDR address recovery for
-the main radio and digital decoders. After the first successful connection,
-the application remembers the receiver's address and checks its advertised
-name before reusing it if `.local` discovery fails. No extra package or option
-is needed. A DHCP reservation is recommended when using Wi-Fi extenders; see
-[local receiver recovery and its limits](docs/local-receivers.md).
+Both installation paths use bounded local KiwiSDR name discovery for the main
+radio and digital decoders, without HTTP status probes. If multicast discovery
+fails, select a reserved LAN IP; stale cached addresses are not reused without
+identity verification. See [local receiver discovery](docs/local-receivers.md).
 
 For the custom CM5 carrier's **ES8316 codec / Class-D speaker amplifier**, add
 `--cm5-audio` to that command. This opt-in profile includes the verified audio
@@ -177,7 +175,7 @@ After reboot, the following services are enabled:
 
 - `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
 - `ituner-sdr.service` starts the active OpenGL radio UI.
-- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. Your local receiver may still be queried through `/status` for capacity/location and address recovery.
+- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. No receiver, including local receivers, is queried through `/status`. Connected Kiwi receivers supply live occupancy using `SET GET_USERS` / `MSG user_cb` on existing authenticated WebSockets, shared at a 2.5-second cadence per receiver address. Disconnected receivers use directory snapshots. WSPR reporting locations remain configured separately.
 
 Check them with:
 

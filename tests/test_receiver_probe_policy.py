@@ -14,6 +14,7 @@ from urllib.request import Request
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'UI'))
 import kiwi_station_health
+from kiwi_occupancy import OccupancyCache
 
 class ReceiverProbePolicyTests(unittest.TestCase):
     def setUp(self):
@@ -24,7 +25,7 @@ class ReceiverProbePolicyTests(unittest.TestCase):
         self.env=dict(ipaddress=ipaddress,urlparse=urlparse,json=json,re=re,Request=Request,
             STATIONS=[],GLOBE_DIRECTORY_CACHE=self.path,
             WSPR_CAPACITY_TIMEOUT_SECONDS=4,urlopen=self.http,
-            kiwi=types.SimpleNamespace(read_local_status=self.local_status))
+            kiwi=types.SimpleNamespace(occupancy=OccupancyCache()))
         tree=ast.parse((ROOT/'UI/kiwi_gl_display.py').read_text())
         wanted={'local_status_allowed','cached_receiver_metadata','kiwi_status_metadata',
                 'kiwi_status_grid','wspr_grid_is_valid','maidenhead_grid_from_latlon','station_fields'}
@@ -42,14 +43,24 @@ class ReceiverProbePolicyTests(unittest.TestCase):
         self.assertEqual(self.env['kiwi_status_metadata']('http://remote.example:8073'),(None,None,None))
         self.local_status.assert_not_called();self.http.assert_not_called()
 
-    def test_only_explicit_local_names_or_addresses_allow_status(self):
-        policy=self.env['local_status_allowed']
+    def test_local_metadata_also_uses_cache_without_http(self):
         for server in ('http://kiwisdr.local:8073','http://192.168.1.100:8073','http://[fd00::1]:8073'):
-            self.assertTrue(policy(server))
-        for server in ('http://kiwisdr.local.evil.example','http://receiver.example','http://0.0.0.0','http://224.0.0.1'):
-            self.assertFalse(policy(server))
-        self.assertEqual(self.env['kiwi_status_metadata']('http://kiwisdr.local:8073'),(2,8,'KN34AL'))
-        self.local_status.assert_called_once();self.http.assert_not_called()
+            self.path.write_text(json.dumps([dict(server=server,used=2,total=4,grid='KN34AL')]))
+            self.assertEqual(self.env['kiwi_status_metadata'](server),(2,4,'KN34AL'))
+            self.env['kiwi'].occupancy.accept(server, '[{"i":0,"n":""},{"i":1}]')
+            self.assertEqual(self.env['kiwi_status_metadata'](server),(1,2,'KN34AL'))
+        self.local_status.assert_not_called();self.http.assert_not_called()
+
+    def test_no_standalone_status_request_in_ui(self):
+        for path in (ROOT/'UI').glob('*.py'):
+            if path.name.startswith('test_'):
+                continue
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                # Exclude docstrings/comments; prohibit endpoint string literals.
+                if isinstance(node, ast.Constant) and isinstance(node.value,str):
+                    self.assertNotEqual(node.value, '/status', str(path))
+                    self.assertFalse(node.value.endswith('/status'), str(path))
 
     def test_retired_checker_has_no_network_imports_or_probes(self):
         source=(ROOT/'UI/kiwi_station_health.py').read_text()

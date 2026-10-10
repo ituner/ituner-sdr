@@ -22,7 +22,8 @@ from PIL import Image, ImageDraw
 
 import render_sdr_frontend_mockup as sdr_ui
 from client_identity import CLIENT_NAME
-from local_receivers import create_connection as local_connection, read_local_status
+from local_receivers import create_connection as local_connection
+from kiwi_occupancy import occupancy
 
 
 FB = Path("/dev/fb0")
@@ -96,9 +97,12 @@ STATIONS = [
 
 
 class KiwiWebSocket:
-    def __init__(self, sock):
+    def __init__(self, sock, endpoint="", stream_name=""):
         self.sock = sock
         self.lock = threading.Lock()
+        self.endpoint = endpoint
+        self.stream_name = stream_name
+        self.authenticated = False
 
     @staticmethod
     def connect(endpoint, stream_name, timeout=8.0, session_timestamp=None):
@@ -147,7 +151,7 @@ class KiwiWebSocket:
                     if expected not in response:
                         raise RuntimeError(f"websocket accept check failed for {stream_name}")
                     raw.settimeout(1.0)
-                    return KiwiWebSocket(raw)
+                    return KiwiWebSocket(raw, endpoint, stream_name)
                 redirect = websocket_redirect_endpoint(response)
                 if redirect and redirect_count < 2:
                     raw.close()
@@ -215,6 +219,17 @@ class KiwiWebSocket:
                 continue
             if opcode == 0xA:
                 continue
+            if self.endpoint and self.stream_name in ("SND", "W/F"):
+                if payload.startswith(b"MSG"):
+                    params = parse_msg_params(payload)
+                    if "badp" in params:
+                        self.authenticated = params["badp"] == "0"
+                    if self.authenticated and "user_cb" in params:
+                        occupancy.accept(self.endpoint, params["user_cb"])
+                # All Kiwi consumers pass here, including CW/Hell/QRSS/SSTV.
+                # Share one request cadence per endpoint across SND/WF/decoders.
+                if self.authenticated and occupancy.request_due(self.endpoint):
+                    self.send_text("SET GET_USERS")
             return payload
 
     def _send_frame(self, opcode, payload):

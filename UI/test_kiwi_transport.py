@@ -43,3 +43,36 @@ class KiwiTransportTests(unittest.TestCase):
         sock = ScriptedSocket((b'\x82\x7f', struct.pack('>Q', declared)))
         with self.assertRaisesRegex(ValueError, 'frame too large'):
             kiwi.KiwiWebSocket(sock).recv()
+
+
+class KiwiOccupancyTransportTests(unittest.TestCase):
+    def message(self, payload):
+        payload = b'MSG ' + payload
+        return (bytes((0x82, len(payload))), payload)
+
+    def test_only_authenticated_connections_request_users(self):
+        from unittest.mock import patch
+        from kiwi_occupancy import OccupancyCache
+        cache = OccupancyCache()
+        sock = ScriptedSocket(self.message(b'badp=1') + self.message(b'badp=0'))
+        ws = kiwi.KiwiWebSocket(sock, 'http://kiwi', 'SND')
+        with patch.object(kiwi, 'occupancy', cache), patch.object(ws, 'send_text') as send:
+            ws.recv()
+            send.assert_not_called()
+            ws.recv()
+            send.assert_called_once_with('SET GET_USERS')
+
+    def test_sound_and_waterfall_share_requests_and_publish_counts(self):
+        from unittest.mock import patch
+        from kiwi_occupancy import OccupancyCache
+        cache = OccupancyCache()
+        snd = kiwi.KiwiWebSocket(ScriptedSocket(self.message(b'badp=0') +
+            self.message(b'user_cb=[{"i":0,"n":""},{"i":1}]')), 'http://kiwi', 'SND')
+        wf = kiwi.KiwiWebSocket(ScriptedSocket(self.message(b'badp=0')), 'http://kiwi', 'W/F')
+        with patch.object(kiwi, 'occupancy', cache), patch.object(snd, 'send_text') as sound_send, patch.object(wf, 'send_text') as wf_send:
+            snd.recv()
+            wf.recv()
+            snd.recv()
+            sound_send.assert_called_once_with('SET GET_USERS')
+            wf_send.assert_not_called()
+            self.assertEqual(cache.snapshot('http://kiwi'), (1, 2))

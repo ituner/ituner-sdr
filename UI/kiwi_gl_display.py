@@ -7756,7 +7756,7 @@ class WSPRMonitorManager:
     def capacity_snapshot(self, server):
         with self.capacity_lock:
             value = self.capacities.get(str(server))
-        return value[:2] if value else (None, None)
+        return kiwi.occupancy.snapshot(server) or (value[:2] if value else (None, None))
 
     def receiver_grid_snapshot(self, server):
         with self.capacity_lock:
@@ -7821,7 +7821,7 @@ class WSPRMonitorManager:
 
 
 class MainReceiverCapacityMonitor:
-    """Poll only the tuned Kiwi's lightweight status endpoint in the background."""
+    """Display shared WebSocket occupancy, falling back to directory metadata."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -7860,6 +7860,9 @@ class MainReceiverCapacityMonitor:
                     self.inflight = False
 
     def snapshot(self, server):
+        live = kiwi.occupancy.snapshot(server)
+        if live is not None:
+            return live
         with self.lock:
             if str(server or "").rstrip("/") != self.server:
                 return None, None
@@ -11221,18 +11224,6 @@ def maidenhead_grid_from_latlon(latitude, longitude):
     )
 
 
-def local_status_allowed(server):
-    """No public DNS lookups: only explicit LAN names and private IP literals."""
-    host = (urlparse(str(server)).hostname or "").lower().rstrip(".")
-    if host.endswith(".local"):
-        return True
-    try:
-        address = ipaddress.ip_address(host.split("%", 1)[0])
-        return address.is_private and not (address.is_unspecified or address.is_multicast)
-    except ValueError:
-        return False
-
-
 def cached_receiver_metadata(server):
     """Read directory metadata only; never contact a receiver to test it.
 
@@ -11262,33 +11253,16 @@ def cached_receiver_metadata(server):
 
 
 def kiwi_status_metadata(server):
-    """Local receivers may supply /status; public receivers use directory cache."""
-    if not local_status_allowed(server):
-        return cached_receiver_metadata(server)
-    url = f"{str(server or '').rstrip('/')}/status"
-    if not url.startswith(("http://", "https://")):
-        raise ValueError("receiver URL is invalid")
-    try:
-        status = kiwi.read_local_status(server, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS)
-        if status is None:
-            request = Request(url, headers={"User-Agent": CLIENT_NAME})
-            with urlopen(request, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS) as response:
-                status = response.read().decode("utf-8", "replace")
-    except OSError:
-        raise
-    users = re.search(r"(?:^|\s)users=(\d+)", status)
-    maximum = re.search(r"(?:^|\s)users_max=(\d+)", status)
-    match = re.search(r"(?:^|\s)grid=([A-R]{2}[0-9]{2}(?:[A-X]{2})?)", status, re.IGNORECASE)
-    grid = match.group(1).upper() if match else None
-    if grid is None:
-        gps = re.search(r"(?:^|\s)gps=\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", status)
-        if gps:
-            grid = maidenhead_grid_from_latlon(gps.group(1), gps.group(2))
-    return (int(users.group(1)) if users else None, int(maximum.group(1)) if maximum else None, grid)
+    """Read WebSocket occupancy and saved directory location; never HTTP /status."""
+    used, total, grid = cached_receiver_metadata(server)
+    live = kiwi.occupancy.snapshot(server)
+    if live is not None:
+        used, total = live
+    return used, total, grid
 
 
 def kiwi_status_grid(server):
-    """Read a locator from local status or cached public-directory metadata."""
+    """Read a locator from saved directory metadata without network requests."""
     try:
         _used, _total, grid = kiwi_status_metadata(server)
     except (OSError, ValueError):
@@ -22965,9 +22939,8 @@ def main():
             except queue.Full:
                 pass
 
-    # Local Kiwi location is authoritative for a local WSPR receiver. Do the
-    # small status read off the render thread, then use it as the automatic
-    # distance reference unless the operator has explicitly supplied another.
+    # Use saved directory location only. A manually configured receiving
+    # location remains authoritative; no standalone receiver probes.
     threading.Thread(target=refresh_local_wspr_grid, name="wspr-local-grid", daemon=True).start()
     wspr_identity_open = False
     wspr_identity_field = "reporter"
