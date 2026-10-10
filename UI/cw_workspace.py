@@ -20,7 +20,21 @@ class CWWorkspace(SSTVWorkspace):
         if line:lines.append(line)
         for i,line in enumerate(lines[-count:]):self.text(cache,x,y+i*(size+10),line,size,width=width)
 
+    def move_receiver(self,direction):
+        index=max(0,min(len(self.manager.configs)-1,self.receiver_index+direction))
+        if index!=self.receiver_index:
+            self.receiver_index=index;self.selected_track=None
+
     def swipe(self,sx,sy,x,y):
+        # A horizontal gesture changes the viewed receiver, never its tuning
+        # or audio. Keep vertical live/history navigation independent.
+        dx,dy=x-sx,y-sy
+        if (self.open and not self.history_open and not self.add_open
+                and not self.decoders_open and not self.enlarged and self.field is None
+                and 16<=sx<=1260 and 150<=sy<=780
+                and abs(dx)>=60 and abs(dx)>=abs(dy)*1.5):
+            self.move_receiver(1 if dx<0 else -1)
+            return True
         direction=self.gallery_swipe_direction(sx,sy,x,y,(16,150,1260,780))
         if not direction:return False
         if not self.history_open:
@@ -181,7 +195,7 @@ class CWWorkspace(SSTVWorkspace):
             elif key=='history':self.history_open=True;self.decoders_open=False;self.page=0
             elif key=='decoders':self.history_open=False;super().tap(x,y,receivers)
             elif key=='select_rx':self.receiver_index=next(i for i,r in enumerate(self.manager.configs) if r['id']==value);self.decoders_open=False;self.history_open=False
-            elif key=='rx':self.receiver_index=max(0,min(len(self.manager.configs)-1,self.receiver_index+value));self.selected_track=None
+            elif key=='rx':self.move_receiver(value)
             elif key=='track':self.selected_track=value
             elif key=='listen':self.manager.listen(*value);self.message=''
             elif key=='preset':

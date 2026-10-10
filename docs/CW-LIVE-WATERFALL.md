@@ -2,6 +2,8 @@
 
 The CW overview covers 200–3200 Hz above the USB dial. Slot markers and both waterfall sources share this RF scale. Selecting a marker selects its text; **Listen to slot** on the touchscreen or **Listen on CM5** on the web page explicitly plays that signal through the CM5 speaker/headphones. Web listening controls the CM5 output, not the browser speaker.
 
+On the touchscreen, swipe left across the live waterfall to view the next saved CW receiver, or right for the previous one. This matches the < RX / RX > buttons and does not retune or switch listening audio. Up/down swipes continue to navigate live view and history.
+
 ## Waterfall sources
 
 A W/F socket pairs with each CW receiver’s existing SND session timestamp. It requests zoom 13 and crops the returned rows using their actual starting-bin/zoom header. The Kiwi stream takes priority when available. No additional SND receiver is created. Waterfall hardware resources still depend on the Kiwi configuration and channel assignment.
