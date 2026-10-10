@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import calendar
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import ctypes
@@ -5935,10 +5935,49 @@ class SharedState:
             )
 
 
+TEXT_TEXTURE_CACHE_LIMIT = 2048
+
+
 class TextCache:
-    def __init__(self):
+    def __init__(self, texture_limit=TEXT_TEXTURE_CACHE_LIMIT):
         pygame.font.init()
         self.cache = {}
+        # Live labels such as the UTC clock generate a new cache key every
+        # second. V3D backs every OpenGL texture with a GEM buffer object, so
+        # an unbounded dictionary eventually consumes all system RAM even
+        # though Python's RSS remains stable. Keep fonts for the lifetime of
+        # the renderer, but bound GPU-backed entries and delete them on LRU
+        # eviction.
+        self.texture_limit = max(1, int(texture_limit))
+        self._texture_lru = OrderedDict()
+
+    def _cached_texture(self, key):
+        cached = self.cache.get(key)
+        if cached is not None:
+            self._texture_lru.move_to_end(key)
+        return cached
+
+    def _store_texture(self, key, cached):
+        self.cache[key] = cached
+        self._texture_lru[key] = None
+        self._texture_lru.move_to_end(key)
+        while len(self._texture_lru) > self.texture_limit:
+            expired_key, _unused = self._texture_lru.popitem(last=False)
+            expired = self.cache.pop(expired_key, None)
+            if expired is not None:
+                GL.glDeleteTextures([expired[0]])
+        return cached
+
+    def close(self):
+        textures = [
+            cached[0]
+            for key in tuple(self._texture_lru)
+            if (cached := self.cache.get(key)) is not None
+        ]
+        if textures:
+            GL.glDeleteTextures(textures)
+        self._texture_lru.clear()
+        self.cache.clear()
 
     def font(self, size, bold=False, mono=False, family=None):
         key = ("font", size, bold, mono, family)
@@ -5966,7 +6005,7 @@ class TextCache:
 
     def texture(self, text, size, color, bold=False, mono=False, family=None):
         key = ("text", text, size, color, bold, mono, family)
-        cached = self.cache.get(key)
+        cached = self._cached_texture(key)
         if cached is not None:
             return cached
 
@@ -5982,12 +6021,11 @@ class TextCache:
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
         GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
         cached = tex, width, height
-        self.cache[key] = cached
-        return cached
+        return self._store_texture(key, cached)
 
     def surface_texture(self, key, surface):
         cache_key = ("surface", key)
-        cached = self.cache.get(cache_key)
+        cached = self._cached_texture(cache_key)
         if cached is not None:
             return cached
 
@@ -6002,8 +6040,7 @@ class TextCache:
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
         GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
         cached = tex, width, height
-        self.cache[cache_key] = cached
-        return cached
+        return self._store_texture(cache_key, cached)
 
 
 def setup_gl(desktop=False):
@@ -28566,6 +28603,7 @@ def main():
         snd_thread.join(timeout=1.5)
         caption_thread.join(timeout=1.5)
         callsign_thread.join(timeout=1.5)
+        text_cache.close()
         elapsed = max(0.001, time.monotonic() - start)
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()
