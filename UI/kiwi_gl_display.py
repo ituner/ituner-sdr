@@ -29,6 +29,7 @@ import html
 import wave
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
+import ipaddress
 from urllib.request import Request, urlopen
 
 
@@ -4082,24 +4083,6 @@ def format_scout_measurement(sample):
     return f"{smeter_label}/{snr_label}"
 
 
-def local_kiwi_is_reachable(server, station_health, now=None):
-    """True for any receiver except an unconfirmed built-in LAN Kiwi.
-
-    The LAN Kiwi is a configured placeholder rather than a discovery result.
-    Listing it in LOCAL before a probe has confirmed it answers on this
-    network would make the segment claim a server that does not exist, so it
-    only appears once its health record reports a live stream.
-    """
-    if str(server).rstrip("/") != LOCAL_KIWI_SERVER.rstrip("/"):
-        return True
-    entry = (station_health or {}).get(str(server)) or {}
-    now = time.time() if now is None else now
-    checked = entry.get("checked", 0)
-    if not checked or now - checked > 86400:
-        return False
-    return entry.get("audio") is True or entry.get("waterfall") is True
-
-
 def filtered_stations(
     stations, query, sort_mode, route_filter="all", favorites=(),
     station_health=None, home_profile=None,
@@ -4117,11 +4100,6 @@ def filtered_stations(
         )
         return all(term in haystack for term in terms) and route_matches
     filtered = [station for station in stations if matches(station)]
-    if station_health is not None:
-        filtered = [
-            station for station in filtered
-            if local_kiwi_is_reachable(station[2], station_health)
-        ]
     sort_mode = normalize_receiver_sort_mode(sort_mode)
     name_key = lambda station: (station[0].casefold(), station[1].casefold())
     if sort_mode == "name_az":
@@ -4164,7 +4142,7 @@ def bottom_station_title(name, location):
 
 
 def health_prioritized_stations(stations, station_health, sort_mode):
-    """Retain the requested sort order; health is expressed by row badges."""
+    """Retain the requested sort order; availability probing is disabled."""
     return list(stations)
 
 
@@ -11242,8 +11220,50 @@ def maidenhead_grid_from_latlon(latitude, longitude):
     )
 
 
+def local_status_allowed(server):
+    """No public DNS lookups: only explicit LAN names and private IP literals."""
+    host = (urlparse(str(server)).hostname or "").lower().rstrip(".")
+    if host.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+        return address.is_private and not (address.is_unspecified or address.is_multicast)
+    except ValueError:
+        return False
+
+
+def cached_receiver_metadata(server):
+    """Read directory metadata only; never contact a receiver to test it.
+
+    Counts are advertised snapshots, not a guarantee of current availability.
+    Keep unknown values unknown when the cached directory omits them.
+    """
+    endpoint = str(server or "").rstrip("/")
+    for row in STATIONS:
+        if str(row[2]).rstrip("/") == endpoint:
+            used, total = station_fields(row)[3:5]
+            grid = None
+            if len(row) >= 7:
+                grid = maidenhead_grid_from_latlon(row[5], row[6])
+            if used is not None or total is not None or grid:
+                return used, total, grid
+    try:
+        entries = json.loads(GLOBE_DIRECTORY_CACHE.read_text())
+    except (OSError, ValueError, TypeError):
+        entries = []
+    for row in entries if isinstance(entries, list) else []:
+        if isinstance(row, dict) and str(row.get("server", "")).rstrip("/") == endpoint:
+            grid = row.get("grid")
+            if not wspr_grid_is_valid(grid):
+                grid = maidenhead_grid_from_latlon(row.get("lat"), row.get("lon"))
+            return row.get("used"), row.get("total"), grid
+    return None, None, None
+
+
 def kiwi_status_metadata(server):
-    """Return published capacity plus a grid, preferring explicit locator."""
+    """Local receivers may supply /status; public receivers use directory cache."""
+    if not local_status_allowed(server):
+        return cached_receiver_metadata(server)
     url = f"{str(server or '').rstrip('/')}/status"
     if not url.startswith(("http://", "https://")):
         raise ValueError("receiver URL is invalid")
@@ -11267,7 +11287,7 @@ def kiwi_status_metadata(server):
 
 
 def kiwi_status_grid(server):
-    """Read a Kiwi receiver's Maidenhead locator, deriving it from GPS if needed."""
+    """Read a locator from local status or cached public-directory metadata."""
     try:
         _used, _total, grid = kiwi_status_metadata(server)
     except (OSError, ValueError):
@@ -16698,15 +16718,7 @@ def draw_station_picker(
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
         selected = receiver_servers_match(server, selected_server)
         pending = receiver_servers_match(server, pending_server)
-        entry_health = station_health.get(server, {})
         receiver_type = station_receiver_type(station)
-        displayed_health = dict(entry_health)
-        if receiver_type == "fmdx":
-            # FM-DX derives its local waterfall from the verified audio feed;
-            # it has no separate remote waterfall endpoint to probe.
-            displayed_health["waterfall"] = displayed_health.get("audio")
-        checked = entry_health.get("checked", 0)
-        health_fresh = time.time() - checked <= 86400
         pressed = ui_button_pressed(box)
         focused = selected or pending
         fill = theme.focus if pressed else (theme.selected_background if focused else theme.row_background)
@@ -16742,8 +16754,6 @@ def draw_station_picker(
         badge_y = box[1] + 52
         badge_x = left
         badges = (
-            receiver_health_badge("AUDIO", displayed_health, "audio", health_fresh, pending, theme),
-            receiver_health_badge("WATERFALL", displayed_health, "waterfall", health_fresh, pending, theme),
             receiver_source_badge(receiver_type, local_receiver, theme),
         )
         for badge in badges:

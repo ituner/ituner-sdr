@@ -112,7 +112,6 @@ RestartSec=5
 WantedBy=graphical.target
 EOF
 
-sed "s/__ITUNER_SDR_USER__/$app_user/g" "$repo/systemd/ituner-sdr-health.service" > /etc/systemd/system/ituner-sdr-health.service
 install -m 0755 "$repo/scripts/configure.sh" /usr/local/sbin/ituner-sdr-configure
 install -m 0755 "$repo/systemd/ituner-network" /usr/local/sbin/ituner-network
 sudoers_file=$(mktemp)
@@ -135,11 +134,15 @@ Application renders at native 800x1280 through the existing Wayland desktop.
 Application-only launcher swaps touch axes for the landscape interface.
 The cloned upstream repository remains unchanged.
 EOF
-systemd-analyze verify /etc/systemd/system/ituner-sdr.service /etc/systemd/system/ituner-sdr-touch-ready.service /etc/systemd/system/ituner-sdr-health.service
+systemd-analyze verify /etc/systemd/system/ituner-sdr.service /etc/systemd/system/ituner-sdr-touch-ready.service
+# Retire the old scanner on upgrades as well as fresh installations.
+systemctl disable --now ituner-sdr-health.service 2>/dev/null || true
+rm -f /etc/systemd/system/ituner-sdr-health.service
+ln -s /dev/null /etc/systemd/system/ituner-sdr-health.service
 systemctl daemon-reload
 if ((cm5_audio)); then
     bash "$repo/scripts/install-cm5-audio.sh" --no-restart
 fi
-systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service ituner-sdr-health.service
+systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 systemctl restart ituner-sdr-touch-ready.service
-systemctl restart ituner-sdr.service ituner-sdr-health.service
+systemctl restart ituner-sdr.service

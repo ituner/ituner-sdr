@@ -7,7 +7,8 @@ Kiwi listening channels.
 
 The shared Kiwi connection layer now remembers verified local receivers in
 `~/.cache/ituner-sdr/local-receivers.json`. This covers the main radio's sound
-and waterfall, WSPR, SSTV, Hell, QRSS, CW, and the receiver health probes.
+and waterfall, WSPR, SSTV, Hell, QRSS and CW. These local identity requests
+are allowed; the retired background receiver health service performs no probes.
 
 - Normal local name discovery runs off the connection thread. Waiting for it
   is limited to one second, with one outstanding lookup per hostname/port.

@@ -177,12 +177,12 @@ After reboot, the following services are enabled:
 
 - `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
 - `ituner-sdr.service` starts the active OpenGL radio UI.
-- `ituner-sdr-health.service` gently checks cached public-directory receiver availability for the UI.
+- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. Your local receiver may still be queried through `/status` for capacity/location and address recovery.
 
 Check them with:
 
 ```bash
-systemctl status ituner-sdr.service ituner-sdr-touch-ready.service ituner-sdr-health.service
+systemctl status ituner-sdr.service ituner-sdr-touch-ready.service
 ```
 
 The UI uses the Goodix touch event automatically. Audio is sent through PipeWire to its current default audio sink; the installer enables the selected user's persistent runtime so this works at boot without an interactive login.
@@ -233,7 +233,7 @@ sudo reboot
 
 - `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
 - `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
-- `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture assets.
+- `UI/` — OpenGL active UI, Python reference UI, and required texture assets.
 - `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.
 - `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.

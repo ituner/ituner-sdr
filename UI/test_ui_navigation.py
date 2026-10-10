@@ -995,6 +995,7 @@ class ReceiverListStyleTests(unittest.TestCase):
 
         name_call = next(call for call in drawn_text if call[3] == "Receiver · Location")
         distance_call = next(call for call in drawn_text if str(call[3]).startswith("DISTANCE:"))
+        self.assertEqual([b[2] for b in badge_calls], ["OPENWEBRX"])
         self.assertGreater(badge_calls[0][1], name_call[2])
         self.assertGreater(distance_call[1], badge_calls[-1][0])
 
