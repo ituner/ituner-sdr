@@ -21,7 +21,7 @@ Host/Origin headers and TLS hostname verification retain the selected hostname.
 
 After successful Kiwi authentication, the existing sound/waterfall connection
 sends `SET GET_USERS`, and parses `MSG user_cb` replies. All streams to the same
-selected receiver URL share one 2.5-second request schedule within the app,
+selected receiver URL share one 5-second request schedule within the app,
 including all digital decoders. No new socket or listening slot is allocated.
 The response includes every channel; the presence of the `n` field identifies
 an occupied channel, including anonymous/private users. Counts expire after

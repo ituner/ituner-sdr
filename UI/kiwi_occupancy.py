@@ -4,7 +4,8 @@ import threading
 import time
 from urllib.parse import unquote
 
-INTERVAL = 2.5
+# Occupancy is informational; refresh more slowly than the official 2.5 s UI.
+INTERVAL = 5.0
 MAX_AGE = 15.0
 
 

@@ -16,7 +16,9 @@ class OccupancyTests(unittest.TestCase):
         self.assertTrue(self.cache.request_due('http://kiwi/'))
         self.assertFalse(self.cache.request_due('http://kiwi'))
         self.assertTrue(self.cache.request_due('http://second'))
-        self.now=2.5
+        self.now=4.99
+        self.assertFalse(self.cache.request_due('http://kiwi'))
+        self.now=5.0
         self.assertTrue(self.cache.request_due('http://kiwi'))
 
     def test_counts_anonymous_busy_channels_and_expiry(self):

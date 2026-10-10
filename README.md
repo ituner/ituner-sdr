@@ -175,7 +175,7 @@ After reboot, the following services are enabled:
 
 - `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
 - `ituner-sdr.service` starts the active OpenGL radio UI.
-- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. No receiver, including local receivers, is queried through `/status`. Connected Kiwi receivers supply live occupancy using `SET GET_USERS` / `MSG user_cb` on existing authenticated WebSockets, shared at a 2.5-second cadence per receiver address. Disconnected receivers use directory snapshots. WSPR reporting locations remain configured separately.
+- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. No receiver, including local receivers, is queried through `/status`. Connected Kiwi receivers supply live occupancy using `SET GET_USERS` / `MSG user_cb` on existing authenticated WebSockets, shared at a 5-second cadence per receiver address. Disconnected receivers use directory snapshots. WSPR reporting locations remain configured separately.
 
 Check them with:
 
