@@ -3567,7 +3567,10 @@ def parse_public_directory(page):
         loc = html.unescape(location.group(1)).strip() if location else "Public KiwiSDR"
         if name:
             used, total = parse_listener_capacity(entry)
-            stations.append((name, loc, server, used, total))
+            mode_match = re.search(r"<!--\s*mode=(.*?)\s*-->", entry, re.S)
+            mode = receiver_catalog.normalize_kiwi_directory_mode(mode_match.group(1) if mode_match else "")
+            row = (name, loc, server, used, total)
+            stations.append(row + (None, None, "kiwi", mode) if mode else row)
     return stations
 
 
@@ -3736,6 +3739,7 @@ def catalog_records_from_stations(stations):
         "lon": station[6] if len(station) > 6 else None,
         "protocol": station_receiver_type(station),
         "source_group": receiver_source_group(station),
+        "directory_mode": station[8] if len(station) > 8 else "",
     }) for station in stations)
 
 
@@ -3817,7 +3821,10 @@ def parse_globe_directory(script):
             total = int(field("users_max", "0"))
         except ValueError:
             used = total = 0
+        mode = receiver_catalog.normalize_kiwi_directory_mode(field("mode"))
+        audio_channels, waterfall_channels = receiver_catalog.kiwi_directory_channels(mode)
         receivers.append({
+            "mode": mode, "audio_channels": audio_channels, "waterfall_channels": waterfall_channels,
             "name": name, "location": location, "server": server,
             "lat": lat, "lon": lon, "used": used, "total": total,
             "receiver_type": "kiwi",
@@ -3884,7 +3891,9 @@ def stations_from_globe_receivers(receivers):
         except (KeyError, TypeError, ValueError):
             lat = lon = None
         receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
-        stations.append((name, location, server, used, total, lat, lon, receiver_type))
+        mode = receiver_catalog.normalize_kiwi_directory_mode(receiver.get("mode")) if receiver_type == "kiwi" else ""
+        row = (name, location, server, used, total, lat, lon, receiver_type)
+        stations.append(row + (mode,) if mode else row)
     return prioritize_local_station(stations)
 
 
@@ -3925,6 +3934,7 @@ def merge_receiver_map_stations(receivers, stations):
             "used": used,
             "total": total,
             "receiver_type": station_receiver_type(station),
+            "mode": station[8] if len(station) > 8 else "",
         })
         seen.add(key)
     return merged
@@ -16513,6 +16523,18 @@ def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LI
     return ReceiverBadge("KIWI", theme.kiwi, theme.primary_text)
 
 
+
+def receiver_directory_badges(station, theme=RECEIVER_LIST_THEME):
+    """Neutral advertised capacities, never health/availability indicators."""
+    if station_receiver_type(station) != "kiwi":
+        return ()
+    mode = station[8] if len(station) > 8 else ""
+    audio, waterfall = receiver_catalog.kiwi_directory_channels(mode)
+    if audio is None:
+        return ()
+    return tuple(ReceiverBadge(label, theme.secondary_text, theme.secondary_text)
+                 for label in (f"AUDIO {audio}", f"WF {waterfall}"))
+
 def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME,
                         background=None):
     """Draw a uniform outlined pill and return its occupied width."""
@@ -16730,15 +16752,17 @@ def draw_station_picker(
         badge_x = left
         badges = (
             receiver_source_badge(receiver_type, local_receiver, theme),
-        )
+        ) + receiver_directory_badges(station, theme)
         for badge in badges:
             badge_x += draw_receiver_badge(
                 text_cache, badge_x, badge_y, badge, theme, background=fill,
             ) + 8
-        draw_text(
-            text_cache, badge_x + 6, badge_y + 14, distance_label, secondary_color,
-            theme.label_size, False, False, "lm", family=theme.font_family,
-        )
+        distance_width = text_cache.texture(distance_label, theme.label_size, secondary_color, family=theme.font_family)[1]
+        if right - badge_x >= distance_width + 8:
+            draw_text(
+                text_cache, right, badge_y + 14, distance_label, secondary_color,
+                theme.label_size, False, False, "rm", family=theme.font_family,
+            )
     if notice:
         notice_box = receiver_list_notice_box()
         visual = draw_styled_button_frame(notice_box, active=True)
