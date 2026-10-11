@@ -27955,7 +27955,7 @@ def main():
                 next_health_reload = now + 3.0
             daily_directories.poll()
             for directory_label, directory_queue in (
-                ("Kiwi", public_result_queue), ("OpenWebRX", directory_result_queue),
+                ("Kiwi", public_result_queue), ("OpenWebRX", openwebrx_result_queue),
             ):
                 while True:
                     try:
