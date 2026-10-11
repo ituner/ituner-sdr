@@ -175,6 +175,7 @@ After reboot, the following services are enabled:
 
 - `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
 - `ituner-sdr.service` starts the active OpenGL radio UI.
+- Receiver directories refresh at startup and every 24 hours while the app stays running. Daily updates run off the UI thread, fetch central directory feeds only, preserve cached data on failure, and never launch receiver health probes.
 - Kiwi directory firmware modes (for example `rx8.wf3`) are saved in the catalog and shown as neutral `AUDIO 8` / `WF 3` badges. These are advertised total capacities, not tested health or free waterfall slots. Missing mode metadata remains unknown.
 - Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. No receiver, including local receivers, is queried through `/status`. Connected Kiwi receivers supply live occupancy using `SET GET_USERS` / `MSG user_cb` on existing authenticated WebSockets, shared at a 5-second cadence per receiver address. Disconnected receivers use directory snapshots. WSPR reporting locations remain configured separately.
 

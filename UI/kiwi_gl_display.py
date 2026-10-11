@@ -213,6 +213,7 @@ import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
 import receiver_catalog
+from directory_refresh import DailyDirectoryRefresh
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 
@@ -3760,6 +3761,14 @@ def merge_station_rows(*groups):
         receiver_catalog.legacy_station_row(record)
         for record in receiver_catalog.merge_catalogs(records)
     )
+
+
+
+def refresh_public_stations(result_queue):
+    """Refresh the central Kiwi listing only; preserve cache on failure."""
+    rows = load_public_stations()
+    if rows:
+        result_queue.put(("ready", rows))
 
 
 def refresh_openwebrx_stations(result_queue):
@@ -22069,6 +22078,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
 
 
 def main():
+    global STATIONS
     global LCD_RADIO_DRAWER_PROGRESS
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
@@ -22993,6 +23003,12 @@ def main():
         target=refresh_openwebrx_stations,
         args=(openwebrx_result_queue,), name="openwebrx-directory", daemon=True,
     ).start()
+    public_result_queue = queue.Queue(maxsize=1)
+    daily_directories = DailyDirectoryRefresh((
+        lambda: refresh_public_stations(public_result_queue),
+        lambda: refresh_globe_receivers(globe_result_queue),
+        lambda: refresh_openwebrx_stations(openwebrx_result_queue),
+    ))
     globe_yaw = math.radians(-20)
     globe_pitch = math.radians(18)
     globe_scale = 0.72
@@ -27937,37 +27953,41 @@ def main():
                 except (OSError, ValueError, TypeError):
                     station_health = {}
                 next_health_reload = now + 3.0
-            while True:
-                try:
-                    openwebrx_result, openwebrx_payload = openwebrx_result_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if openwebrx_result == "ready":
-                    catalog_stations = merge_station_rows(openwebrx_payload, catalog_stations)
-                    globe_receivers = merge_receiver_map_stations(
-                        globe_receivers, catalog_stations,
-                    )
-                    all_stations = merge_station_rows(
-                        stations_from_globe_receivers(globe_receivers), catalog_stations,
-                    )
-                    stations = filtered_stations(
-                        all_stations, station_query, station_sort,
-                        station_route_filter, favorite_servers, station_health,
-                        receiver_home_profile,
-                    )
-                    if picker_open and not picker_map_open and not search_open:
-                        center_active_receiver_in_current_list()
-                    else:
-                        station_scroll = clamp(
-                            station_scroll, 0,
-                            station_page_max(stations, int(fmdx_disclaimer_open)),
+            daily_directories.poll()
+            for directory_label, directory_queue in (
+                ("Kiwi", public_result_queue), ("OpenWebRX", directory_result_queue),
+            ):
+                while True:
+                    try:
+                        directory_result, directory_payload = directory_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if directory_result == "ready":
+                        catalog_stations = merge_station_rows(directory_payload, catalog_stations)
+                        globe_receivers = merge_receiver_map_stations(
+                            globe_receivers, catalog_stations,
                         )
-                    print(
-                        f"gl OpenWebRX directory ready: {len(openwebrx_payload)} receiver(s)",
-                        flush=True,
-                    )
-                else:
-                    print(f"gl OpenWebRX directory unavailable: {openwebrx_payload}", flush=True)
+                        all_stations = merge_station_rows(
+                            stations_from_globe_receivers(globe_receivers), catalog_stations,
+                        )
+                        stations = filtered_stations(
+                            all_stations, station_query, station_sort,
+                            station_route_filter, favorite_servers, station_health,
+                            receiver_home_profile,
+                        )
+                        if picker_open and not picker_map_open and not search_open:
+                            center_active_receiver_in_current_list()
+                        else:
+                            station_scroll = clamp(
+                                station_scroll, 0,
+                                station_page_max(stations, int(fmdx_disclaimer_open)),
+                            )
+                        print(
+                            f"gl {directory_label} directory ready: {len(directory_payload)} receiver(s)",
+                            flush=True,
+                        )
+                    else:
+                        print(f"gl {directory_label} directory unavailable: {directory_payload}", flush=True)
             while True:
                 try:
                     globe_result, globe_payload = globe_result_queue.get_nowait()
@@ -27994,6 +28014,7 @@ def main():
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"
+            STATIONS = all_stations
             while True:
                 try:
                     globe_event, globe_server = globe_mixer.events.get_nowait()
