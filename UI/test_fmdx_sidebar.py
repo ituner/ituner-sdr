@@ -17,10 +17,16 @@ class FmdxSidebarTests(unittest.TestCase):
     def test_fm_steps_match_touch_targets(self):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1
         steps = list(ui.radio_step_options('fmdx'))
-        self.assertEqual(len(steps), 1)
-        _step, box = steps[0]
-        self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2,
-                                            receiver_type='fmdx'), ('step_cycle', None))
+        self.assertEqual([step for step, _box in steps], list(ui.FMDX_TUNE_STEPS_HZ))
+        self.assertEqual(len({box[1] for _step, box in steps}), 1)
+        for step, box in steps:
+            self.assertEqual((box[2] - box[0], box[3] - box[1]), (55, 31))
+            center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            self.assertEqual(ui.radio_option_at(*center, receiver_type='fmdx'),
+                             ('step', step))
+            self.assertIsNone(ui.radio_option_at(
+                *center, receiver_type='fmdx', fmdx_shared_control=False,
+            ))
         self.assertEqual([ui.next_radio_tune_step(step, 'fmdx')
                           for step in (50000, 100000, 200000)],
                          [100000, 200000, 50000])
@@ -76,7 +82,8 @@ class FmdxRailRegressionTests(unittest.TestCase):
                  patch.object(ui, "draw_radio_close_button"), \
                  patch.object(ui, "draw_sidebar_header"), \
                  patch.object(ui, "fit_station_text", side_effect=lambda _c, label, *_a, **_kw: label), \
-                 patch.object(ui, "draw_lcd_audio_tile") as tile:
+                 patch.object(ui, "draw_lcd_audio_tile") as tile, \
+                 patch.object(ui, "draw_picker_button") as step_button:
                 ui.draw_radio_setup_panel(None, "AM", "DIG", 100000,
                     receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared)
                 calls = tile.call_args_list
@@ -86,7 +93,10 @@ class FmdxRailRegressionTests(unittest.TestCase):
                     self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2,
                         receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared),
                         ("fmdx_action", action))
-                steps = [call for call in calls if call.args[2] == "TUNE STEP"]
-                self.assertEqual(len(steps), 1 if shared else 0)
+                steps = step_button.call_args_list
+                self.assertEqual(len(steps), 3 if shared else 0)
                 if shared:
-                    self.assertEqual(steps[0].args[3], "100 kHz")
+                    self.assertEqual([call.args[2] for call in steps],
+                                     ["50K", "100K", "200K"])
+                    self.assertEqual([call.args[4] for call in steps],
+                                     [False, True, False])

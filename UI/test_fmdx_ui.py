@@ -140,7 +140,7 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             ui.radio_option_at(step_x, step_y, receiver_type="fmdx", fmdx_shared_control=True),
-            ("step_cycle", None),
+            ("step", step_hz),
         )
 
     def test_fmdx_drawer_exposes_presets_without_scan(self):

@@ -252,9 +252,22 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertEqual(left[0], back_box[0])
             self.assertEqual(right[2], back_box[2])
             self.assertEqual(right[0] - left[2], 8)
-        self.assertEqual(len(step_boxes), 1)
-        self.assertEqual(ui.radio_option_at(*self._center(step_boxes[0])), ("step_cycle", None))
+        self.assertEqual([step for step, _box in ui.radio_step_options("kiwi")],
+                         [10, 100, 1000, 5000])
+        self.assertEqual(len(step_boxes), 4)
+        frequency_boxes = [box for _step, box in ui.frequency_drawer_step_boxes("kiwi")]
+        for (step, box), frequency_box in zip(ui.radio_step_options("kiwi"), frequency_boxes):
+            self.assertEqual(ui.radio_option_at(*self._center(box)), ("step", step))
+            self.assertEqual((box[0], box[2], box[3] - box[1]),
+                             (frequency_box[0], frequency_box[2], 31))
+        self.assertEqual(len({box[1] for box in step_boxes}), 1)
         self.assertIsNone(ui.radio_option_at(step_boxes[0][0] + 4, step_boxes[0][1] - 18))
+        self.assertEqual(ui.radio_option_at(*self._center(
+            next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
+        ), receiver_type="fmdx", fmdx_shared_control=True), ("step", 100_000))
+        self.assertIsNone(ui.radio_option_at(*self._center(
+            next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
+        ), receiver_type="fmdx", fmdx_shared_control=False))
         decoders = ui.radio_decoder_boxes()
         self.assertEqual({kind for kind, _ in decoders}, {"wspr", "sstv", "hell", "qrss", "cw"})
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
@@ -266,6 +279,28 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="openwebrx"), ("workspace", kind))
             self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="fmdx"), ("workspace", kind))
 
+    def test_modes_drawer_highlights_the_selected_step_in_four_button_row(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
+        ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
+        try:
+            with mock.patch.object(ui, 'draw_logical_rect'), \
+                 mock.patch.object(ui, 'draw_sidebar_header'), \
+                 mock.patch.object(ui, 'draw_radio_close_button'), \
+                 mock.patch.object(ui, 'draw_radio_family_option'), \
+                 mock.patch.object(ui, 'draw_lcd_drawer_heading'), \
+                 mock.patch.object(ui, 'draw_radio_option'), \
+                 mock.patch.object(ui, 'draw_picker_button') as buttons:
+                ui.draw_radio_setup_panel(None, 'AM', 'DIG', 100,
+                                          receiver_type='kiwi')
+        finally:
+            ui.LCD_RADIO_DRAWER_PROGRESS = previous_progress
+        self.assertEqual([entry.args[2] for entry in buttons.call_args_list],
+                         ['10 Hz', '100 Hz', '1 kHz', '5 kHz'])
+        self.assertEqual([entry.args[4] for entry in buttons.call_args_list],
+                         [False, True, False, False])
+
     def test_stats_close_target_is_inside_graph_header(self):
         graph = (120, 90, 900, 420)
         close = ui.cpu_utilization_graph_close_box(graph)
@@ -273,6 +308,18 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertGreaterEqual(close[1], graph[1])
         self.assertLessEqual(close[2], graph[2])
         self.assertLess(close[3], graph[1] + 44)
+
+    def test_live_pcm_uses_the_stats_close_button(self):
+        graph = (120, 90, 900, 420)
+        close = ui.audio_transport_graph_close_box(graph)
+        self.assertEqual(close, ui.cpu_utilization_graph_close_box(graph))
+        text_cache = object()
+        with mock.patch.object(ui, 'draw_logical_rect'), \
+             mock.patch.object(ui, 'draw_logical_line'), \
+             mock.patch.object(ui, 'draw_text'), \
+             mock.patch.object(ui, 'draw_styled_text_button') as button:
+            ui.draw_audio_transport_graph(text_cache, (), graph)
+        button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
 
     def test_frequency_drawer_controls_are_bounded_and_disjoint(self):
         boxes = ui.frequency_drawer_boxes()
@@ -401,13 +448,16 @@ class DrawerGeometryTests(unittest.TestCase):
         ))
 
     def test_sidebar_headers_use_one_centered_compact_style(self):
-        with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line"), mock.patch.object(ui, "draw_text") as draw_text:
+        with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line") as draw_line, mock.patch.object(ui, "draw_text") as draw_text:
             ui.draw_sidebar_header(object(), "SETTINGS")
         args = draw_text.call_args.args
         self.assertEqual(args[1], (ui.LCD_NAV_X0 + ui.LOGICAL_W) / 2)
         self.assertEqual(args[5], 15)
         self.assertTrue(args[6])
         self.assertEqual(args[8], "cm")
+        self.assertEqual(draw_line.call_args.args[:4],
+                         (ui.LCD_NAV_X0 + 10, ui.LCD_DRAWER_HEADER_H,
+                          ui.LOGICAL_W - 10, ui.LCD_DRAWER_HEADER_H))
 
 
 class ParentNavigationTests(unittest.TestCase):
@@ -767,10 +817,11 @@ class AllScreenLayoutTests(unittest.TestCase):
 
 
 class BigFrequencyStyleTests(unittest.TestCase):
-    """The large readout must look identical wherever it is drawn."""
+    """The large readout and the compact Home rail keep their intended sizes."""
 
     def test_one_shared_face_size_and_colour(self):
         self.assertEqual(ui.BIG_FREQUENCY_SIZE, 58)
+        self.assertEqual(ui.COMPACT_FREQUENCY_SIZE, 36)
         self.assertEqual(ui.BIG_FREQUENCY_COLOR, ui.VFO_NEON_COLOR)
 
     def test_helper_draws_the_shared_style(self):

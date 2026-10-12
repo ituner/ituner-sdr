@@ -2,7 +2,7 @@
 import math
 import time
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 import kiwi_gl_display as ui
 
 
@@ -81,6 +81,415 @@ class AudioJitterBufferTests(unittest.TestCase):
         self.assertEqual(player.target_packets, 7)
 
 class BoardLayoutTests(unittest.TestCase):
+    def test_old_frequency_positions_keep_their_screen_locations(self):
+        self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
+        self.assertEqual(ui.normalize_frequency_position('expanded'), 'middle')
+        self.assertEqual(ui.normalize_frequency_position('left'), 'left')
+        self.assertEqual(ui.normalize_frequency_position('unknown'), 'right')
+
+    def test_left_frequency_is_drawn_and_tappable_at_top_left(self):
+        from contextlib import ExitStack
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (300, 58)
+        left_box = ui.frequency_display_box(text_cache, 7075, position='left')
+        self.assertEqual(left_box, (ui.LEFT_FREQUENCY_X - 8, 4,
+                                    ui.LEFT_FREQUENCY_X + 308, 70))
+        self.assertEqual(ui.frequency_display_box(text_cache, 7075, position='right'),
+                         ui.compact_frequency_touch_box())
+        self.assertTrue(ui.is_frequency_readout_touch(left_box[0] + 4, 39, left_box))
+        meter_box = ui.left_smeter_box(text_cache, 7075)
+        self.assertEqual(meter_box, (334, 0, 756, 80))
+        self.assertEqual(ui.main_band_context_box(text_cache, 7075, position='left'),
+                         (meter_box[2] + 8, 24, meter_box[2] + 184, 53))
+        self.assertFalse(ui.is_waterfall_tune_touch(400, 50, 'left', meter_box))
+        self.assertTrue(ui.is_waterfall_tune_touch(100, 140, 'left', meter_box))
+        self.assertTrue(ui.is_waterfall_tune_touch(100, 140, 'middle'))
+        with ExitStack() as stack:
+            for name in ('draw_logical_rect',
+                         'draw_ruler', 'draw_lower_status', 'draw_waterfall_operating_controls',
+                         'draw_connection_annunciator', 'draw_squelch_closed_annunciator',
+                         'draw_lcd_navigation'):
+                stack.enter_context(patch.object(ui, name))
+            stack.enter_context(patch.object(ui, 'top_instrument_layout',
+                                            return_value=('7.075.000', (0, 0, 1, 1))))
+            draw_frequency = stack.enter_context(patch.object(ui, 'draw_big_frequency'))
+            draw_context = stack.enter_context(patch.object(ui, 'draw_band_context_chip'))
+            draw_meter = stack.enter_context(patch.object(ui, 'draw_lcd_compact_smeter'))
+            draw_analog_meter = stack.enter_context(patch.object(ui, 'draw_smeter'))
+            ui.draw_ui(text_cache, 7075, 20, -95, -95, None, 'LSB', 'DIG', 100,
+                       instrument_layout='left', sidebar_open=True)
+        self.assertEqual(draw_frequency.call_args.args[2], ui.LEFT_FREQUENCY_X)
+        self.assertEqual(draw_frequency.call_args.args[4], 330.0)
+        self.assertEqual(draw_frequency.call_args.kwargs['family'], ui.COMPACT_FREQUENCY_FONT_FAMILY)
+        self.assertNotIn('fit_text', draw_frequency.call_args.kwargs)
+        self.assertEqual(draw_frequency.call_args.kwargs['anchor'], 'lm')
+        self.assertEqual(draw_context.call_args.kwargs['compact'], True)
+        draw_meter.assert_not_called()
+        draw_analog_meter.assert_called_once_with(
+            text_cache, -95, False, -95, meter_x0=439,
+        )
+
+    def test_left_meter_stays_beside_frequency_for_different_font_widths(self):
+        ui.configure_output(True)
+        text_cache = Mock()
+        for font_width in (127, 187, 400):
+            text_cache.font.return_value.size.return_value = (font_width, 36)
+            frequency_box = ui.frequency_display_box(text_cache, 7075, position='left')
+            meter_box = ui.left_smeter_box(text_cache, 7075)
+            self.assertLess(frequency_box[2], meter_box[0])
+            self.assertLess(meter_box[2], ui.rf_canvas_width())
+
+    def test_top_frequency_uses_right_rail_font_and_size(self):
+        from contextlib import ExitStack
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (187, 36)
+        with ExitStack() as stack:
+            for name in ('draw_logical_rect', 'draw_ruler', 'draw_lower_status',
+                         'draw_waterfall_operating_controls', 'draw_connection_annunciator',
+                         'draw_squelch_closed_annunciator', 'draw_lcd_navigation',
+                         'draw_band_context_chip', 'draw_smeter'):
+                stack.enter_context(patch.object(ui, name))
+            stack.enter_context(patch.object(ui, 'top_instrument_layout',
+                                            return_value=('7.075.000', (0, 0, 1, 1))))
+            draw_frequency = stack.enter_context(patch.object(ui, 'draw_big_frequency'))
+            for position in ('left', 'middle'):
+                ui.draw_ui(text_cache, 7075, 20, -95, -95, None, 'LSB', 'DIG', 100,
+                           instrument_layout=position, sidebar_open=True)
+            top_calls = draw_frequency.call_args_list
+            draw_frequency.reset_mock()
+            stack.enter_context(patch.object(ui, 'lcd_home_mode_boxes', return_value=()))
+            stack.enter_context(patch.object(ui, 'draw_lcd_compact_smeter'))
+            ui.draw_lcd_mode_annunciators(
+                text_cache, 'LSB', 'DIG', 7075, -95,
+                compact_frequency_font_family=ui.COMPACT_FREQUENCY_FONT_FAMILY,
+            )
+            right_call = draw_frequency.call_args
+
+        self.assertEqual(len(top_calls), 2)
+        self.assertEqual([entry.args[4] for entry in top_calls], [330.0, 330.0])
+        for entry in (*top_calls, right_call):
+            self.assertEqual(entry.kwargs['family'], ui.COMPACT_FREQUENCY_FONT_FAMILY)
+        for entry in top_calls:
+            self.assertNotIn('fit_text', entry.kwargs)
+        self.assertEqual(right_call.kwargs['fit_text'], '30.000.000')
+        self.assertEqual(right_call.args[4], 236)
+        self.assertEqual(right_call.kwargs['size'], ui.COMPACT_FREQUENCY_SIZE)
+
+    def test_top_instrument_band_follows_frequency_position(self):
+        from contextlib import ExitStack
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (187, 36)
+        with ExitStack() as stack:
+            rectangles = stack.enter_context(patch.object(ui, 'draw_logical_rect'))
+            for name in ('draw_ruler', 'draw_lower_status',
+                         'draw_waterfall_operating_controls', 'draw_connection_annunciator',
+                         'draw_squelch_closed_annunciator', 'draw_lcd_navigation',
+                         'draw_band_context_chip', 'draw_smeter', 'draw_big_frequency'):
+                stack.enter_context(patch.object(ui, name))
+            stack.enter_context(patch.object(ui, 'top_instrument_layout',
+                                            return_value=('7.075.000', (0, 0, 1, 1))))
+            for position, height in (
+                ('right', None),
+                ('middle', ui.LCD_TOP_INSTRUMENT_BAND_H),
+                ('left', ui.LCD_TOP_INSTRUMENT_BAND_H),
+            ):
+                rectangles.reset_mock()
+                ui.draw_ui(text_cache, 7075, 20, -95, -95, None, 'LSB', 'DIG', 100,
+                           instrument_layout=position, sidebar_open=True)
+                expected = [] if height is None else [
+                    call(0, 0, ui.rf_canvas_width(), height, (0, 0, 0, 144))
+                ]
+                self.assertEqual(rectangles.call_args_list, expected)
+
+        self.assertEqual(ui.LCD_TOP_INSTRUMENT_BAND_H, 88)
+        self.assertEqual(ui.LCD_LEFT_INSTRUMENT_BAND_H, ui.LCD_TOP_INSTRUMENT_BAND_H)
+        self.assertEqual(ui.LCD_TOP_INSTRUMENT_CENTER_Y, 39)
+        with patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_circle'), \
+             patch.object(ui, 'draw_text') as labels:
+            ui.draw_smeter(text_cache, -95, False, meter_x0=320)
+        top_label = next(entry for entry in labels.call_args_list if entry.args[3] == 'S')
+        bottom_label = next(entry for entry in labels.call_args_list if entry.args[3] == '-121')
+        self.assertGreaterEqual(top_label.args[2] - top_label.args[5] / 2, 8)
+        self.assertGreaterEqual(
+            ui.LCD_TOP_INSTRUMENT_BAND_H - bottom_label.args[2] - bottom_label.args[5] / 2,
+            8,
+        )
+        context_box = ui.main_band_context_box(text_cache, 7075, position='left')
+        context_center = (context_box[1] + context_box[3]) / 2 + 0.5
+        self.assertEqual(context_center, ui.LCD_TOP_INSTRUMENT_CENTER_Y)
+
+    def test_smeter_lower_labels_align_with_major_ruler_bars(self):
+        ui.configure_output(True)
+        expected_dbm = (-121, -109, -97, -85, -73, -53, -33)
+        for meter_x0 in (320, 675):
+            with patch.object(ui, 'draw_logical_line') as lines, \
+                 patch.object(ui, 'draw_logical_circle'), \
+                 patch.object(ui, 'draw_text') as labels:
+                ui.draw_smeter(Mock(), -95, False, meter_x0=meter_x0)
+            major_xs = {
+                entry.args[0] for entry in lines.call_args_list
+                if entry.args[1] == 26
+                and entry.args[2] == entry.args[0]
+                and entry.args[3] == 52
+            }
+            lower_labels = {
+                int(entry.args[3]): entry.args[1]
+                for entry in labels.call_args_list
+                if entry.args[3] in {str(dbm) for dbm in expected_dbm}
+            }
+            s_label = next(entry for entry in labels.call_args_list if entry.args[3] == 'S')
+            scale_unit = next(
+                entry for entry in labels.call_args_list
+                if entry.args[3] == 'dBm' and entry.args[5] == 13
+            )
+            first_dbm = next(entry for entry in labels.call_args_list if entry.args[3] == '-121')
+            self.assertEqual(set(lower_labels), set(expected_dbm))
+            self.assertEqual(set(lower_labels.values()), major_xs)
+            self.assertEqual(scale_unit.args[1], s_label.args[1])
+            self.assertEqual(scale_unit.args[2], first_dbm.args[2])
+            self.assertEqual(scale_unit.args[8], 'cm')
+            self.assertLess(scale_unit.args[1], first_dbm.args[1])
+
+    def test_band_navigation_alignment_follows_frequency_position(self):
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (300, 58)
+        left_frequency = ui.frequency_display_box(text_cache, 7075, position='left')
+        left_meter = ui.left_smeter_box(text_cache, 7075)
+        left_band = ui.main_band_context_box(text_cache, 7075, position='left')
+        self.assertGreater(left_band[0], left_meter[2])
+        self.assertGreater(left_band[0], left_frequency[2])
+        self.assertGreaterEqual(
+            ui.LCD_TOP_INSTRUMENT_BAND_H - ((left_band[1] + left_band[3]) / 2 + 0.5 + 17 / 2),
+            8,
+        )
+        self.assertEqual((left_band[1] + left_band[3]) / 2 + 0.5,
+                         ui.LCD_TOP_INSTRUMENT_CENTER_Y)
+
+        middle_frequency = ui.frequency_display_box(text_cache, 7075, position='middle')
+        middle_band = ui.main_band_context_box(text_cache, 7075, position='middle')
+        self.assertLess(middle_band[2], middle_frequency[0])
+        self.assertEqual((middle_band[1] + middle_band[3]) / 2 + 0.5,
+                         ui.LCD_TOP_INSTRUMENT_CENTER_Y)
+
+    def test_band_navigation_uses_stats_close_button(self):
+        ui.configure_output(True)
+        boxes = ui.band_navigation_layout()
+        close = boxes['close']
+        self.assertEqual(close, ui.compact_header_close_box(boxes['panel']))
+        self.assertEqual((close[2] - close[0], close[3] - close[1]), (102, 30))
+        self.assertEqual(ui.band_navigation_action_at(
+            (close[0] + close[2]) / 2, (close[1] + close[3]) / 2,
+        ), 'close')
+        text_cache = Mock()
+        with patch.object(ui, 'draw_logical_rect'), \
+             patch.object(ui, 'draw_logical_line') as lines, \
+             patch.object(ui, 'draw_text'), \
+             patch.object(ui, 'draw_styled_button_frame'), \
+             patch.object(ui, 'draw_styled_text_button') as close_button:
+            ui.draw_band_navigation(text_cache, 7075, 'LSB')
+        self.assertEqual(len(lines.call_args_list), 1)
+        close_button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
+
+    def test_audio_rail_uses_full_width_sliders_and_bottom_reset_mute_row(self):
+        ui.configure_output(True)
+        back = ui.lcd_audio_drawer_close_box()
+        full_edges = (back[0], back[2])
+        for box in (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
+                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_BACKEND_BOX):
+            self.assertEqual((box[0], box[2]), full_edges)
+            self.assertEqual(box[2] - box[0], 236)
+
+        reset, mute = ui.AUDIO_RESET_BOX, ui.AUDIO_MUTE_BOX
+        self.assertEqual((reset[1], reset[3]), (mute[1], mute[3]))
+        self.assertEqual((reset[0], mute[2]), full_edges)
+        self.assertEqual(mute[0] - reset[2], 8)
+        self.assertEqual(ui.AUDIO_BACKEND_BOX[3] + 8, reset[1])
+        self.assertGreaterEqual(back[1] - mute[3], 16)
+        self.assertEqual(ui.AUDIO_DENOISE_BOX[3] + 8,
+                         ui.AUDIO_VOICE_CLEAN_BOX[1])
+        for action, box in (('reset', reset), ('mute', mute),
+                            ('backend', ui.AUDIO_BACKEND_BOX),
+                            ('filter', ui.AUDIO_FILTER_BOX)):
+            self.assertEqual(ui.audio_option_at(
+                (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+            ), action)
+
+        controls = (
+            ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX, ui.AUDIO_DENOISE_BOX,
+            ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_HF_ENHANCE_BOX,
+            ui.AUDIO_AGC_BOX, ui.AUDIO_BLANKER_BOX, ui.AUDIO_NOTCH_BOX,
+            ui.AUDIO_DEEMP_BOX, ui.AUDIO_TONE_BOX, ui.AUDIO_FILTER_BOX,
+            ui.AUDIO_BACKEND_BOX, reset, mute,
+        )
+        for index, box in enumerate(controls):
+            for other in controls[index + 1:]:
+                self.assertFalse(
+                    box[0] < other[2] and other[0] < box[2]
+                    and box[1] < other[3] and other[1] < box[3],
+                    (box, other),
+                )
+
+    def test_audio_rail_draws_full_width_volume_and_slider_tracks(self):
+        ui.configure_output(True)
+        controls = dict(mute=False, voice_clean_level=0, hf_enhance_level=0,
+                        tone_profile=0, squelch_level=0, agc=True,
+                        agc_hang=False, nb_algo=0, denoise_level=0,
+                        deemphasis=0, autonotch=False)
+        with patch.object(ui, 'draw_logical_rect') as rectangles, \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_text'), \
+             patch.object(ui, 'draw_radio_close_button'), \
+             patch.object(ui, 'draw_lcd_audio_tile'), \
+             patch.object(ui, 'draw_lcd_audio_slider_tile'), \
+             patch.object(ui, 'draw_sidebar_header'):
+            ui.draw_lcd_audio_drawer(object(), 0.5, controls, -400, 400,
+                                     True, 'am', 'pipewire')
+        volume = ui.AUDIO_VOLUME_BOX
+        track_y = volume[3] - 16
+        self.assertIn((volume[0], track_y - 3, volume[2], track_y + 3),
+                      [entry.args[:4] for entry in rectangles.call_args_list])
+
+        for box in (ui.AUDIO_SQUELCH_BOX, ui.AUDIO_DENOISE_BOX):
+            with patch.object(ui, 'draw_logical_rect') as rectangles, \
+                 patch.object(ui, 'draw_logical_line'), patch.object(ui, 'draw_text'):
+                ui.draw_lcd_audio_slider_tile(object(), box, 'LEVEL', 0, 10,
+                                              'OFF', full_width=True)
+            track_y = box[3] - 15
+            self.assertIn((box[0], track_y - 3, box[2], track_y + 3),
+                          [entry.args[:4] for entry in rectangles.call_args_list])
+        self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[0]), 0)
+        self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[2]),
+                         len(ui.DENOISE_SLIDER_POSITIONS) - 1)
+
+    def test_scope_drag_requires_a_held_vertical_move(self):
+        self.assertFalse(ui.scope_hold_drag_ready(0.2, 0, 80, 10))
+        self.assertFalse(ui.scope_hold_drag_ready(0.6, 80, 10, 10))
+        self.assertFalse(ui.scope_hold_drag_ready(0.6, 0, 8, 10))
+        self.assertTrue(ui.scope_hold_drag_ready(0.6, 4, 35, 10))
+        self.assertTrue(ui.scope_hold_drag_ready(0.6, 4, -35, 10))
+
+    def test_scope_drag_from_waterfall_uses_relative_motion(self):
+        self.assertEqual(ui.scope_height_from_drag(240, 650, 690, 350), 280)
+        self.assertEqual(ui.scope_height_from_drag(240, 650, 610, 350), 200)
+        self.assertEqual(ui.scope_height_from_drag(240, 650, 200, 350), 0)
+        self.assertEqual(ui.scope_height_from_drag(240, 650, 900, 350), 350)
+        self.assertEqual(ui.scope_height_from_drag(280, 100, 620, ui.LOGICAL_H), ui.LOGICAL_H)
+        self.assertEqual(ui.scope_height_from_drag(280, 650, 0, ui.LOGICAL_H), 0)
+
+    def test_scope_and_waterfall_reach_both_screen_edges(self):
+        ui.configure_output(True)
+        self.assertEqual(ui.scope_waterfall_y_bounds(0, True), (0, 0, 0))
+        self.assertEqual(ui.scope_waterfall_y_bounds(ui.LOGICAL_H, True),
+                         (0, ui.LOGICAL_H, ui.LOGICAL_H))
+        self.assertEqual(ui.scope_waterfall_y_bounds(ui.LCD_SPECTRUM_H, True),
+                         (0, 280, 280))
+        self.assertEqual(ui.scope_waterfall_y_bounds(ui.LCD_SPECTRUM_H, False),
+                         (0, 0, 0))
+
+    def test_spectrum_ruler_has_a_16px_top_label_gap(self):
+        text_cache = Mock()
+        text_cache.texture.return_value = (1, 64, 16)
+        with patch.object(ui, 'draw_logical_rect'), \
+             patch.object(ui, 'draw_logical_line') as line, \
+             patch.object(ui, 'draw_textured_quad') as text_quad, \
+             patch.object(ui, 'draw_logical_area'), \
+             patch.object(ui, 'draw_logical_polyline') as trace:
+            ui.draw_spectrum(0, 240, (0.0, 1.0), text_cache=text_cache)
+
+        self.assertEqual(min(entry.args[2] for entry in text_quad.call_args_list), 16)
+        self.assertEqual(
+            [entry.args[1] for entry in line.call_args_list
+             if entry.args[0] == 8 and entry.args[2] == 22][0],
+            26,
+        )
+        self.assertEqual(trace.call_args.args[0][-1][1], 26)
+
+    def test_spectrum_fill_reaches_the_waterfall_boundary(self):
+        text_cache = Mock()
+        text_cache.texture.return_value = (1, 64, 16)
+        with patch.object(ui, 'draw_logical_rect'), \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_textured_quad'), \
+             patch.object(ui, 'draw_logical_area') as areas, \
+             patch.object(ui, 'draw_logical_polyline'):
+            ui.draw_spectrum(0, 240, (0.0, 0.8), (0.2, 1.0), text_cache)
+
+        self.assertEqual([entry.args[1] for entry in areas.call_args_list], [240, 240])
+
+    def test_spectrum_passband_extension_meets_waterfall_band(self):
+        ui.configure_output(True)
+        text_cache = Mock()
+        with patch.object(ui, 'draw_logical_rect') as rectangles, \
+             patch.object(ui, 'draw_logical_line') as lines, \
+             patch.object(ui, 'draw_text') as labels:
+            ui.draw_filter_overlay(
+                text_cache, 20, -3000, 3000, 0, 280,
+                tuned_offset_hz=1000, show_markers=False,
+            )
+            spectrum_band = rectangles.call_args.args
+            self.assertEqual(len(lines.call_args_list), 2)
+            spectrum_edge = lines.call_args_list[0].args[4]
+            labels.assert_not_called()
+            rectangles.reset_mock()
+            ui.draw_filter_overlay(
+                text_cache, 20, -3000, 3000, 280, 800,
+                tuned_offset_hz=1000,
+            )
+            waterfall_band = rectangles.call_args.args
+
+        self.assertEqual(spectrum_band[:4], (
+            waterfall_band[0], 0, waterfall_band[2], 280,
+        ))
+        self.assertEqual(waterfall_band[1:4:2], (280, 800))
+        self.assertEqual(spectrum_band[4][:3], ui.APP_UI_STYLE.palette.passband_fill[:3])
+        self.assertEqual(spectrum_band[4][3], ui.APP_UI_STYLE.palette.passband_fill[3])
+        self.assertEqual(spectrum_edge, ui.APP_UI_STYLE.palette.passband_border)
+        self.assertLess(spectrum_edge[3], ui.APP_UI_STYLE.palette.passband_center[3])
+
+    def test_waterfall_tap_tunes_under_finger_without_recentering_passband(self):
+        ui.configure_output(True)
+        width = ui.rf_canvas_width()
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        for tap_x in (width * 0.25, width * 0.75):
+            target = ui.waterfall_tap_frequency_khz(tap_x, 7075.0, 20.0)
+            state.set_view(freq_khz=target, waterfall_center_khz=7075.0)
+            self.assertEqual(state.waterfall_view_center_snapshot(), 7075.0)
+            center = ui.receiver_waterfall_center(
+                state.snapshot()[1], 20.0, 'kiwi',
+                state.waterfall_view_center_snapshot(),
+            )
+            self.assertEqual(center, 7075.0)
+            with patch.object(ui, 'draw_logical_rect') as rectangles, \
+                 patch.object(ui, 'draw_logical_line'):
+                ui.draw_filter_overlay(
+                    Mock(), 20.0, -1000, 1000, 0, 800,
+                    tuned_offset_hz=(target - center) * 1000.0,
+                    show_markers=False,
+                )
+            left, _top, right, _bottom, _color = rectangles.call_args.args
+            self.assertAlmostEqual((left + right) / 2, tap_x)
+
+        state.set_view(freq_khz=7080.0)
+        self.assertIsNone(state.waterfall_view_center_snapshot())
+
+    def test_waterfall_tap_maps_full_canvas_and_clamps_outside_it(self):
+        ui.configure_output(True)
+        width = ui.rf_canvas_width()
+        self.assertEqual(ui.waterfall_touch_bounds()[0], 0)
+        self.assertEqual(ui.waterfall_touch_bounds()[1], 0)
+        self.assertEqual(ui.waterfall_touch_bounds()[2], width)
+        self.assertEqual(ui.waterfall_tap_frequency_khz(-20, 7000, 20), 6990)
+        self.assertEqual(ui.waterfall_tap_frequency_khz(width / 2, 7000, 20), 7000)
+        self.assertEqual(ui.waterfall_tap_frequency_khz(width + 20, 7000, 20), 7010)
+
     def test_settings_back_has_an_isolated_target(self):
         items = ui.SETTINGS_MENU_ITEMS
         self.assertEqual(ui.lcd_nav_box(len(items)-1, len(items), True), ui.lcd_drawer_back_box())
@@ -235,51 +644,193 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
-    def test_display_drawer_exposes_the_scope_drag_action(self):
+    def test_display_reset_follows_frequency_layout(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        box = ui.DISPLAY_SCOPE_BOX
-        center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-        self.assertEqual(ui.display_option_at(*center), ('scope', None))
-        # It shares its row with Instruments without overlapping it.
-        self.assertFalse(
-            ui.DISPLAY_INSTRUMENTS_BOX[0] < ui.DISPLAY_SCOPE_BOX[2]
-            and ui.DISPLAY_SCOPE_BOX[0] < ui.DISPLAY_INSTRUMENTS_BOX[2]
-        )
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
+                         ui.DISPLAY_RESET_BOX[1])
 
-    def test_display_drawer_draws_scope_and_short_layout_tile(self):
+    def test_display_drawer_draws_layout_and_speed_without_scope(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         seen = []
         with patch.object(ui, 'draw_lcd_audio_tile',
                           side_effect=lambda *_a, **_k: seen.append((_a[1], _a[2]))), \
-             patch.object(ui, 'draw_lcd_audio_slider_tile'), \
+             patch.object(ui, 'draw_display_slider_section'), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_radio_close_button'), \
-             patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_display_control'):
+             patch.object(ui, 'draw_sidebar_header'), \
+             patch.object(ui, 'draw_display_control') as controls, \
+             patch.object(ui, 'draw_lcd_drawer_heading') as headings:
             ui.draw_display_setup_panel(None, -95, -20, 1, False, 'kiwi', True)
-        titles = [title for _box, title in seen]
-        self.assertIn((ui.DISPLAY_SCOPE_BOX, 'SCOPE'), seen)
-        # The too-long INSTRUMENTS tile was renamed so it fits half a rail.
-        self.assertIn('LAYOUT', titles)
-        self.assertNotIn('INSTRUMENTS', titles)
+        self.assertIn((ui.DISPLAY_RESET_BOX, 'RESET DISPLAY'), seen)
+        self.assertIn('LEFT', [entry.args[2] for entry in controls.call_args_list])
+        self.assertIn('MIDDLE', [entry.args[2] for entry in controls.call_args_list])
+        self.assertIn('RIGHT', [entry.args[2] for entry in controls.call_args_list])
+        self.assertNotIn('DRAG', [entry.args[2] for entry in controls.call_args_list])
+        self.assertIn('WATERFALL SPEED', [entry.args[3] for entry in headings.call_args_list])
+        self.assertIn('WATERFALL THEME', [entry.args[3] for entry in headings.call_args_list])
+        self.assertIn('FREQUENCY POSITION', [entry.args[3] for entry in headings.call_args_list])
+        self.assertNotIn('SCOPE', [entry.args[3] for entry in headings.call_args_list])
+        heading_y = {entry.args[3]: entry.args[2] for entry in headings.call_args_list}
+        self.assertEqual(heading_y['WATERFALL THEME'] - 8
+                         - ui.DISPLAY_CEIL_MINUS_BOX[3], 16)
+        self.assertEqual(heading_y['WATERFALL SPEED'] - 8
+                         - ui.DISPLAY_PALETTE_BOXES[0][1][3], 16)
+        self.assertEqual(heading_y['FREQUENCY POSITION'] - 8
+                         - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
+                         ui.DISPLAY_RESET_BOX[1])
+        states = {entry.args[2]: entry.args[3] for entry in controls.call_args_list}
+        self.assertFalse(states['LEFT'])
+        self.assertTrue(states['MIDDLE'])
+        self.assertFalse(states['RIGHT'])
 
     def test_display_drawer_options_fit_the_rail(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         rail_bottom = ui.lcd_drawer_back_box()[1]
+        self.assertEqual(ui.DISPLAY_SPECTRUM_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
+        self.assertEqual(ui.DISPLAY_AUTO_BOX[1], ui.DISPLAY_SPECTRUM_BOX[1])
         boxes = [ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
-                 ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX,
-                 ui.DISPLAY_INSTRUMENTS_BOX, ui.DISPLAY_SCOPE_BOX]
+                 ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX]
+        boxes.extend(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES)
         boxes.extend(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES)
         boxes.extend(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES)
         for box in boxes:
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
             self.assertLess(box[3], rail_bottom, box)
-        # LAYOUT and SCOPE share one compact row without overlapping.
-        self.assertEqual(ui.DISPLAY_INSTRUMENTS_BOX[3], ui.DISPLAY_SCOPE_BOX[3])
-        self.assertLess(ui.DISPLAY_INSTRUMENTS_BOX[2], ui.DISPLAY_SCOPE_BOX[0])
+        for layout, box in ui.DISPLAY_LAYOUT_BOXES:
+            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
+                                                  (box[1] + box[3]) / 2), ('layout', layout))
+        back_x0, rail_bottom, back_x1, _back_bottom = ui.lcd_drawer_back_box()
+        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[::2], (back_x0, back_x1))
+        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[::2], (back_x0, back_x1))
+        for group in (
+            (ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX),
+            tuple(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES),
+            tuple(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES),
+            tuple(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES),
+        ):
+            self.assertEqual((group[0][0], group[-1][2]), (back_x0, back_x1))
+        self.assertEqual([box[3] - box[1] for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
+                         [31] * 3)
+        self.assertEqual([position for position, _box in ui.DISPLAY_LAYOUT_BOXES],
+                         ['left', 'middle', 'right'])
+        self.assertEqual(
+            [(box[0], box[2] - box[0], box[3] - box[1])
+             for _position, box in ui.DISPLAY_LAYOUT_BOXES],
+            [(box[0], box[2] - box[0], box[3] - box[1])
+             for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
+        )
+        self.assertEqual([(box[2] - box[0], box[3] - box[1])
+                          for _name, box, _label in ui.DISPLAY_PALETTE_BOXES],
+                         [(box[2] - box[0], box[3] - box[1])
+                          for _rate, box, _label in ui.DISPLAY_RATE_BOXES])
+        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[1] - ui.DISPLAY_SPECTRUM_BOX[3], 16)
+        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[1] - ui.DISPLAY_FLOOR_MINUS_BOX[3], 16)
+        self.assertEqual(ui.DISPLAY_PALETTE_BOXES[0][1][1] - ui.DISPLAY_CEIL_MINUS_BOX[3], 40)
+        self.assertEqual([name for name, _box, _label in ui.DISPLAY_PALETTE_BOXES],
+                         ['classic', 'kiwi', 'gqrx'])
+        for palette, box, _label in ui.DISPLAY_PALETTE_BOXES:
+            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
+                                                  (box[1] + box[3]) / 2),
+                             ('palette', palette))
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16, ui.DISPLAY_RESET_BOX[1])
+        self.assertGreaterEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], 16)
+        for earlier in boxes:
+            if earlier != ui.DISPLAY_RESET_BOX:
+                self.assertFalse(earlier[0] < ui.DISPLAY_RESET_BOX[2]
+                                 and ui.DISPLAY_RESET_BOX[0] < earlier[2]
+                                 and earlier[1] < ui.DISPLAY_RESET_BOX[3]
+                                 and ui.DISPLAY_RESET_BOX[1] < earlier[3])
+
+    def test_palette_choice_restores_both_contrast_sliders(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        self.assertEqual(ui.WATERFALL_PALETTE_PRESETS['classic'], (160, 220))
+        for palette in ('classic', 'kiwi', 'gqrx', 'classic'):
+            state.set_waterfall(floor=80, ceil=250, auto=True)
+            floor, ceiling, _speed, auto, selected, _generation = (
+                ui.apply_waterfall_palette_preset(state, palette)
+            )
+            self.assertEqual((floor, ceiling), ui.WATERFALL_PALETTE_PRESETS[palette])
+            self.assertFalse(auto)
+            self.assertEqual(selected, palette)
+            self.assertEqual(state.waterfall_snapshot()[:2], (floor, ceiling))
+
+    def test_reset_display_restores_every_waterfall_and_spectrum_setting(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        state.set_waterfall(floor=160, ceil=220, speed=2, auto=False, palette='classic')
+        state.set_spectrum_enabled(False)
+        state.set_spectrum_auto(False)
+        previous_generation = state.waterfall_snapshot()[-1]
+
+        reset_waterfall = ui.reset_display_view(state)
+
+        self.assertEqual(reset_waterfall[:5], (
+            ui.WATERFALL_DEFAULT_FLOOR,
+            ui.WATERFALL_DEFAULT_CEIL,
+            ui.WATERFALL_DEFAULT_SPEED,
+            False,
+            ui.WATERFALL_DEFAULT_PALETTE,
+        ))
+        self.assertEqual(state.waterfall_snapshot(), reset_waterfall)
+        self.assertEqual(reset_waterfall[-1], previous_generation + 1)
+        self.assertTrue(state.spectrum_enabled_snapshot())
+        self.assertTrue(state.spectrum_auto_snapshot())
+
+    def test_display_slider_section_renders_full_back_width(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        box = ui.DISPLAY_FLOOR_MINUS_BOX
+        with patch.object(ui, 'draw_logical_rect') as rectangles, \
+             patch.object(ui, 'draw_logical_line') as lines, \
+             patch.object(ui, 'draw_text'):
+            ui.draw_display_slider_section(None, box, 'FLOOR', 60, 180, '100', True)
+        self.assertEqual(rectangles.call_args_list[0].args[:4], box)
+        self.assertEqual(box[2] - box[0], 236)
+        lines.assert_not_called()
+
+    def test_gqrx_waterfall_has_dark_noise_and_warm_signal_peaks(self):
+        red, green, blue = ui.waterfall_mapper('gqrx')
+        self.assertEqual((len(red), len(green), len(blue)), (256, 256, 256))
+        self.assertEqual((red[0], green[0], blue[0]), (0, 0, 0))
+        self.assertEqual((red[100], green[100], blue[100]), (60, 125, 255))
+        self.assertEqual((red[150], green[150], blue[150]), (255, 255, 0))
+        self.assertEqual((red[249], green[249], blue[249]), (255, 3, 0))
+        self.assertEqual((red[255], green[255], blue[255]), (255, 255, 255))
+        self.assertNotEqual((red, green, blue), ui.waterfall_mapper('classic'))
+
+    def test_kiwi_and_classic_preserve_their_original_palettes(self):
+        self.assertEqual(ui.waterfall_mapper('kiwi'), ui.kiwi.make_waterfall_mapper())
+        red, green, blue = ui.waterfall_mapper('classic')
+        self.assertEqual((red[0], green[0], blue[0]), (1, 4, 14))
+        self.assertEqual((red[160], green[160], blue[160]), (0, 226, 235))
+        self.assertEqual((red[255], green[255], blue[255]), (245, 44, 36))
+
+    def test_spectrum_and_auto_controls_leave_live_waterfall_unchanged(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        ui.apply_waterfall_palette_preset(state, 'gqrx')
+        waterfall_before = state.waterfall_snapshot()
+        ui.toggle_display_spectrum_control(state, 'spectrum')
+        self.assertFalse(state.spectrum_enabled_snapshot())
+        self.assertEqual(state.waterfall_snapshot(), waterfall_before)
+        ui.toggle_display_spectrum_control(state, 'auto')
+        self.assertFalse(state.spectrum_auto_snapshot())
+        self.assertEqual(state.waterfall_snapshot(), waterfall_before)
+        ui.toggle_display_spectrum_control(state, 'auto')
+        self.assertTrue(state.spectrum_auto_snapshot())
+        self.assertEqual(state.waterfall_snapshot(), waterfall_before)
 
     def test_map_view_no_longer_offers_clean(self):
         # CLEAN hid the geographic context and read as an empty globe; it is
@@ -539,6 +1090,24 @@ class ReceiverHandoffTests(unittest.TestCase):
         self.assertEqual(state.snapshot()[1],101700)
 
 class WaterfallPresentationTests(unittest.TestCase):
+    def test_palette_change_does_not_restart_live_row_presentation(self):
+        state = ui.SharedState(
+            'http://example.test:8073', 7075.0, 4, -95.0,
+            142, 245, 3, 'am', True,
+        )
+        rows = ui.queue.Queue()
+        for value in range(3):
+            rows.put(value)
+        presenter = ui.WaterfallPresenter(reserve_seconds=0.10)
+        key = ui.waterfall_stream_key(state.snapshot()[5], state.snapshot()[4], 'kiwi', False)
+        self.assertEqual(presenter.take(rows, 1.0, 23.0, key), (0,))
+        ui.apply_waterfall_palette_preset(state, 'gqrx')
+        self.assertEqual(
+            ui.waterfall_stream_key(state.snapshot()[5], state.snapshot()[4], 'kiwi', False),
+            key,
+        )
+        self.assertEqual(presenter.take(rows, 1.05, 23.0, key), (1,))
+
     def test_presenter_builds_reserve_then_releases_at_source_cadence(self):
         rows = ui.queue.Queue()
         presenter = ui.WaterfallPresenter(reserve_seconds=0.26)
@@ -596,7 +1165,7 @@ class WaterfallPresentationTests(unittest.TestCase):
                     'draw_squelch_closed_annunciator','draw_lcd_navigation','draw_lcd_mode_annunciators'):
                     mocks[name]=stack.enter_context(patch.object(ui,name))
                 stack.enter_context(patch.object(ui,'top_instrument_layout',return_value=('7.075.000',(0,0,1,1))))
-                ui.draw_ui(None,7075,20,-95,-95,None,'LSB','DIG',100,instrument_layout='compact',**kwargs)
+                ui.draw_ui(None,7075,20,-95,-95,None,'LSB','DIG',100,instrument_layout='right',**kwargs)
                 mocks['draw_lcd_mode_annunciators'].assert_not_called()
 
     def test_settings_back_uses_shared_renderer(self):
