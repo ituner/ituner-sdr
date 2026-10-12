@@ -4,7 +4,7 @@ def install_navigation(workspace):
     if getattr(workspace,'navigation_installed',False):return
     workspace.navigation_installed=True
     original_draw,original_tap=workspace.draw,workspace.tap
-    back_box=(1102,10,1178,65);home_box=(1186,10,1262,65)
+    back_box=(1034,728,1270,792);home_box=(1034,8,1270,72)
     def back():
         if getattr(workspace,'field',None) is not None:workspace.field=None
         elif getattr(workspace,'reporting',None) is not None:workspace.reporting=None
@@ -18,9 +18,9 @@ def install_navigation(workspace):
     def draw(cache,*args):
         original_draw(cache,*args)
         if getattr(getattr(workspace,'log_search_view',None),'open',False):return
-        workspace.ui.draw_logical_rect(1060 if workspace.enlarged else 1100,10,1264,76,(7,18,25,255))
-        workspace.button(cache,back_box,'BACK',('nav_back',None))
-        workspace.button(cache,home_box,'HOME',('nav_home',None))
+        drawn={box for box,_ in getattr(workspace,'actions',())}
+        if back_box not in drawn:workspace.button(cache,back_box,'BACK',('nav_back',None))
+        if home_box not in drawn:workspace.button(cache,home_box,'HOME',('nav_home',None))
     def tap(x,y,*args):
         if getattr(getattr(workspace,'log_search_view',None),'open',False):return original_tap(x,y,*args)
         if workspace.ui.contains(home_box,x,y):workspace.open=False;return

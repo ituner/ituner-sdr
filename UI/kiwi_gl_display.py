@@ -1127,21 +1127,13 @@ FMDX_TUNE_STEPS_HZ = (50_000, 100_000, 200_000)
 
 
 def radio_step_options(receiver_type="kiwi"):
+    if LCD_800_MODE:
+        yield None, lcd_radio_step_cycle_box()
+        return
     if receiver_type == "fmdx":
         for index, step in enumerate(FMDX_TUNE_STEPS_HZ):
-            y = 364 + index * 74
-            yield step, (LCD_NAV_X0 + 10, y, LOGICAL_W - 10, y + 62)
-        return
-    if LCD_800_MODE:
-        x0, _y0, x1, _y1 = radio_panel_box()
-        gap = 7
-        step_y0, step_h = lcd_radio_step_y0(), 52
-        button_w = (x1 - x0 - 20 - gap) / 2
-        for index, (step_hz, _box) in enumerate(RADIO_STEP_OPTIONS):
-            col, row = index % 2, index // 2
-            left = x0 + 10 + col * (button_w + gap)
-            top = step_y0 + row * (step_h + gap)
-            yield step_hz, (left, top, left + button_w, top + step_h)
+            y = 364 + index * 72
+            yield step, (LCD_NAV_X0 + 10, y, LOGICAL_W - 10, y + 64)
         return
     for step_hz, box in RADIO_STEP_OPTIONS:
         yield step_hz, radio_popup_box(box)
@@ -1156,17 +1148,32 @@ def radio_panel_box():
 
 
 def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
-    """Top-justified LCD tuning-step control pair, below mode families."""
+    """Top of the tuning-step heading, below the mode family grid."""
     rows = max(1, math.ceil(int(mode_family_count) / 2))
-    grid_height = rows * 62 + (rows - 1) * 7
-    return lcd_radio_mode_grid_y0() + grid_height + 30
+    grid_height = rows * APP_UI_STYLE.button.height + (rows - 1) * APP_UI_STYLE.button.gap
+    return lcd_radio_mode_grid_y0() + grid_height + APP_UI_STYLE.button.gap
+
+
+def lcd_radio_step_cycle_box():
+    top = lcd_radio_step_y0() + 32
+    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + APP_UI_STYLE.button.height
+
+
+def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
+    options = FMDX_TUNE_STEPS_HZ if receiver_worker_protocol(receiver_type) == "fmdx" else tuple(
+        step for step, _box in RADIO_STEP_OPTIONS
+    )
+    try:
+        return options[(options.index(int(current_step_hz)) + 1) % len(options)]
+    except (ValueError, TypeError):
+        return options[0]
 
 
 def lcd_radio_mode_grid_y0():
     """Top of the top-justified 2×4 LCD mode-family matrix."""
     # Keep all mode instruments together at the top; the lower area remains
     # intentionally quiet until the separate Back control at the bottom.
-    return 88
+    return 80
 
 
 def radio_family_button_width():
@@ -1479,10 +1486,10 @@ WSPR_AUDIO_GAP_RGBA = (224, 46, 58, 238)
 WSPR_CAPACITY_REFRESH_SECONDS = 20.0
 MAIN_RECEIVER_CAPACITY_REFRESH_SECONDS = 20.0
 WSPR_CAPACITY_TIMEOUT_SECONDS = 4.0
-WSPR_DECODE_BOX = (574, 6, 748, 70)
+WSPR_DECODE_BOX = (904, 6, 1018, 70)
 WSPR_CPU_BOX = (760, 12, 936, 62)
-WSPR_ADD_BOX = (948, 6, 1116, 70)
-WSPR_HOME_BOX = (1128, 6, 1262, 70)
+WSPR_ADD_BOX = (1026, 6, 1140, 70)
+WSPR_HOME_BOX = (1148, 6, 1262, 70)
 WSPR_CPU_DETAIL_BOX = (280, 114, 1000, 698)
 WSPR_TILE_SETTINGS_BOX = (100, 70, 1180, 748)
 WSPR_DECODER_SETTINGS_BOX = (132, 104, 1148, 700)
@@ -1783,23 +1790,20 @@ def configure_popup_layout():
         display_y0, display_y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
         inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
-        # A compact, evenly spaced stack: shorter tiles and tighter gaps keep
-        # every option inside the 256 px rail with readable labels.
-        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 142)
-        column_gap, tile_h, adjust_h = 7, 64, 56
+        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 148)
+        column_gap, tile_h, adjust_h = 8, 64, 56
         # Every LCD drawer is top-justified: instruments begin together
         # beneath the header and leave a quiet lane to the bottom Back button.
-        toggle_y0 = 158
+        toggle_y0 = 156
         toggle_y1 = toggle_y0 + tile_h
-        floor_y0 = toggle_y1 + 14
+        floor_y0 = toggle_y1 + 8
         floor_y1 = floor_y0 + adjust_h
-        ceiling_y0 = floor_y1 + 14
+        ceiling_y0 = floor_y1 + 8
         ceiling_y1 = ceiling_y0 + adjust_h
-        rate_y0 = ceiling_y1 + 14
-        rate_y1 = rate_y0 + tile_h
-        palette_y0 = rate_y1 + 14
+        rate_y0 = ceiling_y1 + 8
+        palette_y0 = rate_y0 + 2 * (tile_h + column_gap)
         palette_y1 = palette_y0 + tile_h
-        instruments_y0 = palette_y1 + 14
+        instruments_y0 = palette_y1 + column_gap
         instruments_y1 = instruments_y0 + tile_h
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
@@ -1811,10 +1815,12 @@ def configure_popup_layout():
         DISPLAY_FLOOR_PLUS_BOX = (0, 0, 0, 0)
         DISPLAY_CEIL_MINUS_BOX = (inner_x0, ceiling_y0, inner_x1, ceiling_y1)
         DISPLAY_CEIL_PLUS_BOX = (0, 0, 0, 0)
-        rate_w = (inner_x1 - inner_x0 - 2 * column_gap) / 3
+        rate_w = half_w
         DISPLAY_RATE_BOXES = tuple(
-            (rate, (inner_x0 + index * (rate_w + column_gap), rate_y0,
-                    inner_x0 + index * (rate_w + column_gap) + rate_w, rate_y1), label)
+            (rate, (inner_x0 + (index % 2) * (rate_w + column_gap),
+                    rate_y0 + (index // 2) * (tile_h + column_gap),
+                    inner_x0 + (index % 2) * (rate_w + column_gap) + rate_w,
+                    rate_y0 + (index // 2) * (tile_h + column_gap) + tile_h), label)
             for index, (rate, _box, label) in enumerate(base_rates)
         )
         palette_w = (inner_x1 - inner_x0 - column_gap) / 2
@@ -1844,23 +1850,23 @@ def configure_popup_layout():
     if LCD_800_MODE:
         # Audio follows the same 256 px right-rail drawer language as the
         # mode controls. The running waterfall remains visible at all times.
-        audio_x0, audio_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
+        audio_x0, audio_x1 = LCD_NAV_X0, LOGICAL_W
         audio_y0 = LCD_DRAWER_HEADER_H
         audio_y1 = lcd_rail_bottom()
         AUDIO_PANEL_BOX = (audio_x0, audio_y0, audio_x1, audio_y1)
         # Keep all audio instruments together under the header; Back has its
         # own broad, isolated target at the bottom of the rail.
         slider_x0, slider_x1 = LCD_NAV_X0, LOGICAL_W
-        left_x0, left_x1 = audio_x0 + 10, audio_x0 + 117
-        right_x0, right_x1 = audio_x0 + 124, audio_x1 - 10
-        AUDIO_MUTE_BOX = (audio_x0 + 10, 80, audio_x1 - 10, 142)
+        left_x0, left_x1 = audio_x0 + 10, audio_x0 + 124
+        right_x0, right_x1 = audio_x0 + 132, audio_x1 - 10
+        AUDIO_MUTE_BOX = (audio_x0 + 10, 80, audio_x1 - 10, 144)
         # Five compact rows leave space for the listening EQ without making
         # the Audio drawer scroll. Each target remains comfortably touchable.
-        tile_h, tile_gap = 60, 8
-        volume_y0, volume_y1 = 160, 222
-        squelch_y0, squelch_y1 = 230, 294
-        denoise_y0, denoise_y1 = 302, 366
-        rows_y0 = 382
+        tile_h, tile_gap = 64, 8
+        volume_y0, volume_y1 = 152, 212
+        squelch_y0, squelch_y1 = 220, 280
+        denoise_y0, denoise_y1 = 288, 348
+        rows_y0 = 360
         AUDIO_VOLUME_BOX = (slider_x0, volume_y0, slider_x1, volume_y1)
         AUDIO_SQUELCH_BOX = (slider_x0, squelch_y0, slider_x1, squelch_y1)
         AUDIO_DENOISE_BOX = (slider_x0, denoise_y0, slider_x1, denoise_y1)
@@ -1886,18 +1892,18 @@ def configure_popup_layout():
     TEST_BACK_BOX = (0, 0, 0, 0)
     if LCD_800_MODE:
         TEST_PANEL_BOX = (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H)
-        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 121
-        right_x0, right_x1 = LCD_NAV_X0 + 135, LOGICAL_W - 10
-        row_h, row_gap = 104, 12
-        rows = tuple(112 + index * (row_h + row_gap) for index in range(4))
+        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 124
+        right_x0, right_x1 = LCD_NAV_X0 + 132, LOGICAL_W - 10
+        row_h, row_gap = 64, 8
+        rows = tuple(440 + index * (row_h + row_gap) for index in range(4))
         TEST_GLOBE_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
         TEST_DJ_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
         TEST_RTL_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
         TEST_PATTERN_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
         TEST_FONT_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
         TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
-        TEST_RUN_BOX = (left_x0, rows[3], left_x1, rows[3] + 78)
-        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + 78)
+        TEST_RUN_BOX = (left_x0, rows[3], left_x1, rows[3] + row_h)
+        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + row_h)
         TEST_BACK_BOX = lcd_drawer_back_box()
         FONT_LAB_BACK_BOX = lcd_drawer_back_box()
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
@@ -2011,8 +2017,8 @@ MENU_BOX = (12, 72, 948, LOGICAL_H)
 # Home remains visible above the overlay and is the single, unambiguous way
 # to close this temporary workspace.
 MENU_CLOSE_BOX = (0, 0, 0, 0)
-MENU_COLS = 5
-MENU_ROWS = 2
+MENU_COLS = 2
+MENU_ROWS = 4
 # The permanent Home rail is deliberately limited to live operating tools.
 # Secondary configuration pages live one tap deeper under Settings so the
 # 800x1280 control rail does not read as an eight-button wall.
@@ -2071,19 +2077,19 @@ def dual_vfo_layout():
         # Leave a deliberate quiet gap below Home before the live VFO A
         # instrument stack begins.
         "freq_a": (1031, 80, 1273, 136),
-        "mode_a": (1042, 144, 1262, 182),
-        "smeter_a": (1042, 192, 1262, 268),
+        "mode_a": (1034, 144, 1270, 208),
+        "smeter_a": (1042, 216, 1262, 292),
         # Start B's tools immediately below its header, visually tied to the
         # top edge of the B waterfall rather than crowded against Clone.
         "freq_b": (1031, 494, 1273, 550),
-        "mode_b": (1042, 558, 1262, 596),
-        "smeter_b": (1042, 606, 1262, 682),
+        "mode_b": (1034, 558, 1270, 622),
+        "smeter_b": (1042, 630, 1262, 706),
         # One shared left/right audio blend lives in the calm center of the
         # tool rail, rather than competing with either VFO header.
-        "mix_track": (1042, 371, 1262, 435),
+        "mix_track": (1042, 372, 1262, 436),
         # Cloning is an occasional setup action, so keep it out of the
         # mixer flow, above its controls and clear of the bottom Back button.
-        "clone": (1042, 292, 1262, 340),
+        "clone": (1034, 300, 1270, 364),
     }
 
 
@@ -2176,15 +2182,7 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
 
 def draw_dual_vfo_mode_annunciator(text_cache, box, vfo, mode, active=False):
     """Draw one Home-style mode control in the matching VFO tool stack."""
-    x0, y0, x1, y1 = box
-    accent = (90, 222, 245) if vfo == "A" else (242, 181, 92)
-    # This remains a generous invisible touch target, but reads as a quiet
-    # status annunciator rather than another boxed tool in the dense rail.
-    draw_text(text_cache, x0 + 14, (y0 + y1) / 2, "MODE", (156, 189, 195), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 28, (y0 + y1) / 2, str(mode).upper(), (*accent, 255) if active else (218, 235, 237), 21, True, False, "rm", family="Liberation Sans")
-    chevron_x, chevron_y = x1 - 13, (y0 + y1) / 2
-    draw_logical_line(chevron_x - 4, chevron_y - 3, chevron_x, chevron_y + 2, (*accent, 244), 1.5)
-    draw_logical_line(chevron_x, chevron_y + 2, chevron_x + 4, chevron_y - 3, (*accent, 244), 1.5)
+    draw_styled_two_line_button(text_cache, box, "MODE", mode, active=active)
 
 
 def draw_dual_vfo_zoom_controls(text_cache, group, minus, plus):
@@ -2352,29 +2350,28 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
 
     draw_dual_vfo_audio_mixer(text_cache, boxes["mix_track"], mix)
     for key, label, active in (("clone", "CLONE VFO A", False),):
-        x0, y0, x1, y1 = boxes[key]
-        draw_logical_rect(x0, y0, x1, y1, (19, 54, 61, 235) if active else (14, 28, 36, 232))
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (221, 240, 241), 16, True, False, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, boxes[key], label, active=active)
 
 
 def dual_vfo_mode_picker_boxes():
     """Large direct mode choices: predictable and comfortably touch-sized."""
     panel = (96, 176, 928, 620)
     x0, y0, x1, y1 = panel
-    cols = 4
-    gap = 12
-    button_w = (x1 - x0 - 48 - gap * (cols - 1)) / cols
-    button_h = 92
+    cols = 2
+    gap = APP_UI_STYLE.button.gap
+    button_w = APP_UI_STYLE.button.width
+    button_h = APP_UI_STYLE.button.height
+    grid_left = (x0 + x1 - (cols * button_w + gap)) / 2
     buttons = []
     for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
         col = index % cols
         row = index // cols
-        bx0 = x0 + 24 + col * (button_w + gap)
-        by0 = y0 + 128 + row * (button_h + 16)
+        bx0 = grid_left + col * (button_w + gap)
+        by0 = y0 + 128 + row * (button_h + gap)
         buttons.append((family, modes[0], (bx0, by0, bx0 + button_w, by0 + button_h)))
     return {
         "panel": panel,
-        "close": (x1 - 132, y0 + 20, x1 - 24, y0 + 62),
+        "close": (x1 - 260, y0 + 20, x1 - 24, y0 + 84),
         "buttons": tuple(buttons),
     }
 
@@ -2400,22 +2397,13 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
     draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", (231, 246, 247), 24, True, False, "lm", family="Liberation Sans")
     state_label = "APPLIES LIVE" if target_vfo == "A" else "STAGES VFO B"
     draw_text(text_cache, x0 + 26, y0 + 66, state_label, accent, 13, True, False, "lm", family="Liberation Sans")
-    cx0, cy0, cx1, cy1 = boxes["close"]
-    draw_logical_rect(cx0, cy0, cx1, cy1, (20, 43, 53, 240))
-    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (220, 239, 241), 13, True, False, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
     current_family = KIWI_MODE_FAMILY.get(str(active_mode).upper(), str(active_mode).upper())
     for family, selected_mode, box in boxes["buttons"]:
-        bx0, by0, bx1, by1 = box
         active = family == current_family
-        fill = (*accent, 72) if active else (18, 35, 44, 222)
-        edge = (*accent, 230) if active else (95, 126, 136, 130)
-        draw_logical_rect(bx0, by0, bx1, by1, fill)
-        draw_logical_line(bx0, by0, bx1, by0, edge, 2 if active else 1)
-        draw_logical_line(bx0, by1, bx1, by1, edge, 1)
         label = "FM" if family == "FM" else family
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2 - 10, label, (240, 253, 252) if active else (202, 221, 224), 21, True, False, "cm", family="Liberation Sans")
         detail = KIWI_MODE_LABELS.get(selected_mode, selected_mode)
-        draw_text(text_cache, (bx0 + bx1) / 2, by1 - 17, detail, accent if active else (136, 169, 176), 12, True, False, "cm", family="Liberation Sans")
+        draw_styled_two_line_button(text_cache, box, label, detail, active=active)
 
 
 def dual_vfo_receiver_picker_boxes():
@@ -2424,9 +2412,9 @@ def dual_vfo_receiver_picker_boxes():
     x0, y0, x1, y1 = panel
     return {
         "panel": panel,
-        "close": (x1 - 144, y0 + 16, x1 - 20, y0 + 62),
-        "previous": (x0 + 20, y1 - 66, x0 + 172, y1 - 16),
-        "next": (x1 - 172, y1 - 66, x1 - 20, y1 - 16),
+        "close": (x1 - 256, y0 + 16, x1 - 20, y0 + 80),
+        "previous": (x0 + 20, y1 - 80, x0 + 134, y1 - 16),
+        "next": (x1 - 134, y1 - 80, x1 - 20, y1 - 16),
         "rows": tuple((x0 + 20, y0 + 104 + index * 98, x1 - 20, y0 + 188 + index * 98) for index in range(5)),
     }
 
@@ -2439,9 +2427,7 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
     draw_logical_line(x0, y0, x1, y0, (111, 214, 210, 220), 2)
     draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", (230, 245, 246), 22, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 24, y0 + 56, "VFO A changes the live receiver. VFO B is staged for the second client.", (144, 181, 187), 14, False, False, "lm", family="Liberation Sans")
-    cx0, cy0, cx1, cy1 = boxes["close"]
-    draw_logical_rect(cx0, cy0, cx1, cy1, (28, 52, 61, 245))
-    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (230, 244, 245), 14, True, False, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
     start = max(0, int(page)) * len(boxes["rows"])
     for row_index, box in enumerate(boxes["rows"]):
         index = start + row_index
@@ -2456,9 +2442,7 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
         detail = bottom_station_title(name, location) if location else server
         draw_text(text_cache, bx0 + 18, by1 - 20, fit_station_text(text_cache, detail, bx1 - bx0 - 36, 14, False, False, family="Liberation Sans"), (138, 181, 187), 14, False, False, "lm", family="Liberation Sans")
     for key, label in (("previous", "PREV"), ("next", "NEXT")):
-        bx0, by0, bx1, by1 = boxes[key]
-        draw_logical_rect(bx0, by0, bx1, by1, (22, 45, 55, 240))
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (220, 240, 241), 14, True, False, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, boxes[key], label)
     page_count = max(1, math.ceil(len(stations) / len(boxes["rows"])))
     draw_text(text_cache, (x0 + x1) / 2, y1 - 40, f"PAGE {page + 1} / {page_count}", (147, 188, 194), 13, True, False, "cm", family="Liberation Sans")
 
@@ -2523,20 +2507,19 @@ class ReceiverBrowserState:
         )
 
 
-# Source tabs are ordered LAN, KIWI, OPENWEBRX, FM-DX, ALL. Their wide,
-# single-column treatment makes selection obvious and uses the rail from the
-# top instead of shrinking the station list with a content header.
+# Source tabs are ordered LAN, KIWI, OPENWEBRX, FM-DX, ALL and use the shared
+# two-column button grid at the top of the receiver rail.
 RECEIVER_RAIL_TAB_TOP_GAP = 12
-RECEIVER_RAIL_TAB_HEIGHT = 52
+RECEIVER_RAIL_TAB_HEIGHT = 64
 RECEIVER_RAIL_TAB_GAP = 8
 RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
-# Two larger square actions plus their compact gutter span the same 236 px as
-# BACK. These dimensions match every other square launcher in the app.
+# Two standard actions plus their gutter span the same 236 px as BACK.
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
-RECEIVER_PICKER_ACTION_TOP = 484
+RECEIVER_PICKER_ACTION_HEIGHT = 64
+RECEIVER_PICKER_ACTION_TOP = 584
 # Shared action-icon metrics. Code-drawn icons and raster assets use this same
 # canvas and stroke so switching screens never changes their visual weight.
 APP_ACTION_ICON_SIZE = 46
@@ -2558,7 +2541,7 @@ RECEIVER_PICKER_BACK_BOX = (
 
 
 def receiver_source_segments():
-    """Return full-width source tabs in priority order down the LCD rail."""
+    """Return standard two-column source buttons in priority order."""
     names = receiver_catalog.SOURCE_FILTERS
     # This helper also seeds module-level placeholder geometry before the LCD
     # constants later in this file are declared. The fallbacks are the native
@@ -2568,31 +2551,29 @@ def receiver_source_segments():
     header_h = globals().get("LCD_DRAWER_HEADER_H", 64)
     x0, x1 = rail_x0 + 10, logical_w - 10
     top = header_h + RECEIVER_RAIL_TAB_TOP_GAP
+    width = (x1 - x0 - RECEIVER_RAIL_TAB_GAP) / 2
     return tuple(
-        (
-            name,
-            (
-                x0,
-                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP),
-                x1,
-                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP)
-                + RECEIVER_RAIL_TAB_HEIGHT,
-            ),
-        )
+        (name, (
+            x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP),
+            top + (index // 2) * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP),
+            x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP) + width,
+            top + (index // 2) * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP)
+            + RECEIVER_RAIL_TAB_HEIGHT,
+        ))
         for index, name in enumerate(names)
     )
 
 
 def receiver_picker_command_boxes():
-    """Return the receiver browser's square 2x2 action grid."""
+    """Return the receiver browser's standard 2x2 action grid."""
     grid_width = 2 * RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP
     left = RECEIVER_PICKER_MAIN_W + (RECEIVER_PICKER_SIDEBAR_W - grid_width) / 2
     return tuple(
         (
             left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
-            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_HEIGHT + RECEIVER_PICKER_ACTION_GAP),
             left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
-            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_HEIGHT + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_HEIGHT,
         )
         for index in range(4)
     )
@@ -4239,28 +4220,33 @@ def frequency_entry_action_at(x, y):
     return None
 
 
-FREQUENCY_STEP_GAP = 8
-FREQUENCY_STEP_H = 52
+FREQUENCY_SMALL_BUTTON_W = 55
+FREQUENCY_SMALL_BUTTON_H = 31
+FREQUENCY_SMALL_BUTTON_GAP = 4
+FREQUENCY_KEY_LABELS = (
+    ("1", "2", "3", "DEL"),
+    ("4", "5", "6", "CLR"),
+    ("7", "8", "9", "."),
+    ("0", "00", "000", "OK"),
+)
 
 
 def frequency_drawer_boxes():
     """Touch-first tuning controls in the otherwise empty LCD rail."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
     left, right = x0 + 10, x1 - 10
-    # The two tuning arrows are square targets: their height follows the
-    # two-column width instead of stretching into a tall rectangle, so the
-    # chevrons sit in the centre of an evenly weighted pair.
-    arrow_gap = 10
-    arrow = (right - left - arrow_gap) / 2
-    arrow_top = 184
-    arrow_bottom = arrow_top + arrow
+    arrow = APP_UI_STYLE.button.width
+    readout_bottom = 160
+    arrow_top = readout_bottom + 16
+    arrow_bottom = arrow_top + APP_UI_STYLE.button.height
+    keypad_bottom = arrow_bottom + 16 + (len(FREQUENCY_KEY_LABELS) - 1) * 39 + FREQUENCY_SMALL_BUTTON_H
+    step_heading_top = keypad_bottom + 32
     return {
         "panel": (x0, 0, x1, lcd_rail_bottom()),
-        "readout": (left, 76, right, 160),
+        "readout": (left, 76, right, readout_bottom),
         "down": (left, arrow_top, left + arrow, arrow_bottom),
         "up": (right - arrow, arrow_top, right, arrow_bottom),
-        "manual": (left, 352, right, 424),
-        "step_heading": (left, 434, right, 458),
+        "step_heading": (left, step_heading_top, right, step_heading_top + 32),
         "close": lcd_drawer_back_box(),
     }
 
@@ -4273,29 +4259,88 @@ def frequency_tune_steps(receiver_type="kiwi"):
 
 
 def frequency_drawer_step_boxes(receiver_type="kiwi"):
-    """Inline tune-step choices inside the frequency rail, not another screen."""
+    """Four Home-mode-sized tune choices on one row of the frequency rail."""
     steps = frequency_tune_steps(receiver_type)
-    left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    width = (right - left - FREQUENCY_STEP_GAP) / 2
-    y0 = frequency_drawer_boxes()["step_heading"][3] + 6
+    width = FREQUENCY_SMALL_BUTTON_W
+    gap = FREQUENCY_SMALL_BUTTON_GAP
+    left = (LCD_NAV_X0 + LOGICAL_W - (len(steps) * width + (len(steps) - 1) * gap)) / 2
+    y0 = frequency_drawer_boxes()["step_heading"][3] + 8
     boxes = []
     for index, step_hz in enumerate(steps):
-        col, row = index % 2, index // 2
-        x = left + col * (width + FREQUENCY_STEP_GAP)
-        top = y0 + row * (FREQUENCY_STEP_H + FREQUENCY_STEP_GAP)
-        boxes.append((step_hz, (x, top, x + width, top + FREQUENCY_STEP_H)))
+        x = left + index * (width + gap)
+        boxes.append((step_hz, (x, y0, x + width, y0 + FREQUENCY_SMALL_BUTTON_H)))
     return tuple(boxes)
+
+
+def frequency_drawer_key_boxes():
+    """Four 55×31 px keys per row, matching the Home mode controls."""
+    group_width = 4 * FREQUENCY_SMALL_BUTTON_W + 3 * FREQUENCY_SMALL_BUTTON_GAP
+    left = (LCD_NAV_X0 + LOGICAL_W - group_width) / 2
+    first_row_top = frequency_drawer_boxes()["down"][3] + 16
+    return tuple(
+        (label, (left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP),
+                 first_row_top + row * 39,
+                 left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP) + FREQUENCY_SMALL_BUTTON_W,
+                 first_row_top + row * 39 + FREQUENCY_SMALL_BUTTON_H))
+        for row, labels in enumerate(FREQUENCY_KEY_LABELS)
+        for column, label in enumerate(labels)
+    )
 
 
 def frequency_drawer_action_at(x, y, receiver_type="kiwi"):
     boxes = frequency_drawer_boxes()
-    for action in ("down", "up", "manual", "close"):
+    for action in ("down", "up", "close"):
         if contains(boxes[action], x, y):
             return action
+    for label, box in frequency_drawer_key_boxes():
+        if contains(box, x, y):
+            return f"key_{label}"
     for step_hz, box in frequency_drawer_step_boxes(receiver_type):
         if contains(box, x, y):
             return f"step_{int(step_hz)}"
     return None
+
+
+def frequency_drawer_tuning_allowed(receiver_type, server, policy=None):
+    """FM-DX's shared tuner requires the existing session acknowledgement."""
+    return receiver_worker_protocol(receiver_type) != "fmdx" or (
+        policy or FMDX_SHARED_CONTROL
+    ).can_tune(server)
+
+
+def edit_frequency_entry(value, key, replace_on_digit=False):
+    """Apply one inline keypad key and return the new text and replace state."""
+    value = str(value or "")
+    if key == "DEL":
+        return value[:-1], False
+    if key == "CLR":
+        return "", False
+    if key not in (".", "00", "000", *"0123456789"):
+        return value, replace_on_digit
+    if replace_on_digit:
+        value = ""
+    if key == ".":
+        if "." in value:
+            return value, False
+        dotted = (value or "0") + "."
+        return (dotted if len(dotted) <= 12 else value), False
+    if value in ("", "0"):
+        return key.lstrip("0") or "0", False
+    if len(value) + len(key) > 12:
+        return value, False
+    return value + key, False
+
+
+def frequency_entry_preview_khz(value, tuned_khz, replace_on_digit,
+                                max_frequency_khz=TUNING_MAX_KHZ):
+    """Show the keypad's pending value in the large readout before OK tunes."""
+    if replace_on_digit:
+        return tuned_khz
+    try:
+        numeric = float(str(value or "0"))
+    except ValueError:
+        return 0.0
+    return numeric * 1000.0 if numeric <= max_frequency_khz / 1000.0 else numeric
 
 
 def format_frequency_digits(freq_khz):
@@ -4313,6 +4358,12 @@ def format_tune_step(step_hz):
     return f"{step_hz} Hz"
 
 
+def format_small_tune_step(step_hz):
+    """Use a short unambiguous label on the 55 px frequency-step keys."""
+    step_hz = int(step_hz)
+    return f"{step_hz // 1000}K" if step_hz >= 10_000 and step_hz % 1000 == 0 else format_tune_step(step_hz)
+
+
 def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
     """Move to the adjacent configured tuning-grid point."""
     step_hz = max(1, int(step_hz))
@@ -4323,6 +4374,57 @@ def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
     else:
         target_hz = (math.ceil(quotient - 1e-9) - 1) * step_hz
     return clamp(target_hz / 1000.0, float(low_khz), float(high_khz))
+
+
+FREQUENCY_ARROW_HOLD_DELAY_S = 0.50
+
+
+def frequency_arrow_repeat_interval_s(held_seconds):
+    """Repeat faster as an arrow stays held, with a bounded tuning rate."""
+    accelerating_seconds = max(0.0, held_seconds - FREQUENCY_ARROW_HOLD_DELAY_S)
+    return max(0.08, 0.26 * math.exp(-0.40 * accelerating_seconds))
+
+
+@dataclass
+class FrequencyArrowHold:
+    action: str = None
+    receiver_identity: tuple = None
+    started_at: float = 0.0
+    next_at: float = 0.0
+    repeated: bool = False
+
+    def begin(self, action, now, receiver_identity):
+        self.action = action
+        self.receiver_identity = receiver_identity
+        self.started_at = now
+        self.next_at = now + FREQUENCY_ARROW_HOLD_DELAY_S
+        self.repeated = False
+
+    def cancel(self):
+        self.action = None
+        self.receiver_identity = None
+        self.repeated = False
+
+    def tick(self, now, pointed_action, receiver_identity):
+        if self.action is None:
+            return None
+        if pointed_action != self.action or receiver_identity != self.receiver_identity:
+            self.cancel()
+            return None
+        if now < self.next_at:
+            return None
+        self.repeated = True
+        self.next_at = now + frequency_arrow_repeat_interval_s(now - self.started_at)
+        return self.action
+
+    def release(self, pointed_action, receiver_identity):
+        tap = (
+            self.action is not None and not self.repeated
+            and pointed_action == self.action
+            and receiver_identity == self.receiver_identity
+        )
+        self.cancel()
+        return tap
 
 
 def configured_tune_step_hz(receiver_type, kiwi_step_hz, fmdx_step_hz):
@@ -7969,9 +8071,9 @@ class SpectrumLayerCache:
 # immediate, high-contrast press feedback.  It is session-only display state;
 # actions still commit on release through the existing gesture handlers.
 UI_PRESS_POINT = None
-UI_PRESSED_FILL = APP_UI_STYLE.palette.focus
-UI_PRESSED_TEXT = APP_UI_STYLE.palette.focus_text
-UI_PRESSED_EDGE = APP_UI_STYLE.palette.focus
+UI_PRESSED_FILL = APP_UI_STYLE.palette.active_surface
+UI_PRESSED_TEXT = APP_UI_STYLE.palette.text
+UI_PRESSED_EDGE = APP_UI_STYLE.palette.active_border
 
 
 def set_ui_press_point(x=None, y=None):
@@ -7994,15 +8096,47 @@ def draw_styled_button_frame(box, *, active=False, pressed=None, danger=False,
     return visual
 
 
+def button_label_for_box(text_cache, label, box, style=APP_UI_STYLE.button):
+    """Keep 13 px button text inside its touch target without changing its size."""
+    label = str(label).upper()
+    if not callable(getattr(text_cache, "texture", None)):
+        return label
+    return fit_station_text(
+        text_cache, label, box[2] - box[0] - 8, style.label_size,
+        bold=True, family=style.font_family,
+    )
+
+
 def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
                             danger=False, bold=True, style=APP_UI_STYLE.button):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-        label, visual.text, size or style.label_size, bold, False, "cm",
+        button_label_for_box(text_cache, label, box, style), visual.text,
+        style.label_size, True, False, "cm",
         family=style.font_family,
     )
+    return visual
+
+
+def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
+                                style=APP_UI_STYLE.button):
+    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
+    x0, y0, x1, y1 = box
+    visual = draw_styled_button_frame(box, active=active, style=style)
+    center_x = (x0 + x1) / 2
+    if subtitle:
+        draw_text(text_cache, center_x, y0 + 23,
+                  button_label_for_box(text_cache, title, box, style),
+                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
+        draw_text(text_cache, center_x, y0 + 46,
+                  button_label_for_box(text_cache, subtitle, box, style),
+                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
+    else:
+        draw_text(text_cache, center_x, (y0 + y1) / 2,
+                  button_label_for_box(text_cache, title, box, style),
+                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
     return visual
 
 
@@ -8206,7 +8340,7 @@ def draw_muted_waterfall_badge(text_cache):
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
-    """Large transparent play/pause control for the retained receiver."""
+    """Compact play/pause glyph inside the retained touch target."""
     x0, y0, x1, y1 = stream_waterfall_box()
     paused = bool(stream_paused)
     pressed = ui_button_pressed((x0, y0, x1, y1))
@@ -8214,16 +8348,16 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     icon_color = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     if paused:
-        draw_logical_line(cx - 12, cy - 20, cx - 12, cy + 20, icon_color, 4)
-        draw_logical_line(cx - 12, cy - 20, cx + 20, cy, icon_color, 4)
-        draw_logical_line(cx + 20, cy, cx - 12, cy + 20, icon_color, 4)
+        draw_logical_line(cx - 11, cy - 15, cx - 11, cy + 15, icon_color, 2)
+        draw_logical_line(cx - 11, cy - 15, cx + 15, cy, icon_color, 2)
+        draw_logical_line(cx + 15, cy, cx - 11, cy + 15, icon_color, 2)
     else:
-        draw_logical_rect(cx - 17, cy - 20, cx - 7, cy + 20, icon_color)
-        draw_logical_rect(cx + 7, cy - 20, cx + 17, cy + 20, icon_color)
+        draw_logical_line(cx - 10, cy - 15, cx - 10, cy + 15, icon_color, 4)
+        draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
 
 
 def draw_favorite_waterfall_button(favorited):
-    """Draw the Home favorite with the shared cyan active/pressed styling."""
+    """Draw a fine-lined favorite star inside the shared touch target."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -8231,7 +8365,7 @@ def draw_favorite_waterfall_button(favorited):
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    draw_logical_polyline(regular_star_points(cx, cy, 23), edge, 3)
+    draw_logical_polyline(regular_star_points(cx, cy, 17), edge, 2)
 
 
 def draw_audio_transport_graph(text_cache, history, box):
@@ -8570,11 +8704,11 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
         panel_x0, _panel_y0, panel_x1, _panel_y1 = radio_panel_box()
         grid_x0, grid_x1 = panel_x0 + 10, panel_x1 - 10
         grid_y0 = lcd_radio_mode_grid_y0()
-        gap = 7
-        button_h = 62
-        available = grid_x1 - grid_x0
+        gap = APP_UI_STYLE.button.gap
+        button_h = APP_UI_STYLE.button.height
         cols = 2
-        button_w = (available - gap * (cols - 1)) / cols
+        button_w = APP_UI_STYLE.button.width
+        grid_x0 = (panel_x0 + panel_x1 - (cols * button_w + gap)) / 2
         for index, (family, modes) in enumerate(mode_families):
             col = index % cols
             row = index // cols
@@ -8596,23 +8730,20 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
 
 def radio_wspr_box():
     """Dedicated WSPR workspace launcher below the Kiwi mode controls."""
-    return LCD_NAV_X0 + 10, 522, (LCD_NAV_X0 + LOGICAL_W) / 2 - 4, 584
+    return LCD_NAV_X0 + 10, 512, LCD_NAV_X0 + 124, 576
 
 def radio_sstv_box():
     """SSTV alongside WSPR in PR12's Modes drawer."""
-    return (LCD_NAV_X0 + LOGICAL_W) / 2 + 4, 522, LOGICAL_W - 10, 584
+    return LCD_NAV_X0 + 132, 512, LOGICAL_W - 10, 576
 
 def radio_hell_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 10, 596, LCD_NAV_X0 + 10 + width, 658
+    return LCD_NAV_X0 + 10, 584, LCD_NAV_X0 + 124, 648
 
 def radio_qrss_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 14 + width, 596, LCD_NAV_X0 + 14 + 2*width, 658
+    return LCD_NAV_X0 + 132, 584, LOGICAL_W - 10, 648
 
 def radio_cw_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 18 + 2*width, 596, LOGICAL_W - 10, 658
+    return LCD_NAV_X0 + 10, 656, LCD_NAV_X0 + 124, 720
 
 
 def radio_decoder_boxes():
@@ -8817,8 +8948,10 @@ def radio_option_at(
     # A read-only shared FM-DX tuner has no tuning step: the frequency is not
     # ours to change until shared control is acknowledged.
     if not (receiver_worker_protocol(receiver_type) == "fmdx" and not fmdx_shared_control):
+        if LCD_800_MODE and contains(lcd_radio_step_cycle_box(), x, y):
+            return "step_cycle", None
         for step_hz, box in radio_step_options(receiver_type):
-            if contains(box, x, y):
+            if step_hz is not None and contains(box, x, y):
                 return "step", step_hz
     return None
 
@@ -8833,8 +8966,7 @@ def next_radio_mode_variant(current_mode, modes):
 
 
 def draw_radio_option(text_cache, box, label, active):
-    font_size = 12 if len(label) > 10 else (13 if len(label) > 8 else 15)
-    draw_styled_text_button(text_cache, box, label, size=font_size, active=active)
+    draw_styled_text_button(text_cache, box, label, active=active)
 
 
 BACK_BUTTON_FONT_SIZE = 13
@@ -8852,58 +8984,15 @@ def draw_radio_close_button(text_cache, box):
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     """Draw a large mode-family button without cramming its variants inside."""
-    x0, y0, x1, y1 = box
     active = active_mode in modes
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    compact_lcd_drawer = LCD_800_MODE and (x1 - x0) < 140
-    draw_text(
-        text_cache,
-        (x0 + x1) / 2,
-        (y0 + y1) / 2 - (3 if compact_lcd_drawer else 4),
-        family,
-        visual.text,
-        (15 if len(family) <= 6 else 12) if compact_lcd_drawer else (21 if len(family) <= 6 else 19),
-        True,
-        False,
-        "cm",
-        family="Liberation Sans",
-    )
-    if active:
-        active_label = KIWI_MODE_LABELS.get(active_mode, active_mode)
-        active_size = 13 if len(active_label) <= 11 else 12
-        draw_text(
-            text_cache,
-            (x0 + x1) / 2,
-            y1 - (13 if compact_lcd_drawer else 16),
-            active_label,
-            visual.text,
-            active_size if compact_lcd_drawer else 14,
-            True,
-            False,
-            "cm",
-            family="Liberation Sans",
-        )
+    detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
+    draw_styled_two_line_button(text_cache, box, family, detail, active=active)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
     """Render one readable option in the compact second-level popover."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
     label = KIWI_MODE_LABELS.get(mode, mode)
-    draw_text(
-        text_cache,
-        (x0 + x1) / 2,
-        (y0 + y1) / 2,
-        label,
-        visual.text,
-        17 if len(label) <= 11 else 15,
-        True,
-        False,
-        "cm",
-        family="Liberation Sans",
-    )
+    draw_styled_text_button(text_cache, box, label, active=active)
 
 
 def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
@@ -8933,11 +9022,11 @@ def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
         if reveal_y >= box[3]:
             draw_lcd_audio_tile(text_cache, box, *labels[action])
     if shared_control:
-        if reveal_y >= 349:
-            draw_lcd_drawer_heading(text_cache, left + 10, 349, "TUNING STEP")
-        for option, box in radio_step_options("fmdx"):
-            if reveal_y >= box[3]:
-                draw_lcd_audio_tile(text_cache, box, "TUNING STEP", f"{option // 1000} kHz", option == step_hz)
+        step_box = lcd_radio_step_cycle_box()
+        if reveal_y >= step_box[1]:
+            draw_lcd_drawer_heading(text_cache, left + 4, lcd_radio_step_y0() + 12, "TUNE STEP")
+        if reveal_y >= step_box[3]:
+            draw_lcd_audio_tile(text_cache, step_box, "TUNE STEP", format_tune_step(step_hz))
 
 
 def draw_radio_setup_panel(
@@ -8974,13 +9063,13 @@ def draw_radio_setup_panel(
         for family, modes, box in radio_mode_layout(mode_families):
             if reveal_y >= box[3]:
                 draw_radio_family_option(text_cache, box, family, modes, active_mode)
-        step_y0 = lcd_radio_step_y0(len(mode_families))
-        if reveal_y >= step_y0:
-            draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
-        for option, box in radio_step_options(receiver_type):
-            if reveal_y >= box[3]:
-                label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
-                draw_radio_option(text_cache, box, label, option == step_hz)
+        step_box = lcd_radio_step_cycle_box()
+        if reveal_y >= step_box[1]:
+            draw_lcd_drawer_heading(text_cache, step_box[0] + 4,
+                                    lcd_radio_step_y0(len(mode_families)) + 12,
+                                    "TUNE STEP")
+        if reveal_y >= step_box[3]:
+            draw_lcd_audio_tile(text_cache, step_box, "TUNE STEP", format_tune_step(step_hz))
         if receiver_worker_protocol(receiver_type) == "kiwi":
             labels = {"wspr": "WSPR", "sstv": "SSTV", "hell": "HELL RX", "qrss": "QRSS", "cw": "CW"}
             for workspace, box in radio_decoder_boxes():
@@ -9050,17 +9139,7 @@ def lcd_display_drawer_close_box():
 
 
 def draw_display_control(text_cache, box, label, active=False):
-    x0, y0, x1, y1 = box
-    fill = (86, 91, 95, 214) if active else (18, 29, 38, 152)
-    line = (213, 218, 221, 194) if active else (118, 143, 151, 78)
-    color = (236, 239, 241) if active else (177, 199, 204)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    size = 42 if label in ("-", "+") else 15
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, size, True, True, "cm")
+    draw_styled_text_button(text_cache, box, label, active=active)
 
 
 def volume_at_x(x, box):
@@ -10625,14 +10704,8 @@ def lcd_audio_drawer_close_box():
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
                         title_size=None, detail_size=None):
-    """Compact two-line control tile for the LCD audio drawer."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    title_size = title_size or (15 if len(title) <= 8 else 13)
-    detail_size = detail_size or (13 if len(detail) <= 10 else 11)
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, visual.text, title_size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, visual.text if active or pressed else APP_UI_STYLE.palette.secondary_text, detail_size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    """Compact two-line control tile with the shared theme typography."""
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_sidebar_header(text_cache, title):
@@ -10970,12 +11043,7 @@ def rtl_lab_option_at(x, y):
 
 
 def draw_tests_button(text_cache, box, title, detail, active=False):
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, visual.text, 18, True, True, "lm", family=APP_UI_STYLE.button.font_family)
-    detail_color = visual.text if active or pressed else APP_UI_STYLE.palette.secondary_text
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, detail_color, 14, False, True, "lm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
@@ -11045,14 +11113,8 @@ def draw_font_lab(text_cache, page):
         True, False, "lm", family="Liberation Sans",
     )
     draw_settings_leaf_sidebar(text_cache, "FONT LAB", "FONT PAGES")
-    for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT"), (FONT_LAB_BACK_BOX, "BACK")):
-        if label == "BACK":
-            continue
-        x0, y0, x1, y1 = box
-        draw_logical_rect(x0, y0, x1, y1, (17, 35, 43, 246))
-        for line in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-            draw_logical_line(*line, (112, 181, 187, 178), 1)
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (231, 243, 244), 16, True, False, "cm", family="Liberation Sans")
+    for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT")):
+        draw_styled_text_button(text_cache, box, label)
 
     for column in range(5):
         column_x0 = column * FONT_LAB_COLUMN_WIDTH
@@ -11162,14 +11224,7 @@ def wspr_option_at(x, y, page):
 
 
 def draw_wspr_button(text_cache, box, title, detail="", active=False, selected=False):
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active or selected, pressed=pressed)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - (7 if detail else 0), title,
-              visual.text, 17, True, True, "cm", family=APP_UI_STYLE.button.font_family)
-    if detail:
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 13, detail,
-                  visual.text if active or selected or pressed else APP_UI_STYLE.palette.secondary_text, 12, True, True, "cm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active or selected)
 
 
 def draw_wspr_mrtg_graph(text_cache, history, window_s, selected_band):
@@ -12107,21 +12162,20 @@ def draw_wspr_cycle_timer(cx, cy, radius=11):
 
 
 def wspr_card_settings_box(box):
-    """Large visual settings target; the rest of a card is its view switch."""
+    """Standard settings target; the rest of a card is its view switch."""
     _x0, _y0, x1, y1 = box
-    return x1 - 104, y1 - 43, x1 - 12, y1 - 10
+    return x1 - 126, y1 - 76, x1 - 12, y1 - 12
 
 
 def wspr_card_settings_hit_box(box):
-    """Forgiving touch halo around the deliberately compact settings icon."""
-    x0, y0, x1, y1 = wspr_card_settings_box(box)
-    return x0 - 18, y0 - 14, x1 + 8, y1 + 8
+    """The visible settings button is already large enough for touch."""
+    return wspr_card_settings_box(box)
 
 
 def wspr_card_log_expand_box(box):
     """Dedicated full-log target, separate from the card view-cycle tap."""
     _x0, _y0, x1, y1 = box
-    return x1 - 204, y1 - 43, x1 - 112, y1 - 10
+    return x1 - 248, y1 - 76, x1 - 134, y1 - 12
 
 
 def wspr_card_waterfall_expand_box(box):
@@ -12130,8 +12184,7 @@ def wspr_card_waterfall_expand_box(box):
 
 
 def wspr_card_waterfall_expand_hit_box(box):
-    x0, y0, x1, y1 = wspr_card_waterfall_expand_box(box)
-    return x0 - 12, y0 - 10, x1 + 8, y1 + 10
+    return wspr_card_waterfall_expand_box(box)
 
 
 def wspr_card_distance_expand_box(box):
@@ -12139,26 +12192,11 @@ def wspr_card_distance_expand_box(box):
 
 
 def wspr_card_distance_expand_hit_box(box):
-    x0, y0, x1, y1 = wspr_card_distance_expand_box(box)
-    return x0 - 12, y0 - 10, x1 + 8, y1 + 10
+    return wspr_card_distance_expand_box(box)
 
 
 def draw_wspr_settings_button(text_cache, box):
-    """A clear cog affordance instead of a tiny text-only settings target."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    visual = draw_styled_button_frame(box, pressed=pressed)
-    for index in range(8):
-        angle = math.tau * index / 8
-        inner, outer = 7, 12
-        draw_logical_line(
-            cx + inner * math.cos(angle), cy + inner * math.sin(angle),
-            cx + outer * math.cos(angle), cy + outer * math.sin(angle),
-            visual.text, 2,
-        )
-    draw_logical_circle(cx, cy, 7, visual.text, segments=20, outline=True)
-    draw_logical_circle(cx, cy, 2.5, visual.text, segments=14, outline=True)
+    draw_styled_text_button(text_cache, box, "SETTINGS")
 
 
 def draw_wspr_log_expand_button(text_cache, box):
@@ -12392,10 +12430,11 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
 
 
 def wspr_distance_range_boxes():
-    x0, x1 = 28, 1074
-    gap = 12
-    width = (x1 - x0 - gap * (len(WSPR_DISTANCE_WINDOWS) - 1)) / len(WSPR_DISTANCE_WINDOWS)
-    return tuple((x0 + index * (width + gap), 84, x0 + index * (width + gap) + width, 132) for index in range(len(WSPR_DISTANCE_WINDOWS)))
+    width = APP_UI_STYLE.button.width
+    gap = APP_UI_STYLE.button.gap
+    return tuple((28 + index * (width + gap), 76,
+                  28 + index * (width + gap) + width, 140)
+                 for index in range(len(WSPR_DISTANCE_WINDOWS)))
 
 
 def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_index):
@@ -12513,9 +12552,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
-        draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
-        draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
-        draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active=active)
     start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
     visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
     for index, box in enumerate(boxes):
@@ -12661,9 +12698,10 @@ def draw_wspr_add_card(text_cache, box):
 
 def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False):
     x0, y0, x1, y1 = WSPR_TILE_SETTINGS_BOX
-    hf_x0, hf_x1 = x0 + 32, x1 - 32
-    hf_top, hf_gap, hf_cols, hf_h = y0 + 250, 10, 5, 66
-    hf_w = (hf_x1 - hf_x0 - hf_gap * (hf_cols - 1)) / hf_cols
+    hf_gap, hf_cols, hf_h = 8, 5, 64
+    hf_w = APP_UI_STYLE.button.width
+    hf_x0 = (x0 + x1 - (hf_cols * hf_w + (hf_cols - 1) * hf_gap)) / 2
+    hf_top = y0 + 250
     direct_hf_band_boxes = []
     for index, (label, frequency) in enumerate(WSPR_HF_BANDS):
         col, row = index % hf_cols, index // hf_cols
@@ -12674,17 +12712,17 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
         "panel": WSPR_TILE_SETTINGS_BOX,
         "receiver": (x0 + 32, y0 + 94, x1 - 32, y0 + 178),
         "hf_band_boxes": tuple(direct_hf_band_boxes),
-        "toggle": (x0 + 32, y1 - 86, x0 + 282, y1 - 28),
-        "delete": (x0 + 300, y1 - 86, x0 + 594, y1 - 28),
-        "close": (x0 + 612, y1 - 86, x1 - 32, y1 - 28),
+        "toggle": (278, y1 - 84, 514, y1 - 20),
+        "delete": (522, y1 - 84, 758, y1 - 20),
+        "close": (766, y1 - 84, 1002, y1 - 20),
     }
     if receiver_picker_open:
         rows = []
         for index in range(3):
             rows.append((x0 + 32, y0 + 92 + index * 66, x1 - 32, y0 + 148 + index * 66))
-        band_x0, band_x1 = x0 + 32, x1 - 32
-        band_top, band_gap, band_cols, band_h = y0 + 324, 10, 5, 66
-        band_w = (band_x1 - band_x0 - band_gap * (band_cols - 1)) / band_cols
+        band_top, band_gap, band_cols, band_h = y0 + 324, 8, 5, 64
+        band_w = APP_UI_STYLE.button.width
+        band_x0 = (x0 + x1 - (band_cols * band_w + (band_cols - 1) * band_gap)) / 2
         hf_band_boxes = []
         for index, (label, frequency) in enumerate(WSPR_HF_BANDS):
             col, row = index % band_cols, index // band_cols
@@ -12694,16 +12732,15 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
         layout.update({
             "receiver_rows": tuple(rows),
             "hf_band_boxes": tuple(hf_band_boxes),
-            "prev": (x0 + 32, y1 - 76, x0 + 202, y1 - 26),
-            "cancel": ((x0 + x1) / 2 - 90, y1 - 76, (x0 + x1) / 2 + 90, y1 - 26),
-            "next": (x1 - 202, y1 - 76, x1 - 32, y1 - 26),
+            "prev": (278, y1 - 84, 514, y1 - 20),
+            "cancel": (522, y1 - 84, 758, y1 - 20),
+            "next": (766, y1 - 84, 1002, y1 - 20),
         })
     elif band_picker_open:
-        inner_x0, inner_x1 = x0 + 32, x1 - 32
-        top, bottom, cols, gap = y0 + 96, y1 - 106, 4, 10
-        rows = math.ceil(len(WSPR_BANDS) / cols)
-        cell_w = (inner_x1 - inner_x0 - gap * (cols - 1)) / cols
-        cell_h = (bottom - top - gap * (rows - 1)) / rows
+        cols, gap = 4, 8
+        cell_w, cell_h = APP_UI_STYLE.button.width, APP_UI_STYLE.button.height
+        inner_x0 = (x0 + x1 - (cols * cell_w + (cols - 1) * gap)) / 2
+        top = y0 + 96
         band_boxes = []
         for index, (label, frequency) in enumerate(WSPR_BANDS):
             col, row = index % cols, index // cols
@@ -12712,7 +12749,7 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
             band_boxes.append((label, frequency, (bx0, by0, bx0 + cell_w, by0 + cell_h)))
         layout.update({
             "band_boxes": tuple(band_boxes),
-            "cancel": ((x0 + x1) / 2 - 112, y1 - 76, (x0 + x1) / 2 + 112, y1 - 26),
+            "cancel": (522, y1 - 84, 758, y1 - 20),
         })
     return layout
 
@@ -12775,7 +12812,9 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
         draw_wspr_button(text_cache, boxes["prev"], "< PREV")
         draw_wspr_button(text_cache, boxes["cancel"], "DONE", active=True)
         draw_wspr_button(text_cache, boxes["next"], "NEXT >")
-        draw_text(text_cache, (boxes["prev"][2] + boxes["next"][0]) / 2, (boxes["prev"][1] + boxes["prev"][3]) / 2, f"{receiver_page + 1}/{pages}", (179, 206, 209), 16, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, boxes["prev"][1] - 14,
+                  f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+                  True, True, "cm", family="Liberation Sans")
         return
     receiver_box = boxes["receiver"]
     draw_logical_rect(*receiver_box, (14, 37, 44, 235))
@@ -12846,21 +12885,22 @@ def draw_wspr_cpu_debug_backdrop(text_cache):
 
 def wspr_decoder_settings_layout():
     x0, y0, x1, y1 = WSPR_DECODER_SETTINGS_BOX
-    gap = 18
-    width = (x1 - x0 - 56 - gap) / 2
+    gap = APP_UI_STYLE.button.gap
+    width = APP_UI_STYLE.button.width
+    group_x0 = (x0 + x1 - (2 * width + gap)) / 2
     profile_boxes = []
     for index, profile in enumerate(WSPR_DECODER_PROFILES):
         col, row = index % 2, index // 2
-        bx0 = x0 + 28 + col * (width + gap)
-        by0 = y0 + 112 + row * 120
-        profile_boxes.append((profile, (bx0, by0, bx0 + width, by0 + 102)))
+        bx0 = group_x0 + col * (width + gap)
+        by0 = y0 + 112 + row * (APP_UI_STYLE.button.height + gap)
+        profile_boxes.append((profile, (bx0, by0, bx0 + width, by0 + APP_UI_STYLE.button.height)))
     return {
         "panel": WSPR_DECODER_SETTINGS_BOX,
         "profiles": tuple(profile_boxes),
-        "osd_down": (x0 + 28, y0 + 390, x0 + 242, y0 + 482),
-        "osd_value": (x0 + 260, y0 + 390, x1 - 260, y0 + 482),
-        "osd_up": (x1 - 242, y0 + 390, x1 - 28, y0 + 482),
-        "close": ((x0 + x1) / 2 - 160, y1 - 80, (x0 + x1) / 2 + 160, y1 - 24),
+        "osd_down": (400, y0 + 390, 514, y0 + 454),
+        "osd_value": (522, y0 + 390, 758, y0 + 454),
+        "osd_up": (766, y0 + 390, 880, y0 + 454),
+        "close": (522, y1 - 84, 758, y1 - 20),
     }
 
 
@@ -12886,12 +12926,12 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
             text_cache, box, WSPR_DECODER_PROFILE_LABELS[candidate],
             details[candidate], active=active, selected=active,
         )
-    draw_text(text_cache, x0 + 28, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", (156, 203, 208), 16, True, True, "lm", family="Liberation Sans")
-    draw_wspr_button(text_cache, boxes["osd_down"], "−", "LESS")
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", (156, 203, 208), 16, True, True, "cm", family="Liberation Sans")
+    draw_wspr_button(text_cache, boxes["osd_down"], "LESS", "OSD")
     osd_label = "OFF" if not osd_depth else f"LEVEL {osd_depth}"
     osd_detail = "NO EXTRA SEARCH" if not osd_depth else "MORE WEAK-SIGNAL SEARCH"
     draw_wspr_button(text_cache, boxes["osd_value"], f"OSD {osd_label}", osd_detail, active=bool(osd_depth), selected=bool(osd_depth))
-    draw_wspr_button(text_cache, boxes["osd_up"], "+", "MORE")
+    draw_wspr_button(text_cache, boxes["osd_up"], "MORE", "OSD")
     draw_wspr_button(text_cache, boxes["close"], "DONE", active=True)
 
 
@@ -12939,54 +12979,46 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     )
     draw_text(text_cache, 22, 53, f"{live_count}/{WSPR_MONITOR_MAX_LIVE} LIVE MONITORS  ·  TWO-MINUTE CYCLES", (102, 214, 177), 14, True, True, "lm", family="Liberation Sans")
     decoder_profile, decoder_osd_depth = monitor_manager.decoder_settings.snapshot()
-    decode_x0, decode_y0, decode_x1, decode_y1 = WSPR_DECODE_BOX
     decode_active = decoder_profile != "normal" or bool(decoder_osd_depth)
-    draw_logical_rect(decode_x0, decode_y0, decode_x1, decode_y1, (17, 55, 51, 224) if decode_active else (11, 37, 43, 212))
-    draw_logical_line(decode_x0, decode_y0, decode_x1, decode_y0, (96, 232, 175, 202) if decode_active else (87, 211, 190, 156), 1)
-    draw_text(text_cache, (decode_x0 + decode_x1) / 2, 25, "DECODE", (218, 244, 238), 14, True, True, "cm", family="Liberation Sans")
     decode_detail = WSPR_DECODER_PROFILE_LABELS[decoder_profile]
     if decoder_osd_depth:
         decode_detail += f" · OSD {decoder_osd_depth}"
-    draw_text(text_cache, (decode_x0 + decode_x1) / 2, 49, decode_detail, (117, 238, 180) if decode_active else (155, 204, 204), 14, True, True, "cm", family="Liberation Sans")
+    draw_styled_two_line_button(text_cache, WSPR_DECODE_BOX, "DECODE", decode_detail,
+                                active=decode_active)
     cpu_x0, cpu_y0, cpu_x1, cpu_y1 = WSPR_CPU_BOX
     draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, (11, 37, 43, 212))
     draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, (87, 211, 190, 156), 1)
     cpu_label = "CPU --" if cpu_percent is None else f"CPU {cpu_percent:.0f}%"
     draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, (163, 238, 226), 17, True, True, "cm", family="Liberation Sans")
-    add_x0, add_y0, add_x1, add_y1 = WSPR_ADD_BOX
-    draw_logical_rect(add_x0, add_y0, add_x1, add_y1, (13, 48, 43, 210))
-    draw_logical_line(add_x0, add_y0, add_x1, add_y0, (104, 232, 178, 196), 1)
-    add_cy = (add_y0 + add_y1) / 2
-    draw_logical_line(add_x0 + 21, add_cy, add_x0 + 35, add_cy, (117, 244, 185, 255), 2)
-    draw_logical_line(add_x0 + 28, add_cy - 7, add_x0 + 28, add_cy + 7, (117, 244, 185, 255), 2)
-    draw_text(text_cache, add_x0 + 48, add_cy, "WSPR", (232, 249, 245), 18, True, True, "lm", family="Liberation Sans")
-    home_x0, home_y0, home_x1, home_y1 = WSPR_HOME_BOX
-    draw_logical_rect(home_x0, home_y0, home_x1, home_y1, (10, 30, 36, 162))
-    draw_logical_line(home_x0, home_y0, home_x1, home_y0, (111, 187, 180, 138), 1)
-    draw_text(text_cache, (home_x0 + home_x1) / 2, (home_y0 + home_y1) / 2, "HOME", (232, 245, 246), 18, True, True, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, WSPR_ADD_BOX, "ADD WSPR")
+    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "HOME")
 
 
 def wspr_add_layout():
-    panel = (18, 24, LOGICAL_W - 18, LOGICAL_H - 18)
+    panel = (18, 24, LOGICAL_W - 18, LOGICAL_H)
     # Choose the receiver first, then a HF band directly below it. This reads
     # in the same order as the operator's task and makes every control usable
     # without leaving the one large Add WSPR workspace.
     receivers = (42, 116, LOGICAL_W - 42, 370)
-    bands = (42, 446, LOGICAL_W - 42, 580)
-    cancel = (42, 684, 268, 756)
-    create = (LOGICAL_W - 268, 684, LOGICAL_W - 42, 756)
-    prev = (42, 602, 244, 660)
-    next_box = (LOGICAL_W - 244, 602, LOGICAL_W - 42, 660)
+    bands = (42, 446, LOGICAL_W - 42, 582)
+    cancel = (394, 728, 630, 792)
+    create = (638, 728, 874, 792)
+    prev = (522, 632, 636, 696)
+    next_box = (644, 632, 758, 696)
     return panel, bands, receivers, cancel, create, prev, next_box
 
 
 def wspr_add_band_boxes():
     _panel, box, _receivers, _cancel, _create, _prev, _next = wspr_add_layout()
     x0, y0, x1, y1 = box
-    cols, rows, gap = 5, 2, 12
-    width = (x1 - x0 - gap * (cols - 1)) / cols
-    height = (y1 - y0 - gap * (rows - 1)) / rows
-    return tuple((band, (x0 + (index % cols) * (width + gap), y0 + (index // cols) * (height + gap), x0 + (index % cols) * (width + gap) + width, y0 + (index // cols) * (height + gap) + height)) for index, band in enumerate(WSPR_HF_BANDS))
+    cols, gap = 5, APP_UI_STYLE.button.gap
+    width, height = APP_UI_STYLE.button.width, APP_UI_STYLE.button.height
+    grid_x0 = (x0 + x1 - (cols * width + (cols - 1) * gap)) / 2
+    return tuple((band, (grid_x0 + (index % cols) * (width + gap),
+                         y0 + (index // cols) * (height + gap),
+                         grid_x0 + (index % cols) * (width + gap) + width,
+                         y0 + (index // cols) * (height + gap) + height))
+                 for index, band in enumerate(WSPR_HF_BANDS))
 
 
 def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page, selected_server):
@@ -13022,7 +13054,9 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
     for box, label, active in ((cancel, "CANCEL", False), (create, "CREATE", True), (prev, "< PREV", False), (next_box, "NEXT >", False)):
         draw_wspr_button(text_cache, box, label, active=active)
     pages = max(1, math.ceil(len(receiver_rows) / 3))
-    draw_text(text_cache, (prev[2] + next_box[0]) / 2, (prev[1] + prev[3]) / 2, f"{receiver_page + 1}/{pages}", (179, 206, 209), 16, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, prev[1] - 16,
+              f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+              True, True, "cm", family="Liberation Sans")
 
 
 def wspr_workspace_action_at(x, y, tiles, scroll_y):
@@ -13238,7 +13272,7 @@ RECEIVER_MAP_GROUP_COLORS = {
 RECEIVER_MAP_HIDDEN_GROUPS = set()
 # Legend filters follow the full-width horizontal source-tab language from
 # Receivers. Their coloured circles remain the source key while the neutral
-# label and cyan active outline retain the Globe's visibility-filter state.
+# label and light-gray active outline retain the Globe's visibility-filter state.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + RECEIVER_RAIL_TAB_TOP_GAP
 RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
@@ -13291,8 +13325,8 @@ def receiver_map_legend_visual(group, active, pressed=False):
     base = APP_UI_STYLE.button.resolve()
     if active or pressed:
         return ButtonVisualState(
-            base.fill, APP_UI_STYLE.palette.focus,
-            APP_UI_STYLE.palette.secondary_text, 2,
+            APP_UI_STYLE.palette.active_surface, APP_UI_STYLE.palette.active_border,
+            APP_UI_STYLE.palette.text, 2,
         )
     return ButtonVisualState(
         base.fill, base.border, APP_UI_STYLE.palette.secondary_text, base.border_width,
@@ -13300,18 +13334,19 @@ def receiver_map_legend_visual(group, active, pressed=False):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Full-width horizontal legend filters matching Receivers source tabs."""
+    """Two-column legend filters matching Receivers source buttons."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
     x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
-    x1 = LOGICAL_W - RECEIVER_PICKER_MARGIN
+    width = (LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN - RECEIVER_RAIL_TAB_GAP) / 2
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
-        y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
+        x = x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP)
+        y = RECEIVER_MAP_LEGEND_RAIL_TOP + (index // 2) * (
             RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP
         )
-        boxes.append((group, (x0, y, x1, y + RECEIVER_RAIL_TAB_HEIGHT)))
+        boxes.append((group, (x, y, x + width, y + RECEIVER_RAIL_TAB_HEIGHT)))
     return tuple(boxes)
 
 
@@ -13685,9 +13720,8 @@ def draw_receiver_map(
     draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
 
     # The horizontal legend doubles as the visibility filter. Its dot retains
-    # the source colour while the neutral label and cyan outline carry state.
+    # the source colour while the neutral label and gray outline carry state.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
-        legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
         visual = receiver_map_legend_visual(
@@ -13697,39 +13731,13 @@ def draw_receiver_map(
             lx0, ly0, lx1, ly1, APP_UI_STYLE.button.radius,
             visual.fill, visual.border, visual.border_width,
         )
-        swatch_x, swatch_y = lx0 + 24, (ly0 + ly1) / 2
-        draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         draw_text(
-            text_cache, swatch_x + 22, swatch_y,
+            text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2,
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
-            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "lm", family="Liberation Sans",
+            APP_UI_STYLE.button.label_size, True, False, "cm", family=APP_UI_STYLE.button.font_family,
         )
 
-    def draw_globe_tile_border(command_box):
-        pressed = ui_button_pressed(command_box)
-        return draw_styled_button_frame(command_box, pressed=pressed)
-
-    def draw_globe_icon_tile(command_box, icon, label):
-        bx0, by0, bx1, by1 = command_box
-        pressed = ui_button_pressed(command_box)
-        draw_globe_tile_border(command_box)
-        tile, _tile_w, _tile_h = menu_icon_texture(
-            text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8),
-            pressed=pressed,
-        )
-        draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
-
-    def draw_globe_zoom_tile(command_box, glyph):
-        bx0, by0, bx1, by1 = command_box
-        pressed = ui_button_pressed(command_box)
-        visual = draw_globe_tile_border(command_box)
-        draw_text(
-            text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, glyph,
-            visual.text,
-            46, True, False, "cm", family="Liberation Sans",
-        )
-
-    draw_globe_icon_tile(RADIOGARDEN_LIST_BOX, GLOBE_LIST_ICON_KIND, "LIST")
+    draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
     draw_picker_two_line_button(
         text_cache,
         RADIOGARDEN_VIEW_BOX,
@@ -13737,8 +13745,8 @@ def draw_receiver_map(
         MAP_VIEW_LABELS.get(map_view, "BORDERS"),
         18,
     )
-    draw_globe_zoom_tile(RADIOGARDEN_ZOOM_IN_BOX, "+")
-    draw_globe_zoom_tile(RADIOGARDEN_ZOOM_OUT_BOX, "−")
+    draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_IN_BOX, "ZOOM IN")
+    draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_OUT_BOX, "ZOOM OUT")
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
     draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
@@ -13997,16 +14005,7 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
 
 
 def draw_dj_control(text_cache, box, title, detail, active=False):
-    x0, y0, x1, y1 = box
-    fill = (27, 76, 70, 210) if active else (18, 29, 38, 210)
-    line = (94, 230, 178, 210) if active else (115, 140, 151, 78)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - 9, title, (232, 247, 247), 16, True, True, "cm")
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 14, detail, (126, 225, 183), 13, False, True, "cm")
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, link_rate_hz):
@@ -14039,16 +14038,7 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
 
 def draw_filter_width_control(text_cache, box, label):
     """Large neutral controls that stay legible over the cool waterfall."""
-    x0, y0, x1, y1 = box
-    fill = (54, 57, 60, 96)
-    line = (183, 188, 192, 156)
-    color = (236, 239, 241)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 42, True, True, "cm")
+    draw_styled_text_button(text_cache, box, label)
 
 
 def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, spectrum_enabled,
@@ -14531,16 +14521,19 @@ def menu_max_scroll():
 
 
 def menu_item_box(index, scroll):
-    x0, y0, _x1, _y1, pad, gap, item_w, item_h = menu_metrics()
+    x0, _y0, x1, y1 = MENU_BOX
     col = index % MENU_COLS
     row = index // MENU_COLS
     if row >= MENU_ROWS:
         return None
-    # The second row remains left-justified, like the first, so operators can
-    # scan a stable grid without a competing close target.
-    left = x0 + pad + col * (item_w + gap)
-    top = y0 + pad + row * (item_h + gap)
-    return left, top, left + item_w, top + item_h
+    width = APP_UI_STYLE.button.width
+    height = APP_UI_STYLE.button.height
+    gap = APP_UI_STYLE.button.gap
+    group_width = 2 * width + gap
+    group_height = MENU_ROWS * height + (MENU_ROWS - 1) * gap
+    left = (x0 + x1 - group_width) / 2 + col * (width + gap)
+    top = y1 - 8 - group_height + row * (height + gap)
+    return left, top, left + width, top + height
 
 
 def menu_at(x, y, scroll):
@@ -14715,38 +14708,27 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
 
 
 def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False, pressed=False):
-    """Build a menu tile at its eventual raster size to avoid texture blur."""
+    """Build the legacy native rail's rounded, text-only button texture."""
     key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}_{'pressed' if pressed else 'normal'}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
-    try:
-        if kind in ("sstv", "hell", "qrss", "cw", "network", "list", "favorite"):
-            draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
-                           (232, 248, 250, 232), (82, 235, 231, 150))
-        else:
-            asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)
-            icon = pygame.image.load(str(asset_path)).convert_alpha()
-            # All main navigation assets share the same icon canvas as the
-            # code-drawn action glyphs.
-            icon_size = APP_ACTION_ICON_SIZE
-            icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
-            icon_y = max(0, (height - 26 - icon_size) // 2)
-            surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
-    except (pygame.error, OSError):
-        # Keep development builds usable if the optional icon package is absent.
-        color = (232, 248, 250, 232)
-        dim = (82, 235, 231, 150)
-        draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12), color, dim)
-    label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(
-        label, True, UI_PRESSED_TEXT if pressed else (207, 221, 224)
-    )
-    surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - 26))
-    if pressed:
-        # Preserve the asset alpha while turning every visible icon pixel into
-        # the same dark ink used by pressed text on the cyan button surface.
-        surface.fill((*UI_PRESSED_TEXT, 255), special_flags=pygame.BLEND_RGBA_MULT)
+    style = APP_UI_STYLE.button
+    visual = style.resolve(pressed=pressed)
+    rect = pygame.Rect(0, 0, width, height)
+    pygame.draw.rect(surface, visual.fill, rect, border_radius=style.radius)
+    pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
+                     border_radius=style.radius)
+    subtitle = HOME_MENU_SUBTITLES.get(kind, "")
+    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
+    for caption, center_y, color in (
+        (label, 23 if subtitle else height / 2, visual.text),
+        (subtitle, 46, style.subtitle_color),
+    ):
+        if caption:
+            rendered = font.render(str(caption).upper(), True, color[:3])
+            surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
 
@@ -14762,25 +14744,18 @@ def draw_main_menu(text_cache, scroll):
         bx0, by0, bx1, by1 = box
         if bx1 < x0 or bx0 > x1:
             continue
-        target_w = min(132, bx1 - bx0 - 12)
-        target_h = min(92, by1 - by0 - 4)
-        target_x = bx0 + ((bx1 - bx0) - target_w) / 2
-        target_y = by0 + ((by1 - by0) - target_h) / 2
-        pressed = ui_button_pressed(box)
-        draw_styled_button_frame(box, pressed=pressed)
-        tex, tex_w, tex_h = menu_icon_texture(
-            text_cache, kind, label, int(target_w), int(target_h), pressed=pressed
+        draw_styled_two_line_button(
+            text_cache, box, label, HOME_MENU_SUBTITLES.get(kind, ""),
         )
-        draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
 def desktop_1280_nav_box(index):
     """Persistent 2-column Home navigation rail for the 1280x480 desktop test."""
     col = index % 2
     row = index // 2
-    x0 = DESKTOP_1280_MAIN_W + 7 + col * 125
-    y0 = DESKTOP_1280_TOP_H + 8 + row * 96
-    return x0, y0, x0 + 117, y0 + 88
+    x0 = DESKTOP_1280_MAIN_W + 10 + col * 122
+    y0 = NATIVE_H - 8 - (4 * 64 + 3 * 8) + row * 72
+    return x0, y0, x0 + 114, y0 + 64
 
 
 def draw_desktop_1280_navigation(text_cache):
@@ -14791,18 +14766,10 @@ def draw_desktop_1280_navigation(text_cache):
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
         pressed = ui_button_pressed((bx0, by0, bx1, by1))
-        visual = APP_UI_STYLE.button.resolve(pressed=pressed)
-        draw_native_rect(bx0, by0, bx1, by1, visual.fill)
-        draw_native_line(bx0, by0, bx1, by0, visual.border, visual.border_width)
-        draw_native_line(bx0, by1, bx1, by1, visual.border, visual.border_width)
-        draw_native_line(bx0, by0, bx0, by1, visual.border, visual.border_width)
-        draw_native_line(bx1, by0, bx1, by1, visual.border, visual.border_width)
-        tile_w = bx1 - bx0 - 8
-        tile_h = by1 - by0 - 8
         tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, tile_w, tile_h, pressed=pressed
+            text_cache, kind, label, bx1 - bx0, by1 - by0, pressed=pressed
         )
-        draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
+        draw_native_textured_quad(tex, bx0, by0, bx1, by1, alpha=1.0)
 
 
 LCD_NAV_X0 = 1024
@@ -14877,13 +14844,13 @@ def settings_center_workspace_box():
 
 def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
                        family=COMPACT_FREQUENCY_FONT_FAMILY, fit_text=None,
-                       size=BIG_FREQUENCY_SIZE, anchor="rm"):
+                       size=BIG_FREQUENCY_SIZE, anchor="rm", display_text=None):
     """Draw a frequency readout with fixed geometry for its instrument lane.
 
     ``fit_text`` fixes horizontal squeeze against a worst-case value so the
     digits do not change size as the frequency moves.
     """
-    frequency_text = sdr_ui.format_freq(freq_khz)
+    frequency_text = display_text if display_text is not None else sdr_ui.format_freq(freq_khz)
     measured = [frequency_text]
     if fit_text:
         measured.append(fit_text)
@@ -15050,11 +15017,11 @@ def compact_frequency_touch_box():
     return x0 + 4, y0 + 12, x1 - 4, y0 + 61
 
 
-def is_frequency_readout_touch(x, y, measured_box, compact=False):
+def is_frequency_readout_touch(x, y, measured_box, compact=False, home_available=True):
     """Treat every visible compact-frequency pixel as the tuning target."""
-    return contains(measured_box, x, y) or (
+    return bool(home_available) and (contains(measured_box, x, y) or (
         compact and contains(compact_frequency_touch_box(), x, y)
-    )
+    ))
 
 
 def frequency_band_context(freq_khz, mode=""):
@@ -15394,14 +15361,10 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
     draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
-    button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
-    button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
-    icon_color = (*MUTE_ACCENT, 255) if muted else (145, 231, 242, 255)
-    draw_logical_rect(mute_x0, mute_y0, mute_x1, mute_y1, button_fill)
-    draw_logical_line(mute_x0, mute_y0, mute_x1, mute_y0, button_edge, 1)
-    draw_logical_line(mute_x0, mute_y1, mute_x1, mute_y1, button_edge, 1)
-    draw_logical_line(mute_x0, mute_y0, mute_x0, mute_y1, button_edge, 1)
-    draw_logical_line(mute_x1, mute_y0, mute_x1, mute_y1, button_edge, 1)
+    mute_visual = draw_styled_button_frame(
+        (mute_x0, mute_y0, mute_x1, mute_y1), active=muted,
+    )
+    icon_color = (*mute_visual.text[:3], 255)
     cx, cy = (mute_x0 + mute_x1) / 2, (mute_y0 + mute_y1) / 2
     draw_logical_rect(cx - 13, cy - 5, cx - 6, cy + 5, icon_color)
     draw_logical_polyline(((cx - 6, cy - 5), (cx + 5, cy - 13), (cx + 5, cy + 13), (cx - 6, cy + 5)), icon_color, 2.5)
@@ -15529,7 +15492,7 @@ def lcd_filter_drawer_boxes():
     inner_x0, inner_x1 = x0 + 10, x1 - 10
     # Keep choice buttons bottom-aligned immediately above Back. That gives
     # the two continuous instruments generous, finger-friendly travel.
-    preset_top, preset_h, preset_gap = 493, 50, 8
+    preset_top, preset_h, preset_gap = 493, APP_UI_STYLE.button.height, APP_UI_STYLE.button.gap
     preset_w = (inner_x1 - inner_x0 - 8) / 2
     preset_boxes = []
     for index, (name, width_hz) in enumerate(FILTER_WIDTH_PRESETS):
@@ -15701,18 +15664,11 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        pressed = ui_button_pressed(nav_box)
-        visual = draw_styled_button_frame(nav_box, pressed=pressed)
         subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
         if subtitle:
-            draw_text(text_cache, (bx0 + bx1) / 2, by0 + 23, label,
-                      visual.text, 13, True, False, "cm", family="Liberation Sans")
-            draw_text(text_cache, (bx0 + bx1) / 2, by0 + 46, subtitle,
-                      visual.text if pressed else APP_UI_STYLE.palette.secondary_text,
-                      13, True, False, "cm", family="Liberation Sans")
+            draw_styled_two_line_button(text_cache, nav_box, label, subtitle)
         else:
-            draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label.upper(),
-                      visual.text, 13, True, False, "cm", family="Liberation Sans")
+            draw_styled_text_button(text_cache, nav_box, label)
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
@@ -15772,7 +15728,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
                 color if active else (31, 52, 61, 208),
             )
         for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
-            lx = meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0
+            lx = max(meter_x0 + 14, meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0)
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
             draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
@@ -15792,13 +15748,7 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
 
 def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
     """Draw a picker command with a stable action name and changing value."""
-    x0, y0, x1, y1 = box
-    draw_picker_button(text_cache, box, "", size, selected)
-    visual = APP_UI_STYLE.button.resolve(active=selected, pressed=ui_button_pressed(box))
-    center_x = (x0 + x1) / 2
-    center_y = (y0 + y1) / 2
-    draw_text(text_cache, center_x, center_y - 12, first_line, visual.text, size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, center_x, center_y + 13, second_line, visual.text, max(11, size - 3), True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, first_line, second_line, active=selected)
 
 
 def deepgram_keyboard_rows(mode):
@@ -16122,8 +16072,6 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         "lm",
         family="Liberation Sans",
     )
-    draw_text(text_cache, ex1 - 10, (ey0 + ey1) / 2, "MHz", (132, 151, 155), 13, True, False, "rm", family="Liberation Sans")
-
     def draw_key(box, label, size, active=False):
         draw_styled_text_button(text_cache, box, label, size=size, active=active)
 
@@ -16153,7 +16101,9 @@ def frequency_chevron_texture(text_cache, direction, pressed=False):
 
 
 def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=None,
-                          receiver_type="kiwi"):
+                          receiver_type="kiwi", entry_value="", entry_invalid=False,
+                          tuning_allowed=True, entry_replace_on_digit=True,
+                          max_frequency_khz=TUNING_MAX_KHZ):
     """Draw a single-purpose frequency rail for touch and encoder use."""
     boxes = frequency_drawer_boxes()
     x0, _y0, x1, y1 = boxes["panel"]
@@ -16161,31 +16111,27 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     draw_sidebar_header(text_cache, "FREQUENCY")
 
     rx0, ry0, rx1, ry1 = boxes["readout"]
-    draw_logical_rect(rx0, ry0, rx1, ry1, (3, 10, 15, 255))
-    draw_logical_line(rx0, ry1, rx1, ry1, (74, 222, 225, 170), 2)
+    draw_logical_rect(
+        rx0, ry0, rx1, ry1,
+        (35, 13, 16, 255) if entry_invalid else (3, 10, 15, 255),
+    )
     # The rail readout uses the same big-frequency face/size/colour as the top
     # instrument strip, so the instrument looks identical wherever it appears.
+    readout_khz = frequency_entry_preview_khz(
+        entry_value, freq_khz, entry_replace_on_digit, max_frequency_khz,
+    )
     draw_big_frequency(
-        text_cache, freq_khz, rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
+        text_cache, readout_khz,
+        rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
         family=font_family,
+        display_text=(entry_value or "0") if not entry_replace_on_digit else None,
     )
 
-    def draw_arrow_button(box, direction, action):
-        bx0, by0, bx1, by1 = box
-        active = pressed == action
-        draw_styled_button_frame(box, active=active, pressed=active)
-        tex, tex_w, tex_h = frequency_chevron_texture(text_cache, direction, active)
-        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
-        # The chevron is the whole control; the old UP/DOWN caption under it
-        # only crowded the icon with text the arrow already implies.
-        draw_textured_quad(
-            tex, cx - tex_w / 2, cy - tex_h / 2, cx + tex_w / 2, cy + tex_h / 2,
-            0, 0, 1, 1,
-        )
-
-    draw_arrow_button(boxes["down"], -1, "down")
-    draw_arrow_button(boxes["up"], 1, "up")
-    draw_picker_button(text_cache, boxes["manual"], "ENTER FREQUENCY", 15, pressed == "manual")
+    draw_styled_text_button(text_cache, boxes["down"], "DOWN", active=pressed == "down")
+    draw_styled_text_button(text_cache, boxes["up"], "UP", active=pressed == "up")
+    for label, key_box in frequency_drawer_key_boxes():
+        draw_styled_text_button(text_cache, key_box, label,
+                                active=pressed == f"key_{label}")
     # The tune steps are listed here and selected in place. They no longer
     # link away to the Radio drawer's separate step screen.
     heading = boxes["step_heading"]
@@ -16196,9 +16142,13 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     for option_hz, option_box in frequency_drawer_step_boxes(receiver_type):
         active = int(option_hz) == int(step_hz)
         draw_picker_button(
-            text_cache, option_box, format_tune_step(option_hz), 15,
+            text_cache, option_box, format_small_tune_step(option_hz), 15,
             active or pressed == f"step_{int(option_hz)}",
         )
+    if not tuning_allowed:
+        draw_text(text_cache, (x0 + x1) / 2, 618,
+                  "ENABLE CONTROL IN MODES", APP_UI_STYLE.button.subtitle_color,
+                  13, True, False, "cm", family=APP_UI_STYLE.button.font_family)
     draw_radio_close_button(text_cache, boxes["close"])
 
 
@@ -16427,7 +16377,7 @@ class ReceiverListTheme:
     main_background: tuple = APP_UI_STYLE.palette.background
     sidebar_background: tuple = APP_UI_STYLE.palette.sidebar
     row_background: tuple = APP_UI_STYLE.palette.background
-    selected_background: tuple = APP_UI_STYLE.palette.selected_surface
+    selected_background: tuple = APP_UI_STYLE.palette.active_surface
     primary_text: tuple = APP_UI_STYLE.palette.text
     secondary_text: tuple = APP_UI_STYLE.palette.secondary_text
     focus: tuple = APP_UI_STYLE.palette.focus
@@ -16613,20 +16563,7 @@ def draw_receiver_action_icon(text_cache, box, kind, color):
 
 def draw_receiver_action_button(text_cache, box, label, kind, selected=False,
                                 theme=RECEIVER_LIST_THEME, detail=""):
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=selected, pressed=pressed)
-    ink = visual.text
-    draw_receiver_action_icon(text_cache, box, kind, ink)
-    label_y = box[3] - (29 if detail else 18)
-    draw_text(
-        text_cache, (box[0] + box[2]) / 2, label_y, label, ink,
-        theme.label_size, True, False, "cm", family=theme.font_family,
-    )
-    if detail:
-        draw_text(
-            text_cache, (box[0] + box[2]) / 2, box[3] - 12, detail, ink,
-            11, True, False, "cm", family=theme.font_family,
-        )
+    draw_styled_two_line_button(text_cache, box, label, detail, active=selected)
 
 
 def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
@@ -16691,13 +16628,13 @@ def draw_station_picker(
         receiver_type = station_receiver_type(station)
         pressed = ui_button_pressed(box)
         focused = selected or pending
-        fill = theme.focus if pressed else (theme.selected_background if focused else theme.row_background)
-        outline = theme.focus if focused or pressed else theme.row_outline
+        fill = APP_UI_STYLE.palette.active_surface if pressed else (theme.selected_background if focused else theme.row_background)
+        outline = APP_UI_STYLE.palette.active_border if focused or pressed else theme.row_outline
         if focused and not pressed:
-            draw_logical_rounded_rect(*box, 8, fill, (0, 229, 255, 80), 5)
+            draw_logical_rounded_rect(*box, 8, fill, (*APP_UI_STYLE.palette.active_border[:3], 80), 5)
         draw_station_list_frame(box, fill, outline, 2 if focused or pressed else 1)
-        text_color = (18, 18, 18) if pressed else theme.primary_text
-        secondary_color = (18, 18, 18) if pressed else theme.secondary_text
+        text_color = theme.primary_text
+        secondary_color = theme.secondary_text
         capacity = (
             f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
             if listener_used is not None and listener_total is not None else "FREE ?"
@@ -23117,10 +23054,14 @@ def main():
     # pressed tile lit briefly, while a held press stays lit for the gesture.
     zoom_flash_gesture = None
     zoom_flash_until = 0.0
-    frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
+    frequency_entry_value = (
+        f"{args.freq_khz / 1000.0:.6f}"
+        if frequency_entry_open or frequency_drawer_open else ""
+    )
     frequency_entry_invalid = False
-    frequency_entry_replace_on_digit = False
+    frequency_entry_replace_on_digit = bool(frequency_drawer_open)
     frequency_drawer_pressed = None
+    frequency_drawer_hold = FrequencyArrowHold()
     station_scroll = 0
     saved_digital_mode = remembered_preferences.get("digital_mode")
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
@@ -23553,6 +23494,35 @@ def main():
             server,
             state.receiver_type_snapshot(server_generation) or "kiwi",
         )
+
+    def frequency_drawer_receiver_identity():
+        server, _freq, _zoom, _smeter, _generation, server_generation = state.snapshot()
+        return server, server_generation, state.receiver_type_snapshot(server_generation)
+
+    def step_frequency_in_drawer(action):
+        nonlocal display_freq, candidate_freq, inertia_velocity_khz_s, anim_start
+        nonlocal frequency_entry_value, frequency_entry_replace_on_digit, frequency_entry_invalid
+        server, current_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot()
+        if action not in ("down", "up") or not frequency_drawer_tuning_allowed(receiver_type, server):
+            return False
+        step_hz = configured_tune_step_hz(receiver_type, tune_step_hz, fmdx_tune_step_hz)
+        low_khz, high_khz = active_tuning_bounds()
+        target_khz = frequency_step_target(
+            current_khz, 1 if action == "up" else -1, step_hz, low_khz, high_khz,
+        )
+        if target_khz != current_khz:
+            state.set_view(freq_khz=target_khz)
+            display_freq = candidate_freq = target_khz
+            inertia_velocity_khz_s = 0.0
+            anim_start = 0.0
+            apply_band_default(target_khz)
+            remember_current_view()
+        frequency_entry_value = f"{target_khz / 1000.0:.6f}"
+        frequency_entry_replace_on_digit = True
+        frequency_entry_invalid = False
+        wake_controls()
+        return True
 
     def clamp_active_frequency(value):
         low, high = active_tuning_bounds()
@@ -25022,6 +24992,13 @@ def main():
                                 frequency_drawer_pressed = frequency_drawer_action_at(
                                     x, y, state.receiver_type_snapshot()
                                 )
+                                frequency_drawer_hold.cancel()
+                                if frequency_drawer_pressed in ("down", "up"):
+                                    identity = frequency_drawer_receiver_identity()
+                                    if frequency_drawer_tuning_allowed(identity[2], identity[0]):
+                                        frequency_drawer_hold.begin(
+                                            frequency_drawer_pressed, start_time, identity,
+                                        )
                             elif deepgram_setup_open and (
                                 contains(DEEPGRAM_SETUP_BOX, x, y)
                                 or (
@@ -25194,6 +25171,10 @@ def main():
                                             text_cache, display_freq, compact_frequency_font_family
                                         ),
                                         instrument_layout == "compact",
+                                        home_rail_controls_available(
+                                            picker_open, settings_menu_open,
+                                            digital_menu_open, home_sidebar_open,
+                                        ),
                                     )
                                 )
                             ):
@@ -25888,28 +25869,44 @@ def main():
                                 )
                                 if action != frequency_drawer_pressed:
                                     action = None
-                                if action in ("down", "up"):
-                                    _server, current_khz, current_zoom, _smeter, _gen, _server_gen = state.snapshot()
-                                    current_step_hz = configured_tune_step_hz(
-                                        state.receiver_type_snapshot(), tune_step_hz, fmdx_tune_step_hz
-                                    )
-                                    low_khz, high_khz = active_tuning_bounds()
-                                    target_khz = frequency_step_target(
-                                        current_khz, 1 if action == "up" else -1,
-                                        current_step_hz, low_khz, high_khz,
-                                    )
-                                    state.set_view(freq_khz=target_khz)
-                                    display_freq = target_khz
-                                    candidate_freq = target_khz
-                                    inertia_velocity_khz_s = 0.0
-                                    animate_to(target_khz, display_span, 0.12)
-                                    apply_band_default(target_khz)
-                                    remember_current_view()
-                                elif action == "manual":
-                                    frequency_entry_value = f"{display_freq / 1000.0:.6f}"
-                                    frequency_entry_invalid = False
-                                    frequency_entry_replace_on_digit = True
-                                    frequency_entry_open = True
+                                arrow_tap = frequency_drawer_hold.release(
+                                    action, frequency_drawer_receiver_identity(),
+                                )
+                                receiver_server = state.snapshot()[0]
+                                can_tune_frequency = frequency_drawer_tuning_allowed(
+                                    state.receiver_type_snapshot(), receiver_server,
+                                )
+                                if action in ("down", "up") and arrow_tap:
+                                    step_frequency_in_drawer(action)
+                                elif isinstance(action, str) and action.startswith("key_"):
+                                    key = action[4:]
+                                    if key == "OK":
+                                        if not can_tune_frequency:
+                                            frequency_entry_invalid = True
+                                        else:
+                                            minimum_khz, maximum_khz = active_tuning_bounds()
+                                            entered_khz = parse_frequency_entry_mhz(
+                                                frequency_entry_value, maximum_khz
+                                            )
+                                            if entered_khz is None or entered_khz < minimum_khz:
+                                                frequency_entry_invalid = True
+                                            else:
+                                                state.set_view(freq_khz=entered_khz)
+                                                display_freq = entered_khz
+                                                candidate_freq = entered_khz
+                                                inertia_velocity_khz_s = 0.0
+                                                animate_to(entered_khz, display_span, 0.16)
+                                                apply_band_default(entered_khz)
+                                                remember_current_view()
+                                                frequency_entry_value = f"{entered_khz / 1000.0:.6f}"
+                                                frequency_entry_replace_on_digit = True
+                                                frequency_entry_invalid = False
+                                    else:
+                                        frequency_entry_value, frequency_entry_replace_on_digit = edit_frequency_entry(
+                                            frequency_entry_value, key,
+                                            frequency_entry_replace_on_digit,
+                                        )
+                                        frequency_entry_invalid = False
                                 elif isinstance(action, str) and action.startswith("step_"):
                                     # The step is selected right here in the
                                     # frequency rail instead of navigating to
@@ -25930,6 +25927,9 @@ def main():
                                 frequency_drawer_open = True
                                 frequency_entry_open = False
                                 frequency_drawer_pressed = None
+                                frequency_entry_value = f"{display_freq / 1000.0:.6f}"
+                                frequency_entry_replace_on_digit = True
+                                frequency_entry_invalid = False
                                 rc28_dial_mode = "TUNE"
                                 band_navigation_open = False
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
@@ -26944,6 +26944,16 @@ def main():
                                         else:
                                             tune_step_hz = value
                                         remember_current_view()
+                                    elif kind == "step_cycle":
+                                        if state.receiver_type_snapshot() == "fmdx":
+                                            fmdx_tune_step_hz = next_radio_tune_step(
+                                                fmdx_tune_step_hz, "fmdx"
+                                            )
+                                        else:
+                                            tune_step_hz = next_radio_tune_step(
+                                                tune_step_hz, state.receiver_type_snapshot()
+                                            )
+                                        remember_current_view()
                                     wake_controls()
                                     if kind != "close":
                                         print(f"gl radio {radio_mode} {digital_mode} step {tune_step_hz} Hz", flush=True)
@@ -27742,6 +27752,7 @@ def main():
                                 remember_current_view()
                                 animate_to(candidate_freq, kiwi.zoom_to_span_khz(zoom), 0.001)
                                 print(f"gl tuned {candidate_freq:.3f} kHz", flush=True)
+                        frequency_drawer_hold.cancel()
                         touch_started = False
                         gesture = None
                         picker_map_pinch_active = False
@@ -27783,6 +27794,24 @@ def main():
                 audio_transport_graph_open = False
                 cpu_utilization_graph_open = False
                 print("gl LCD drawer idle timeout: returned to Home rail", flush=True)
+            if frequency_drawer_hold.action is not None:
+                identity = frequency_drawer_receiver_identity()
+                pointed_action = (
+                    frequency_drawer_action_at(*UI_PRESS_POINT, identity[2])
+                    if UI_PRESS_POINT is not None else None
+                )
+                if not (
+                    touch_started and gesture == "frequency_drawer" and frequency_drawer_open
+                    and frequency_drawer_tuning_allowed(identity[2], identity[0])
+                ):
+                    frequency_drawer_hold.cancel()
+                    frequency_drawer_pressed = None
+                else:
+                    repeat_action = frequency_drawer_hold.tick(now, pointed_action, identity)
+                    if repeat_action is not None:
+                        step_frequency_in_drawer(repeat_action)
+                    elif frequency_drawer_hold.action is None:
+                        frequency_drawer_pressed = None
             drawer_target = 1.0 if radio_setup_open else 0.0
             drawer_rate = drawer_dt / 0.18
             if drawer_target > LCD_RADIO_DRAWER_PROGRESS:
@@ -28626,6 +28655,13 @@ def main():
                     compact_frequency_font_family,
                     frequency_drawer_pressed,
                     state.receiver_type_snapshot(),
+                    frequency_entry_value,
+                    frequency_entry_invalid,
+                    frequency_drawer_tuning_allowed(
+                        state.receiver_type_snapshot(), state.snapshot()[0],
+                    ),
+                    frequency_entry_replace_on_digit,
+                    active_tuning_bounds()[1],
                 )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)

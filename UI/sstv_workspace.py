@@ -4,6 +4,7 @@ import math
 import socket
 from sstv_monitor import PRESETS
 from sstv_modes import MODE_COUNT
+from ui_style import APP_UI_STYLE
 
 
 GALLERY_COLUMNS = 5
@@ -67,16 +68,33 @@ class SSTVWorkspace:
         self.ui.draw_text(cache, x, y, str(value), color, size, False, False, 'lm', family='Liberation Sans')
 
     def button(self, cache, box, title, action, subtitle='', active=False):
-        x0, y0, x1, y1 = box
-        self.ui.draw_logical_rect(*box, (29, 80, 66, 255) if active else (21, 46, 56, 255))
-        size = 16 if y1-y0 < 45 else 20
-        title = self.ui.fit_station_text(cache, title, x1-x0-12, size, True, False, 'Liberation Sans')
-        self.ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2-(11 if subtitle else 0), title,
-                          (222, 243, 240), size, True, False, 'cm', family='Liberation Sans')
-        if subtitle:
-            subtitle = self.ui.fit_station_text(cache, subtitle, x1-x0-12, 15, False, False, 'Liberation Sans')
-            self.ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2+16, subtitle,
-                              (160, 197, 202), 15, False, False, 'cm', family='Liberation Sans')
+        title, subtitle = str(title).upper(), str(subtitle).upper()
+        style = APP_UI_STYLE.button
+        fit = getattr(self.ui, 'fit_station_text', None)
+        if callable(fit):
+            width = box[2]-box[0]-12
+            title = fit(cache, title, width, style.label_size, True, False, style.font_family)
+            if subtitle:
+                subtitle = fit(cache, subtitle, width, style.label_size, True, False, style.font_family)
+        draw_button = getattr(self.ui, 'draw_styled_two_line_button', None)
+        if callable(draw_button):
+            draw_button(cache, box, title, subtitle, active=active)
+        else:
+            # Small mock UIs used by decoder tests need only the drawing
+            # primitives; the application supplies the shared renderer above.
+            visual = style.resolve(active=active)
+            rounded = getattr(self.ui, 'draw_logical_rounded_rect', None)
+            if callable(rounded):
+                rounded(*box, style.radius, visual.fill, visual.border, visual.border_width)
+            else:
+                self.ui.draw_logical_rect(*box, visual.fill)
+            x0, y0, x1, y1 = box
+            family = style.font_family
+            self.ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2-(10 if subtitle else 0), title,
+                              visual.text, style.label_size, True, False, 'cm', family=family)
+            if subtitle:
+                self.ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2+10, subtitle,
+                                  style.palette.secondary_text, style.label_size, True, False, 'cm', family=family)
         self.actions.append((box, action))
 
     def image(self, key, box, *, fill=False, source_box=None):
@@ -147,23 +165,23 @@ class SSTVWorkspace:
             if item:
                 self.text(cache, 24, 34, f"{item['mode']} · {item['band']} · {item['freq_khz']/1000:.3f} MHz", 25)
                 self.text(cache, 24, 66, f"{item['receiver']} · {item['capture_utc']} · {item['kind']}", 17, width=990)
-                self.preview(cache, item, (20, 90, 1260, 778))
-                self.button(cache, (1060, 16, 1258, 76), 'BACK', ('back_image', None))
+                self.preview(cache, item, (20, 90, 1020, 778))
+                self.button(cache, (1034, 728, 1270, 792), 'BACK', ('back_image', None))
                 return
             self.enlarged = None
         self.text(cache, 20, 37, 'SSTV', 30, (104, 234, 194))
         self.text(cache, 138, 37, 'Decoders' if self.decoders_open else 'Image gallery', 24)
-        self.button(cache, (654, 14, 842, 70), 'GALLERY' if self.decoders_open else 'DECODERS',
+        self.button(cache, (546, 8, 782, 72), 'GALLERY' if self.decoders_open else 'DECODERS',
                     ('gallery' if self.decoders_open else 'decoders', None))
-        self.button(cache, (854, 14, 1090, 70), '+ ADD DECODER', ('add', None))
-        self.button(cache, (1102, 14, 1258, 70), 'HOME', ('home', None))
+        self.button(cache, (790, 8, 1026, 72), 'ADD DECODER', ('add', None))
+        self.button(cache, (1034, 8, 1270, 72), 'HOME', ('home', None))
         if self.decoders_open:
             self.draw_decoders(cache)
             return
         images = self.manager.image_snapshot(self.filter_id)
         pages = max(1, math.ceil(len(images) / GALLERY_PAGE_SIZE))
         self.page = min(self.page, pages - 1)
-        self.text(cache, 330, 37, f'{len(images)} images · newest first', 16, width=305)
+        self.text(cache, 302, 37, f'{len(images)} · {self.page+1}/{pages}', 13, width=112)
         if not images:
             self.text(cache, 330, 350, 'Waiting for an SSTV transmission', 28)
             self.text(cache, 330, 394, 'Images appear here automatically.', 21)
@@ -178,16 +196,15 @@ class SSTVWorkspace:
             self.text(cache, x+8, y+178, f"{item['mode']} · {item['band']} · {item['progress_pct']}%", 15, width=226)
             self.text(cache, x+8, y+194, item['capture_utc'].replace('T', ' ').replace('Z', ' UTC'), 13, width=226)
             self.actions.append((box, ('image', item['id'])))
-        self.button(cache, (16, 730, 168, 786), '< PREV', ('page', -1))
-        self.text(cache, 188, 758, f'{self.page+1} / {pages}', 19)
-        self.button(cache, (282, 730, 434, 786), 'NEXT >', ('page', 1))
-        self.button(cache, (450, 730, 690, 786), 'ALL IMAGES', ('filter', None), active=self.filter_id is None)
+        self.button(cache, (16, 728, 130, 792), 'PREVIOUS', ('page', -1))
+        self.button(cache, (138, 728, 252, 792), 'NEXT', ('page', 1))
+        self.button(cache, (260, 728, 496, 792), 'ALL IMAGES', ('filter', None), active=self.filter_id is None)
         notice = self.message or self.manager.web_error
         if notice:
-            self.text(cache, 712, 758, notice, 16, width=546)
+            self.text(cache, 512, 758, notice, 16, width=506)
         else:
-            self.text(cache, 712, 744, 'Tap an image to enlarge' if not self.filter_id else 'Showing selected decoder · tap All images to clear', 15, width=546)
-            self.text(cache, 712, 772, f"Browser: {socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 15, width=546)
+            self.text(cache, 512, 744, 'Tap an image to enlarge' if not self.filter_id else 'Showing selected decoder · tap All images to clear', 15, width=506)
+            self.text(cache, 512, 772, f"Browser: {socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 15, width=506)
 
     def draw_decoders(self, cache):
         """Keep receiver operation on its own page, leaving gallery space for images."""
@@ -213,17 +230,21 @@ class SSTVWorkspace:
                 self.preview(cache, item, box)
                 self.actions.append((box, ('image', item['id'])))
             running = row.get('running', False)
-            self.button(cache, (x+16, y+128, x+130, y+180), 'STOP' if running else 'START', ('toggle', row['id']))
-            self.button(cache, (x+142, y+128, x+256, y+180), 'EDIT', ('edit', row['id']))
-            self.button(cache, (x+268, y+128, x+424, y+180), 'IMAGES', ('filter', row['id']))
-            self.button(cache, (x+436, y+128, x+596, y+180), 'DELETE', ('delete', row['id']))
+            for offset, label, action in (
+                (0, 'STOP' if running else 'START', ('toggle', row['id'])),
+                (1, 'EDIT', ('edit', row['id'])),
+                (2, 'IMAGES', ('filter', row['id'])),
+                (3, 'DELETE', ('delete', row['id'])),
+            ):
+                left=x+16+offset*122
+                self.button(cache, (left, y+120, left+114, y+184), label, action)
         if self.delete_armed:
             ui.draw_logical_rect(16, 714, 1258, 792, (49, 30, 28, 255))
             self.text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
-            self.button(cache, (814, 726, 1018, 782), 'DELETE', ('confirm_delete', self.delete_armed))
-            self.button(cache, (1030, 726, 1242, 782), 'CANCEL', ('cancel_delete', None))
+            self.button(cache, (782, 728, 896, 792), 'DELETE', ('confirm_delete', self.delete_armed))
+            self.button(cache, (904, 728, 1018, 792), 'CANCEL', ('cancel_delete', None))
         else:
-            self.text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=1220)
+            self.text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=990)
 
     def draw_add(self, cache, receivers):
         self.text(cache, 30, 38, 'EDIT SSTV DECODER' if self.edit_id else 'ADD SSTV DECODER', 29, (104, 234, 194))
@@ -234,22 +255,22 @@ class SSTVWorkspace:
             y = 102+index*76
             self.button(cache, (30, y, 1250, y+64), name[:65], ('receiver', server),
                         (location or server)[:90], server == self.selected_server)
-        self.button(cache, (30, 338, 212, 392), '< RECEIVERS', ('rxpage', -1))
+        self.button(cache, (30, 338, 144, 402), 'PREVIOUS', ('rxpage', -1))
         self.text(cache, 540, 365, f'{self.receiver_page+1} / {max(1, math.ceil(len(receivers)/3))}', 19)
-        self.button(cache, (1058, 338, 1250, 392), 'RECEIVERS >', ('rxpage', 1))
+        self.button(cache, (1136, 338, 1250, 402), 'NEXT', ('rxpage', 1))
         self.text(cache, 30, 425, 'ANALOG SSTV PRESETS · USB / LSB SELECTED AUTOMATICALLY', 18)
         for index, preset in enumerate(PRESETS):
-            x, y = 30+(index%5)*246, 448+(index//5)*80
-            self.button(cache, (x, y, x+232, y+68), preset[0], ('preset', preset),
+            x = 30+index*122
+            self.button(cache, (x, 448, x+114, 512), preset[0], ('preset', preset),
                         f'{preset[1]/1000:.3f} MHz {preset[2].upper()}', preset == self.preset)
         if self.current and 0 < self.current[1] <= 30000 and self.current[2] in ('usb', 'lsb'):
-            self.button(cache, (30, 618, 440, 678), 'USE CURRENT RADIO DIAL', ('preset', self.current),
+            self.button(cache, (30, 528, 266, 592), 'CURRENT DIAL', ('preset', self.current),
                         f'{self.current[1]/1000:.3f} MHz {self.current[2].upper()}', self.preset == self.current)
-        self.text(cache, 470, 644, 'Regional activity varies; presets are receive-only.', 18)
-        self.text(cache, 470, 673, f'{MODE_COUNT} analog modes · automatic detection · Kiwi: 0–30 MHz.', 17)
-        self.button(cache, (30, 716, 242, 782), 'CANCEL', ('cancel_add', None))
-        self.text(cache, 270, 750, self.message, 17, width=680)
-        self.button(cache, (994, 716, 1250, 782), 'SAVE CHANGES' if self.edit_id else 'START DECODER', ('create', None), active=True)
+        self.text(cache, 282, 554, 'Regional activity varies; presets are receive-only.', 18)
+        self.text(cache, 282, 584, f'{MODE_COUNT} analog modes · automatic detection · Kiwi: 0–30 MHz.', 17)
+        self.button(cache, (30, 728, 266, 792), 'CANCEL', ('cancel_add', None))
+        self.text(cache, 282, 750, self.message, 17, width=488)
+        self.button(cache, (782, 728, 1018, 792), 'SAVE CHANGES' if self.edit_id else 'START DECODER', ('create', None), active=True)
 
     def tap(self, x, y, receivers):
         action = next((a for box, a in reversed(self.actions) if self.ui.contains(box, x, y)), None)

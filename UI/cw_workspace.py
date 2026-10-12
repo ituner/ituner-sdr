@@ -77,23 +77,24 @@ class CWWorkspace(SSTVWorkspace):
             self.text(cache,24,44,self.field.replace('_',' ').upper()+' · 0 WPM = AUTO',26)
             self.text(cache,24,110,self.entry or '0',36)
             for i,c in enumerate('123456789.0'):
-                x,y=24+i%3*185,160+i//3*105;self.button(cache,(x,y,x+170,y+90),c,('digit',c))
+                x,y=24+i%3*122,160+i//3*72;self.button(cache,(x,y,x+114,y+64),c,('digit',c))
             for i,(label,action) in enumerate((('DELETE','erase'),('APPLY','apply'),('CANCEL','cancel_number'))):
-                self.button(cache,(620,160+i*120,1000,250+i*120),label,(action,None))
-            self.text(cache,24,680,self.message,20,width=1220);return
+                top=160+i*72
+                self.button(cache,(512,top,748,top+64),label,(action,None))
+            self.text(cache,24,680,self.message,20,width=990);return
         if self.add_open:self.draw_add(cache,receivers);return
         self.text(cache,20,35,'CW · MORSE',28,(104,234,194))
-        self.button(cache,(296,10,470,65),'LIVE',('live',None),active=not self.history_open and not self.decoders_open)
-        self.button(cache,(482,10,656,65),'HISTORY',('history',None),active=self.history_open)
-        self.button(cache,(668,10,842,65),'RECEIVERS',('decoders',None),active=self.decoders_open)
-        self.button(cache,(854,10,1090,65),'+ ADD DECODER',('add',None))
-        self.button(cache,(1102,10,1260,65),'HOME',('home',None))
+        self.button(cache,(296,8,410,72),'LIVE',('live',None),active=not self.history_open and not self.decoders_open)
+        self.button(cache,(418,8,532,72),'HISTORY',('history',None),active=self.history_open)
+        self.button(cache,(540,8,654,72),'RECEIVERS',('decoders',None),active=self.decoders_open)
+        self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
+        self.button(cache,(1034,8,1270,72),'HOME',('home',None))
         if self.decoders_open:self.draw_receivers(cache);return
         if self.history_open:
             rows=self.manager.history();pages=max(1,math.ceil(len(rows)/3));self.page=min(self.page,pages-1)
-            self.button(cache,(16,78,184,132),'< PREV',('page',-1));self.text(cache,204,106,f'{self.page+1} / {pages}',20)
-            self.button(cache,(316,78,484,132),'NEXT >',('page',1))
-            self.text(cache,508,106,'Saved across restarts · latest 200 entries · export from /cw',18,width=735)
+            self.button(cache,(16,78,130,142),'PREVIOUS',('page',-1))
+            self.button(cache,(138,78,252,142),'NEXT',('page',1))
+            self.text(cache,270,106,f'{self.page+1} / {pages} · Saved across restarts · latest 200 entries · export from /cw',18,width=750)
             for i,row in enumerate(rows[self.page*3:self.page*3+3]):
                 y=146+i*210;self.ui.draw_logical_rect(16,y,1260,y+198,(17,34,42,255))
                 self.text(cache,30,y+24,f"{row['rf_hz']/1e6:.6f} MHz · {row['wpm']:g} WPM · {row['receiver']} · {row.get('engine','ggmorse')}",20,width=1200)
@@ -112,12 +113,12 @@ class CWWorkspace(SSTVWorkspace):
         if self.pan_dx:row['freq_khz']=self.pan_target(row,self.pan_dx)
         # Keep fixed RF signals under the moving scale during preview/pending tuning.
         row['tracks']=[dict(t,tone_hz=t['rf_hz']-row['freq_khz']*1000) for t in row.get('tracks',[])]
-        self.button(cache,(16,78,74,132),'−',('span',-1))
-        self.button(cache,(84,78,226,132),f"{row.get('view_span_khz',3):g} kHz view",('span',1))
-        self.button(cache,(236,78,296,132),'+',('span',1))
-        self.text(cache,312,100,f"{row['name']} · {row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz center",21,width=716)
-        self.text(cache,312,126,row['status']+' · '+row.get('detail',''),15,width=716)
-        self.button(cache,(1050,78,1260,132),'STOP' if row['running'] else 'START',('toggle',row['id']))
+        self.button(cache,(16,78,130,142),'NARROW',('span',-1))
+        self.button(cache,(138,78,374,142),f"{row.get('view_span_khz',3):g} KHZ VIEW",('span',1))
+        self.button(cache,(382,78,496,142),'WIDEN',('span',1))
+        self.text(cache,510,100,f"{row['name']} · {row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz center",19,width=510)
+        self.text(cache,510,126,row['status']+' · '+row.get('detail',''),15,width=510)
+        self.button(cache,(1034,78,1270,142),'STOP' if row['running'] else 'START',('toggle',row['id']))
         tracks=row.get('tracks',[])
         if not any(t['id']==self.selected_track for t in tracks):self.selected_track=tracks[0]['id'] if tracks else None
         self.ui.draw_logical_rect(16,150,1260,524,(10,29,38,255))
@@ -159,25 +160,25 @@ class CWWorkspace(SSTVWorkspace):
         hint=' · wider view needs Kiwi waterfall' if limited else ' · Swipe to tune · tap signal to listen/select'
         self.text(cache,24,543,f"{source} · {(hi-lo)/1000:g} kHz shown · {(decode_hi-decode_lo)/1000:g} kHz decode"+hint,17,width=1210)
         for i in range(4):
-            x=16+i*314
+            x=16+i*244
             if i<len(tracks):
                 t=tracks[i]
-                self.button(cache,(x,563,x+302,633),f"{i+1} · {t['rf_hz']/1e6:.6f} MHz",('track',t['id']),
+                self.button(cache,(x,563,x+236,627),f"{i+1} · {t['rf_hz']/1e6:.6f} MHz",('track',t['id']),
                     f"{t['wpm']:g} WPM · "+('TRACKING' if t['active'] else 'FADING'),self.selected_track==t['id'])
             else:
-                self.ui.draw_logical_rect(x,563,x+302,633,(17,34,42,255))
-                self.text(cache,x+12,598,'Searching…' if not i else 'Available signal slot',17,width=278)
+                self.ui.draw_logical_rect(x,563,x+236,627,(17,34,42,255))
+                self.text(cache,x+12,598,'Searching…' if not i else 'Available signal slot',17,width=212)
         chosen=next((t for t in tracks if t['id']==self.selected_track),None)
-        self.ui.draw_logical_rect(16,647,1260,784,(17,34,42,255))
+        self.ui.draw_logical_rect(16,647,1020,784,(17,34,42,255))
         self.text(cache,30,669,'DECODED TEXT · '+(f"{chosen['rf_hz']/1e6:.6f} MHz" if chosen else 'waiting'),20,(104,234,194))
         listening=row.get('listen',{})
         is_listening=bool(listening.get('track_id'))
         if chosen or is_listening:
-            self.button(cache,(960,646,1258,691),'STOP LISTENING' if is_listening else 'LISTEN TO SLOT',
+            self.button(cache,(782,646,1018,710),'STOP LISTENING' if is_listening else 'LISTEN TO SLOT',
                         ('listen',(row['id'],None if is_listening else chosen['id'])),active=is_listening)
         if self.message or listening.get('error'):
-            self.text(cache,30,770,self.message or listening['error'],16,(255,210,103),width=1180)
-        self.lines(cache,(chosen['text'] if chosen else '') or 'Text appears after several seconds of Morse. Tap a signal to follow it.',30,704,count=3,size=22)
+            self.text(cache,30,770,self.message or listening['error'],16,(255,210,103),width=980)
+        self.lines(cache,(chosen['text'] if chosen else '') or 'Text appears after several seconds of Morse. Tap a signal to follow it.',30,704,width=970,count=3,size=22)
 
     def close(self):
         for texture in self.live_textures.values():texture.close()
@@ -192,13 +193,14 @@ class CWWorkspace(SSTVWorkspace):
             self.text(cache,x+14,y+60,row['name'],18,width=580)
             self.text(cache,x+14,y+90,row['status']+' · '+row.get('detail',''),16,width=580)
             self.actions.append(((x,y,x+612,y+120),('select_rx',row['id'])))
-            for dx,label,action in ((14,'STOP' if row['running'] else 'START','toggle'),(160,'EDIT','edit'),(304,'LIVE','select_rx'),(448,'DELETE','delete')):
-                self.button(cache,(x+dx,y+126,x+dx+140,y+178),label,(action,row['id']))
+            for index,(label,action) in enumerate((('STOP' if row['running'] else 'START','toggle'),('EDIT','edit'),('LIVE','select_rx'),('DELETE','delete'))):
+                left=x+14+index*122
+                self.button(cache,(left,y+122,left+114,y+186),label,(action,row['id']))
         if self.delete_armed:
             self.text(cache,24,748,'Remove receiver? Saved text is kept.',21)
-            self.button(cache,(824,716,1020,780),'REMOVE',('confirm_delete',self.delete_armed))
-            self.button(cache,(1032,716,1260,780),'CANCEL',('cancel_delete',None))
-        else:self.text(cache,24,744,self.message or 'Tap a receiver card to open its live view.',19,width=1215)
+            self.button(cache,(782,728,896,792),'REMOVE',('confirm_delete',self.delete_armed))
+            self.button(cache,(904,728,1018,792),'CANCEL',('cancel_delete',None))
+        else:self.text(cache,24,744,self.message or 'Tap a receiver card to open its live view.',19,width=990)
 
     def draw_add(self,cache,receivers):
         self.text(cache,24,32,'EDIT CW RECEIVER' if self.edit_id else 'ADD CW RECEIVER',28,(104,234,194))
@@ -206,24 +208,24 @@ class CWWorkspace(SSTVWorkspace):
         for i,r in enumerate(receivers[self.receiver_page*2:self.receiver_page*2+2]):
             name,location,server,*_=self.ui.station_fields(r);y=63+i*64
             self.button(cache,(24,y,1256,y+56),name,('receiver',server),location or server,server==self.selected_server)
-        self.button(cache,(24,196,250,246),'< RECEIVERS',('rxpage',-1));self.button(cache,(1020,196,1256,246),'RECEIVERS >',('rxpage',1))
+        self.button(cache,(24,196,138,260),'PREVIOUS',('rxpage',-1));self.button(cache,(1142,196,1256,260),'NEXT',('rxpage',1))
         self.text(cache,470,220,f'Receivers {self.receiver_page+1}/{max(1,math.ceil(len(receivers)/2))}',19)
         for i,p in enumerate(PRESETS):
-            x=24+i%5*248;y=264+i//5*62
-            self.button(cache,(x,y,x+236,y+54),p['band'],('preset',dict(p)),active=self.preset['band']==p['band'])
+            x=24+i*122
+            self.button(cache,(x,272,x+114,336),p['band'],('preset',dict(p)),active=self.preset['band']==p['band'])
         p=self.preset
-        self.button(cache,(24,392,616,442),'GGMORSE · 1 kHz decode',('set',('engine','ggmorse')),active=p.get('engine','ggmorse')=='ggmorse')
-        self.button(cache,(632,392,1256,442),'FLDIGI · 3 kHz decode',('set',('engine','fldigi')),active=p.get('engine')=='fldigi')
-        self.button(cache,(24,450,616,502),'AUTO SCAN · UP TO 4 SIGNALS',('set',('cw_mode','SCAN')),active=p['cw_mode']=='SCAN')
-        self.button(cache,(632,450,1256,502),'LOCK TO ONE TONE',('set',('cw_mode','LOCK')),active=p['cw_mode']=='LOCK')
+        self.button(cache,(24,352,260,416),'GGMORSE',('set',('engine','ggmorse')),'1 KHZ DECODE',active=p.get('engine','ggmorse')=='ggmorse')
+        self.button(cache,(268,352,504,416),'FLDIGI',('set',('engine','fldigi')),'3 KHZ DECODE',active=p.get('engine')=='fldigi')
+        self.button(cache,(512,352,748,416),'AUTO SCAN',('set',('cw_mode','SCAN')),'UP TO 4 SIGNALS',active=p['cw_mode']=='SCAN')
+        self.button(cache,(756,352,992,416),'LOCK',('set',('cw_mode','LOCK')),'ONE TONE',active=p['cw_mode']=='LOCK')
         for i,(key,label,value) in enumerate((('rf_khz','RF center kHz',p['freq_khz']+center_offset(p)),('tone_hz','Locked tone Hz',p['tone_hz']),('wpm','Speed WPM (0 = Auto)',p['wpm']),('squelch_db','Signal gate dB',p['squelch_db']))):
-            x=24+i%2*632;y=514+i//2*64
-            self.button(cache,(x,y,x+600,y+58),f'{label}: {value:g}',('number',key))
-        self.text(cache,24,648,f"{(bounds(p)[1]-200)/1000:g} kHz decode · 3 kHz overview · up to four signals · speed 5–55 WPM",20)
-        self.text(cache,24,681,'Presets are starting points. CW activity is spread across each band.',18)
-        self.button(cache,(24,718,244,780),'CANCEL',('cancel_add',None))
-        self.text(cache,266,746,self.message,17,width=690)
-        self.button(cache,(984,718,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
+            x=24+i*244
+            self.button(cache,(x,432,x+236,496),label,('number',key),f'{value:g}')
+        self.text(cache,24,542,f"{(bounds(p)[1]-200)/1000:g} kHz decode · 3 kHz overview · up to four signals · speed 5–55 WPM",20)
+        self.text(cache,24,578,'Presets are starting points. CW activity is spread across each band.',18)
+        self.button(cache,(24,728,260,792),'CANCEL',('cancel_add',None))
+        self.text(cache,276,754,self.message,17,width=498)
+        self.button(cache,(782,728,1018,792),'SAVE' if self.edit_id else 'START DECODER',('create',None))
 
     def tap(self,x,y,receivers):
         action=next((a for box,a in reversed(self.actions) if self.ui.contains(box,x,y)),None)

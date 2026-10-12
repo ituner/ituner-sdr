@@ -55,11 +55,12 @@ class QRSSWorkspace(SSTVWorkspace):
             self.text(cache,24,48,self.field.replace('_',' ').upper(),28)
             self.text(cache,24,110,self.entry or '0',36)
             for i,c in enumerate('123456789.0'):
-                x,y=24+i%3*185,160+i//3*105
-                self.button(cache,(x,y,x+170,y+90),c,('digit',c))
+                x,y=24+i%3*122,160+i//3*72
+                self.button(cache,(x,y,x+114,y+64),c,('digit',c))
             for i,(label,action) in enumerate((('DELETE','erase'),('APPLY','apply'),('CANCEL','cancel_number'))):
-                self.button(cache,(620,160+i*120,1000,250+i*120),label,(action,None))
-            self.text(cache,24,660,self.message,22,width=1230);return
+                top=160+i*72
+                self.button(cache,(512,top,748,top+64),label,(action,None))
+            self.text(cache,24,660,self.message,22,width=990);return
         if self.add_open:self.draw_add(cache,receivers);return
         images=self.manager.image_snapshot(self.filter_id)
         if self.enlarged:
@@ -69,52 +70,53 @@ class QRSSWorkspace(SSTVWorkspace):
                 self.text(cache,24,78,item['receiver']+' · '+item['capture_utc'],18,width=1200)
                 tracks=item.get('tracks',[])
                 if tracks:
-                    self.draw_plot(cache,item,(20,115,1260,500))
+                    self.draw_plot(cache,item,(20,115,1020,500))
                     self.text(cache,24,529,'TENTATIVE TEXT · independent signal frequencies and dot timing',19,(104,234,194))
                     pages=max(1,math.ceil(len(tracks)/6));self.track_page=min(self.track_page,pages-1)
                     for j,r in enumerate(tracks[self.track_page*6:self.track_page*6+6]):
                         label=f"{r['id']} · {r['rf_hz']/1e6:.6f} MHz · {r['mode']} · {r['dot_seconds']:g} s/dot"
                         self.text(cache,24,564+j*28,label,17,width=570)
-                        self.text(cache,608,564+j*28,r.get('display_text') or item['empty_text_message'],19,width=640)
+                        self.text(cache,608,564+j*28,r.get('display_text') or item['empty_text_message'],19,width=404)
                     self.text(cache,24,767,f'{len(tracks)} signals · text {self.track_page+1}/{pages}',18)
                     if pages>1:
-                        self.button(cache,(728,16,880,70),'< TEXT',('track_page',-1))
-                        self.button(cache,(892,16,1044,70),'TEXT >',('track_page',1))
+                        self.button(cache,(790,8,904,72),'PREVIOUS TEXT',('track_page',-1))
+                        self.button(cache,(912,8,1026,72),'NEXT TEXT',('track_page',1))
                 else:
-                    self.draw_plot(cache,item,(20,115,1260,620))
+                    self.draw_plot(cache,item,(20,115,1020,620))
                     self.text(cache,24,657,'TENTATIVE MORSE TEXT · compare with the waterfall',19,(104,234,194))
-                    self.text(cache,24,696,item['text_message'],23,width=1210)
-                    self.text(cache,24,745,item.get('reception_detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=1210)
-                self.button(cache,(1060,16,1258,76),'BACK',('back_image',None));return
+                    self.text(cache,24,696,item['text_message'],23,width=990)
+                    self.text(cache,24,745,item.get('reception_detail') or f"{item['mode']} · {item['dot_seconds']:g} s/dot · one selected tone",18,width=990)
+                self.button(cache,(1034,728,1270,792),'BACK',('back_image',None))
+                return
             self.enlarged=None
         if self.decoders_open:
             self.text(cache,20,36,'QRSS · decoders',27,(104,234,194))
-            self.button(cache,(654,14,842,70),'GALLERY',('gallery',None))
-            self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
-            self.button(cache,(1102,14,1258,70),'HOME',('home',None))
+            self.button(cache,(546,8,782,72),'GALLERY',('gallery',None))
+            self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
+            self.button(cache,(1034,8,1270,72),'HOME',('home',None))
             self.draw_decoders(cache);return
         pages=max(1,math.ceil(len(images)/2));self.page=min(self.page,pages-1)
         self.text(cache,16,35,'QRSS',26,(104,234,194))
-        self.button(cache,(116,10,222,62),'< PREV',('page',-1))
-        self.text(cache,236,36,f'{self.page+1}/{pages}',19,width=78)
-        self.button(cache,(320,10,426,62),'NEXT >',('page',1))
-        self.button(cache,(438,10,626,62),'ALL RECEIVERS',('filter',None))
-        self.button(cache,(638,10,816,62),'DECODERS',('decoders',None))
-        self.button(cache,(828,10,1090,62),'+ ADD DECODER',('add',None))
-        self.button(cache,(1102,10,1264,62),'HOME',('home',None))
+        self.button(cache,(116,8,230,72),'PREVIOUS',('page',-1))
+        self.button(cache,(238,8,352,72),'NEXT',('page',1))
+        self.button(cache,(360,8,596,72),'ALL RECEIVERS',('filter',None))
+        self.button(cache,(604,8,718,72),'DECODERS',('decoders',None))
+        self.text(cache,730,36,f'{self.page+1}/{pages}',17,width=52)
+        self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
+        self.button(cache,(1034,8,1270,72),'HOME',('home',None))
         if not images:
             self.text(cache,120,300,'Add a QRSS receiver: waterfall and Morse text share one Kiwi channel.',23)
             self.text(cache,120,352,'Start with 30 m and AUTO to find a keyed signal and estimate its timing.',20)
             self.text(cache,120,402,'DFCW and other patterns remain visible; their text is not decoded.',20)
         for i,item in enumerate(images[self.page*2:self.page*2+2]):
             x,y=16,76+i*360
-            self.ui.draw_logical_rect(x,y,x+1248,y+352,(17,34,42,255))
+            self.ui.draw_logical_rect(x,y,1020,y+352,(17,34,42,255))
             self.text(cache,x+12,y+17,f"{'LIVE' if item['kind']=='receiving' else 'SAVED'} · {item['band']} · {item['mode']} · {item['receiver']}",17,width=890)
-            self.text(cache,x+936,y+17,item['capture_utc'][11:19]+' UTC · tap to enlarge',15,width=300)
-            self.draw_plot(cache,item,(x+8,y+34,x+1240,y+294),compact=True)
+            self.text(cache,x+700,y+17,item['capture_utc'][11:19]+' UTC · tap to enlarge',15,width=300)
+            self.draw_plot(cache,item,(x+8,y+34,1012,y+294),compact=True)
             for n,line in enumerate(self.preview_lines(cache,item)):
-                self.text(cache,x+12,y+314+n*23,line,18,(217,233,238),width=1224)
-            self.actions.append(((x,y,x+1248,y+352),('image',item['id'])))
+                self.text(cache,x+12,y+314+n*23,line,18,(217,233,238),width=980)
+            self.actions.append(((x,y,1020,y+352),('image',item['id'])))
         if self.message:self.text(cache,20,70,self.message,12,width=1220)
 
     def preview_lines(self,cache,item):
@@ -130,7 +132,7 @@ class QRSSWorkspace(SSTVWorkspace):
         words=value.split();first=[]
         while words:
             candidate=' '.join(first+[words[0]])
-            if first and self.ui.fit_station_text(cache,candidate,1224,18,False,False,'Liberation Sans')!=candidate:break
+            if first and self.ui.fit_station_text(cache,candidate,980,18,False,False,'Liberation Sans')!=candidate:break
             first.append(words.pop(0))
         return [' '.join(first),' '.join(words)]
 
@@ -141,32 +143,33 @@ class QRSSWorkspace(SSTVWorkspace):
         for i,row in enumerate(receivers[self.receiver_page*2:self.receiver_page*2+2]):
             name,location,server,*_=self.ui.station_fields(row);y=65+i*65
             self.button(cache,(24,y,1256,y+57),name,('receiver',server),location or server,server==self.selected_server)
-        self.button(cache,(24,201,250,246),'< RECEIVERS',('rxpage',-1))
+        self.button(cache,(24,201,138,265),'PREVIOUS',('rxpage',-1))
         self.text(cache,490,224,f'Receivers {self.receiver_page+1}/{max(1,math.ceil(len(receivers)/2))}',18)
-        self.button(cache,(1020,201,1256,246),'RECEIVERS >',('rxpage',1))
+        self.button(cache,(1142,201,1256,265),'NEXT',('rxpage',1))
         for i,preset in enumerate(PRESETS):
-            x=24+i*312
-            self.button(cache,(x,260,x+300,313),preset['band'],('preset',dict(preset)),active=p['band']==preset['band'])
+            x=24+i*244
+            self.button(cache,(x,273,x+236,337),preset['band'],('preset',dict(preset)),active=p['band']==preset['band'])
         for i,mode in enumerate(KINDS):
-            x=24+i*246
-            self.button(cache,(x,329,x+234,382),'Visual only' if mode=='VISUAL' else mode,('set',('qrss_mode',mode)),active=p['qrss_mode']==mode)
-        self.button(cache,(1008,329,1260,382),'POLARITY: AUTO' if p['qrss_mode']=='AUTO' else 'REVERSE '+('ON' if p['reverse'] else 'OFF'),('noop',None) if p['qrss_mode']=='AUTO' else ('set',('reverse',not p['reverse'])))
+            x=24+i*122
+            self.button(cache,(x,345,x+114,409),'Visual only' if mode=='VISUAL' else mode,('set',('qrss_mode',mode)),active=p['qrss_mode']==mode)
+        self.button(cache,(512,345,748,409),'REVERSE',('noop',None) if p['qrss_mode']=='AUTO' else ('set',('reverse',not p['reverse'])),
+                    'AUTO' if p['qrss_mode']=='AUTO' else 'ON' if p['reverse'] else 'OFF',active=p['reverse'])
         for i,(key,label) in enumerate((('freq_khz','USB dial kHz'),('tone_hz','Band center Hz' if p['qrss_mode']=='AUTO' else 'Mark tone Hz'),('span_hz','Span Hz'),('shift_hz','FSK shift Hz'))):
-            x=24+i*312
-            self.button(cache,(x,399,x+300,454),('FSK shift: AUTO' if key=='shift_hz' and p['qrss_mode']=='AUTO' else f'{label}: {p[key]:g}'),('noop',None) if key=='shift_hz' and p['qrss_mode']=='AUTO' else ('number',key))
-        self.text(cache,24,480,'AUTO: searches the full span and learns frequency, shift, polarity and dot time' if p['qrss_mode']=='AUTO' else 'Seconds per dot · match the signal for tentative text',18)
-        if p['qrss_mode']=='AUTO':self.text(cache,24,529,'Up to six signals with independent timing · one Kiwi channel',20,(104,234,194))
+            x=24+i*244
+            self.button(cache,(x,417,x+236,481),label,('noop',None) if key=='shift_hz' and p['qrss_mode']=='AUTO' else ('number',key),
+                        'AUTO' if key=='shift_hz' and p['qrss_mode']=='AUTO' else f'{p[key]:g}')
+        self.text(cache,24,509,'AUTO searches the full span, frequency, shift, polarity and dot time.' if p['qrss_mode']=='AUTO' else 'Seconds per dot · match the signal for tentative text',18)
+        if p['qrss_mode']=='AUTO':self.text(cache,24,562,'Up to six signals with independent timing · one Kiwi channel',20,(104,234,194))
         for i,dot in enumerate(() if p['qrss_mode']=='AUTO' else DOTS):
-            x=24+i*246
-            self.button(cache,(x,499,x+234,551),f'{dot} s',('set',('dot_seconds',dot)),active=p['dot_seconds']==dot)
+            x=24+i*122
+            self.button(cache,(x,529,x+114,593),f'{dot} S',('set',('dot_seconds',dot)),active=p['dot_seconds']==dot)
         for i,minutes in enumerate((5,10,20,30)):
-            x=24+i*312
-            self.button(cache,(x,570,x+300,623),f'{minutes} min capture',('set',('minutes',minutes)),active=p['minutes']==minutes)
-        self.text(cache,24,651,f"Band center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · both outputs use one Kiwi channel",19)
-        self.text(cache,24,684,'AUTO finds CW / FSKCW in the span. DFCW and other patterns remain visual only.',17)
-        self.button(cache,(24,714,244,780),'CANCEL',('cancel_add',None))
-        self.text(cache,265,748,self.message,17,width=715)
-        self.button(cache,(990,714,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
+            x=24+i*244
+            self.button(cache,(x,609,x+236,673),f'{minutes} MIN CAPTURE',('set',('minutes',minutes)),active=p['minutes']==minutes)
+        self.text(cache,24,704,f"Band center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · one Kiwi channel · DFCW and other patterns remain visual only",17,width=990)
+        self.button(cache,(24,728,260,792),'CANCEL',('cancel_add',None))
+        self.text(cache,276,754,self.message,17,width=498)
+        self.button(cache,(782,728,1018,792),'SAVE' if self.edit_id else 'START DECODER',('create',None))
 
     def tap(self,x,y,receivers):
         receivers=[r for r in receivers if getattr(self.ui,'station_receiver_type',lambda r:'kiwi')(r)=='kiwi']

@@ -14,6 +14,7 @@ class UIPalette:
     sidebar: tuple = (26, 26, 26, 255)
     surface: tuple = (0, 0, 0, 255)
     active_surface: tuple = (42, 42, 42, 255)
+    active_border: tuple = (160, 160, 160, 255)
     selected_surface: tuple = (30, 30, 30, 255)
     border: tuple = (88, 88, 88, 255)
     text: tuple = (255, 255, 255)
@@ -40,18 +41,25 @@ class ButtonVisualState:
 class ButtonStyle:
     palette: UIPalette
     radius: int = 8
-    label_size: int = 14
+    width: int = 114
+    height: int = 64
+    gap: int = 8
+    label_size: int = 13
     font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
+
+    @property
+    def subtitle_color(self):
+        return self.palette.secondary_text
 
     def resolve(self, *, active=False, pressed=False, danger=False) -> ButtonVisualState:
         if pressed:
             return ButtonVisualState(
-                self.palette.focus, self.palette.focus,
-                self.palette.focus_text, 2,
+                self.palette.active_surface, self.palette.active_border,
+                self.palette.text, 2,
             )
         if active:
             return ButtonVisualState(
-                self.palette.active_surface, self.palette.focus,
+                self.palette.active_surface, self.palette.active_border,
                 self.palette.text, 2,
             )
         if danger:

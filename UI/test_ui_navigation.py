@@ -69,6 +69,10 @@ class MenuIconTests(unittest.TestCase):
 
 
 class DrawerGeometryTests(unittest.TestCase):
+    @staticmethod
+    def _center(box):
+        return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+
     def _overlaps(self, a, b):
         return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
@@ -243,6 +247,14 @@ class DrawerGeometryTests(unittest.TestCase):
         mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
         step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
         back_box = ui.lcd_radio_drawer_close_box()
+        for row in range(0, len(mode_boxes), 2):
+            left, right = mode_boxes[row:row + 2]
+            self.assertEqual(left[0], back_box[0])
+            self.assertEqual(right[2], back_box[2])
+            self.assertEqual(right[0] - left[2], 8)
+        self.assertEqual(len(step_boxes), 1)
+        self.assertEqual(ui.radio_option_at(*self._center(step_boxes[0])), ("step_cycle", None))
+        self.assertIsNone(ui.radio_option_at(step_boxes[0][0] + 4, step_boxes[0][1] - 18))
         decoders = ui.radio_decoder_boxes()
         self.assertEqual({kind for kind, _ in decoders}, {"wspr", "sstv", "hell", "qrss", "cw"})
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
@@ -265,7 +277,8 @@ class DrawerGeometryTests(unittest.TestCase):
     def test_frequency_drawer_controls_are_bounded_and_disjoint(self):
         boxes = ui.frequency_drawer_boxes()
         panel = boxes["panel"]
-        controls = [boxes[name] for name in ("readout", "down", "up", "manual", "step_heading", "close")]
+        controls = [boxes[name] for name in ("readout", "down", "up", "step_heading", "close")]
+        controls += [box for _key, box in ui.frequency_drawer_key_boxes()]
         controls += [box for _step, box in ui.frequency_drawer_step_boxes("kiwi")]
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
         for box in controls:
@@ -276,17 +289,26 @@ class DrawerGeometryTests(unittest.TestCase):
         for index, box in enumerate(controls):
             for other in controls[index + 1:]:
                 self.assertFalse(overlaps(box, other))
-        for name in ("down", "up", "manual", "close"):
+        for name in ("down", "up", "close"):
             box = boxes[name]
             self.assertEqual(ui.frequency_drawer_action_at((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), name)
 
-    def test_frequency_drawer_arrows_are_square(self):
+    def test_frequency_drawer_direction_buttons_match_rail_tiles(self):
         boxes = ui.frequency_drawer_boxes()
         for name in ("down", "up"):
             x0, y0, x1, y1 = boxes[name]
-            self.assertAlmostEqual(x1 - x0, y1 - y0, msg=f"{name} is not square")
+            self.assertEqual((x1 - x0, y1 - y0),
+                             (ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H))
         self.assertEqual(boxes["down"][1], boxes["up"][1])
         self.assertEqual(boxes["down"][3], boxes["up"][3])
+        self.assertEqual(boxes["down"][1] - boxes["readout"][3], 16)
+        self.assertEqual(ui.frequency_drawer_key_boxes()[0][1][1] - boxes["down"][3], 16)
+        self.assertEqual(
+            boxes["step_heading"][1] - max(box[3] for _key, box in ui.frequency_drawer_key_boxes()),
+            32,
+        )
+        self.assertEqual(ui.frequency_drawer_step_boxes()[0][1][1] - boxes["step_heading"][3], 8)
+        self.assertNotIn("entry", boxes)
 
     def test_frequency_drawer_no_longer_exposes_a_font_setting(self):
         # The big-frequency typeface is fixed to the enabled face, so the rail
@@ -311,6 +333,15 @@ class DrawerGeometryTests(unittest.TestCase):
                 ui.frequency_drawer_action_at(*center, receiver_type="fmdx" if step in ui.FMDX_TUNE_STEPS_HZ else "kiwi"),
                 f"step_{int(step)}",
             )
+        self.assertEqual(len({box[1] for _step, box in kiwi}), 1)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+                            for _step, box in kiwi))
+        keys = ui.frequency_drawer_key_boxes()
+        self.assertEqual(len(keys), 16)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+                            for _key, box in keys))
+        for key, box in keys:
+            self.assertEqual(ui.frequency_drawer_action_at(*self._center(box)), f"key_{key}")
 
     def test_frequency_step_uses_hz_increment_and_receiver_bounds(self):
         self.assertEqual(ui.frequency_step_target(7075.0, 1, 100, 0, 30000), 7075.1)
@@ -321,12 +352,53 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.configured_tune_step_hz("fmdx", 500, 50_000), 50_000)
         self.assertEqual(ui.format_frequency_digits(7075.794), "007.075.794")
         self.assertEqual(ui.format_tune_step(100_000), "100 kHz")
+        self.assertEqual(ui.format_small_tune_step(100_000), "100K")
+        self.assertEqual(ui.edit_frequency_entry("7.075000", "1", True), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("7.", "."), ("7.", False))
+        self.assertEqual(ui.edit_frequency_entry("7.", "000"), ("7.000", False))
+        self.assertEqual(ui.edit_frequency_entry("7.000", "DEL"), ("7.00", False))
+        self.assertEqual(ui.edit_frequency_entry("7.000", "CLR"), ("", False))
+        self.assertEqual(ui.edit_frequency_entry("", "1"), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("0", "1"), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("", "00"), ("0", False))
+        self.assertEqual(ui.edit_frequency_entry("", "."), ("0.", False))
+        self.assertEqual(ui.frequency_entry_preview_khz("7.125", 7075.0, False), 7125.0)
+        self.assertEqual(ui.frequency_entry_preview_khz("", 7075.0, False), 0.0)
+        self.assertEqual(ui.frequency_entry_preview_khz("7.125", 7075.0, True), 7075.0)
+        self.assertEqual(
+            [ui.next_radio_tune_step(step) for step in (10, 100, 1000, 5000)],
+            [100, 1000, 5000, 10],
+        )
+
+    def test_frequency_arrow_hold_accelerates_and_cancels_cleanly(self):
+        receiver = ("receiver", 1, "kiwi")
+        hold = ui.FrequencyArrowHold()
+        hold.begin("up", 10.0, receiver)
+        self.assertIsNone(hold.tick(10.49, "up", receiver))
+        self.assertEqual(hold.tick(10.50, "up", receiver), "up")
+        first_interval = hold.next_at - 10.50
+        self.assertEqual(hold.tick(13.0, "up", receiver), "up")
+        self.assertLess(hold.next_at - 13.0, first_interval)
+        self.assertFalse(hold.release("up", receiver))
+
+        hold.begin("down", 20.0, receiver)
+        self.assertTrue(hold.release("down", receiver))
+        hold.begin("up", 30.0, receiver)
+        self.assertIsNone(hold.tick(30.2, None, receiver))
+        self.assertFalse(hold.release("up", receiver))
+        hold.begin("up", 40.0, receiver)
+        self.assertIsNone(hold.tick(40.5, "up", ("another receiver", 2, "kiwi")))
+        self.assertFalse(hold.release("up", receiver))
 
     def test_entire_compact_frequency_area_opens_tuning_target(self):
         compact = ui.compact_frequency_touch_box()
         measured = (compact[0] + 40, compact[1] + 10, compact[2] - 40, compact[3] - 10)
         self.assertTrue(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=True))
         self.assertFalse(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=False))
+        self.assertFalse(ui.is_frequency_readout_touch(
+            compact[0] + 2, compact[1] + 2, measured,
+            compact=True, home_available=False,
+        ))
 
     def test_sidebar_headers_use_one_centered_compact_style(self):
         with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line"), mock.patch.object(ui, "draw_text") as draw_text:
@@ -707,7 +779,8 @@ class BigFrequencyStyleTests(unittest.TestCase):
         cache.font.return_value = mock.Mock(size=lambda text: (100, 30))
         with mock.patch.object(ui, "draw_text_scaled_x", side_effect=lambda *a, **k: calls.append((a, k))):
             ui.draw_big_frequency(cache, 7075.794, 500, 40, 300, family="Oxanium")
-        self.assertEqual(len(calls), 1)
+            ui.draw_big_frequency(cache, 0, 500, 40, 300, display_text="0")
+        self.assertEqual(len(calls), 2)
         args, kwargs = calls[0]
         self.assertEqual(args[3], ui.sdr_ui.format_freq(7075.794))
         self.assertEqual(args[4], ui.BIG_FREQUENCY_COLOR)
@@ -715,11 +788,12 @@ class BigFrequencyStyleTests(unittest.TestCase):
         self.assertEqual(kwargs.get("family"), "Oxanium")
         self.assertTrue(kwargs.get("bold"))
         self.assertEqual(kwargs.get("anchor"), "rm")
+        self.assertEqual(calls[1][0][3], "0")
 
     def test_frequency_rail_readout_uses_the_shared_helper(self):
         calls = []
         with mock.patch.object(ui, "draw_big_frequency", side_effect=lambda *a, **k: calls.append((a, k))), \
-                mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_logical_rect") as rect, \
                 mock.patch.object(ui, "draw_logical_line"), \
                 mock.patch.object(ui, "draw_logical_rounded_rect"), \
                 mock.patch.object(ui, "draw_sidebar_header"), \
@@ -729,10 +803,35 @@ class BigFrequencyStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "frequency_chevron_texture", return_value=(0, 10, 10)), \
                 mock.patch.object(ui, "draw_textured_quad"):
             ui.draw_frequency_drawer(object(), 7075.794, 100, "Oxanium")
-        self.assertEqual(len(calls), 1)
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="7.125",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="1",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="999999",
+                entry_invalid=True, entry_replace_on_digit=False,
+            )
+        self.assertEqual(len(calls), 5)
         args, kwargs = calls[0]
         self.assertEqual(args[1], 7075.794)
         self.assertEqual(kwargs.get("family"), "Oxanium")
+        self.assertEqual(calls[1][0][1], 7125.0)
+        self.assertEqual(calls[1][1]["display_text"], "7.125")
+        self.assertEqual(calls[2][0][1], 0.0)
+        self.assertEqual(calls[2][1]["display_text"], "0")
+        self.assertEqual(calls[3][1]["display_text"], "1")
+        self.assertIn(
+            mock.call(*ui.frequency_drawer_boxes()["readout"], (35, 13, 16, 255)),
+            rect.call_args_list,
+        )
 
 
 class FmdxDisclaimerTests(unittest.TestCase):
@@ -813,7 +912,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(theme.primary_text, (255, 255, 255))
         self.assertEqual(theme.secondary_text, (160, 160, 160))
         self.assertEqual(theme.focus, (0, 229, 255, 255))
-        self.assertEqual((theme.label_size, theme.server_name_size), (14, 18))
+        self.assertEqual((theme.label_size, theme.server_name_size), (13, 18))
 
     def test_badges_share_labels_and_exact_state_colors(self):
         theme = ui.RECEIVER_LIST_THEME
@@ -851,14 +950,14 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertTrue(fitted.endswith("..."))
         self.assertLessEqual(len(fitted) * 10, 105)
 
-    def test_selected_filter_has_dark_fill_and_cyan_border(self):
+    def test_selected_filter_has_dark_gray_fill_and_light_gray_border(self):
         box = (1090, 76, 1270, 128)
         with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 mock.patch.object(ui, "draw_text") as text:
             ui.draw_receiver_filter_button(self.Cache(), box, "LAN", True)
         rounded.assert_called_once_with(
             *box, ui.APP_UI_STYLE.button.radius,
-            ui.APP_UI_STYLE.palette.active_surface, ui.RECEIVER_LIST_THEME.focus, 2,
+            ui.APP_UI_STYLE.palette.active_surface, ui.APP_UI_STYLE.palette.active_border, 2,
         )
         self.assertEqual(text.call_args.args[4], ui.APP_UI_STYLE.palette.text)
 
@@ -912,7 +1011,8 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(len(boxes), 4)
         self.assertGreaterEqual(min(box[1] for box in boxes), 466)
         self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
-        self.assertTrue(all(box[2] - box[0] == box[3] - box[1] for box in boxes))
+        self.assertTrue(all(box[2] - box[0] == ui.LCD_NAV_TILE_W and
+                            box[3] - box[1] == ui.LCD_NAV_TILE_H for box in boxes))
         self.assertEqual(ui.RECEIVER_PICKER_ACTION_SIZE, ui.LCD_NAV_TILE_W)
         self.assertEqual(ui.RECEIVER_PICKER_ACTION_GAP, ui.LCD_NAV_GAP)
         back = ui.RECEIVER_PICKER_BACK_BOX
@@ -993,10 +1093,11 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(normal.fill, (0, 0, 0, 255))
         self.assertEqual(normal.border, (88, 88, 88, 255))
         self.assertEqual(active.fill, (42, 42, 42, 255))
-        self.assertEqual(active.border, (0, 229, 255, 255))
+        self.assertEqual(active.border, (160, 160, 160, 255))
         self.assertEqual(active.text, (255, 255, 255))
-        self.assertEqual(pressed.fill, (0, 229, 255, 255))
-        self.assertEqual(pressed.text, (18, 18, 18))
+        self.assertEqual(pressed.fill, active.fill)
+        self.assertEqual(pressed.border, active.border)
+        self.assertEqual(pressed.text, active.text)
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)

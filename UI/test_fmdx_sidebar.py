@@ -16,9 +16,14 @@ class FmdxSidebarTests(unittest.TestCase):
 
     def test_fm_steps_match_touch_targets(self):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1
-        for step, box in ui.radio_step_options('fmdx'):
-            self.assertIn(step, (50000, 100000, 200000))
-            self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2, receiver_type='fmdx'), ('step', step))
+        steps = list(ui.radio_step_options('fmdx'))
+        self.assertEqual(len(steps), 1)
+        _step, box = steps[0]
+        self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2,
+                                            receiver_type='fmdx'), ('step_cycle', None))
+        self.assertEqual([ui.next_radio_tune_step(step, 'fmdx')
+                          for step in (50000, 100000, 200000)],
+                         [100000, 200000, 50000])
 
     def test_fm_step_does_not_depend_on_audio_waterfall_zoom(self):
         for zoom in (0, 8, 16):
@@ -81,7 +86,7 @@ class FmdxRailRegressionTests(unittest.TestCase):
                     self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2,
                         receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared),
                         ("fmdx_action", action))
-                steps = [call for call in calls if call.args[2] == "TUNING STEP"]
-                self.assertEqual(len(steps), 3 if shared else 0)
+                steps = [call for call in calls if call.args[2] == "TUNE STEP"]
+                self.assertEqual(len(steps), 1 if shared else 0)
                 if shared:
-                    self.assertEqual([call.args[4] for call in steps], [False, True, False])
+                    self.assertEqual(steps[0].args[3], "100 kHz")
