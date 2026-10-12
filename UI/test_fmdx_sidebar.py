@@ -39,17 +39,17 @@ class FmdxRailRegressionTests(unittest.TestCase):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         self.addCleanup(setattr, ui, "LCD_RADIO_DRAWER_PROGRESS", self.previous_progress)
 
-    def test_selected_fmdx_server_lights_only_fmdx(self):
+    def test_selected_fmdx_server_lights_only_fm(self):
         state = ui.SharedState("http://kiwi.test", 7075, 8, -95, -125, -15, 3, "am", True)
         state.set_server("https://fm.example/radio", receiver_type="fmdx")
         mode = ui.effective_receiver_mode(state.receiver_type_snapshot(), state.radio_snapshot()[0])
         labels = [label for label, _box in ui.lcd_home_mode_boxes(False, mode)]
         active = [label for label in labels if ui.mode_annunciator_active(label, mode, "IQ")]
-        self.assertEqual(active, ["FMDX"])
+        self.assertEqual(active, ["FM"])
         for mode in ("AM", "USB", "NBFM", ui.fmdx.MODE_LABEL):
-            self.assertIn("FMDX", ui.home_mode_labels(mode))
+            self.assertIn("FM", ui.home_mode_labels(mode))
             self.assertNotIn("NFM", ui.home_mode_labels(mode))
-        self.assertTrue(ui.mode_annunciator_active("FMDX", "NBFM", "DIG"))
+        self.assertTrue(ui.mode_annunciator_active("FM", "NBFM", "DIG"))
 
     def test_zoom_buttons_match_home_action_spacing_and_stay_left_aligned(self):
         favorite = ui.favorite_waterfall_box()

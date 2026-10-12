@@ -92,26 +92,60 @@ class DrawerGeometryTests(unittest.TestCase):
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.frequency_entry_action_at(*center), label)
 
-    def test_home_destinations_are_preserved_with_updated_mode_label(self):
+    def test_home_destinations_match_text_only_layout(self):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["local_rx", "rx", "audio", "digital", "favorite", "settings"],
+            ["rx", "audio", "digital", "vosc", "display", "dual", "settings"],
         )
-        self.assertEqual(dict(ui.MENU_ITEMS)["local_rx"], "LAN")
-        self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "DIGI")
-        self.assertEqual(dict(ui.MENU_ITEMS)["favorite"], "FAVORITES")
-        self.assertNotIn("dual", kinds)
+        self.assertNotIn("display", dict(ui.SETTINGS_MENU_ITEMS))
+        self.assertEqual(ui.LCD_NAV_TILE_W, 114)
+        self.assertEqual(ui.LCD_NAV_TILE_H, 64)
+        self.assertEqual(ui.LCD_NAV_GAP, 8)
+        boxes = [ui.lcd_nav_box(i) for i in range(len(ui.MENU_ITEMS))]
+        self.assertEqual(boxes[0], (1034, 512, 1148, 576))
+        self.assertEqual(boxes[-1], (1034, 728, 1148, 792))
+
+    def test_vosc_uses_right_rail_controls_and_shared_back(self):
+        options = list(ui.vosc_sidebar_options())
+        self.assertEqual(len(options), len(ui.ASR_ENGINES) + len(ui.CAPTION_MODES))
+        back = ui.lcd_drawer_back_box()
+        for kind, value, box in options:
+            self.assertEqual((box[2] - box[0], box[3] - box[1]), (114, 64))
+            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0 + 10)
+            self.assertLessEqual(box[2], ui.LOGICAL_W - 10)
+            self.assertLessEqual(box[3] + 8, back[1])
+            center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            self.assertEqual(ui.asr_option_at(*center), (kind, value))
+        self.assertEqual(ui.asr_option_at((back[0] + back[2]) / 2,
+                                          (back[1] + back[3]) / 2), ("back", None))
+
+    def test_footer_places_clock_after_buffer_and_system_stats_on_right(self):
+        cache = mock.Mock()
+        cache.font.return_value.size.return_value = (90, 13)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "fit_station_text", return_value="TEST RECEIVER"), \
+             mock.patch.object(ui, "read_process_ram_mb", return_value=120), \
+             mock.patch.object(ui, "draw_text") as draw_text:
+            ui.draw_lower_status(cache, 15, 50, 712, 800,
+                                 station_name="TEST RECEIVER", audio_jitter_depth=7)
+        rendered = [(call.args[1], call.args[2], call.args[3]) for call in draw_text.call_args_list]
+        self.assertEqual(rendered[0], (18, 739, "TEST RECEIVER"))
+        self.assertEqual(rendered[1], (18, 771, "BUFFER Q7/T6"))
+        self.assertEqual(rendered[2][0:2], (124, 771))
+        self.assertIn("UTC", rendered[2][2])
+        self.assertEqual(rendered[3], (1006, 739, "CPU 15%   RAM 120 MB"))
+        self.assertEqual(rendered[4], (1006, 771, "TEMP 50 C"))
 
     def test_digi_rail_retains_all_decoder_destinations(self):
         self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},
                          {"wspr", "sstv", "hell", "qrss", "cw", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
-    def test_apps_contains_dual_vfo_action(self):
+    def test_apps_no_longer_contains_dual_vfo_action(self):
         cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
         cy = (ui.TEST_DUAL_BOX[1] + ui.TEST_DUAL_BOX[3]) / 2
-        self.assertEqual(ui.tests_option_at(cx, cy), "dual")
+        self.assertIsNone(ui.tests_option_at(cx, cy))
 
     def test_lan_and_network_use_distinct_drawn_icons(self):
         surface = mock.Mock()
@@ -307,7 +341,8 @@ class DrawerGeometryTests(unittest.TestCase):
 class ParentNavigationTests(unittest.TestCase):
     def test_shared_destination_records_the_surface_that_opened_it(self):
         self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "rx"), "home")
-        self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "display"), "settings")
+        self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "display"), "home")
+        self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "dual"), "home")
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "tests"), "settings")
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "settings_back"), "home")
 

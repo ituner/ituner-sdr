@@ -12,6 +12,7 @@ import json
 import lzma
 import math
 import os
+import resource
 import queue
 import select
 import signal
@@ -250,15 +251,15 @@ DESKTOP_1280_TOP_H = 96
 # bounds of the two-column navigation rail beneath it. It is one touch target.
 DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
 # FMDX is the shared mode-button label; Kiwi's wire-mode remains NBFM.
-DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "FMDX", "IQ")
+DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "FM", "IQ")
 
 
 def mode_annunciator_active(label, active_mode, digital):
     """Map compact panel labels onto Kiwi's internal demodulator names."""
     return (
         label == active_mode
-        or (label == "FMDX" and active_mode == "NBFM")
-        or (label == "FMDX" and active_mode == fmdx.MODE_LABEL)
+        or (label == "FM" and active_mode == "NBFM")
+        or (label == "FM" and active_mode == fmdx.MODE_LABEL)
         or (label == "IQ" and active_mode != fmdx.MODE_LABEL and str(digital).upper() == "IQ")
     )
 
@@ -594,7 +595,7 @@ CALLSIGN_TOGGLE_BOX = (684, LOGICAL_H - BOTTOM_STATUS_H, 838, LOGICAL_H)
 ASR_TOGGLE_BOX = (846, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
 # The system readout is deliberately a real control, not merely decoration:
 # its compact status text opens the per-core performance view.
-CPU_ANNUNCIATOR_BOX = (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+CPU_ANNUNCIATOR_BOX = (800, LOGICAL_H - BOTTOM_STATUS_H, DESKTOP_1280_MAIN_W, LOGICAL_H)
 # This replaces the old one-bit Vosk switch with deliberate, readable
 # choices. It is transient and leaves the radio view visible beneath it.
 ASR_PANEL_BOX = (244, 186, 716, 244)
@@ -1932,7 +1933,10 @@ def configure_popup_layout():
     # Reserve explicit, non-overlapping right-side status lanes. Keeping the
     # boxes in this one layout function also makes the Pi and desktop views
     # agree on their hit targets.
-    CPU_ANNUNCIATOR_BOX = (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+    CPU_ANNUNCIATOR_BOX = (
+        (800, LOGICAL_H - BOTTOM_STATUS_H, radio_canvas_w, LOGICAL_H)
+        if LCD_800_MODE else (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+    )
     CALLSIGN_TOGGLE_BOX = (700, LOGICAL_H - BOTTOM_STATUS_H, 838, LOGICAL_H)
     ASR_TOGGLE_BOX = (846, LOGICAL_H - BOTTOM_STATUS_H, radio_canvas_w, LOGICAL_H)
     asr_x0 = (radio_canvas_w - ASR_PANEL_WIDTH) // 2
@@ -2013,13 +2017,23 @@ MENU_ROWS = 2
 # Secondary configuration pages live one tap deeper under Settings so the
 # 800x1280 control rail does not read as an eight-button wall.
 MENU_ITEMS = (
-    ("local_rx", "LAN"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
     ("digital", "DIGI"),
-    ("favorite", "FAVORITES"),
+    ("vosc", "VOSC"),
+    ("display", "DISPLAY"),
+    ("dual", "DUAL"),
     ("settings", "SETTINGS"),
 )
+HOME_MENU_SUBTITLES = {
+    "rx": "BROWSE",
+    "audio": "OUTPUT",
+    "digital": "DECODERS",
+    "vosc": "CAPTIONS",
+    "display": "WATERFALL",
+    "dual": "2 VFO",
+    "settings": "PREFERENCES",
+}
 
 
 def dual_vfo_layout():
@@ -2464,7 +2478,6 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
-    ("display", "DISPLAY"),
     ("network", "NETWORK"),
     ("stats", "STATS"),
     ("tests", "APPS"),
@@ -2523,7 +2536,7 @@ RECEIVER_PICKER_MARGIN = 10
 # BACK. These dimensions match every other square launcher in the app.
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
-RECEIVER_PICKER_ACTION_TOP = 478
+RECEIVER_PICKER_ACTION_TOP = 484
 # Shared action-icon metrics. Code-drawn icons and raster assets use this same
 # canvas and stroke so switching screens never changes their visual weight.
 APP_ACTION_ICON_SIZE = 46
@@ -2538,9 +2551,9 @@ RECEIVER_PICKER_ROW_GAP = 8
 RECEIVER_PICKER_ROW_INSET = 6
 RECEIVER_PICKER_BACK_BOX = (
     RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN,
-    722,
+    728,
     RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_SIDEBAR_W - RECEIVER_PICKER_MARGIN,
-    790,
+    792,
 )
 
 
@@ -8823,7 +8836,7 @@ def draw_radio_option(text_cache, box, label, active):
     draw_styled_text_button(text_cache, box, label, size=font_size, active=active)
 
 
-BACK_BUTTON_FONT_SIZE = 14
+BACK_BUTTON_FONT_SIZE = 13
 
 
 def draw_shared_back_button(text_cache, box, size=BACK_BUTTON_FONT_SIZE):
@@ -10913,8 +10926,6 @@ def tests_option_at(x, y):
         return "openwebrx"
     if contains(TEST_RUN_BOX, x, y):
         return "run"
-    if contains(TEST_DUAL_BOX, x, y):
-        return "dual"
     return None
 
 
@@ -10981,7 +10992,6 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             (TEST_FONT_BOX, "FONT LAB", "TYPE", False),
             (TEST_OPENWEBRX_BOX, "RETURN KIWI" if openwebrx_active else "OPENWEBRX", "PUBLIC RX", openwebrx_active),
             (TEST_RUN_BOX, "STOP" if sweep is not None else "RUN TEST", "RETUNE PATTERN", sweep is not None),
-            (TEST_DUAL_BOX, "DUAL", "TWO VFO", False),
         ):
             draw_lcd_audio_tile(
                 text_cache, box, title, detail, active,
@@ -11015,7 +11025,6 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             f"{sweep.name}  {sweep.index}/{sweep.command_count}",
             active=True,
         )
-    draw_tests_button(text_cache, TEST_DUAL_BOX, "DUAL", "TWO RECEIVERS  /  TWO VFO")
 
 
 def draw_font_lab(text_cache, page):
@@ -14799,7 +14808,7 @@ LCD_NAV_TOP_MIN = 88
 # Every two-column square row shares the full-width BACK button's left and
 # right edges: 114 + 8 + 114 = 236 px inside the rail's 10 px margins.
 LCD_NAV_TILE_W = 114
-LCD_NAV_TILE_H = 114
+LCD_NAV_TILE_H = 64
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
@@ -14821,14 +14830,14 @@ LCD_HOME_PASSBAND_HEIGHT = 89
 # Compact Home must fit VFO, S-meter, modes, passband and the complete Volume
 # control before the navigation grid. These constants keep that stack explicit
 # instead of allowing the final block to be silently squeezed.
-LCD_COMPACT_SMETER_TOP = 108
-LCD_COMPACT_SMETER_HEIGHT = 52
-LCD_COMPACT_MODE_GRID_TOP = 166
-LCD_COMPACT_INSTRUMENT_PAD = 10
+LCD_COMPACT_SMETER_TOP = 104
+LCD_COMPACT_SMETER_HEIGHT = 80
+LCD_COMPACT_MODE_GRID_TOP = 203
+LCD_COMPACT_INSTRUMENT_PAD = 20
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 266)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 280)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -14853,9 +14862,9 @@ def lcd_drawer_back_box():
     """Shared bottom return target for every right-rail drawer."""
     return (
         LCD_NAV_X0 + 10,
-        lcd_rail_bottom() - 78,
+        lcd_rail_bottom() - 72,
         LOGICAL_W - 10,
-        lcd_rail_bottom() - 10,
+        lcd_rail_bottom() - 8,
     )
 
 
@@ -14865,27 +14874,25 @@ def settings_center_workspace_box():
 
 
 def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
-                       family=COMPACT_FREQUENCY_FONT_FAMILY, fit_text=None):
-    """Draw the large VFO readout with one shared face, size and colour.
+                       family=COMPACT_FREQUENCY_FONT_FAMILY, fit_text=None,
+                       size=BIG_FREQUENCY_SIZE, anchor="rm"):
+    """Draw a frequency readout with fixed geometry for its instrument lane.
 
-    The readout appears in the top instrument strip, the compact Home rail and
-    the FREQUENCY drawer. Routing every one of them through this helper keeps
-    them visually identical; only the horizontal squeeze changes so the digits
-    still fit their lane. ``fit_text`` fixes the squeeze against a worst-case
-    value so the digits never change size as the frequency moves.
+    ``fit_text`` fixes horizontal squeeze against a worst-case value so the
+    digits do not change size as the frequency moves.
     """
     frequency_text = sdr_ui.format_freq(freq_khz)
     measured = [frequency_text]
     if fit_text:
         measured.append(fit_text)
     source_width = max(
-        text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=family).size(text)[0]
+        text_cache.font(size, bold=True, family=family).size(text)[0]
         for text in measured
     )
     x_scale = min(1.0, max_width / max(1, source_width))
     draw_text_scaled_x(
         text_cache, right_x, center_y, frequency_text, BIG_FREQUENCY_COLOR,
-        BIG_FREQUENCY_SIZE, x_scale, bold=True, anchor="rm", family=family,
+        size, x_scale, bold=True, anchor=anchor, family=family,
     )
 
 
@@ -14956,7 +14963,7 @@ def lcd_nav_top(item_count=None, has_back=False):
     # the square grid, so the five-button group reads as one unit.
     bottom = (
         lcd_drawer_back_box()[1] - LCD_NAV_GAP
-        if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
+        if has_back else lcd_rail_bottom() - 8
     )
     return max(LCD_NAV_TOP_MIN, bottom - tiles_h)
 
@@ -14985,9 +14992,9 @@ def home_mode_labels(mode=None):
 def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-    grid_w = (x1 - x0 - 12) * 0.85
+    grid_w = 4 * 55 + 3 * gap
     grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
-    cell_w = (grid_w - 3 * gap) / 4
+    cell_w = 55
     for index, label in enumerate(home_mode_labels(mode)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
         top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
@@ -15000,7 +15007,7 @@ def engage_home_mode(state, x, y, compact=True, local_receiver=None):
         return None
     for label, box in lcd_home_mode_boxes(compact):
         if contains(box, x, y):
-            mode = "NBFM" if label == "FMDX" else label
+            mode = "NBFM" if label == "FM" else label
             if local_receiver is not None:
                 if not local_receiver.set_home_mode(mode):
                     return None
@@ -15038,7 +15045,7 @@ def lcd_annunciator_surface_bottom(show_compact_readouts=True):
 def compact_frequency_touch_box():
     """The open compact frequency digits, distinct from the mode matrix."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
-    return x0 + 4, y0 + 12, x1 - 4, y0 + 83
+    return x0 + 4, y0 + 12, x1 - 4, y0 + 61
 
 
 def is_frequency_readout_touch(x, y, measured_box, compact=False):
@@ -15074,7 +15081,7 @@ def frequency_band_context(freq_khz, mode=""):
 def compact_band_context_touch_box():
     """A real touch target for the persistent compact band indicator."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
-    return x0 + 4, y0 + 78, x1 - 4, y0 + 105
+    return x0 + 4, y0 + 62, x1 - 4, y0 + 90
 
 
 def main_band_context_box(text_cache, freq_khz, font_family=VFO_FONT_FAMILY):
@@ -15237,7 +15244,7 @@ def lcd_home_volume_box(show_compact_readouts=True):
     """Persistent Home volume instrument in the calm upper right-rail gap."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
-    y0 = pass_y1 + 10
+    y0 = pass_y1 + 16
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 18, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 
@@ -15283,7 +15290,7 @@ def lcd_compact_smeter_box():
     """Short S-meter strip that leaves room for the full Home Volume block."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     top = y0 + LCD_COMPACT_SMETER_TOP
-    return x0 + 6, top, x1 - 6, top + LCD_COMPACT_SMETER_HEIGHT
+    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_COMPACT_SMETER_HEIGHT
 
 
 def lcd_nav_box(index, item_count=None, has_back=False):
@@ -15385,11 +15392,10 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box(show_compact_readouts)
     status = "MUTE" if muted else main_volume_label(level)
     status_color = MUTE_ACCENT if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248)
-    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 228))
-    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
-    draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 9, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, status, status_color, 18, True, False, "rt", family="Liberation Sans")
+    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
+    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
+    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
     button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
     button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
     icon_color = (*MUTE_ACCENT, 255) if muted else (145, 231, 242, 255)
@@ -15471,12 +15477,11 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     fill = (42, 154, 176, 88)
     edge = (113, 234, 240, 238)
     grid = (87, 125, 138, 132)
-    quiet = (153, 186, 195)
-    draw_logical_rect(x0, y0, x1, y1, (7, 15, 21, 236))
-    draw_logical_line(x0, y0, x1, y0, (82, 127, 141, 154), 1)
-    draw_logical_line(x0, y1, x1, y1, (24, 46, 55, 220), 1)
-    draw_text(text_cache, x0 + 11, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 11, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
+    quiet = (174, 203, 208)
+    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
+    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
+    draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
     # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
     for index in range(-5, 6):
@@ -15699,13 +15704,19 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             continue
         nav_box = (bx0, by0, bx1, by1)
         pressed = ui_button_pressed(nav_box)
-        draw_styled_button_frame(nav_box, pressed=pressed)
-        tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
-            muted=muted and kind == "audio",
-            pressed=pressed,
+        draw_logical_rounded_rect(
+            *nav_box, 8, UI_PRESSED_FILL if pressed else (38, 38, 38, 255),
+            (88, 88, 88, 255), 1,
         )
-        draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
+        subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
+        if subtitle:
+            draw_text(text_cache, (bx0 + bx1) / 2, by0 + 23, label,
+                      (255, 255, 255), 13, True, False, "cm", family="Liberation Sans")
+            draw_text(text_cache, (bx0 + bx1) / 2, by0 + 46, subtitle,
+                      (160, 160, 160), 13, True, False, "cm", family="Liberation Sans")
+        else:
+            draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label.upper(),
+                      (255, 255, 255), 13, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
@@ -15716,63 +15727,21 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # The expanded surface stops just under the mode buttons instead of
     # filling the whole reserved block, so the rail has no empty panel.
     surface_bottom = lcd_annunciator_surface_bottom(show_compact_readouts)
-    # The main frequency display remains untouched. This smaller right-rail
-    # readout stays visually open: it is a live value, not a second button.
+    # Keep the frequency and mode cluster open, with no obsolete square-cell
+    # background peeking out around the rounded mode controls.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    layout_key = "compact" if show_compact_readouts else "expanded"
-    cache_key = ("surface", f"lcd_annunciator_radio_v9_compact_{layout_key}_{active_mode}_{digital.upper()}")
-    cached = text_cache.cache.get(cache_key)
-    if cached is None:
-        width, height, scale = int(x1 - x0), int(round(surface_bottom - y0)), 2
-        surface = pygame.Surface((width * scale, height * scale), pygame.SRCALPHA)
-
-        def pixel(value):
-            return int(round(value * scale))
-
-        def rounded(left, top, right, bottom, fill, edge=None, radius=5):
-            rect = pygame.Rect(pixel(left), pixel(top), pixel(right - left), pixel(bottom - top))
-            pygame.draw.rect(surface, fill, rect, border_radius=pixel(radius))
-            if edge is not None:
-                pygame.draw.rect(surface, edge, rect, width=pixel(1), border_radius=pixel(radius))
-
-        surface.fill((3, 6, 9, 232))
-        grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-        grid_w = (width - 12) * 0.85
-        grid_x0 = (width - grid_w) / 2
-        cell_w = (grid_w - 3 * gap) / 4
-        for index, label in enumerate(home_mode_labels(mode)):
-            col, row = index % 4, index // 4
-            left = grid_x0 + col * (cell_w + gap)
-            top = grid_y0 + row * (cell_h + gap)
-            # Keep the grid cells neutral. The active state is drawn later as
-            # a compact pill tight to the mode label, not a full blue tile.
-            rounded(
-                left,
-                top,
-                left + cell_w,
-                top + cell_h,
-                (7, 10, 13, 238),
-                (62, 67, 73, 228),
-                5,
-            )
-        surface = pygame.transform.smoothscale(surface, (width, height))
-        cached = text_cache.surface_texture(cache_key[1], surface)
-    texture, texture_w, texture_h = cached
-    draw_textured_quad(texture, x0, y0, x0 + texture_w, y0 + texture_h, 0, 0, 1, 1)
+    draw_logical_rect(x0, y0, x1, surface_bottom, (3, 6, 9, 232))
 
     if show_compact_readouts:
         # Compact mode makes this the primary frequency readout. The SDR is
         # frequency-centric, so do not waste this narrow rail on a repeated
         # MHz unit: give the digits the entire available width instead.
-        # The compact rail is the primary readout in this layout, so it uses
-        # the exact same big-frequency face/size/colour as the top instrument
-        # strip. The digits stay a fixed size as the frequency changes.
-        frequency_right_margin = 8
+        # Keep the digits fixed at the HOME-specific 36 px size.
         draw_big_frequency(
-            text_cache, freq_khz, x1 - frequency_right_margin, y0 + 53,
-            (x1 - frequency_right_margin) - (x0 + 8),
-            family=compact_frequency_font_family, fit_text="30.000.000",
+            text_cache, freq_khz, (LCD_NAV_X0 + LOGICAL_W) / 2, y0 + 41,
+            236, family=compact_frequency_font_family, fit_text="30.000.000",
+            size=36, anchor="cm",
         )
         # This narrow, persistent context line answers the basic operating
         # question at a glance and doubles as the entry point to the large
@@ -15788,27 +15757,26 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         meter_x0, meter_y0, meter_x1, meter_y1 = lcd_compact_smeter_box()
         meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
         meter_level = smeter_segment_position(meter_value)
-        draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
-        draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
-        draw_text(text_cache, meter_x0 + 9, meter_y0 + 12, "S-METER", (165, 199, 207), 13, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 17, True, False, "rm", family="Liberation Sans")
-        meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-        meter_track_y = meter_y0 + 31
-        segment_w = (meter_track_x1 - meter_track_x0) / 36
-        for index in range(36):
-            sx0 = meter_track_x0 + index * segment_w + 1
-            sx1 = meter_track_x0 + (index + 1) * segment_w - 1
+        draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (11, 20, 27, 255))
+        draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (112, 136, 146, 255), 1)
+        draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", (190, 218, 223), 13, True, False, "rm", family="Liberation Sans")
+        meter_track_x0 = meter_x0 + (236 - (35 * 4.65 + 34 * 2)) / 2
+        meter_track_y = meter_y0 + 25
+        for index in range(35):
+            sx0 = meter_track_x0 + index * (4.65 + 2)
+            sx1 = sx0 + 4.65
             active = index + 0.5 <= meter_level
             color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
             draw_logical_rect(
                 sx0,
-                meter_track_y - 6,
+                meter_track_y,
                 sx1,
-                meter_track_y + 6,
+                meter_track_y + 26,
                 color if active else (31, 52, 61, 208),
             )
         for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
-            lx = meter_track_x0 + (meter_track_x1 - meter_track_x0) * position / 36.0
+            lx = meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0
             color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
             draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
@@ -15818,7 +15786,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         pressed = ui_button_pressed(box)
         visual = draw_styled_button_frame(box, active=active, pressed=pressed)
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  visual.text, 14, True, False, "cm",
+                  visual.text, 13, True, False, "cm",
                   family=APP_UI_STYLE.button.font_family)
 
 
@@ -16907,6 +16875,21 @@ def read_cpu_temp_c():
         return None
 
 
+def read_process_ram_mb():
+    """Report the radio process's resident memory where the host exposes it."""
+    try:
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/self/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+        # macOS reports ru_maxrss in bytes; it is the best portable fallback.
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def read_input_power_ok():
     """Return the firmware's current 5 V input health, not core voltage.
 
@@ -17014,6 +16997,37 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
                       input_power_ok=None,
                       alpha=1.0):
     if alpha <= 0.01:
+        return
+    if LCD_800_MODE:
+        status_x1 = DESKTOP_1280_MAIN_W
+        draw_logical_rect(0, y0, status_x1, y1, (4, 8, 12, int(208 * alpha)))
+        size = 13
+        first_y = y0 + 27
+        second_y = y0 + 59
+        server = fit_station_text(
+            text_cache, station_name or "NO RECEIVER", status_x1 - 300,
+            size, True, False, family="Liberation Sans",
+        )
+        draw_text(text_cache, 18, first_y, server, (162, 175, 179), size,
+                  True, False, "lm", alpha, family="Liberation Sans")
+        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
+        draw_text(text_cache, 18, second_y, buffer_label, (120, 255, 179), size,
+                  False, False, "lm", alpha, family="Liberation Sans")
+        buffer_width = text_cache.font(size, family="Liberation Sans").size(buffer_label)[0]
+        clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
+        draw_text(text_cache, 18 + buffer_width + 16, second_y, clock_label,
+                  (120, 255, 179), size, False, False, "lm", alpha,
+                  family="Liberation Sans")
+        ram_mb = read_process_ram_mb()
+        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
+        ram_label = f"RAM {ram_mb:.0f} MB" if ram_mb is not None else "RAM --"
+        temp_label = f"TEMP {temp_c:.0f} C" if temp_c is not None else "TEMP --"
+        draw_text(text_cache, status_x1 - 18, first_y, f"{cpu_label}   {ram_label}",
+                  (162, 175, 179), size, True, False, "rm", alpha,
+                  family="Liberation Sans")
+        draw_text(text_cache, status_x1 - 18, second_y, temp_label,
+                  (162, 175, 179), size, True, False, "rm", alpha,
+                  family="Liberation Sans")
         return
     height = y1 - y0
     compact = height < 28
@@ -17212,6 +17226,13 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
 
 
 def asr_option_at(x, y, moon_language_menu=False):
+    if LCD_800_MODE:
+        if contains(lcd_drawer_back_box(), x, y):
+            return "back", None
+        for kind, value, box in vosc_sidebar_options(moon_language_menu):
+            if contains(box, x, y):
+                return kind, value
+        return None
     box = ASR_MOON_LANGUAGE_PANEL_BOX if moon_language_menu else ASR_PANEL_BOX
     x0, y0, x1, y1 = box
     if not contains(box, x, y):
@@ -17230,8 +17251,55 @@ def asr_option_at(x, y, moon_language_menu=False):
     return "caption_mode", CAPTION_MODES[index]
 
 
+def vosc_sidebar_options(moon_language_menu=False):
+    """The right-rail geometry is shared by VOSC drawing and touch handling."""
+    if moon_language_menu:
+        choices = (("engine", f"moonshine:{language}") for language, _label in MOONSHINE_LANGUAGE_OPTIONS)
+        first_y = 128
+    else:
+        choices = (("engine", value) for value in ASR_ENGINES)
+        first_y = 112
+    for index, (kind, value) in enumerate(choices):
+        yield kind, value, lcd_nav_option_box(index, first_y)
+    if not moon_language_menu:
+        for index, value in enumerate(CAPTION_MODES):
+            yield "caption_mode", value, lcd_nav_option_box(index, 504)
+
+
+def lcd_nav_option_box(index, first_y):
+    x0 = LCD_NAV_X0 + 10 + (index % 2) * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+    y0 = first_y + (index // 2) * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+    return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
+
+
 def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
+    if LCD_800_MODE:
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 6, 9, 255))
+        draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+        draw_sidebar_header(text_cache, "VOSC")
+        draw_text(text_cache, LCD_NAV_X0 + 14, 86,
+                  "LANGUAGE" if moon_language_menu else "ENGINE",
+                  (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+        if not moon_language_menu:
+            draw_text(text_cache, LCD_NAV_X0 + 14, 478, "CAPTIONS",
+                      (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+        for kind, value, box in vosc_sidebar_options(moon_language_menu):
+            if moon_language_menu:
+                title = next(label for language, label in MOONSHINE_LANGUAGE_OPTIONS
+                             if value == f"moonshine:{language}")
+                active = value == engine
+            elif kind == "engine":
+                title = ASR_ENGINE_LABELS[value]
+                active = value == asr_engine_family(engine)
+            else:
+                title = CAPTION_MODE_LABELS[value]
+                active = value == caption_mode
+            visual = draw_styled_button_frame(box, active=active)
+            draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+                      title, visual.text, 13, True, False, "cm", family="Liberation Sans")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+        return
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
         draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 232))
@@ -22309,9 +22377,9 @@ def main():
             elif profile != 2 and restored_audio.get("voice_clean_level", 0):
                 restored_audio["voice_clean_level"] = 1
             state.set_audio_controls(**restored_audio)
-    instrument_layout = remembered_preferences.get("instrument_layout", "expanded")
+    instrument_layout = remembered_preferences.get("instrument_layout", "compact")
     if instrument_layout not in ("compact", "expanded"):
-        instrument_layout = "expanded"
+        instrument_layout = "compact"
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
@@ -22577,7 +22645,7 @@ def main():
     # makes it independent from the one live KiWi client until the second
     # transport/audio path is implemented deliberately.
     dual_vfo_open = bool(args.dual_vfo_preview)
-    dual_vfo_parent = "apps" if dual_vfo_open else "home"
+    dual_vfo_parent = "home"
     # Home closes B's transport to release the Kiwi slot, but it does not end
     # the operator's Dual session. Keep B's receiver/tuning profile in RAM so
     # re-entering Dual feels like returning to an instrument, not starting it.
@@ -24101,6 +24169,13 @@ def main():
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "vosc":
+            settings_menu_open = False
+            digital_menu_open = False
+            asr_panel_open = True
+            asr_moon_language_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
             tests_parent = parent
             settings_menu_open = False
@@ -25317,9 +25392,9 @@ def main():
                                     gesture = "network_launch"
                                 else:
                                     gesture = "lcd_nav"
-                            elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
+                            elif not LCD_800_MODE and not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
                                 gesture = "callsign_toggle"
-                            elif not picker_open and contains(ASR_TOGGLE_BOX, x, y):
+                            elif not LCD_800_MODE and not picker_open and contains(ASR_TOGGLE_BOX, x, y):
                                 gesture = "asr_toggle"
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
@@ -25684,7 +25759,7 @@ def main():
                                 if action == "home":
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
-                                    tests_panel_open = dual_vfo_parent == "apps"
+                                    tests_panel_open = False
                                 elif action in ("A", "B"):
                                     # A spectrum tap is an operator's source
                                     # selection, not merely a cosmetic focus.
@@ -26696,10 +26771,6 @@ def main():
                                 elif choice == "openwebrx":
                                     toggle_openwebrx_test()
                                     tests_panel_open = False
-                                elif choice == "dual":
-                                    tests_panel_open = False
-                                    activate_navigation_item(0, (("dual", "DUAL"),))
-                                    dual_vfo_parent = "apps"
                                 elif choice == "pattern" and retune_sweep is None:
                                     retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
                                 elif choice == "run":
@@ -27325,7 +27396,12 @@ def main():
                             if moved <= args.tap_px:
                                 selection = asr_option_at(x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
-                                if selection_kind == "caption_mode":
+                                if selection_kind == "back":
+                                    if asr_moon_language_open:
+                                        asr_moon_language_open = False
+                                    else:
+                                        asr_panel_open = False
+                                elif selection_kind == "caption_mode":
                                     if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
                                         state.set_asr_engine("whisper")
                                     state.set_caption_mode(selected_value)
@@ -28861,13 +28937,6 @@ def main():
                 draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
-            if not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open
-                or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open
-                or filter_panel_open or frequency_entry_open or dual_vfo_open
-            ):
-                draw_utc_clock(text_cache)
             if cw_workspace.open:
                 cw_workspace.draw(text_cache, wspr_receiver_choices())
             if qrss_workspace.open:

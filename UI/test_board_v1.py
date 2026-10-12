@@ -283,8 +283,8 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(views, set(ui.MAP_VIEWS))
         self.assertNotIn('clean', views)
 
-    def test_navigation_tiles_are_equal_squares(self):
-        self.assertEqual(ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H)
+    def test_navigation_tiles_match_home_button_spec(self):
+        self.assertEqual((ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H), (114, 64))
         back = ui.lcd_drawer_back_box()
         self.assertEqual(
             2 * ui.LCD_NAV_TILE_W + ui.LCD_NAV_GAP,
@@ -298,13 +298,14 @@ class BoardLayoutTests(unittest.TestCase):
                 box = ui.lcd_nav_box(index, len(items), has_back)
                 self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
                 self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
-        # Every Globe rail command reuses the same square launcher tile.
+        # The Globe commands retain their existing 114 px hit targets until
+        # that screen is migrated to the compact button geometry.
         ui.configure_output(True)
         ui.configure_popup_layout()
         for box in (ui.RADIOGARDEN_LIST_BOX, ui.RADIOGARDEN_VIEW_BOX,
                     ui.RADIOGARDEN_ZOOM_IN_BOX, ui.RADIOGARDEN_ZOOM_OUT_BOX):
             self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
-            self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
+            self.assertEqual(box[3] - box[1], 114)
         self.assertEqual(
             (
                 ui.RADIOGARDEN_LIST_BOX, ui.RADIOGARDEN_VIEW_BOX,
@@ -453,7 +454,7 @@ class BoardLayoutTests(unittest.TestCase):
     def test_mode_hit_selects_before_drawer(self):
         for compact in (True,False):
             for label, box in ui.lcd_home_mode_boxes(compact):
-                expected = 'NBFM' if label=='FMDX' else label
+                expected = 'NBFM' if label=='FM' else label
                 state=ui.SharedState('http://kiwi.test',7075,8,-95,-125,-15,3,'lsb',True)
                 selected=ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,compact)
                 self.assertEqual(selected,expected)
@@ -583,7 +584,7 @@ class WaterfallPresentationTests(unittest.TestCase):
              patch.object(ui,'draw_logical_rounded_rect'), \
              patch.object(ui,'lcd_nav_tile_background',return_value=(1,1,1)), \
              patch.object(ui,'menu_icon_texture',return_value=(1,1,1)), \
-             patch.object(ui,'draw_textured_quad'), patch.object(ui,'draw_radio_close_button') as back:
+             patch.object(ui,'draw_textured_quad'), patch.object(ui,'draw_text'), patch.object(ui,'draw_radio_close_button') as back:
             ui.draw_lcd_navigation(None,settings_open=True)
         back.assert_called_once_with(None,ui.lcd_drawer_back_box())
 
@@ -1172,7 +1173,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'lcd_nav_tile_background', return_value=(1, 1, 1)), \
              patch.object(ui, 'menu_icon_texture', return_value=(1, 1, 1)), \
-             patch.object(ui, 'draw_textured_quad'), \
+             patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_text'), \
              patch.object(ui, 'draw_lcd_home_bandwidth') as bandwidth, \
              patch.object(ui, 'draw_lcd_home_volume_slider') as volume:
             ui.draw_lcd_navigation(None, volume=0.5, muted=False, low_cut=-2400, high_cut=2400)
