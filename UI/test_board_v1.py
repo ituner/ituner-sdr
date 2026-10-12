@@ -1114,15 +1114,15 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
         self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
 
-    def test_selected_picker_tab_uses_cyan_fill_and_dark_text(self):
+    def test_selected_picker_tab_uses_dark_fill_and_light_text(self):
         box = (10, 20, 246, 72)
         fills = []
         colors = []
         with patch.object(ui, 'draw_logical_rounded_rect', side_effect=lambda *_args: fills.append(_args[5])), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_button(None, box, 'KIWI', selected=True)
-        self.assertEqual(fills[0], ui.UI_PRESSED_FILL)
-        self.assertEqual(colors[0], ui.UI_PRESSED_TEXT)
+        self.assertEqual(fills[0], ui.APP_UI_STYLE.palette.active_surface)
+        self.assertEqual(colors[0], ui.APP_UI_STYLE.palette.text)
 
     def test_two_line_button_inverts_both_labels_while_pressed(self):
         box = (10, 20, 104, 114)

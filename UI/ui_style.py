@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 class UIPalette:
     background: tuple = (18, 18, 18, 255)
     sidebar: tuple = (26, 26, 26, 255)
-    surface: tuple = (38, 38, 38, 255)
+    surface: tuple = (0, 0, 0, 255)
+    active_surface: tuple = (42, 42, 42, 255)
     selected_surface: tuple = (30, 30, 30, 255)
     border: tuple = (88, 88, 88, 255)
     text: tuple = (255, 255, 255)
@@ -43,10 +44,15 @@ class ButtonStyle:
     font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
 
     def resolve(self, *, active=False, pressed=False, danger=False) -> ButtonVisualState:
-        if pressed or active:
+        if pressed:
             return ButtonVisualState(
                 self.palette.focus, self.palette.focus,
                 self.palette.focus_text, 2,
+            )
+        if active:
+            return ButtonVisualState(
+                self.palette.active_surface, self.palette.focus,
+                self.palette.text, 2,
             )
         if danger:
             return ButtonVisualState(

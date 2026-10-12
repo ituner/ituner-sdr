@@ -851,16 +851,16 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertTrue(fitted.endswith("..."))
         self.assertLessEqual(len(fitted) * 10, 105)
 
-    def test_selected_filter_is_cyan_with_dark_text(self):
+    def test_selected_filter_has_dark_fill_and_cyan_border(self):
         box = (1090, 76, 1270, 128)
         with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 mock.patch.object(ui, "draw_text") as text:
             ui.draw_receiver_filter_button(self.Cache(), box, "LAN", True)
         rounded.assert_called_once_with(
             *box, ui.APP_UI_STYLE.button.radius,
-            ui.RECEIVER_LIST_THEME.focus, ui.RECEIVER_LIST_THEME.focus, 2,
+            ui.APP_UI_STYLE.palette.active_surface, ui.RECEIVER_LIST_THEME.focus, 2,
         )
-        self.assertEqual(text.call_args.args[4], (18, 18, 18))
+        self.assertEqual(text.call_args.args[4], ui.APP_UI_STYLE.palette.text)
 
     def test_receiver_rows_show_five_complete_and_a_sixth_teaser(self):
         boxes = [ui.station_tile(index, 0) for index in range(6)]
@@ -986,14 +986,17 @@ class ReceiverListStyleTests(unittest.TestCase):
         inner = (points[1][0] ** 2 + points[1][1] ** 2) ** 0.5
         self.assertAlmostEqual(inner / outer, 0.38196601125)
 
-    def test_shared_button_style_uses_cyan_active_state_everywhere(self):
+    def test_shared_button_style_separates_inactive_active_and_pressed_states(self):
         normal = ui.APP_UI_STYLE.button.resolve()
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
-        self.assertEqual(normal.fill, (38, 38, 38, 255))
-        self.assertEqual(active.fill, (0, 229, 255, 255))
-        self.assertEqual(active.text, (18, 18, 18))
-        self.assertEqual(pressed, active)
+        self.assertEqual(normal.fill, (0, 0, 0, 255))
+        self.assertEqual(normal.border, (88, 88, 88, 255))
+        self.assertEqual(active.fill, (42, 42, 42, 255))
+        self.assertEqual(active.border, (0, 229, 255, 255))
+        self.assertEqual(active.text, (255, 255, 255))
+        self.assertEqual(pressed.fill, (0, 229, 255, 255))
+        self.assertEqual(pressed.text, (18, 18, 18))
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
