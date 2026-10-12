@@ -8505,11 +8505,12 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         return
     x0, y0, x1, y1 = DESKTOP_1280_ANNUNCIATOR_BOX
     pressed = ui_button_pressed(DESKTOP_1280_ANNUNCIATOR_BOX)
-    draw_native_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (15, 31, 39, 244))
-    draw_native_line(x0, y0, x1, y0, (125, 147, 158, 168), 1)
-    draw_native_line(x0, y0, x0, y1, (93, 120, 132, 155), 1)
-    draw_native_line(x1, y0, x1, y1, (32, 50, 61, 215), 1)
-    draw_native_line(x0, y1, x1, y1, (53, 88, 98, 210), 1)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
+    draw_native_rect(x0, y0, x1, y1, visual.fill)
+    draw_native_line(x0, y0, x1, y0, visual.border, visual.border_width)
+    draw_native_line(x0, y0, x0, y1, visual.border, visual.border_width)
+    draw_native_line(x1, y0, x1, y1, visual.border, visual.border_width)
+    draw_native_line(x0, y1, x1, y1, visual.border, visual.border_width)
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     context_label = KIWI_MODE_CONTEXT.get(exact_mode, exact_mode)
@@ -8518,7 +8519,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         (x0 + x1) / 2,
         y0 + 13,
         context_label,
-        UI_PRESSED_TEXT if pressed else (214, 238, 233),
+        visual.text,
         11 if len(context_label) > 20 else 12,
         True,
         False,
@@ -14790,11 +14791,12 @@ def draw_desktop_1280_navigation(text_cache):
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
         pressed = ui_button_pressed((bx0, by0, bx1, by1))
-        draw_native_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL if pressed else (17, 29, 38, 218))
-        draw_native_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
-        draw_native_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
-        draw_native_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
-        draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
+        visual = APP_UI_STYLE.button.resolve(pressed=pressed)
+        draw_native_rect(bx0, by0, bx1, by1, visual.fill)
+        draw_native_line(bx0, by0, bx1, by0, visual.border, visual.border_width)
+        draw_native_line(bx0, by1, bx1, by1, visual.border, visual.border_width)
+        draw_native_line(bx0, by0, bx0, by1, visual.border, visual.border_width)
+        draw_native_line(bx1, by0, bx1, by1, visual.border, visual.border_width)
         tile_w = bx1 - bx0 - 8
         tile_h = by1 - by0 - 8
         tex, _tex_w, _tex_h = menu_icon_texture(
@@ -15366,8 +15368,8 @@ def lcd_nav_item_at(x, y, items=MENU_ITEMS):
 
 
 def lcd_nav_tile_background(text_cache):
-    """Return the lightly rounded shared Home-tile background texture."""
-    key = "lcd_nav_tile_background_v3_compact"
+    """Return the shared black Home-tile background texture."""
+    key = "lcd_nav_tile_background_v4_black"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -15376,12 +15378,8 @@ def lcd_nav_tile_background(text_cache):
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     rect = pygame.Rect(0, 0, width, height)
     radius = 10 * scale
-    pygame.draw.rect(surface, (17, 29, 38, 218), rect, border_radius=radius)
-    # One restrained outline preserves the instrument-panel treatment while
-    # rounding the formerly abrupt corners just enough for a touch UI.
-    pygame.draw.rect(surface, (86, 111, 122, 182), rect, width=scale, border_radius=radius)
-    pygame.draw.line(surface, (142, 164, 173, 116), (radius, 1), (width - radius, 1), scale)
-    pygame.draw.line(surface, (30, 49, 59, 188), (radius, height - 1), (width - radius, height - 1), scale)
+    pygame.draw.rect(surface, APP_UI_STYLE.palette.surface, rect, border_radius=radius)
+    pygame.draw.rect(surface, APP_UI_STYLE.palette.border, rect, width=scale, border_radius=radius)
     return text_cache.surface_texture(key, surface)
 
 
@@ -15704,19 +15702,17 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             continue
         nav_box = (bx0, by0, bx1, by1)
         pressed = ui_button_pressed(nav_box)
-        draw_logical_rounded_rect(
-            *nav_box, 8, UI_PRESSED_FILL if pressed else (38, 38, 38, 255),
-            (88, 88, 88, 255), 1,
-        )
+        visual = draw_styled_button_frame(nav_box, pressed=pressed)
         subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
         if subtitle:
             draw_text(text_cache, (bx0 + bx1) / 2, by0 + 23, label,
-                      (255, 255, 255), 13, True, False, "cm", family="Liberation Sans")
+                      visual.text, 13, True, False, "cm", family="Liberation Sans")
             draw_text(text_cache, (bx0 + bx1) / 2, by0 + 46, subtitle,
-                      (160, 160, 160), 13, True, False, "cm", family="Liberation Sans")
+                      visual.text if pressed else APP_UI_STYLE.palette.secondary_text,
+                      13, True, False, "cm", family="Liberation Sans")
         else:
             draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label.upper(),
-                      (255, 255, 255), 13, True, False, "cm", family="Liberation Sans")
+                      visual.text, 13, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,

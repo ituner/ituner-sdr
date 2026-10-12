@@ -1180,6 +1180,19 @@ class HomeRailInstrumentTests(unittest.TestCase):
         bandwidth.assert_not_called()
         volume.assert_not_called()
 
+    def test_large_home_buttons_use_the_shared_black_button_style(self):
+        normal = ui.APP_UI_STYLE.button.resolve()
+        frames = []
+        with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
+             patch.object(ui, 'draw_styled_button_frame', side_effect=lambda box, **kwargs: frames.append((box, kwargs)) or normal), \
+             patch.object(ui, 'draw_text'):
+            ui.draw_lcd_navigation(None)
+        self.assertEqual(len(frames), len(ui.MENU_ITEMS))
+        self.assertTrue(all(kwargs == {'pressed': False} for _box, kwargs in frames))
+        self.assertEqual(normal.fill, (0, 0, 0, 255))
+        self.assertEqual(normal.border, (88, 88, 88, 255))
+
 
 class ReceiverBrowserEmptyStateTests(unittest.TestCase):
     def setUp(self):
