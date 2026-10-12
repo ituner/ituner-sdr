@@ -93,9 +93,14 @@ For an offline repeat, retain the model cache and supply `--wheelhouse PATH`
 containing the exact locked wheels. `--verify-only` checks without installing;
 `--models-only` omits Python provisioning for model-cache maintenance.
 
-## Optional features outside the accepted baseline
+## Whisper and other native engines
 
-Whisper/whisper.cpp, RNNoise, Allosaurus/PyTorch and Moonshine Voice multilingual
+Whisper Base Q5_1 and the pinned `whisper.cpp` runtime are now included by both
+standard installers and by bootstrap verification. Their manifest is
+`config/whisper-runtime.json`; see [Whisper setup](whisper.md). The earlier
+CM5 baseline did not include Whisper.
+
+RNNoise, Allosaurus/PyTorch and Moonshine Voice multilingual
 or experimental streaming were **not installed by the tested CM5 baseline**.
 They are not pulled into the standard installer or represented as ready by this
 document. Their dedicated native builds/models need separate platform validation.

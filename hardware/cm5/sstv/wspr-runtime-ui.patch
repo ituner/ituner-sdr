@@ -1,0 +1,76 @@
+diff --git a/UI/kiwi_gl_display.py b/UI/kiwi_gl_display.py
+index 4e21b4d..c249dab 100644
+--- a/UI/kiwi_gl_display.py
++++ b/UI/kiwi_gl_display.py
+@@ -6076,28 +6076,38 @@ class WSPRDecodeWorker:
+             if osd_depth:
+                 detail += f" · OSD {osd_depth}"
+             self.session._set_decode_state("DECODING", detail=detail)
++            # wsprd writes ALL_WSPR.TXT and its hash table in the working
++            # directory. The installed UI is root-owned; each capture already
++            # has a private, writable directory that is cleaned up afterward.
++            wav_path = Path(wav_path).resolve()
+             process = subprocess.Popen(
+                 wsprd_background_command(wsprd_command(frequency_khz, wav_path, profile, osd_depth)),
++                cwd=str(wav_path.parent),
+                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+             )
+             deadline = time.monotonic() + WSPR_DECODE_TIMEOUT_SECONDS
+-            while process.poll() is None:
++            while True:
+                 if self.stop_event.is_set() or self.session.stop_event.is_set():
+-                    process.terminate()
+-                    try:
+-                        process.wait(timeout=2.0)
+-                    except subprocess.TimeoutExpired:
+-                        process.kill()
+                     return None
+-                if time.monotonic() >= deadline:
+-                    process.kill()
++                remaining = deadline - time.monotonic()
++                if remaining <= 0:
+                     raise RuntimeError("wsprd decode timeout")
+-                time.sleep(0.10)
+-            output, _unused = process.communicate(timeout=2.0)
+-            if process.returncode not in (0, None):
+-                raise RuntimeError(f"wsprd exited {process.returncode}")
++                try:
++                    # Drain output while waiting so a full pipe cannot stall
++                    # the decoder. communicate retains output between retries.
++                    output, _unused = process.communicate(timeout=min(0.25, remaining))
++                    break
++                except subprocess.TimeoutExpired:
++                    continue
++            if process.returncode != 0:
++                detail = " ".join(output.split())[-240:]
++                raise RuntimeError(f"wsprd exited {process.returncode}" + (f": {detail}" if detail else ""))
+             return parse_wsprd_output(output)
+         finally:
++            if process is not None:
++                if process.poll() is None:
++                    process.kill()
++                process.communicate()
+             WSPR_DECODE_SEMAPHORE.release()
+ 
+     def _capture_cycle(self, ws, frequency_khz, configured=False):
+@@ -6232,7 +6242,7 @@ class WSPRDecodeWorker:
+                         self.session._stand_down_decoder(detail)
+                         break
+                     retry_seconds = receiver_retry_delay(audio_failures, outage_started_at)
+-                    self.session._set_decode_state("RETRY", detail=f"audio retry in {retry_seconds:.0f}s")
++                    self.session._set_decode_state("RETRY", detail=f"Retry in {retry_seconds:.0f}s: {message}")
+                     if self.stop_event.wait(retry_seconds):
+                         break
+             finally:
+@@ -6394,7 +6404,10 @@ class WSPRMonitorSession:
+     def _set_decode_state(self, status, detail="", cycle_start=None, audio_seconds=None):
+         with self.lock:
+             self.decode_status = str(status)
+-            self.decode_detail = str(detail)[:62]
++            self.decode_detail = str(detail)[:240]
++            if status in ("CONNECTING", "ARMED", "RETRY", "ERROR", "STOPPED", "NO AUDIO"):
++                self.decode_audio_seconds = 0.0
++                self.decode_cycle_start = 0.0
+             if cycle_start is not None:
+                 self.decode_cycle_start = float(cycle_start)
+             if audio_seconds is not None:

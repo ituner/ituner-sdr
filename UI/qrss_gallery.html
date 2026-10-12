@@ -1,0 +1,184 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>iTuner · QRSS</title>
+<style>
+[hidden]{display:none!important}html{overflow-anchor:none;scrollbar-gutter:stable}:root{color-scheme:dark;font:16px system-ui;background:#071219;color:#d9e9ee}body{margin:0;padding:clamp(8px,1.5vw,22px)}h1,a{color:#68eac2}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}p,small{color:#a8bec6}button,select,input{font:inherit;background:#15343d;color:#d9e9ee;border:1px solid #3e6a73;border-radius:8px;padding:10px;min-height:44px;box-sizing:border-box}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:14px;margin:18px 0}#gallery{grid-template-columns:minmax(0,1fr)}article,.receiver{background:#11222a;border:1px solid #24414c;border-radius:10px;padding:14px}article button{width:100%;padding:0;border:0}article p{overflow-wrap:anywhere}.text{color:#d9e9ee;white-space:pre-wrap;overflow-wrap:anywhere}dialog{background:#071219;color:#d9e9ee;border:1px solid #3e6a73;border-radius:12px;max-width:95vw;max-height:90vh;overflow:auto}dialog::backdrop{background:#000c}#viewer{box-sizing:border-box;width:calc(100vw - 32px);max-width:calc(100vw - 32px)}#large{height:clamp(240px,50vh,520px);margin:16px 0}#gallery article>p:not(.text){height:1.5em;overflow:auto;margin:6px 0}#gallery .text{height:3em;overflow:auto;margin:4px 0 0;font-size:17px}.receiver .text{height:7em;overflow:auto}.receiver .receiver-detail{height:3em;overflow:auto}#detail{height:3em;overflow:auto}#text{height:9em;overflow:auto}.buttons{display:flex;gap:12px;flex-wrap:wrap;align-items:center}#notice{min-height:1.5em}.capture-updates{height:48px}
+.qrss-plot{height:clamp(300px,36vw,460px);background:#071219;display:grid;grid-template-columns:112px minmax(0,1fr);grid-template-rows:28px minmax(0,1fr) 24px;font:18px system-ui;text-align:left;color:#d9e9ee;padding:4px;box-sizing:border-box}
+.plot-head{display:flex;justify-content:space-between;gap:12px;overflow:hidden;white-space:nowrap;align-items:center}.plot-date{overflow:hidden;text-overflow:ellipsis}.plot-progress{flex-shrink:0}.plot-unit{align-self:center}.plot-frequency{display:flex;flex-direction:column;justify-content:space-between;font-variant-numeric:tabular-nums;padding:0 8px 0 0}.plot-viewport{position:relative;overflow:hidden;min-width:0;min-height:0}.plot-viewport img{position:absolute;display:block;max-width:none;max-height:none;object-fit:fill}.plot-time{grid-column:2;display:flex;justify-content:space-between;align-items:end;font-variant-numeric:tabular-nums}.plot-tracks{position:absolute;inset:0;pointer-events:none}.plot-track{position:absolute;left:5px;color:#ffbe5a;font:inherit;background:#071219a0}
+@media(max-width:600px){.qrss-plot{font-size:14px;grid-template-columns:94px minmax(0,1fr)}.plot-date{display:none}}
+</style>
+<header><div><h1>QRSS</h1><p>Slow waterfall captures + tentative Morse text</p></div><nav><a href="/sstv">SSTV</a> · <a href="/wspr">WSPR</a> · <a href="/hell">Hell RX</a> <a href="/cw">CW Morse</a> · <a href="/qrss" aria-current="page">QRSS</a></nav></header>
+<div id="receiver-toolbar"></div><p id="notice" role="status" aria-live="polite"></p><div id="decoders" class="grid"></div>
+<p>Both outputs share one Kiwi channel. AUTO follows up to six separate CW / FSKCW signals in the displayed span, each with its own frequency, shift and dot duration. Paired FSK tones count as one signal. Allow several characters to acquire a signal. Text remains tentative; fading, drift and overlapping stations can cause errors. DFCW and other patterns are visual only. Captures are kept even when no text is recognized.</p>
+<label>Receiver <select id="filter"><option value="">All receivers</option></select></label> <label>View <select id="view"><option value="all">All captures</option><option value="latest">Latest per receiver</option><option value="text">With tentative text</option></select></label>
+<div class="buttons"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
+<p id="status" role="status">Loading…</p><div class="capture-updates"><button id="refresh-captures" hidden>Show latest captures</button></div><main id="gallery" class="grid"></main>
+<dialog id="viewer"><div class="buttons"><button id="close">Close</button><a id="download" download>Download PNG</a></div><div id="large" class="qrss-plot"></div><p id="detail"></p><strong>Tentative Morse text</strong><p id="text" class="text"></p></dialog>
+<script src="/digital-controls.js"></script><script>
+const $=id=>document.getElementById(id);let timer,busy=false,images=[],page=0,selectedImage=null,visibleCaptures=null;
+const numeric={freq_khz:'USB dial frequency (kHz)',tone_hz:'Audio center (Hz; mark tone in manual modes)',span_hz:'Waterfall span (Hz)',shift_hz:'FSK mark / space separation (Hz)'};
+class QRSSControls extends DigitalControls{
+ constructor(){super('qrss',refresh);const extra=document.createElement('div');
+  for(const[key,label]of Object.entries(numeric)){const l=document.createElement('label');l.textContent=label;const input=document.createElement('input');input.id='q-'+key;input.type='number';input.step=key==='freq_khz'?'0.001':'0.1';input.required=true;input.oninput=()=>this.rf();l.append(input);extra.append(l)}
+  for(const[key,label,values]of [['qrss_mode','Text decoding mode',['AUTO','CW','FSKCW','VISUAL']],['dot_seconds','Seconds per dot',[3,6,10,30,60]],['minutes','Capture length (minutes)',[5,10,20,30]]]){const l=document.createElement('label');l.textContent=label;const select=document.createElement('select');select.id='q-'+key;for(const v of values)select.add(new Option(v==='VISUAL'?'Visual only':v,v));l.append(select);extra.append(l)}
+  const l=document.createElement('label');l.innerHTML='<input id="q-reverse" type="checkbox"> Reverse FSK mark / space';extra.append(l);const hint=document.createElement('small');hint.id='q-rf';extra.append(hint);this.form.querySelector('#start-label').before(extra);this.band.onchange=()=>this.usePreset();$('q-qrss_mode').onchange=()=>this.rf();
+ }
+ filterReceivers(selected){if(this.options?.hell_receivers)this.options.receivers=this.options.hell_receivers;super.filterReceivers(selected)}
+ rf(){const auto=$('q-qrss_mode').value==='AUTO';for(const key of ['dot_seconds','shift_hz','reverse'])$('q-'+key).disabled=auto;$('q-rf').textContent=(auto?'Search center RF: ':'Selected RF: ')+((Number($('q-freq_khz').value)*1000+Number($('q-tone_hz').value))/1e6).toFixed(6)+' MHz · one shared Kiwi channel';}
+ fill(p){for(const key of [...Object.keys(numeric),'qrss_mode','dot_seconds','minutes'])$('q-'+key).value=p[key];$('q-reverse').checked=p.reverse;this.rf()}
+ usePreset(){const p=this.options.presets.qrss.find(p=>p.id===this.band.value);if(p)this.fill(p)}
+ async open(row=null){await super.open(row);if(!this.options||!this.editor.open)return;if(row){const p=this.options.presets.qrss.find(p=>p.band===row.band);if(p)this.band.value=p.id;this.fill(row)}else{this.band.value='30';this.usePreset()}}
+ async submit(){if(!this.form.reportValidity())return;const config={server:this.receiver.value,preset:this.band.value,start:$('start-now').checked,qrss_mode:$('q-qrss_mode').value,reverse:$('q-reverse').checked};for(const key of [...Object.keys(numeric),'dot_seconds','minutes'])config[key]=Number($('q-'+key).value);await this.sendEditor(this.row?'edit':'add',config)}
+}
+const controls=new QRSSControls();
+function url(i){return '/qrss-images/'+i.id+'.png?v='+i.updated_ns}
+function acquisition(i){if(i.kind!=='receiving'&&!i.tracks?.length)return i.reception_detail||i.text_message;const a=i.acquisition;if(!a)return '';if(i.tracks?.length)return i.tracks.length+' tracked signals';return a.state==='locked'?a.mode+' · '+(a.rf_hz/1e6).toFixed(6)+' MHz · '+a.dot_seconds+' s/dot · shift '+a.shift_hz+' Hz':a.detail}
+function trackText(i){if(!i.tracks?.length)return i.tentative_text||'—';return i.tracks.map(t=>t.id+' · '+(t.rf_hz/1e6).toFixed(6)+' MHz · '+t.mode+' · '+t.dot_seconds+' s/dot · shift '+t.shift_hz+' Hz'+(t.active?'':' · last seen')+'\n'+(t.display_text||i.empty_text_message)).join('\n\n')}
+function previewText(i){
+ const tracks=(i.tracks||[]).filter(t=>t.display_text||t.tentative_text);
+ return tracks.length?tracks.map(t=>t.id+': '+(t.display_text||t.tentative_text).replace(/\s+/g,' ')).join('  |  '):i.text_message||i.tentative_text||'No decoded text';
+}
+function describe(i){return (i.kind==='receiving'?'LIVE':'SAVED')+' · '+i.receiver+' · '+i.band+' · '+(i.rf_hz/1e6).toFixed(6)+' MHz center · '+(acquisition(i)||i.mode+' · '+i.dot_seconds+' s/dot')+' · '+i.capture_utc}
+// Keep the previous pixels until the next image has loaded. A newer refresh
+// cancels an older pending result; unchanged saved images are not reloaded.
+function updateImage(img,src){
+ if(img.getAttribute('src')===src){delete img.dataset.pending;return}
+ if(img.dataset.pending===src)return;
+ img.dataset.pending=src;
+ const next=new Image();
+ next.onload=()=>{if(img.dataset.pending===src){img.src=src;delete img.dataset.pending}};
+ next.onerror=()=>{if(img.dataset.pending===src)delete img.dataset.pending};
+ next.src=src;
+}
+function setText(el,value){
+ if(el.textContent===value)return;
+ const top=el.scrollTop,left=el.scrollLeft;el.textContent=value;el.scrollTop=top;el.scrollLeft=left;
+}
+function updatePlot(root,i){
+ if(!root.children.length){
+  root.classList.add('qrss-plot');
+  root.innerHTML='<span class="plot-unit">MHz RF</span><div class="plot-head"><span class="plot-date"></span><span class="plot-progress"></span></div><div class="plot-frequency"><span></span><span></span><span></span></div><div class="plot-viewport"><img alt="QRSS spectrum"><div class="plot-tracks"></div></div><div class="plot-time"><span>Time → 0 s</span><span></span><span></span></div>';
+ }
+ const box=i.plot_box||[90,35,(i.width||1700)-10,355],width=box[2]-box[0],height=box[3]-box[1],img=root.querySelector('img');
+ img.style.width=((i.width||1700)/width*100)+'%';img.style.height=((i.height||390)/height*100)+'%';
+ img.style.left=(-box[0]/width*100)+'%';img.style.top=(-box[1]/height*100)+'%';
+ updateImage(img,url(i));
+ const windowSeconds=i.window_seconds||i.duration_seconds||1;
+ setText(root.querySelector('.plot-date'),i.capture_utc.replace('T',' ').replace('Z',' UTC'));
+ setText(root.querySelector('.plot-progress'),'Received '+Math.round(i.duration_seconds)+' / '+windowSeconds+' s');
+ const frequencies=[i.rf_hz+i.span_hz/2,i.rf_hz,i.rf_hz-i.span_hz/2];
+ [...root.querySelector('.plot-frequency').children].forEach((el,n)=>setText(el,(frequencies[n]/1e6).toFixed(6)));
+ const times=root.querySelector('.plot-time').children;setText(times[1],(windowSeconds/2)+' s');setText(times[2],windowSeconds+' s');
+ const parent=root.querySelector('.plot-tracks'),tracks=(i.tracks||[]).filter(t=>t.active&&Math.abs(t.rf_hz-i.rf_hz)<=i.span_hz/2),existing=new Map([...parent.children].map(e=>[e.dataset.id,e]));
+ for(const track of tracks){
+  let label=existing.get(track.id);if(!label){label=document.createElement('span');label.className='plot-track';label.dataset.id=track.id;parent.append(label)}
+  existing.delete(track.id);setText(label,track.id);const fraction=(i.rf_hz+i.span_hz/2-track.rf_hz)/i.span_hz;
+  label.style.top='clamp(0px, calc('+fraction*100+'% - 22px), calc(100% - 22px))';
+ }
+ for(const label of existing.values())label.remove();
+}
+function show(i){
+ const viewer=$('viewer'),top=viewer.scrollTop;
+ selectedImage=i.id;updatePlot($('large'),i);$('download').href=url(i);
+ setText($('detail'),describe(i));setText($('text'),(i.tracks?.length?trackText(i):i.text_message)||i.tentative_text||'No decoded text');
+ if(!viewer.open)viewer.showModal();else viewer.scrollTop=top;
+}
+function browse(){visibleCaptures=null;render()}
+$('close').onclick=()=>$('viewer').close();
+$('previous').onclick=()=>{page=Math.max(0,page-1);browse()};
+$('next').onclick=()=>{page++;browse()};
+$('view').onchange=$('filter').onchange=$('refresh-captures').onclick=()=>{page=0;browse()};
+// Snapshot immediately before a poll updates the DOM, after its network wait.
+// Keep the same capture at the same viewport offset, without fighting input
+// during the request. Fixed plot/text sizes make later image loads inert.
+function viewportAnchor(){
+ const cards=[...$('gallery').children],card=cards.find(c=>c.getBoundingClientRect().bottom>0&&c.getBoundingClientRect().top<innerHeight);
+ return {card,top:card?.getBoundingClientRect().top,x:scrollX,y:scrollY};
+}
+function restoreViewport(anchor){
+ const dy=anchor.card?.isConnected?anchor.card.getBoundingClientRect().top-anchor.top:0;
+ if(dy)window.scrollBy(0,dy);
+ else if(scrollY!==anchor.y)window.scrollTo(anchor.x,anchor.y);
+}
+function render(){
+ let rows=images.filter(i=>!$('filter').value||i.session_id===$('filter').value);
+ if($('view').value==='latest'){
+  const seen=new Set();rows=rows.filter(i=>{if(seen.has(i.session_id))return false;seen.add(i.session_id);return true});
+ }else if($('view').value==='text')rows=rows.filter(i=>i.tentative_text);
+ const pages=Math.max(1,Math.ceil(rows.length/12));if(visibleCaptures===null)page=Math.min(page,pages-1);
+ const gallery=$('gallery'),existing=new Map([...gallery.children].map(c=>[c.dataset.id,c]));
+ const desired=rows.slice(page*12,page*12+12);
+ if(visibleCaptures===null)visibleCaptures=desired;
+ else{
+  const latest=new Map(images.map(i=>[i.id,i]));
+  visibleCaptures=visibleCaptures.map(i=>latest.get(i.id)||i);
+ }
+ const visible=visibleCaptures;
+ // Polling updates existing captures, never inserts/reorders the page being
+ // read. The user chooses when to display a newly started capture.
+ $('refresh-captures').hidden=desired.map(i=>i.id).join(',')===visible.map(i=>i.id).join(',');
+ for(const [index,i] of visible.entries()){
+  let card=existing.get(i.id);
+  if(!card){
+   card=document.createElement('article');card.dataset.id=i.id;
+   const b=document.createElement('button'),plot=document.createElement('div'),caption=document.createElement('p'),text=document.createElement('p');
+   plot.className='qrss-plot';
+   b.append(plot);b.onclick=()=>show(images.find(row=>row.id===card.dataset.id)||i);b.ariaLabel='Enlarge QRSS capture';
+   text.className='text';card.append(b,caption,text);
+  }
+  existing.delete(i.id);
+  updatePlot(card.querySelector('.qrss-plot'),i);
+  const caption=card.children[1],text=card.children[2],description=describe(i),decoded='Tentative · '+previewText(i);
+  setText(caption,description);setText(text,decoded);
+  // Preserve nodes and scroll anchoring on ordinary five-second updates.
+  if(gallery.children[index]!==card)gallery.insertBefore(card,gallery.children[index]||null);
+ }
+ for(const card of existing.values())card.remove();
+ $('page').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page>=pages-1;
+ $('status').textContent=rows.length?rows.length+' captures · newest first · up to 300 retained':'Add a receiver to begin. QRSS characters can take minutes.';
+ if($('viewer').open){const i=images.find(i=>i.id===selectedImage);if(i)show(i)}
+}
+function updateReceivers(rows){
+ const parent=$('decoders'),existing=new Map([...parent.children].map(e=>[e.dataset.id,e]));
+ for(const [index,row] of rows.entries()){
+  let el=existing.get(row.id);
+  if(!el){
+   el=document.createElement('section');el.className='receiver';el.dataset.id=row.id;
+   const title=document.createElement('strong'),detail=document.createElement('p'),text=document.createElement('p');
+   detail.className='receiver-detail';text.className='text';
+   const actions=controls.buttons(row),[start,edit]=actions.children;
+   start.onclick=()=>controls.toggle(el.receiverRow,start);edit.onclick=()=>controls.open(el.receiverRow);
+   el.append(title,detail,actions,text);
+  }
+  el.receiverRow=row;existing.delete(row.id);
+  const [title,detail,actions,text]=el.children,[start,edit]=actions.children;
+  setText(title,row.name+' · '+row.band);
+  const description=row.qrss_mode+' · '+((row.freq_khz*1000+row.tone_hz)/1e6).toFixed(6)+' MHz center · '+row.status+' · '+(row.detail||'');
+  setText(detail,description);detail.title=row.detail||'';
+  setText(start,controls.pending.has(row.id)?'Applying…':row.running?'Stop':'Start');
+  start.disabled=edit.disabled=!controls.token||controls.pending.has(row.id);
+  start.ariaLabel=(row.running?'Stop ':'Start ')+row.name+' '+row.band;edit.ariaLabel='Edit '+row.name+' '+row.band;
+  const i=images.find(i=>i.session_id===row.id);setText(text,'Tentative text:\n'+(i?trackText(i):'—'));
+  if(parent.children[index]!==el)parent.insertBefore(el,parent.children[index]||null);
+ }
+ for(const el of existing.values())el.remove();
+}
+async function refresh(){
+ clearTimeout(timer);if(busy)return;busy=true;
+ try{
+  const r=await fetch('/api/qrss',{cache:'no-store'});if(!r.ok)throw Error();
+  const d=await r.json(),anchor=viewportAnchor();controls.setData(d);images=d.images;
+  const old=$('filter').value,names=new Map(images.map(i=>[i.session_id,i.receiver+' · '+i.band]));
+  for(const row of d.decoders)names.set(row.id,row.name+' · '+row.band);
+  const signature=JSON.stringify([...names]);
+  if($('filter').dataset.options!==signature){
+   $('filter').replaceChildren(new Option('All receivers',''));
+   for(const[k,n]of names)$('filter').add(new Option(n,k));
+   $('filter').value=names.has(old)?old:'';$('filter').dataset.options=signature;
+  }
+  updateReceivers(d.decoders);render();restoreViewport(anchor);
+ }catch(e){$('status').textContent='Cannot reach the SDR. Retrying…'}
+ finally{busy=false;timer=setTimeout(refresh,5000)}
+}
+refresh();
+</script></html>
+
+<script src="/log-search.js"></script>

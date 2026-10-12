@@ -1213,28 +1213,11 @@ class ReceiverBrowserEmptyStateTests(unittest.TestCase):
         rows = ui.filtered_stations([], "", "location", "local", set())
         self.assertEqual(rows, [])
 
-    def test_local_hides_the_builtin_kiwi_until_it_is_reachable(self):
+    def test_local_remains_visible_without_availability_probes(self):
         server = ui.LOCAL_KIWI_SERVER
-        # No health record yet: LOCAL is genuinely empty, so it shows the
-        # shared no-receivers message instead of a phantom placeholder.
-        self.assertEqual(
-            ui.filtered_stations(ui.STATIONS, "", "location", "local", set(), station_health={}),
-            [],
-        )
-        now = time.time()
-        healthy = {server: {"checked": now, "audio": True, "waterfall": True}}
-        reachable = ui.filtered_stations(ui.STATIONS, "", "location", "local", set(), station_health=healthy)
-        self.assertEqual([row[2] for row in reachable], [server])
-        stale = {server: {"checked": now - 90000, "audio": True, "waterfall": True}}
-        self.assertEqual(
-            ui.filtered_stations(ui.STATIONS, "", "location", "local", set(), station_health=stale),
-            [],
-        )
-        offline = {server: {"checked": now, "audio": False, "waterfall": False}}
-        self.assertEqual(
-            ui.filtered_stations(ui.STATIONS, "", "location", "local", set(), station_health=offline),
-            [],
-        )
+        for health in ({}, {server: {"checked": 1, "audio": False, "waterfall": False}}):
+            rows = ui.filtered_stations(ui.STATIONS, "", "location", "local", set(), station_health=health)
+            self.assertEqual([row[2] for row in rows], [server])
 
     def test_reachability_gate_leaves_other_sources_untouched(self):
         kiwi = ui.filtered_stations(ui.STATIONS, "", "location", "kiwi", set(), station_health={})

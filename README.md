@@ -6,6 +6,12 @@ PR #9 and accepted on both machines on 2026-09-27. PR #8 three-knob controls are
 not included. See [the baseline guide](docs/consolidated-baseline.md) and
 [validation results](docs/cm5-pr9-validation.md).
 
+The subsequent board interface, FM-DX, digital decoders, callsign search and
+local receiver recovery are consolidated in the shared source. See the
+[October consolidation record](docs/consolidation-2026-10.md) for the older
+PRs it incorporates or supersedes. Fresh builds do not need the historical
+CM5 decoder compatibility patches.
+
 For a CM5 with the verified working display, use:
 
 ```sh
@@ -18,19 +24,28 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
+Both installation paths use bounded local KiwiSDR name discovery for the main
+radio and digital decoders, without HTTP status probes. If multicast discovery
+fails, select a reserved LAN IP; stale cached addresses are not reused without
+identity verification. See [local receiver discovery](docs/local-receivers.md).
+
 For the custom CM5 carrier's **ES8316 codec / Class-D speaker amplifier**, add
 `--cm5-audio` to that command. This opt-in profile includes the verified audio
 driver/overlay setup, high-quality sample-rate conversion, volume/mute controls
 and automatic speaker shutdown when headphones are inserted. It preserves the
 working display/touch drivers. See [CM5 audio setup and required board repairs](docs/cm5-audio.md).
 
-The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet
-and HF-enhancement models automatically, using fixed versions and verified
+The installer provisions the tested Python engines and Vosk, Moonshine, Parakeet,
+Whisper Base Q5_1 and HF-enhancement models automatically, using fixed versions and verified
 checksums. It requires 64-bit Raspberry Pi OS Trixie / Python 3.13. See
 [dependency setup and version policy](docs/runtime-dependencies.md). This is an
 application/model baseline, not a complete OS image; experimental engines and
 hardware setup remain separate. The reference LCD's running source matches this
 baseline, but its old dirty Git checkout has not been reset or replaced.
+
+Whisper uses a pinned CPU-only `whisper.cpp` build and multilingual Base Q5_1,
+including Chinese and Romanian transcription. Installation makes the engine
+available; it preserves the selected ASR engine. See [Whisper installation](docs/whisper.md).
 
 ## CM5 / JD9365DA-H3 30-pin LCD hardware setup
 
@@ -160,12 +175,14 @@ After reboot, the following services are enabled:
 
 - `ituner-sdr-touch-ready.service` verifies the GT911 touch device.
 - `ituner-sdr.service` starts the active OpenGL radio UI.
-- `ituner-sdr-health.service` gently checks cached public-directory receiver availability for the UI.
+- Receiver directories refresh at startup and every 24 hours while the app stays running. Daily updates run off the UI thread, fetch central directory feeds only, preserve cached data on failure, and never launch receiver health probes.
+- Kiwi directory firmware modes (for example `rx8.wf3`) are saved in the catalog and shown as neutral `AUDIO 8` / `WF 3` badges. These are advertised total capacities, not tested health or free waterfall slots. Missing mode metadata remains unknown.
+- Background receiver health scans are disabled. Installers stop and mask the retired `ituner-sdr-health.service`. Public receiver listings use cached directory metadata, without `/status`, audio or waterfall probes. No receiver, including local receivers, is queried through `/status`. Connected Kiwi receivers supply live occupancy using `SET GET_USERS` / `MSG user_cb` on existing authenticated WebSockets, shared at a 5-second cadence per receiver address. Disconnected receivers use directory snapshots. WSPR reporting locations remain configured separately.
 
 Check them with:
 
 ```bash
-systemctl status ituner-sdr.service ituner-sdr-touch-ready.service ituner-sdr-health.service
+systemctl status ituner-sdr.service ituner-sdr-touch-ready.service
 ```
 
 The UI uses the Goodix touch event automatically. Audio is sent through PipeWire to its current default audio sink; the installer enables the selected user's persistent runtime so this works at boot without an interactive login.
@@ -216,7 +233,47 @@ sudo reboot
 
 - `display-driver/` — verified ST7701 panel module source and DSI1 overlay.
 - `touch-driver/` — verified GT911 DSI1/I2C overlay and circle-following touch test.
-- `UI/` — OpenGL active UI, Python reference UI, health checker, and required texture assets.
+- `UI/` — OpenGL active UI, Python reference UI, and required texture assets.
 - `UI/assets/menu-icons-svg/` — source SVG menu and Home icons.
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.
 - `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.
+
+## SSTV
+
+Digital tools → SSTV adds continuous receiver decoders, a 1280 × 800 touch
+gallery and LAN SSTV/WSPR pages with receiver selection and Add/Edit/Start/Stop controls. See [SSTV setup and supported modes](docs/sstv.md).
+
+## WSPR history and reporting
+
+WSPR spots survive decoder restarts and card removal. Browse sessions, dates
+and receiver/band archives on the touchscreen or `/wspr`, export CSV, and
+optionally upload new spots to WSPRnet with a separate identity per receiver.
+See [history and reporting setup](docs/WSPR_HISTORY.md).
+
+## Hell RX
+
+Seven Hellschreiber receive variants, local/web live strips and optional manual
+PSK Reporter spots: see [Hell RX setup and operation](docs/HELL.md).
+
+## QRSS
+
+Slow waterfall captures and tentative CW / FSKCW Morse text share one Kiwi
+channel. AUTO follows up to six keyed signals with independent frequency, FSK shift and
+Morse timing, with local and web receiver controls. See [QRSS setup and limits](docs/QRSS.md).
+
+## CW Morse
+
+Digital tools → CW Morse (CM5 Modes → CW) adds automatic Morse signal acquisition,
+independent speed estimation for up to four signals on one Kiwi channel, a live
+waterfall and persistent text history. Add/Edit/Start/Stop controls are shared
+with `/cw`; history can be exported as CSV. The pinned GGMorse engine builds
+locally during dependency installation without models or display-driver changes.
+See [CW setup, engine choice and limits](docs/cw.md).
+
+### Receiver client identity
+
+Use the exact lowercase client label **`ituner`** for receiver connections and
+all decoder modes, without mode suffixes. This is the user-selected project
+default, centralized in `UI/client_identity.py`. Kiwi listener names, OpenWebRX
+client identification and FM-DX receiver HTTP/WebSocket user agents share it.
+Reporter callsigns and locations for spot uploads remain separate settings.

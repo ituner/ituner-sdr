@@ -13,6 +13,8 @@ auditable and gives callers enough information to replay the waterfall.
 
 from __future__ import annotations
 
+from client_identity import CLIENT_NAME
+
 import argparse
 import array
 import base64
@@ -109,7 +111,7 @@ class WebSocket:
                 f"Origin: {origin_scheme}://{host}:{port}\r\n"
                 f"Sec-WebSocket-Key: {key}\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
-                "User-Agent: iTuner-OpenWebRX-Recorder/0.1\r\n"
+                f"User-Agent: {CLIENT_NAME}\r\n"
                 "\r\n"
             ).encode("ascii")
             sock.sendall(request)
@@ -421,7 +423,7 @@ class OpenWebRxRecorder:
                 image.write(pixels)
 
     def send_handshake(self, ws: WebSocket) -> None:
-        ws.send_text("SERVER DE CLIENT client=ituner-openwebrx-recorder.py type=receiver")
+        ws.send_text(f"SERVER DE CLIENT client={CLIENT_NAME} type=receiver")
         ws.send_text(
             json.dumps(
                 {

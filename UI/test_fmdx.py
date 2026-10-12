@@ -3,6 +3,7 @@ import math
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 import sys
 
@@ -247,54 +248,9 @@ class FmdxDirectoryTests(unittest.TestCase):
         policy.revoke()
         self.assertFalse(policy.can_tune("https://fm-a.test"))
 
-    def test_health_records_stable_receiver_identity(self):
-        health = {"stations": {}}
-        station = ("Kiwi", "Somewhere", "http://kiwi.test:8073", 0, 0, 1, 2, "kiwi")
-        kiwi_station_health.refresh_station_health(
-            health, station,
-            audio_probe=lambda _server: True,
-            waterfall_probe=lambda _server: "ok",
-            limit_probe=lambda _server: None,
-        )
-        entry = health["stations"]["http://kiwi.test:8073"]
-        self.assertEqual(entry["protocol"], "kiwi")
-        self.assertEqual(entry["receiver_id"], "kiwi:http://kiwi.test:8073")
-
-    def test_health_dispatches_fmdx_without_a_waterfall_probe(self):
-        health = {"stations": {}}
-        station = ("FM", "Somewhere", "https://fmdx.test", 0, 0, 1, 2, "fmdx")
-        called = []
-        result = kiwi_station_health.refresh_station_health(
-            health,
-            station,
-            audio_probe=lambda _server: self.fail("Kiwi audio probe used"),
-            waterfall_probe=lambda _server: self.fail("Kiwi waterfall probe used"),
-            fmdx_audio_probe=lambda server: called.append(server) or True,
-        )
-        self.assertTrue(result)
-        self.assertEqual(called, ["https://fmdx.test"])
-        self.assertTrue(health["stations"]["https://fmdx.test"]["audio"])
-        self.assertFalse(health["stations"]["https://fmdx.test"]["waterfall"])
-
-    def test_probe_list_always_includes_the_static_local_receiver(self):
-        # The LAN Kiwi is not in the public directory cache, so without this
-        # it would never be probed and LOCAL could never confirm it.
-        static = receiver_catalog.load_static_sources()
-        rows = kiwi_station_health.probe_station_list(
-            [("Kiwi", "Somewhere", "http://a.test:8073", 0, 0, 1, 2, "kiwi")],
-            {},
-            static,
-        )
-        self.assertIn("http://kiwisdr.local:8073", [row[2] for row in rows])
-        # And it is never added twice when the cache already lists it.
-        rows = kiwi_station_health.probe_station_list(
-            [("LAN", "Local network", "http://kiwisdr.local:8073", 0, 0, 1, 2, "kiwi")],
-            {},
-            static,
-        )
-        self.assertEqual([row[2] for row in rows], ["http://kiwisdr.local:8073"])
-        local_rows = kiwi_station_health.local_station_rows(rows, static)
-        self.assertEqual([row[2] for row in local_rows], ["http://kiwisdr.local:8073"])
+    def test_retired_health_checker_never_contacts_receivers(self):
+        with mock.patch("socket.socket", side_effect=AssertionError("Unexpected receiver probe")):
+            kiwi_station_health.main()
 
 
 if __name__ == "__main__":

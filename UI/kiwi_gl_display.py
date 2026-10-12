@@ -29,6 +29,7 @@ import html
 import wave
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
+import ipaddress
 from urllib.request import Request, urlopen
 
 
@@ -206,11 +207,13 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 from OpenGL import GL
 
+from client_identity import CLIENT_NAME
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
 import receiver_catalog
+from directory_refresh import DailyDirectoryRefresh
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 
@@ -789,7 +792,8 @@ MOONSHINE_SMALL_STREAMING_TRIAL = os.environ.get("ITUNER_MOONSHINE_SMALL_STREAMI
 WHISPER_CLI = vendor_path("whisper.cpp", "build", "bin", "whisper-cli")
 WHISPER_LANGUAGE = os.environ.get("ITUNER_WHISPER_LANGUAGE", "auto").strip() or "auto"
 _WHISPER_MODEL_NAMES = (
-    os.environ.get("ITUNER_WHISPER_MODEL", "ggml-tiny.bin"),
+    os.environ.get("ITUNER_WHISPER_MODEL", "ggml-base-q5_1.bin"),
+    "ggml-tiny.bin",
     "ggml-tiny.en.bin",
 )
 WHISPER_MODEL = next(
@@ -2468,6 +2472,11 @@ SETTINGS_MENU_ITEMS = (
     ("settings_back", "BACK"),
 )
 DIGITAL_MENU_ITEMS = (
+    ("wspr", "WSPR"),
+    ("sstv", "SSTV"),
+    ("hell", "Hell RX"),
+    ("qrss", "QRSS"),
+    ("cw", "CW MORSE"),
     ("digital_back", "BACK"),
 )
 WATERFALL_TUNE_X0 = 88
@@ -3143,7 +3152,7 @@ def detect_receiver_home(result):
     """Locate the device once from its public IP; retain a safe local fallback."""
     profile = dict(RECEIVER_HOME_FALLBACK)
     try:
-        request = Request("https://ipapi.co/json/", headers={"User-Agent": "iTuner-SDR/1.0"})
+        request = Request("https://ipapi.co/json/", headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=8) as response:
             payload = json.loads(response.read(16384).decode("utf-8", "replace"))
         lat, lon = float(payload["latitude"]), float(payload["longitude"])
@@ -3382,7 +3391,7 @@ def lookup_shortwave_frequency(frequency_khz):
         request = Request(
             SHORTWAVE_DB_QUICKSEARCH_URL,
             data=urlencode({"freq": f"{lookup_frequency:.3f}"}).encode("ascii"),
-            headers={"User-Agent": "iTuner-SDR/1.0"},
+            headers={"User-Agent": CLIENT_NAME},
             method="POST",
         )
         with urlopen(request, timeout=10) as response:
@@ -3392,7 +3401,7 @@ def lookup_shortwave_frequency(frequency_khz):
             fallback_frequency = int(round(float(frequency_khz) / 5.0) * 5)
             fallback_request = Request(
                 SHORTWAVE_LIVE_KHZ_URL.format(frequency=fallback_frequency),
-                headers={"User-Agent": "iTuner-SDR/1.0"},
+                headers={"User-Agent": CLIENT_NAME},
             )
             with urlopen(fallback_request, timeout=10) as response:
                 fallback_document = response.read(512 * 1024).decode("utf-8", "replace")
@@ -3559,7 +3568,10 @@ def parse_public_directory(page):
         loc = html.unescape(location.group(1)).strip() if location else "Public KiwiSDR"
         if name:
             used, total = parse_listener_capacity(entry)
-            stations.append((name, loc, server, used, total))
+            mode_match = re.search(r"<!--\s*mode=(.*?)\s*-->", entry, re.S)
+            mode = receiver_catalog.normalize_kiwi_directory_mode(mode_match.group(1) if mode_match else "")
+            row = (name, loc, server, used, total)
+            stations.append(row + (None, None, "kiwi", mode) if mode else row)
     return stations
 
 
@@ -3640,7 +3652,7 @@ def load_public_stations():
         # The directory returns the full listing to an ordinary HTTP client.
         # Its browser-only authentication marker instead yields an empty
         # response here, so retain the normal request and validate its output.
-        request = Request(PUBLIC_DIRECTORY_URL, headers={"User-Agent": "KiwiTouch/1.0"})
+        request = Request(PUBLIC_DIRECTORY_URL, headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=15) as response:
             stations = parse_public_directory(response.read().decode("utf-8", "replace"))
         if len(stations) >= 20:
@@ -3728,6 +3740,7 @@ def catalog_records_from_stations(stations):
         "lon": station[6] if len(station) > 6 else None,
         "protocol": station_receiver_type(station),
         "source_group": receiver_source_group(station),
+        "directory_mode": station[8] if len(station) > 8 else "",
     }) for station in stations)
 
 
@@ -3748,6 +3761,14 @@ def merge_station_rows(*groups):
         receiver_catalog.legacy_station_row(record)
         for record in receiver_catalog.merge_catalogs(records)
     )
+
+
+
+def refresh_public_stations(result_queue):
+    """Refresh the central Kiwi listing only; preserve cache on failure."""
+    rows = load_public_stations()
+    if rows:
+        result_queue.put(("ready", rows))
 
 
 def refresh_openwebrx_stations(result_queue):
@@ -3809,7 +3830,10 @@ def parse_globe_directory(script):
             total = int(field("users_max", "0"))
         except ValueError:
             used = total = 0
+        mode = receiver_catalog.normalize_kiwi_directory_mode(field("mode"))
+        audio_channels, waterfall_channels = receiver_catalog.kiwi_directory_channels(mode)
         receivers.append({
+            "mode": mode, "audio_channels": audio_channels, "waterfall_channels": waterfall_channels,
             "name": name, "location": location, "server": server,
             "lat": lat, "lon": lon, "used": used, "total": total,
             "receiver_type": "kiwi",
@@ -3831,7 +3855,7 @@ def load_globe_receivers():
 def refresh_globe_receivers(result):
     fmdx_receivers = fmdx.load_directory(FMDX_DIRECTORY_CACHE)
     try:
-        request = Request(GLOBE_DIRECTORY_URL, headers={"User-Agent": "KiwiTouch/1.0"})
+        request = Request(GLOBE_DIRECTORY_URL, headers={"User-Agent": CLIENT_NAME})
         with urlopen(request, timeout=15) as response:
             receivers = parse_globe_directory(response.read().decode("utf-8", "replace"))
         if len(receivers) >= 100:
@@ -3876,7 +3900,9 @@ def stations_from_globe_receivers(receivers):
         except (KeyError, TypeError, ValueError):
             lat = lon = None
         receiver_type = str(receiver.get("receiver_type") or "kiwi").casefold()
-        stations.append((name, location, server, used, total, lat, lon, receiver_type))
+        mode = receiver_catalog.normalize_kiwi_directory_mode(receiver.get("mode")) if receiver_type == "kiwi" else ""
+        row = (name, location, server, used, total, lat, lon, receiver_type)
+        stations.append(row + (mode,) if mode else row)
     return prioritize_local_station(stations)
 
 
@@ -3917,6 +3943,7 @@ def merge_receiver_map_stations(receivers, stations):
             "used": used,
             "total": total,
             "receiver_type": station_receiver_type(station),
+            "mode": station[8] if len(station) > 8 else "",
         })
         seen.add(key)
     return merged
@@ -4076,24 +4103,6 @@ def format_scout_measurement(sample):
     return f"{smeter_label}/{snr_label}"
 
 
-def local_kiwi_is_reachable(server, station_health, now=None):
-    """True for any receiver except an unconfirmed built-in LAN Kiwi.
-
-    The LAN Kiwi is a configured placeholder rather than a discovery result.
-    Listing it in LOCAL before a probe has confirmed it answers on this
-    network would make the segment claim a server that does not exist, so it
-    only appears once its health record reports a live stream.
-    """
-    if str(server).rstrip("/") != LOCAL_KIWI_SERVER.rstrip("/"):
-        return True
-    entry = (station_health or {}).get(str(server)) or {}
-    now = time.time() if now is None else now
-    checked = entry.get("checked", 0)
-    if not checked or now - checked > 86400:
-        return False
-    return entry.get("audio") is True or entry.get("waterfall") is True
-
-
 def filtered_stations(
     stations, query, sort_mode, route_filter="all", favorites=(),
     station_health=None, home_profile=None,
@@ -4111,11 +4120,6 @@ def filtered_stations(
         )
         return all(term in haystack for term in terms) and route_matches
     filtered = [station for station in stations if matches(station)]
-    if station_health is not None:
-        filtered = [
-            station for station in filtered
-            if local_kiwi_is_reachable(station[2], station_health)
-        ]
     sort_mode = normalize_receiver_sort_mode(sort_mode)
     name_key = lambda station: (station[0].casefold(), station[1].casefold())
     if sort_mode == "name_az":
@@ -4158,7 +4162,7 @@ def bottom_station_title(name, location):
 
 
 def health_prioritized_stations(stations, station_health, sort_mode):
-    """Retain the requested sort order; health is expressed by row badges."""
+    """Retain the requested sort order; availability probing is disabled."""
     return list(stations)
 
 
@@ -5521,6 +5525,7 @@ class SharedState:
     def set_external_audio(self, enabled):
         with self.lock:
             self.external_audio = bool(enabled)
+            self.external_audio_generation = getattr(self, 'external_audio_generation', 0) + 1
             self.external_audio_sink_released = not self.external_audio
 
     def external_audio_snapshot(self):
@@ -7111,28 +7116,38 @@ class WSPRDecodeWorker:
             if osd_depth:
                 detail += f" · OSD {osd_depth}"
             self.session._set_decode_state("DECODING", detail=detail)
+            # wsprd writes ALL_WSPR.TXT and its hash table in the working
+            # directory. The installed UI is root-owned; each capture already
+            # has a private, writable directory that is cleaned up afterward.
+            wav_path = Path(wav_path).resolve()
             process = subprocess.Popen(
                 wsprd_background_command(wsprd_command(frequency_khz, wav_path, profile, osd_depth)),
+                cwd=str(wav_path.parent),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
             deadline = time.monotonic() + WSPR_DECODE_TIMEOUT_SECONDS
-            while process.poll() is None:
+            while True:
                 if self.stop_event.is_set() or self.session.stop_event.is_set():
-                    process.terminate()
-                    try:
-                        process.wait(timeout=2.0)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
                     return None
-                if time.monotonic() >= deadline:
-                    process.kill()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise RuntimeError("wsprd decode timeout")
-                time.sleep(0.10)
-            output, _unused = process.communicate(timeout=2.0)
-            if process.returncode not in (0, None):
-                raise RuntimeError(f"wsprd exited {process.returncode}")
+                try:
+                    # Drain output while waiting so a full pipe cannot stall
+                    # the decoder. communicate retains output between retries.
+                    output, _unused = process.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode != 0:
+                detail = " ".join(output.split())[-240:]
+                raise RuntimeError(f"wsprd exited {process.returncode}" + (f": {detail}" if detail else ""))
             return parse_wsprd_output(output)
         finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
             WSPR_DECODE_SEMAPHORE.release()
 
     def _capture_cycle(self, ws, frequency_khz, configured=False):
@@ -7267,7 +7282,7 @@ class WSPRDecodeWorker:
                         self.session._stand_down_decoder(detail)
                         break
                     retry_seconds = receiver_retry_delay(audio_failures, outage_started_at)
-                    self.session._set_decode_state("RETRY", detail=f"audio retry in {retry_seconds:.0f}s")
+                    self.session._set_decode_state("RETRY", detail=f"Retry in {retry_seconds:.0f}s: {message}")
                     if self.stop_event.wait(retry_seconds):
                         break
             finally:
@@ -7293,7 +7308,9 @@ def wspr_stream_config(config):
 class WSPRMonitorSession:
     """One independent, intentionally slow W/F-only Kiwi monitor stream."""
 
-    def __init__(self, config, user, log_callback=None, decoder_settings=None, decode_scheduler=None):
+    def __init__(self, config, user, log_callback=None, decoder_settings=None, decode_scheduler=None, history=None):
+        self.archive = history
+        self.run_id = ""
         self.config = wspr_stream_config(config)
         self.user = str(user)
         self.log_callback = log_callback
@@ -7342,6 +7359,7 @@ class WSPRMonitorSession:
         with self.lock:
             return {
                 "status": self.status,
+                "run_id": self.run_id,
                 "logs": tuple(self.logs),
                 "history": tuple(self.history),
                 "smeter_dbm": self.smeter_dbm,
@@ -7405,6 +7423,8 @@ class WSPRMonitorSession:
     def start(self):
         if self.thread and self.thread.is_alive():
             return
+        if self.archive is not None and (not self.run_id or self.stop_event.is_set()):
+            self.run_id = self.archive.begin_run(self.config)
         self.stop_event.clear()
         if not self.decoder_stood_down and (self.decoder is None or not (self.decoder.thread and self.decoder.thread.is_alive())):
             self.decoder = WSPRDecodeWorker(self)
@@ -7429,7 +7449,10 @@ class WSPRMonitorSession:
     def _set_decode_state(self, status, detail="", cycle_start=None, audio_seconds=None):
         with self.lock:
             self.decode_status = str(status)
-            self.decode_detail = str(detail)[:62]
+            self.decode_detail = str(detail)[:240]
+            if status in ("CONNECTING", "ARMED", "RETRY", "ERROR", "STOPPED", "NO AUDIO"):
+                self.decode_audio_seconds = 0.0
+                self.decode_cycle_start = 0.0
             if cycle_start is not None:
                 self.decode_cycle_start = float(cycle_start)
             if audio_seconds is not None:
@@ -7441,6 +7464,7 @@ class WSPRMonitorSession:
             return
         payload = {
             "wspr_tile_id": self.key,
+            "run_id": self.run_id,
             "band_m": str(self.config.get("band", "")),
             "session_receiver": str(self.config.get("name", "")),
             "session_server": str(self.config.get("server", "")),
@@ -7667,7 +7691,9 @@ class WSPRMonitorSession:
 class WSPRMonitorManager:
     """Own the bounded live-session set without leaking public Kiwi slots."""
 
-    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None, log_file=None):
+    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None, log_file=None, history=None):
+        self.history = history
+        self.hydrators = []
         self.user = user
         self.log_callback = log_callback
         self.decoder_settings = decoder_settings or WSPRDecoderSettings()
@@ -7692,11 +7718,18 @@ class WSPRMonitorManager:
         expected_config = dict(session.config)
 
         def worker():
-            spots = load_wspr_recent_spots(self.log_file, expected_config, session.decoded_spots.maxlen)
+            if self.history is not None:
+                self.history.ready.wait()
+                spots = self.history.recent(expected_config, session.decoded_spots.maxlen)
+            else:
+                spots = load_wspr_recent_spots(self.log_file, expected_config, session.decoded_spots.maxlen)
             if self.sessions.get(session.key) is session and session.matches_config(expected_config):
                 session.restore_decoded_spots(spots)
 
-        threading.Thread(target=worker, name=f"wspr-log-restore-{session.key}", daemon=True).start()
+        self.hydrators = [t for t in self.hydrators if t.is_alive()]
+        thread = threading.Thread(target=worker, name=f"wspr-log-restore-{session.key}", daemon=True)
+        self.hydrators.append(thread)
+        thread.start()
 
     def set_log_callback(self, callback):
         self.log_callback = callback
@@ -7742,7 +7775,7 @@ class WSPRMonitorManager:
     def capacity_snapshot(self, server):
         with self.capacity_lock:
             value = self.capacities.get(str(server))
-        return value[:2] if value else (None, None)
+        return kiwi.occupancy.snapshot(server) or (value[:2] if value else (None, None))
 
     def receiver_grid_snapshot(self, server):
         with self.capacity_lock:
@@ -7760,8 +7793,7 @@ class WSPRMonitorManager:
                 self.start_at.pop(key, None)
         runnable = {key: config for key, config in wanted.items() if not config.get("paused", False)}
         active = tuple(list(runnable)[:WSPR_MONITOR_MAX_LIVE])
-        for key in active:
-            config = runnable[key]
+        for key, config in wanted.items():
             session = self.sessions.get(key)
             needs_start = session is None or (session is not None and not session.matches_config(config))
             if session is None or not session.matches_config(config):
@@ -7769,10 +7801,12 @@ class WSPRMonitorManager:
                     session.stop()
                 session = WSPRMonitorSession(
                     config, self.user, self.log_callback, self.decoder_settings,
-                    self.decode_scheduler,
+                    self.decode_scheduler, history=self.history,
                 )
                 self.sessions[key] = session
                 self._hydrate_session_async(session)
+            if key not in active:
+                continue
             needs_start = needs_start or session.stop_event.is_set()
             if needs_start and key not in self.start_at:
                 # Restored sessions must remain staggered after a boot so the
@@ -7800,10 +7834,13 @@ class WSPRMonitorManager:
             session.stop()
         self.active_keys = ()
         self.start_at.clear()
+        for thread in self.hydrators:
+            thread.join()
+        self.hydrators.clear()
 
 
 class MainReceiverCapacityMonitor:
-    """Poll only the tuned Kiwi's lightweight status endpoint in the background."""
+    """Display shared WebSocket occupancy, falling back to directory metadata."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -7842,6 +7879,9 @@ class MainReceiverCapacityMonitor:
                     self.inflight = False
 
     def snapshot(self, server):
+        live = kiwi.occupancy.snapshot(server)
+        if live is not None:
+            return live
         with self.lock:
             if str(server or "").rstrip("/") != self.server:
                 return None, None
@@ -8542,7 +8582,30 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
 
 def radio_wspr_box():
     """Dedicated WSPR workspace launcher below the Kiwi mode controls."""
-    return LCD_NAV_X0 + 10, 522, LOGICAL_W - 10, 584
+    return LCD_NAV_X0 + 10, 522, (LCD_NAV_X0 + LOGICAL_W) / 2 - 4, 584
+
+def radio_sstv_box():
+    """SSTV alongside WSPR in PR12's Modes drawer."""
+    return (LCD_NAV_X0 + LOGICAL_W) / 2 + 4, 522, LOGICAL_W - 10, 584
+
+def radio_hell_box():
+    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
+    return LCD_NAV_X0 + 10, 596, LCD_NAV_X0 + 10 + width, 658
+
+def radio_qrss_box():
+    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
+    return LCD_NAV_X0 + 14 + width, 596, LCD_NAV_X0 + 14 + 2*width, 658
+
+def radio_cw_box():
+    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
+    return LCD_NAV_X0 + 18 + 2*width, 596, LOGICAL_W - 10, 658
+
+
+def radio_decoder_boxes():
+    """Shared drawing and touch targets for the five Kiwi decoder tools."""
+    return (("wspr", radio_wspr_box()), ("sstv", radio_sstv_box()),
+            ("hell", radio_hell_box()), ("qrss", radio_qrss_box()),
+            ("cw", radio_cw_box()))
 
 
 def radio_variant_layout(modes):
@@ -8729,8 +8792,10 @@ def radio_option_at(
         for _family, modes, box in radio_mode_layout(mode_families):
             if contains(box, x, y):
                 return "mode_cycle", modes
-        if LCD_800_MODE and contains(radio_wspr_box(), x, y):
-            return "workspace", "wspr"
+        if LCD_800_MODE and receiver_worker_protocol(receiver_type) == "kiwi":
+            for workspace, box in radio_decoder_boxes():
+                if contains(box, x, y):
+                    return "workspace", workspace
     else:
         for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active, fmdx_shared_control):
             if contains(box, x, y):
@@ -8902,8 +8967,11 @@ def draw_radio_setup_panel(
             if reveal_y >= box[3]:
                 label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
                 draw_radio_option(text_cache, box, label, option == step_hz)
-        if receiver_worker_protocol(receiver_type) == "kiwi" and reveal_y >= radio_wspr_box()[3]:
-            draw_radio_option(text_cache, radio_wspr_box(), "WSPR", False)
+        if receiver_worker_protocol(receiver_type) == "kiwi":
+            labels = {"wspr": "WSPR", "sstv": "SSTV", "hell": "HELL RX", "qrss": "QRSS", "cw": "CW"}
+            for workspace, box in radio_decoder_boxes():
+                if reveal_y >= box[3]:
+                    draw_radio_option(text_cache, box, labels[workspace], False)
         return
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
@@ -9892,7 +9960,7 @@ def whisper_transcribe(pcm16, translate=False):
         ]
         if translate:
             # Whisper's multilingual models translate the source speech to
-            # English locally. The installer defaults to ggml-tiny.bin (not
+            # English locally. The installer defaults to multilingual Base Q5_1 (not
             # the English-only ggml-tiny.en.bin fallback).
             command.append("--translate")
         result = subprocess.run(
@@ -11175,30 +11243,45 @@ def maidenhead_grid_from_latlon(latitude, longitude):
     )
 
 
-def kiwi_status_metadata(server):
-    """Return published capacity plus a grid, preferring explicit locator."""
-    url = f"{str(server or '').rstrip('/')}/status"
-    if not url.startswith(("http://", "https://")):
-        raise ValueError("receiver URL is invalid")
+def cached_receiver_metadata(server):
+    """Read directory metadata only; never contact a receiver to test it.
+
+    Counts are advertised snapshots, not a guarantee of current availability.
+    Keep unknown values unknown when the cached directory omits them.
+    """
+    endpoint = str(server or "").rstrip("/")
+    for row in STATIONS:
+        if str(row[2]).rstrip("/") == endpoint:
+            used, total = station_fields(row)[3:5]
+            grid = None
+            if len(row) >= 7:
+                grid = maidenhead_grid_from_latlon(row[5], row[6])
+            if used is not None or total is not None or grid:
+                return used, total, grid
     try:
-        request = Request(url, headers={"User-Agent": "KiwiTouch/1.0"})
-        with urlopen(request, timeout=WSPR_CAPACITY_TIMEOUT_SECONDS) as response:
-            status = response.read().decode("utf-8", "replace")
-    except OSError:
-        raise
-    users = re.search(r"(?:^|\s)users=(\d+)", status)
-    maximum = re.search(r"(?:^|\s)users_max=(\d+)", status)
-    match = re.search(r"(?:^|\s)grid=([A-R]{2}[0-9]{2}(?:[A-X]{2})?)", status, re.IGNORECASE)
-    grid = match.group(1).upper() if match else None
-    if grid is None:
-        gps = re.search(r"(?:^|\s)gps=\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", status)
-        if gps:
-            grid = maidenhead_grid_from_latlon(gps.group(1), gps.group(2))
-    return (int(users.group(1)) if users else None, int(maximum.group(1)) if maximum else None, grid)
+        entries = json.loads(GLOBE_DIRECTORY_CACHE.read_text())
+    except (OSError, ValueError, TypeError):
+        entries = []
+    for row in entries if isinstance(entries, list) else []:
+        if isinstance(row, dict) and str(row.get("server", "")).rstrip("/") == endpoint:
+            grid = row.get("grid")
+            if not wspr_grid_is_valid(grid):
+                grid = maidenhead_grid_from_latlon(row.get("lat"), row.get("lon"))
+            return row.get("used"), row.get("total"), grid
+    return None, None, None
+
+
+def kiwi_status_metadata(server):
+    """Read WebSocket occupancy and saved directory location; never HTTP /status."""
+    used, total, grid = cached_receiver_metadata(server)
+    live = kiwi.occupancy.snapshot(server)
+    if live is not None:
+        used, total = live
+    return used, total, grid
 
 
 def kiwi_status_grid(server):
-    """Read a Kiwi receiver's Maidenhead locator, deriving it from GPS if needed."""
+    """Read a locator from saved directory metadata without network requests."""
     try:
         _used, _total, grid = kiwi_status_metadata(server)
     except (OSError, ValueError):
@@ -14514,6 +14597,10 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
                 surface, color,
                 (cx - 10, cy + offset_y), (cx + 26, cy + offset_y), stroke,
             )
+    elif kind in ("sstv", "hell", "qrss", "cw"):
+        pygame.draw.rect(surface, color, (cx-29, cy-23, 58, 43), 3, border_radius=4)
+        pygame.draw.circle(surface, dim, (cx+15, cy-11), 5)
+        pygame.draw.lines(surface, color, False, ((cx-25, cy+14), (cx-10, cy-5), (cx+1, cy+7), (cx+10, cy-2), (cx+25, cy+14)), 3)
     elif kind == "rx":
         # A compact, swept spherical wireframe based on the receiver-globe
         # reference, not a set of free-floating orbital rings.
@@ -14625,7 +14712,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     try:
-        if kind in ("network", "list", "favorite"):
+        if kind in ("sstv", "hell", "qrss", "cw", "network", "list", "favorite"):
             draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
                            (232, 248, 250, 232), (82, 235, 231, 150))
         else:
@@ -16445,6 +16532,18 @@ def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LI
     return ReceiverBadge("KIWI", theme.kiwi, theme.primary_text)
 
 
+
+def receiver_directory_badges(station, theme=RECEIVER_LIST_THEME):
+    """Neutral advertised capacities, never health/availability indicators."""
+    if station_receiver_type(station) != "kiwi":
+        return ()
+    mode = station[8] if len(station) > 8 else ""
+    audio, waterfall = receiver_catalog.kiwi_directory_channels(mode)
+    if audio is None:
+        return ()
+    return tuple(ReceiverBadge(label, theme.secondary_text, theme.secondary_text)
+                 for label in (f"AUDIO {audio}", f"WF {waterfall}"))
+
 def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME,
                         background=None):
     """Draw a uniform outlined pill and return its occupied width."""
@@ -16625,15 +16724,7 @@ def draw_station_picker(
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
         selected = receiver_servers_match(server, selected_server)
         pending = receiver_servers_match(server, pending_server)
-        entry_health = station_health.get(server, {})
         receiver_type = station_receiver_type(station)
-        displayed_health = dict(entry_health)
-        if receiver_type == "fmdx":
-            # FM-DX derives its local waterfall from the verified audio feed;
-            # it has no separate remote waterfall endpoint to probe.
-            displayed_health["waterfall"] = displayed_health.get("audio")
-        checked = entry_health.get("checked", 0)
-        health_fresh = time.time() - checked <= 86400
         pressed = ui_button_pressed(box)
         focused = selected or pending
         fill = theme.focus if pressed else (theme.selected_background if focused else theme.row_background)
@@ -16669,18 +16760,18 @@ def draw_station_picker(
         badge_y = box[1] + 52
         badge_x = left
         badges = (
-            receiver_health_badge("AUDIO", displayed_health, "audio", health_fresh, pending, theme),
-            receiver_health_badge("WATERFALL", displayed_health, "waterfall", health_fresh, pending, theme),
             receiver_source_badge(receiver_type, local_receiver, theme),
-        )
+        ) + receiver_directory_badges(station, theme)
         for badge in badges:
             badge_x += draw_receiver_badge(
                 text_cache, badge_x, badge_y, badge, theme, background=fill,
             ) + 8
-        draw_text(
-            text_cache, badge_x + 6, badge_y + 14, distance_label, secondary_color,
-            theme.label_size, False, False, "lm", family=theme.font_family,
-        )
+        distance_width = text_cache.texture(distance_label, theme.label_size, secondary_color, family=theme.font_family)[1]
+        if right - badge_x >= distance_width + 8:
+            draw_text(
+                text_cache, right, badge_y + 14, distance_label, secondary_color,
+                theme.label_size, False, False, "rm", family=theme.font_family,
+            )
     if notice:
         notice_box = receiver_list_notice_box()
         visual = draw_styled_button_frame(notice_box, active=True)
@@ -20784,7 +20875,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 if session:
                     session.close()
                 state.connection_attempt(server_generation, "audio")
-                session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent="iTuner-SDR")
+                session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent=CLIENT_NAME)
                 session.connect()
                 generation = server_generation
                 leveler = mapper = None
@@ -21139,6 +21230,7 @@ def snd_meter_worker(
                 stop_audio_player(player)
                 player = None
                 player_channels = None
+                state.mark_external_audio_sink_released()
                 if stop_event.wait(0.10):
                     break
                 continue
@@ -21986,6 +22078,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
 
 
 def main():
+    global STATIONS
     global LCD_RADIO_DRAWER_PROGRESS
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
@@ -22053,7 +22146,7 @@ def main():
     parser.add_argument("--station-zoom", type=int, default=13)
     parser.add_argument("--tune-step-hz", type=int, default=100)
     parser.add_argument("--zoom-osd-seconds", type=float, default=ZOOM_OSD_SECONDS)
-    parser.add_argument("--user", default="Codex OpenGL SDR display")
+    parser.add_argument("--user", default=CLIENT_NAME)
     parser.add_argument("--audio", action=argparse.BooleanOptionalAction, default=True, help="play Kiwi PCM through the selected local audio backend")
     parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="alsa" if CM5_AUDIO else "pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
@@ -22776,9 +22869,13 @@ def main():
     wspr_decoder_settings_open = False
     wspr_decoder_settings = WSPRDecoderSettings(wspr_decoder_profile, wspr_decoder_osd_depth)
     wspr_decode_scheduler = WSPRDecodeScheduler()
+    from wspr_history import WSPRHistory
+    from wspr_history_view import WSPRHistoryView
+    wspr_archive = WSPRHistory(args.wspr_log_file)
+    wspr_history_view = WSPRHistoryView(sys.modules[__name__], wspr_archive)
     wspr_monitor = WSPRMonitorManager(
         args.user, decoder_settings=wspr_decoder_settings,
-        decode_scheduler=wspr_decode_scheduler, log_file=args.wspr_log_file,
+        decode_scheduler=wspr_decode_scheduler, log_file=args.wspr_log_file, history=wspr_archive,
     )
     # Parsing historic JSONL happens once off the render thread. The active
     # graph thereafter receives precomputed dots directly from this cache.
@@ -22789,6 +22886,51 @@ def main():
     # sidecar retains personal best hourly decode rates across reboots.
     wspr_decode_rates = WSPRDecodeRateTracker(args.wspr_log_file)
     wspr_decode_rates.start()
+    from sstv_monitor import SSTVManager
+    from sstv_workspace import SSTVWorkspace
+    sstv_manager = SSTVManager(kiwi, args.user)
+    from hell_monitor import HellManager
+    from hell_workspace import HellWorkspace
+    hell_manager = HellManager(kiwi, args.user)
+    hell_workspace = HellWorkspace(sys.modules[__name__], hell_manager)
+    from cw_monitor import CWManager
+    from cw_workspace import CWWorkspace
+    cw_manager = CWManager(kiwi, args.user)
+    from cw_listen import CWListener
+    cw_manager.listener = CWListener(sys.modules[__name__], args, state,
+                                    available=lambda: not dual_audio_mixer.active_snapshot())
+    cw_workspace = CWWorkspace(sys.modules[__name__], cw_manager)
+    from qrss_monitor import QRSSManager
+    from qrss_workspace import QRSSWorkspace
+    qrss_manager = QRSSManager(kiwi, args.user)
+    qrss_workspace = QRSSWorkspace(sys.modules[__name__], qrss_manager)
+    from digital_web import DigitalWebBridge, wspr_snapshot, receiver_options, ReceiverController
+    digital_web = DigitalWebBridge()
+    sstv_manager.ensure_web()
+    if sstv_manager.web:
+        sstv_manager.web.bridge = digital_web
+        sstv_manager.web.hell = hell_manager
+        sstv_manager.web.cw = cw_manager
+        cw_manager.web_port = sstv_manager.web_port
+        sstv_manager.web.qrss = qrss_manager
+        qrss_manager.web_port = sstv_manager.web_port
+        hell_manager.web_port = sstv_manager.web_port
+        sstv_manager.web.wspr_history = wspr_archive
+    digital_web_next_snapshot = 0.0
+    digital_web_next_options = 0.0
+    sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+    if sstv_manager.web:
+        from log_search_workspace import install_search
+        log_search_service = sstv_manager.web.search_history()
+        for search_mode, search_workspace in (
+                ('wspr', wspr_history_view), ('sstv', sstv_workspace),
+                ('hell', hell_workspace), ('qrss', qrss_workspace), ('cw', cw_workspace)):
+            install_search(search_workspace, search_mode, log_search_service)
+
+    from gallery_motion import GalleryMotion
+    gallery_motions = [GalleryMotion(workspace, mode) for mode, workspace in (
+        ('sstv', sstv_workspace), ('hell', hell_workspace),
+        ('qrss', qrss_workspace), ('cw', cw_workspace))]
     wspr_mini_textures = {}
     wspr_selected_band = str(wspr_preferences.get("selected_band", "20"))
     if wspr_selected_band not in wspr_known_bands:
@@ -22831,9 +22973,8 @@ def main():
             except queue.Full:
                 pass
 
-    # Local Kiwi location is authoritative for a local WSPR receiver. Do the
-    # small status read off the render thread, then use it as the automatic
-    # distance reference unless the operator has explicitly supplied another.
+    # Use saved directory location only. A manually configured receiving
+    # location remains authoritative; no standalone receiver probes.
     threading.Thread(target=refresh_local_wspr_grid, name="wspr-local-grid", daemon=True).start()
     wspr_identity_open = False
     wspr_identity_field = "reporter"
@@ -22862,6 +23003,12 @@ def main():
         target=refresh_openwebrx_stations,
         args=(openwebrx_result_queue,), name="openwebrx-directory", daemon=True,
     ).start()
+    public_result_queue = queue.Queue(maxsize=1)
+    daily_directories = DailyDirectoryRefresh((
+        lambda: refresh_public_stations(public_result_queue),
+        lambda: refresh_globe_receivers(globe_result_queue),
+        lambda: refresh_openwebrx_stations(openwebrx_result_queue),
+    ))
     globe_yaw = math.radians(-20)
     globe_pitch = math.radians(18)
     globe_scale = 0.72
@@ -23171,6 +23318,8 @@ def main():
         record.update(extra)
         try:
             append_wspr_local_log(args.wspr_log_file, event, record)
+            if event == "wspr_decode":
+                wspr_archive.record(dict(record, event=event), live=True)
             # New WSPR decodes are folded into all four graph spans once here,
             # never re-parsed from disk by the OpenGL render loop.
             wspr_distance_cache.ingest(event, record)
@@ -23646,6 +23795,47 @@ def main():
         drain_queue(line_queue)
         wf_texture.clear()
 
+    def digital_receiver_options():
+        from sstv_monitor import PRESETS
+        _server, frequency, *_rest = state.snapshot()
+        mode, *_radio = state.radio_snapshot()
+        options = receiver_options(wspr_receiver_choices(), WSPR_BANDS, PRESETS,
+                                [*sstv_manager.configs, *wspr_tiles, *hell_manager.configs, *qrss_manager.configs, *cw_manager.configs],
+                                ('Current dial', frequency, mode.lower()))
+        from hell_modes import PRESETS as HELL_PRESETS, MODES as HELL_MODES
+        options['presets']['hell'] = list(HELL_PRESETS)
+        options['hell_modes'] = HELL_MODES
+        from qrss_modes import PRESETS as QRSS_PRESETS
+        options['presets']['qrss'] = list(QRSS_PRESETS)
+        from cw_modes import PRESETS as CW_PRESETS
+        options['presets']['cw'] = list(CW_PRESETS)
+        kind_of = globals().get('station_receiver_type', lambda row: 'kiwi')
+        kiwi_servers = {row[2] for row in wspr_receiver_choices() if kind_of(row) == 'kiwi'}
+        kiwi_servers.update(row['server'] for row in (*hell_manager.configs, *qrss_manager.configs, *cw_manager.configs))
+        options['hell_receivers'] = [row for row in options['receivers'] if row['server'] in kiwi_servers]
+        return options
+
+    receiver_controller = ReceiverController(sstv_manager, wspr_tiles, wspr_monitor, digital_receiver_options, hell_manager, qrss_manager, cw_manager)
+    digital_web.publish_options(digital_receiver_options())
+
+    def apply_web_receiver_control(mode, key, action, config):
+        nonlocal preferences_dirty, digital_web_next_snapshot, wspr_sessions, wspr_workspace_scroll
+        tile = receiver_controller.apply(mode, key, action, config)
+        if mode == 'wspr':
+            wspr_sessions = {item['band'] for item in wspr_tiles}
+            wspr_workspace_scroll = clamp(wspr_workspace_scroll, 0.0, wspr_workspace_scroll_max(wspr_tiles))
+            if action in ('edit', 'delete'):
+                texture = wspr_mini_textures.pop(key, None)
+                if texture is not None:
+                    texture.close()
+            write_wspr_local_log('monitor_web_' + action, band_m=tile.get('band'),
+                                 receiver=tile.get('name'), server=tile.get('server'))
+            preferences_dirty = True
+            write_remembered_view(force=True)
+        digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot(), qrss_manager.snapshot(), cw_manager.snapshot())
+        digital_web.publish_options(digital_receiver_options())
+        digital_web_next_snapshot = time.monotonic() + 1
+
     def refresh_wspr_waterfalls():
         """Keep active WSPR cards current even while their workspace is hidden."""
         wspr_monitor.sync(wspr_tiles)
@@ -23759,6 +23949,10 @@ def main():
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
+        sstv_workspace.open = False
+        hell_workspace.open = False
+        qrss_workspace.open = False
+        cw_workspace.open = False
         wake_controls()
         menu_open = False
         frequency_drawer_open = False
@@ -23959,6 +24153,13 @@ def main():
                 dual_vfo_sources["A"] = dict(live_source)
                 dual_vfo_profiles["A"] = dict(carried_profile)
             start_dual_vfo_clients()
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind in ("sstv", "hell", "qrss", "cw"):
+            settings_menu_open = digital_menu_open = False
+            active_server, active_freq, *_ = state.snapshot()
+            active_mode, *_ = state.radio_snapshot()
+            ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[kind]).show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
@@ -24657,7 +24858,19 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if waterfall_focus_progress() > 0.01 and not (
+                            if cw_workspace.open:
+                                gesture = "cw_workspace"
+                                cw_workspace.drag_begin(x, y)
+                            elif qrss_workspace.open:
+                                gesture = "qrss_workspace"
+                                qrss_workspace.drag_begin(x, y)
+                            elif hell_workspace.open:
+                                gesture = "hell_workspace"
+                                hell_workspace.drag_begin(x, y)
+                            elif sstv_workspace.open:
+                                gesture = "sstv_workspace"
+                                sstv_workspace.drag_begin(x, y)
+                            elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
                                 or globe_open
                                 or rtl_lab_open
@@ -25120,6 +25333,9 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                        elif gesture in ("sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
+                            {"sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
+                             "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
                                 wspr_workspace_dragged = True
@@ -26071,6 +26287,30 @@ def main():
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
                             wake_controls()
+                        elif touch_started and gesture == "cw_workspace":
+                            if cw_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                cw_workspace.tap(x, y, wspr_receiver_choices())
+                            wake_controls()
+                        elif touch_started and gesture == "qrss_workspace":
+                            if qrss_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                qrss_workspace.tap(x, y, wspr_receiver_choices())
+                            wake_controls()
+                        elif touch_started and gesture == "hell_workspace":
+                            if hell_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                hell_workspace.tap(x, y, wspr_receiver_choices())
+                            wake_controls()
+                        elif touch_started and gesture == "sstv_workspace":
+                            if sstv_workspace.swipe(start_x, start_y, x, y):
+                                pass
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                sstv_workspace.tap(x, y, wspr_receiver_choices())
+                            wake_controls()
                         elif touch_started and gesture == "wspr_add":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -26171,19 +26411,16 @@ def main():
                                 ))
                             wake_controls()
                         elif touch_started and gesture == "wspr_expanded_log":
-                            moved_y = y - start_y
-                            moved = max(abs(x - start_x), abs(moved_y))
-                            if moved <= args.tap_px:
-                                if contains(WSPR_EXPANDED_LOG_BACK_BOX, x, y):
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                navigation = wspr_history_view.tap(x, y)
+                                if navigation == 'home':
+                                    wspr_panel_open = False
+                                if navigation in ('back', 'home'):
                                     wspr_expanded_log_open = False
                                     wspr_expanded_log_id = ""
                                     wspr_expanded_log_scroll = 0
                             else:
-                                # One line per modest finger travel keeps the
-                                # log readable while still feeling direct.
-                                wspr_expanded_log_scroll = max(
-                                    0, wspr_expanded_log_scroll - int(round(moved_y / 24.0))
-                                )
+                                wspr_history_view.page_by(1 if y < start_y else -1)
                             wake_controls()
                         elif touch_started and gesture == "wspr_tile_settings":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -26598,6 +26835,14 @@ def main():
                                                     0.20,
                                                 )
                                                 remember_current_view()
+                                    elif kind == "workspace" and value in ("sstv", "hell", "qrss", "cw"):
+                                        radio_setup_open = False
+                                        radio_family_open = None
+                                        active_server, active_freq, *_ = state.snapshot()
+                                        active_mode, *_ = state.radio_snapshot()
+                                        sstv_workspace.open = hell_workspace.open = qrss_workspace.open = cw_workspace.open = False
+                                        ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[value]).show(active_server, active_freq, active_mode)
+                                        tests_panel_open = dj_tune_open = filter_panel_open = False
                                     elif kind == "workspace" and value == "wspr":
                                         radio_setup_open = False
                                         radio_family_open = None
@@ -27708,37 +27953,41 @@ def main():
                 except (OSError, ValueError, TypeError):
                     station_health = {}
                 next_health_reload = now + 3.0
-            while True:
-                try:
-                    openwebrx_result, openwebrx_payload = openwebrx_result_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if openwebrx_result == "ready":
-                    catalog_stations = merge_station_rows(openwebrx_payload, catalog_stations)
-                    globe_receivers = merge_receiver_map_stations(
-                        globe_receivers, catalog_stations,
-                    )
-                    all_stations = merge_station_rows(
-                        stations_from_globe_receivers(globe_receivers), catalog_stations,
-                    )
-                    stations = filtered_stations(
-                        all_stations, station_query, station_sort,
-                        station_route_filter, favorite_servers, station_health,
-                        receiver_home_profile,
-                    )
-                    if picker_open and not picker_map_open and not search_open:
-                        center_active_receiver_in_current_list()
-                    else:
-                        station_scroll = clamp(
-                            station_scroll, 0,
-                            station_page_max(stations, int(fmdx_disclaimer_open)),
+            daily_directories.poll()
+            for directory_label, directory_queue in (
+                ("Kiwi", public_result_queue), ("OpenWebRX", openwebrx_result_queue),
+            ):
+                while True:
+                    try:
+                        directory_result, directory_payload = directory_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if directory_result == "ready":
+                        catalog_stations = merge_station_rows(directory_payload, catalog_stations)
+                        globe_receivers = merge_receiver_map_stations(
+                            globe_receivers, catalog_stations,
                         )
-                    print(
-                        f"gl OpenWebRX directory ready: {len(openwebrx_payload)} receiver(s)",
-                        flush=True,
-                    )
-                else:
-                    print(f"gl OpenWebRX directory unavailable: {openwebrx_payload}", flush=True)
+                        all_stations = merge_station_rows(
+                            stations_from_globe_receivers(globe_receivers), catalog_stations,
+                        )
+                        stations = filtered_stations(
+                            all_stations, station_query, station_sort,
+                            station_route_filter, favorite_servers, station_health,
+                            receiver_home_profile,
+                        )
+                        if picker_open and not picker_map_open and not search_open:
+                            center_active_receiver_in_current_list()
+                        else:
+                            station_scroll = clamp(
+                                station_scroll, 0,
+                                station_page_max(stations, int(fmdx_disclaimer_open)),
+                            )
+                        print(
+                            f"gl {directory_label} directory ready: {len(directory_payload)} receiver(s)",
+                            flush=True,
+                        )
+                    else:
+                        print(f"gl {directory_label} directory unavailable: {directory_payload}", flush=True)
             while True:
                 try:
                     globe_result, globe_payload = globe_result_queue.get_nowait()
@@ -27765,6 +28014,7 @@ def main():
                     globe_status = f"{len(globe_receivers)} GPS receivers ready"
                 else:
                     globe_status = "Map feed unavailable; using saved GPS map"
+            STATIONS = all_stations
             while True:
                 try:
                     globe_event, globe_server = globe_mixer.events.get_nowait()
@@ -28414,6 +28664,17 @@ def main():
             # after a reboot even if the operator is currently on the radio
             # screen, then keep their slow W/F or audio-FFT rows advancing
             # while the workspace is hidden.
+            if time.monotonic() >= digital_web_next_options:
+                digital_web.publish_options(digital_receiver_options())
+                digital_web_next_options = time.monotonic() + 10
+            digital_web.drain(apply_web_receiver_control)
+            sstv_manager.tick()
+            hell_manager.tick()
+            qrss_manager.tick()
+            cw_manager.tick()
+            if time.monotonic() >= digital_web_next_snapshot:
+                digital_web.publish(sstv_manager.snapshot(), wspr_snapshot(wspr_tiles, wspr_monitor), hell_manager.snapshot(), qrss_manager.snapshot(), cw_manager.snapshot())
+                digital_web_next_snapshot = time.monotonic() + 1
             if wspr_tiles or wspr_monitor.sessions:
                 refresh_wspr_waterfalls()
             if wspr_panel_open:
@@ -28460,9 +28721,8 @@ def main():
                             if str(tile.get("server", "")).rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
                             else None
                         )
-                        draw_wspr_expanded_log(
-                            text_cache, tile, monitor, card_grid, wspr_expanded_log_scroll
-                        )
+                        wspr_history_view.select(tile, monitor)
+                        wspr_history_view.draw(text_cache)
                 elif wspr_decoder_settings_open:
                     draw_wspr_decoder_settings(
                         text_cache, wspr_decoder_profile, wspr_decoder_osd_depth
@@ -28608,6 +28868,14 @@ def main():
                 or filter_panel_open or frequency_entry_open or dual_vfo_open
             ):
                 draw_utc_clock(text_cache)
+            if cw_workspace.open:
+                cw_workspace.draw(text_cache, wspr_receiver_choices())
+            if qrss_workspace.open:
+                qrss_workspace.draw(text_cache, wspr_receiver_choices())
+            if hell_workspace.open:
+                hell_workspace.draw(text_cache, wspr_receiver_choices())
+            if sstv_workspace.open:
+                sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -28638,7 +28906,18 @@ def main():
         scout_probe.stop()
         rtl_lab.stop()
         stop_dual_vfo_clients()
+        digital_web.close()
+        cw_manager.stop()
+        cw_workspace.close()
+        qrss_manager.stop()
+        qrss_workspace.close()
+        hell_manager.stop()
+        hell_workspace.close()
+        sstv_manager.stop()
+        sstv_workspace.close()
         wspr_monitor.stop()
+        wspr_history_view.close()
+        wspr_archive.close()
         for texture in wspr_mini_textures.values():
             texture.close()
         stop_event.set()

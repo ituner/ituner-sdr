@@ -10,6 +10,8 @@ negotiated source properties to its own UI.
 
 from __future__ import annotations
 
+from client_identity import CLIENT_NAME
+
 import array
 import json
 import math
@@ -121,7 +123,7 @@ class OpenWebRxSession:
         output_rate: int = 12_000,
         hd_output_rate: int = 48_000,
         connect_timeout: float = 10.0,
-        user_agent: str = "iTuner-SDR/0.1",
+        user_agent: str = CLIENT_NAME,
     ):
         self.endpoint = endpoint_url(endpoint)
         self.output_rate = int(output_rate)

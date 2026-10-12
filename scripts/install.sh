@@ -68,6 +68,9 @@ awk '/^# BEGIN ITUNER SDR$/ {skip=1; next} /^# END ITUNER SDR$/ {skip=0; next} !
 } >"${config_txt}"
 
 install -m 0644 "${repo_dir}"/UI/*.py "${repo_dir}"/UI/*.json /opt/ituner-sdr/UI/
+cp -a "${repo_dir}/UI/sstv_vendor" "${repo_dir}/UI/cw_vendor" /opt/ituner-sdr/UI/
+cp -a "${repo_dir}/licenses" /opt/ituner-sdr/
+install -m 0644 "${repo_dir}"/UI/*.html "${repo_dir}"/UI/*.js /opt/ituner-sdr/UI/
 install -d -m 0755 /opt/ituner-sdr/UI/assets
 cp -a "${repo_dir}/UI/assets/." /opt/ituner-sdr/UI/assets/
 install -m 0755 "${repo_dir}/scripts/start-opengl.sh" /usr/local/lib/ituner-sdr/start-opengl.sh
@@ -79,9 +82,12 @@ install -m 0755 "${repo_dir}/scripts/touch-test.sh" /usr/local/bin/ituner-sdr-to
 [[ -f /etc/ituner-sdr.conf ]] || install -m 0644 "${repo_dir}/config/ituner-sdr.conf" /etc/ituner-sdr.conf
 sed -e "s/__ITUNER_SDR_USER__/${app_user}/g" -e "s/__ITUNER_SDR_UID__/${app_uid}/g" "${repo_dir}/systemd/ituner-sdr.service" >/etc/systemd/system/ituner-sdr.service
 install -m 0644 "${repo_dir}/systemd/ituner-sdr-touch-ready.service" /etc/systemd/system/ituner-sdr-touch-ready.service
-sed "s/__ITUNER_SDR_USER__/${app_user}/g" "${repo_dir}/systemd/ituner-sdr-health.service" >/etc/systemd/system/ituner-sdr-health.service
 usermod -aG video,input,render,audio "${app_user}"
 loginctl enable-linger "${app_user}"
+# Retire the old scanner on upgrades as well as fresh installations.
+systemctl disable --now ituner-sdr-health.service 2>/dev/null || true
+rm -f /etc/systemd/system/ituner-sdr-health.service
+ln -s /dev/null /etc/systemd/system/ituner-sdr-health.service
 systemctl daemon-reload
-systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service ituner-sdr-health.service
+systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 echo 'Installation complete. Reboot now so the display and touch overlays can load: sudo reboot'

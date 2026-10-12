@@ -15,7 +15,8 @@ fixed or unavailable control is touched, so no input is ever silently ignored.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -189,6 +190,22 @@ class ReceiverCapabilities:
         )
 
 
+def kiwi_directory_channels(mode):
+    """Advertised firmware capacity, not free channels or a connectivity test."""
+    match = re.fullmatch(r"rx([0-9]+)[._]wf([0-9]+)", str(mode or "").strip().lower())
+    if not match:
+        return None, None
+    audio, waterfall = map(int, match.groups())
+    if not 1 <= audio <= 64 or not 0 <= waterfall <= audio:
+        return None, None
+    return audio, waterfall
+
+
+def normalize_kiwi_directory_mode(mode):
+    audio, waterfall = kiwi_directory_channels(mode)
+    return f"rx{audio}.wf{waterfall}" if audio is not None else ""
+
+
 @dataclass(frozen=True)
 class ReceiverRecord:
     """One receiver, independent of how it is rendered or probed."""
@@ -207,6 +224,15 @@ class ReceiverRecord:
     listeners_used: Optional[int] = None
     listeners_total: Optional[int] = None
     favorite: bool = False
+    directory_mode: str = ""
+
+    @property
+    def audio_channels(self):
+        return kiwi_directory_channels(self.directory_mode)[0]
+
+    @property
+    def waterfall_channels(self):
+        return kiwi_directory_channels(self.directory_mode)[1]
 
     def legacy_row(self):
         return legacy_station_row(self)
@@ -341,6 +367,7 @@ def normalize_receiver(record: Mapping) -> ReceiverRecord:
         listeners_used=_as_int(record.get("listeners_used", record.get("used"))),
         listeners_total=_as_int(record.get("listeners_total", record.get("total"))),
         favorite=bool(record.get("favorite", False)),
+        directory_mode=normalize_kiwi_directory_mode(record.get("directory_mode") or record.get("mode")) if protocol == "kiwi" else "",
     )
 
 
@@ -355,7 +382,7 @@ def legacy_station_row(record: ReceiverRecord):
         record.name, record.location, record.endpoint,
         record.listeners_used, record.listeners_total,
         record.latitude, record.longitude, record.protocol,
-    )
+    ) + ((record.directory_mode,) if record.directory_mode else ())
 
 
 def records_from_kiwi_directory(rows: Iterable[Sequence]) -> tuple:
@@ -376,6 +403,7 @@ def records_from_kiwi_directory(rows: Iterable[Sequence]) -> tuple:
             "name": name, "location": location, "server": endpoint,
             "used": used, "total": total, "lat": lat, "lon": lon,
             "protocol": infer_protocol(endpoint, declared),
+            "directory_mode": row[8] if len(row) > 8 else "",
         }))
     return tuple(records)
 
@@ -459,7 +487,16 @@ def merge_catalogs(*groups) -> tuple:
         for item in group or ():
             record = normalize_receiver(item)
             endpoint = canonical_endpoint(record.endpoint)
-            if not endpoint or record.id in seen_ids or endpoint in seen_endpoints:
+            if not endpoint:
+                continue
+            if record.id in seen_ids or endpoint in seen_endpoints:
+                # Preserve first-source labels/ordering while filling missing
+                # advertised capacity from another directory for the same URL.
+                if record.directory_mode:
+                    for index, existing in enumerate(merged):
+                        if canonical_endpoint(existing.endpoint) == endpoint and existing.protocol == "kiwi" and not existing.directory_mode:
+                            merged[index] = replace(existing, directory_mode=record.directory_mode)
+                            break
                 continue
             seen_ids.add(record.id)
             seen_endpoints.add(endpoint)

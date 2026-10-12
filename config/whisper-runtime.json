@@ -1,0 +1,10 @@
+{
+  "version": "1.9.4",
+  "commit": "927cfce34f31707e17f2bff35c349632fb9e2c3a",
+  "source_url": "https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/927cfce34f31707e17f2bff35c349632fb9e2c3a",
+  "source_sha256": "41b664fee09e79176ac277b5237debec34f8d74af3c7d71f333f1ec67989ecde",
+  "model_revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+  "model_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin",
+  "model_sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+  "model_name": "ggml-base-q5_1.bin"
+}

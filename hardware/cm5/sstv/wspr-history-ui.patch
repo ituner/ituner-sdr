@@ -1,0 +1,182 @@
+diff --git a/UI/kiwi_gl_display.py b/UI/kiwi_gl_display.py
+index c249dab..d37c3b0 100644
+--- a/UI/kiwi_gl_display.py
++++ b/UI/kiwi_gl_display.py
+@@ -6268,7 +6268,9 @@ def wspr_stream_config(config):
+ class WSPRMonitorSession:
+     """One independent, intentionally slow W/F-only Kiwi monitor stream."""
+ 
+-    def __init__(self, config, user, log_callback=None, decoder_settings=None, decode_scheduler=None):
++    def __init__(self, config, user, log_callback=None, decoder_settings=None, decode_scheduler=None, history=None):
++        self.archive = history
++        self.run_id = ""
+         self.config = wspr_stream_config(config)
+         self.user = str(user)
+         self.log_callback = log_callback
+@@ -6317,6 +6319,7 @@ class WSPRMonitorSession:
+         with self.lock:
+             return {
+                 "status": self.status,
++                "run_id": self.run_id,
+                 "logs": tuple(self.logs),
+                 "history": tuple(self.history),
+                 "smeter_dbm": self.smeter_dbm,
+@@ -6380,6 +6383,8 @@ class WSPRMonitorSession:
+     def start(self):
+         if self.thread and self.thread.is_alive():
+             return
++        if self.archive is not None and (not self.run_id or self.stop_event.is_set()):
++            self.run_id = self.archive.begin_run(self.config)
+         self.stop_event.clear()
+         if not self.decoder_stood_down and (self.decoder is None or not (self.decoder.thread and self.decoder.thread.is_alive())):
+             self.decoder = WSPRDecodeWorker(self)
+@@ -6419,6 +6424,7 @@ class WSPRMonitorSession:
+             return
+         payload = {
+             "wspr_tile_id": self.key,
++            "run_id": self.run_id,
+             "band_m": str(self.config.get("band", "")),
+             "session_receiver": str(self.config.get("name", "")),
+             "session_server": str(self.config.get("server", "")),
+@@ -6645,7 +6651,9 @@ class WSPRMonitorSession:
+ class WSPRMonitorManager:
+     """Own the bounded live-session set without leaking public Kiwi slots."""
+ 
+-    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None, log_file=None):
++    def __init__(self, user, log_callback=None, decoder_settings=None, decode_scheduler=None, log_file=None, history=None):
++        self.history = history
++        self.hydrators = []
+         self.user = user
+         self.log_callback = log_callback
+         self.decoder_settings = decoder_settings or WSPRDecoderSettings()
+@@ -6670,11 +6678,18 @@ class WSPRMonitorManager:
+         expected_config = dict(session.config)
+ 
+         def worker():
+-            spots = load_wspr_recent_spots(self.log_file, expected_config, session.decoded_spots.maxlen)
++            if self.history is not None:
++                self.history.ready.wait()
++                spots = self.history.recent(expected_config, session.decoded_spots.maxlen)
++            else:
++                spots = load_wspr_recent_spots(self.log_file, expected_config, session.decoded_spots.maxlen)
+             if self.sessions.get(session.key) is session and session.matches_config(expected_config):
+                 session.restore_decoded_spots(spots)
+ 
+-        threading.Thread(target=worker, name=f"wspr-log-restore-{session.key}", daemon=True).start()
++        self.hydrators = [t for t in self.hydrators if t.is_alive()]
++        thread = threading.Thread(target=worker, name=f"wspr-log-restore-{session.key}", daemon=True)
++        self.hydrators.append(thread)
++        thread.start()
+ 
+     def set_log_callback(self, callback):
+         self.log_callback = callback
+@@ -6738,8 +6753,7 @@ class WSPRMonitorManager:
+                 self.start_at.pop(key, None)
+         runnable = {key: config for key, config in wanted.items() if not config.get("paused", False)}
+         active = tuple(list(runnable)[:WSPR_MONITOR_MAX_LIVE])
+-        for key in active:
+-            config = runnable[key]
++        for key, config in wanted.items():
+             session = self.sessions.get(key)
+             needs_start = session is None or (session is not None and not session.matches_config(config))
+             if session is None or not session.matches_config(config):
+@@ -6747,10 +6761,12 @@ class WSPRMonitorManager:
+                     session.stop()
+                 session = WSPRMonitorSession(
+                     config, self.user, self.log_callback, self.decoder_settings,
+-                    self.decode_scheduler,
++                    self.decode_scheduler, history=self.history,
+                 )
+                 self.sessions[key] = session
+                 self._hydrate_session_async(session)
++            if key not in active:
++                continue
+             needs_start = needs_start or session.stop_event.is_set()
+             if needs_start and key not in self.start_at:
+                 # Restored sessions must remain staggered after a boot so the
+@@ -6778,6 +6794,9 @@ class WSPRMonitorManager:
+             session.stop()
+         self.active_keys = ()
+         self.start_at.clear()
++        for thread in self.hydrators:
++            thread.join()
++        self.hydrators.clear()
+ 
+ 
+ class MainReceiverCapacityMonitor:
+@@ -20235,9 +20254,13 @@ def main():
+     wspr_decoder_settings_open = False
+     wspr_decoder_settings = WSPRDecoderSettings(wspr_decoder_profile, wspr_decoder_osd_depth)
+     wspr_decode_scheduler = WSPRDecodeScheduler()
++    from wspr_history import WSPRHistory
++    from wspr_history_view import WSPRHistoryView
++    wspr_archive = WSPRHistory(args.wspr_log_file)
++    wspr_history_view = WSPRHistoryView(sys.modules[__name__], wspr_archive)
+     wspr_monitor = WSPRMonitorManager(
+         args.user, decoder_settings=wspr_decoder_settings,
+-        decode_scheduler=wspr_decode_scheduler, log_file=args.wspr_log_file,
++        decode_scheduler=wspr_decode_scheduler, log_file=args.wspr_log_file, history=wspr_archive,
+     )
+     # Parsing historic JSONL happens once off the render thread. The active
+     # graph thereafter receives precomputed dots directly from this cache.
+@@ -20256,6 +20279,7 @@ def main():
+     sstv_manager.ensure_web()
+     if sstv_manager.web:
+         sstv_manager.web.bridge = digital_web
++        sstv_manager.web.wspr_history = wspr_archive
+     digital_web_next_snapshot = 0.0
+     digital_web_next_options = 0.0
+     sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+@@ -20615,6 +20639,8 @@ def main():
+         record.update(extra)
+         try:
+             append_wspr_local_log(args.wspr_log_file, event, record)
++            if event == "wspr_decode":
++                wspr_archive.record(dict(record, event=event), live=True)
+             # New WSPR decodes are folded into all four graph spans once here,
+             # never re-parsed from disk by the OpenGL render loop.
+             wspr_distance_cache.ingest(event, record)
+@@ -23344,19 +23370,13 @@ def main():
+                                 ))
+                             wake_controls()
+                         elif touch_started and gesture == "wspr_expanded_log":
+-                            moved_y = y - start_y
+-                            moved = max(abs(x - start_x), abs(moved_y))
+-                            if moved <= args.tap_px:
+-                                if contains(WSPR_EXPANDED_LOG_BACK_BOX, x, y):
++                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
++                                if wspr_history_view.tap(x, y) == 'back':
+                                     wspr_expanded_log_open = False
+                                     wspr_expanded_log_id = ""
+                                     wspr_expanded_log_scroll = 0
+                             else:
+-                                # One line per modest finger travel keeps the
+-                                # log readable while still feeling direct.
+-                                wspr_expanded_log_scroll = max(
+-                                    0, wspr_expanded_log_scroll - int(round(moved_y / 24.0))
+-                                )
++                                wspr_history_view.page_by(1 if y < start_y else -1)
+                             wake_controls()
+                         elif touch_started and gesture == "wspr_tile_settings":
+                             moved = max(abs(x - start_x), abs(y - start_y))
+@@ -25364,9 +25384,8 @@ def main():
+                             if str(tile.get("server", "")).rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
+                             else None
+                         )
+-                        draw_wspr_expanded_log(
+-                            text_cache, tile, monitor, card_grid, wspr_expanded_log_scroll
+-                        )
++                        wspr_history_view.select(tile, monitor)
++                        wspr_history_view.draw(text_cache)
+                 elif wspr_decoder_settings_open:
+                     draw_wspr_decoder_settings(
+                         text_cache, wspr_decoder_profile, wspr_decoder_osd_depth
+@@ -25547,6 +25566,8 @@ def main():
+         sstv_manager.stop()
+         sstv_workspace.close()
+         wspr_monitor.stop()
++        wspr_history_view.close()
++        wspr_archive.close()
+         for texture in wspr_mini_textures.values():
+             texture.close()
+         stop_event.set()

@@ -224,6 +224,8 @@ def main():
         for model in models:
             if not model_matches(args.vendor / model["id"], model):
                 raise RuntimeError(f"Model missing or checksum mismatch: {model['id']}")
+        subprocess.run([sys.executable, str(REPO / "scripts/install-whisper.py"),
+                        "--vendor", str(args.vendor), "--cache", str(args.cache), "--verify-only"], check=True)
         print("All selected dependencies verified.")
         return
     if not args.models_only:
@@ -233,6 +235,8 @@ def main():
         install_python(args.vendor, args.cache, lock, args.wheelhouse)
     for model in models:
         install_model(model, args.vendor, args.cache)
+    subprocess.run([sys.executable, str(REPO / "scripts/install-whisper.py"),
+                    "--vendor", str(args.vendor), "--cache", str(args.cache)], check=True)
     print("Dependency installation complete.")
 
 

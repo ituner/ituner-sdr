@@ -103,8 +103,9 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(dict(ui.MENU_ITEMS)["favorite"], "FAVORITES")
         self.assertNotIn("dual", kinds)
 
-    def test_digi_rail_is_empty_except_for_back(self):
-        self.assertEqual(ui.DIGITAL_MENU_ITEMS, (("digital_back", "BACK"),))
+    def test_digi_rail_retains_all_decoder_destinations(self):
+        self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},
+                         {"wspr", "sstv", "hell", "qrss", "cw", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
     def test_apps_contains_dual_vfo_action(self):
@@ -207,15 +208,17 @@ class DrawerGeometryTests(unittest.TestCase):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
         step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
-        wspr_box = ui.radio_wspr_box()
         back_box = ui.lcd_radio_drawer_close_box()
+        decoders = ui.radio_decoder_boxes()
+        self.assertEqual({kind for kind, _ in decoders}, {"wspr", "sstv", "hell", "qrss", "cw"})
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
-        for box in (*mode_boxes, *step_boxes):
-            self.assertFalse(overlaps(box, wspr_box))
-        self.assertFalse(overlaps(wspr_box, back_box))
-        x = (wspr_box[0] + wspr_box[2]) / 2
-        y = (wspr_box[1] + wspr_box[3]) / 2
-        self.assertEqual(ui.radio_option_at(x, y), ("workspace", "wspr"))
+        for index, (kind, box) in enumerate(decoders):
+            for other in (*mode_boxes, *step_boxes, back_box, *(b for _, b in decoders[index+1:])):
+                self.assertFalse(overlaps(box, other), kind)
+            x, y = (box[0]+box[2])/2, (box[1]+box[3])/2
+            self.assertEqual(ui.radio_option_at(x, y), ("workspace", kind))
+            self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="openwebrx"), ("workspace", kind))
+            self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="fmdx"), ("workspace", kind))
 
     def test_stats_close_target_is_inside_graph_header(self):
         graph = (120, 90, 900, 420)
@@ -992,6 +995,7 @@ class ReceiverListStyleTests(unittest.TestCase):
 
         name_call = next(call for call in drawn_text if call[3] == "Receiver · Location")
         distance_call = next(call for call in drawn_text if str(call[3]).startswith("DISTANCE:"))
+        self.assertEqual([b[2] for b in badge_calls], ["OPENWEBRX"])
         self.assertGreater(badge_calls[0][1], name_call[2])
         self.assertGreater(distance_call[1], badge_calls[-1][0])
 
