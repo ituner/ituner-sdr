@@ -2005,10 +2005,9 @@ def configure_popup_layout():
         PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
         # Source categories live in the rail; the list uses the full height.
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 6, 0
-        # RadioGarden gets the same dedicated 256 px right rail as Home.
-        # Keeping map gestures in the 1024 px radio canvas prevents an
-        # accidental globe rotation while reaching for a navigation command.
-        PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
+        # The Globe owns the entire display. Its familiar right-side controls
+        # float over the map instead of reserving an opaque 256 px rail.
+        PICKER_MAP_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
         # Source selectors start below the rail title. Four rail commands
         # stay directly above the bottom-anchored Back button.
         (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
@@ -14093,24 +14092,6 @@ def receiver_map_dot_pixels(scale):
     ))
 
 
-def draw_receiver_map_rail_background():
-    """Paint the Globe command rail as a fully opaque final compositing layer."""
-    if DESKTOP_1280_MODE:
-        draw_native_rect(
-            DESKTOP_1280_MAIN_W, 0, NATIVE_W, NATIVE_H,
-            APP_UI_STYLE.palette.sidebar,
-        )
-    elif LCD_800_MODE:
-        draw_logical_rect(
-            LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H,
-            APP_UI_STYLE.palette.sidebar,
-        )
-        draw_logical_line(
-            LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H,
-            APP_UI_STYLE.palette.sidebar_rule, 1,
-        )
-
-
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
@@ -14118,11 +14099,6 @@ def draw_receiver_map(
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
-    if DESKTOP_1280_MODE or LCD_800_MODE:
-        # The map deliberately stops before the permanent LCD rail. It gives
-        # the three globe commands a large, reliable touch target and makes
-        # the globe itself a single, unambiguous gesture surface.
-        draw_receiver_map_rail_background()
     draw_logical_rect(*box, (7, 19, 29, 255))
     center_lon, center_lat = yaw, pitch
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
@@ -14292,13 +14268,19 @@ def draw_receiver_map(
         draw_logical_rect(notice_x0, notice_y0, notice_x1, notice_y1, (5, 30, 28, 228))
         draw_logical_line(notice_x0, notice_y0, notice_x1, notice_y0, (101, 255, 191, 220), 2)
         draw_text(text_cache, (notice_x0 + notice_x1) / 2, (notice_y0 + notice_y1) / 2, fit_station_text(text_cache, notice, notice_x1 - notice_x0 - 24, 20, True, False, family="Cantarell"), (226, 255, 244), 20, True, False, "cm", family="Cantarell")
-    # Zoom makes the projected sphere much larger than its map viewport. Some
-    # immediate-mode geometry can therefore extend past x=1024. Repaint the
-    # opaque rail after every map/OSD layer so no satellite pixels can remain
-    # beneath its controls at any zoom step.
-    draw_receiver_map_rail_background()
-    # Globe controls stay in the rail, leaving the map as a drag surface.
-    draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
+    # The title floats with the controls. Do not call draw_sidebar_header here:
+    # that shared helper intentionally paints an opaque rail background.
+    title_x = (LCD_NAV_X0 + LOGICAL_W) / 2
+    draw_text(
+        text_cache, title_x + 1, 33, "RECEIVERS / GLOBE",
+        (0, 0, 0), 17, True, False, "cm",
+        family=APP_UI_STYLE.button.font_family,
+    )
+    draw_text(
+        text_cache, title_x, 32, "RECEIVERS / GLOBE",
+        APP_UI_STYLE.palette.sidebar_title, 17, True, False, "cm",
+        family=APP_UI_STYLE.button.font_family,
+    )
 
     # The legend doubles as the visibility filter. Its underline matches the
     # source dots when visible, and turns gray when the source is hidden.
@@ -14330,7 +14312,11 @@ def draw_receiver_map(
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_IN_BOX, "ZOOM IN")
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_OUT_BOX, "ZOOM OUT")
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
-    draw_text(text_cache, box[2] - 18, box[3] - 16, "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
+    draw_text(
+        text_cache, min(box[2], LCD_NAV_X0) - 18, box[3] - 16,
+        "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm",
+        family="Cantarell",
+    )
 
 
 def scout_rf_strength(smeter_dbm):

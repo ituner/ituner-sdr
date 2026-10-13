@@ -874,8 +874,8 @@ class BoardLayoutTests(unittest.TestCase):
         )
 
     def test_globe_commands_all_live_in_the_right_rail(self):
-        # The Globe's controls (including zoom) belong to the rail, never
-        # floating over the map canvas where they could swallow a drag.
+        # Controls retain the familiar right-side geometry while floating over
+        # a full-width Globe canvas.
         ui.configure_output(True)
         ui.configure_popup_layout()
         zoom_in, zoom_out = ui.receiver_map_zoom_boxes()
@@ -885,13 +885,7 @@ class BoardLayoutTests(unittest.TestCase):
         for box in rail_boxes:
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-        map_box = ui.PICKER_MAP_BOX
-        for box in (zoom_in, zoom_out):
-            self.assertFalse(
-                box[0] < map_box[2] and map_box[0] < box[2]
-                and box[1] < map_box[3] and map_box[1] < box[3],
-                f"Globe zoom control floats over the map: {box}",
-            )
+        self.assertEqual(ui.PICKER_MAP_BOX, (0, 0, ui.LOGICAL_W, ui.LOGICAL_H))
         for index, first in enumerate(rail_boxes):
             for second in rail_boxes[index + 1:]:
                 self.assertFalse(
@@ -1439,8 +1433,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ['kiwi', 'openwebrx', 'local', 'fmdx'],
         )
 
-    def test_globe_repaints_an_opaque_rail_after_map_content_at_every_zoom(self):
-        """Zoomed globe geometry must never remain visible beneath the rail."""
+    def test_globe_has_no_rail_background_at_any_zoom(self):
+        """The map remains visible behind floating controls at every zoom."""
         for scale in (ui.RADIOGARDEN_ZOOM_MIN, ui.GLOBE_DEFAULT_SCALE,
                       20.5, ui.RADIOGARDEN_ZOOM_MAX):
             events = []
@@ -1457,7 +1451,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
                  patch.object(ui, 'draw_logical_points'), \
                  patch.object(ui, 'draw_text'), \
                  patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
-                 patch.object(ui, 'draw_sidebar_header'), \
+                 patch.object(ui, 'draw_sidebar_header') as sidebar_header, \
                  patch.object(ui, 'draw_styled_text_button'), \
                  patch.object(ui, 'draw_picker_two_line_button'), \
                  patch.object(ui, 'draw_radio_close_button'):
@@ -1465,11 +1459,10 @@ class ReceiverMapLegendTests(unittest.TestCase):
                     None, self.receivers(), 0.0, 0.0, scale,
                     '', None, 'idle', {}, map_view='satellite_only',
                 )
-            rail = ('rect', (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H,
-                             ui.APP_UI_STYLE.palette.sidebar))
-            self.assertIn(rail, events)
-            self.assertGreater(max(index for index, event in enumerate(events) if event == rail),
-                               events.index('map'))
+            rail_rects = [event for event in events if event[0] == 'rect'
+                          and event[1][:4] == (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H)]
+            self.assertEqual(rail_rects, [])
+            sidebar_header.assert_not_called()
 
     def test_legend_lists_only_present_groups(self):
         entries = ui.receiver_map_legend_entries(self.receivers())
