@@ -2010,6 +2010,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         # would cover the expanded instruments sitting under the mode buttons.
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_logical_rounded_rect'), \
+             patch.object(ui, 'draw_nav_status_led'), \
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'lcd_nav_tile_background', return_value=(1, 1, 1)), \
              patch.object(ui, 'menu_icon_texture', return_value=(1, 1, 1)), \
@@ -2024,6 +2025,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         normal = ui.APP_UI_STYLE.button.resolve()
         frames = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_nav_status_led'), \
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_styled_button_frame', side_effect=lambda box, **kwargs: frames.append((box, kwargs)) or normal), \
              patch.object(ui, 'draw_text'):
@@ -2032,7 +2034,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         self.assertTrue(all(kwargs.get('active') is False for _box, kwargs in frames))
         self.assertTrue(all(kwargs.get('style') is ui.APP_UI_STYLE.button for _box, kwargs in frames))
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (88, 88, 88, 255))
+        self.assertEqual(normal.border, (46, 46, 46, 255))
 
 
 class ReceiverBrowserEmptyStateTests(unittest.TestCase):
