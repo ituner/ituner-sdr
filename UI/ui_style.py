@@ -96,7 +96,9 @@ class ButtonStyle:
     height: int = 64
     gap: int = 8
     label_size: int = 13
-    font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
+    title_size: int = 18
+    subtitle_size: int = 12
+    font_family: tuple = ("Inter", "SF Pro Text", "SF Pro Display", "Roboto", "DejaVu Sans")
 
     @property
     def subtitle_color(self):

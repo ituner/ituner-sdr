@@ -15,6 +15,7 @@ STRAIGHT_INVERTED_THEME_ID = "straight-inverted"
 ROUNDED_INVERTED_THEME_ID = "rounded-inverted"
 GREEN_THEME_ID = "green"
 RED_THEME_ID = "red"
+INSTRUMENT_THEME_ID = "instrument"
 TEXT_SCALE_MIN = 80
 TEXT_SCALE_MAX = 120
 DEFAULT_THEME = {
@@ -68,10 +69,30 @@ GREEN_THEME = {**STRAIGHT_THEME, "id": GREEN_THEME_ID, "name": "Green",
                "colors": tinted_colors(DEFAULT_THEME["colors"], "green")}
 RED_THEME = {**STRAIGHT_THEME, "id": RED_THEME_ID, "name": "Red",
              "colors": tinted_colors(DEFAULT_THEME["colors"], "red")}
+INSTRUMENT_COLORS = {
+    **DEFAULT_THEME["colors"],
+    # Instrument controls should be discoverable without turning the rail
+    # into a bright grid. Active and pressed controls retain clear feedback.
+    "surface": [0, 0, 0, 255],
+    "border": [46, 46, 46, 255],
+    "active_surface": [30, 30, 30, 255],
+    "active_border": [96, 96, 96, 255],
+    "selected_surface": [24, 24, 24, 255],
+    "selected_border": [82, 82, 82, 255],
+    "pressed_surface": [0, 229, 255, 255],
+    "pressed_border": [0, 229, 255, 255],
+    "secondary_text": [132, 132, 132],
+}
+INSTRUMENT_THEME = {
+    **STRAIGHT_THEME,
+    "id": INSTRUMENT_THEME_ID,
+    "name": "Instrument Quiet",
+    "colors": INSTRUMENT_COLORS,
+}
 BUILTIN_THEMES = {
     theme["id"]: theme for theme in (
         DEFAULT_THEME, STRAIGHT_THEME, STRAIGHT_INVERTED_THEME,
-        ROUNDED_INVERTED_THEME, GREEN_THEME, RED_THEME,
+        ROUNDED_INVERTED_THEME, GREEN_THEME, RED_THEME, INSTRUMENT_THEME,
     )
 }
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)

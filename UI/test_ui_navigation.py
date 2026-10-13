@@ -211,6 +211,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(sum(ui.digital_decoder_session_counts([], [], [], [], []).values()), 0)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
@@ -219,6 +220,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(digi_calls[0][3], "4 DECODERS")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
@@ -229,6 +231,7 @@ class DrawerGeometryTests(unittest.TestCase):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
@@ -245,6 +248,27 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertLessEqual(font.size(visible)[0], digi[1][2] - digi[1][0] - 8)
         if visible != digi[3]:
             self.assertTrue(visible.endswith("…"))
+
+    def test_home_status_leds_follow_receiver_decoder_and_asr_state(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as circles:
+            ui.draw_lcd_navigation(
+                None, receiver_playing=True, running_decoder_count=2,
+                captions_running=True,
+            )
+        fills = [item.args[3] for item in circles.call_args_list if not item.kwargs.get("outline")]
+        self.assertEqual(fills, [ui.APP_UI_STYLE.palette.ready] * 3)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as idle_circles:
+            ui.draw_lcd_navigation(None)
+        idle_fills = [item.args[3] for item in idle_circles.call_args_list
+                      if not item.kwargs.get("outline")]
+        self.assertEqual(idle_fills, [(18, 24, 22, 255)] * 3)
 
     def test_apps_no_longer_contains_dual_vfo_action(self):
         cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2

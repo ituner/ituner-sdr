@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, call, patch
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
     BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID, RED_THEME_ID,
+    INSTRUMENT_THEME_ID,
     ROUNDED_INVERTED_THEME_ID, STRAIGHT_INVERTED_THEME_ID, STRAIGHT_THEME_ID,
     ThemeLibrary, apply_theme,
     display_distance, display_temperature, distance_axis_label,
@@ -230,7 +231,7 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(first_name.args[1:3], (548, 132))
         self.assertEqual(first_name.args[8], "lm")
         self.assertEqual([item.args[2] for item in buttons.call_args_list
-                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 6)
+                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 7)
 
     def test_row_delete_confirmation_is_tied_to_its_theme(self):
         first = new_theme("First")
@@ -244,15 +245,19 @@ class ThemeSystemTests(unittest.TestCase):
             box = theme_screen_boxes(editor)[action]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
-        tap("delete:0")
+        tap("delete:1")
         self.assertEqual(editor.confirm_delete_id, second["id"])
         tap("previous")
         self.assertIsNone(editor.confirm_delete_id)
         tap("delete:6")
+        self.assertEqual(editor.notice_action, "LOCKED")
+        tap("next")
+        tap("delete:0")
         self.assertEqual(editor.confirm_delete_id, first["id"])
-        tap("delete:6")
+        tap("delete:0")
         self.assertIsNone(self.library.get(first["id"]))
         self.assertIsNotNone(self.library.get(second["id"]))
+        tap("previous")
         tap("delete:0")
         self.assertEqual(editor.notice_action, "LOCKED")
 
@@ -297,7 +302,7 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(editor.draft["colors"], self.library.get(STRAIGHT_THEME_ID)["colors"])
 
     def test_inverted_and_monochrome_builtins_preserve_alpha_and_corner_choices(self):
-        self.assertEqual(len(BUILTIN_THEME_IDS), 6)
+        self.assertEqual(len(BUILTIN_THEME_IDS), 7)
         original = self.library.get(DEFAULT_THEME_ID)
         for identifier, radius in ((STRAIGHT_INVERTED_THEME_ID, 0),
                                    (ROUNDED_INVERTED_THEME_ID, 8)):
@@ -316,6 +321,19 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(ThemeLibrary(self.path).active_id, identifier)
             with self.assertRaises(ValueError):
                 self.library.delete(identifier)
+
+    def test_instrument_theme_uses_quiet_square_controls(self):
+        theme = self.library.get(INSTRUMENT_THEME_ID)
+        self.assertEqual(theme["name"], "Instrument Quiet")
+        self.assertEqual(theme["radius"], 0)
+        self.assertEqual(theme["colors"]["surface"], [0, 0, 0, 255])
+        self.assertEqual(theme["colors"]["border"], [46, 46, 46, 255])
+        self.assertLess(sum(theme["colors"]["border"][:3]),
+                        sum(theme["colors"]["text"][:3]) / 4)
+        self.library.activate(INSTRUMENT_THEME_ID)
+        self.assertEqual(APP_UI_STYLE.button.title_size, 18)
+        self.assertEqual(APP_UI_STYLE.button.subtitle_size, 12)
+        self.assertEqual(APP_UI_STYLE.button.radius, 0)
 
     def test_green_and_red_smeter_trace_stands_clear_of_its_rail(self):
         for identifier in (GREEN_THEME_ID, RED_THEME_ID):
@@ -382,7 +400,8 @@ class ThemeSystemTests(unittest.TestCase):
         custom = new_theme("Delete me")
         self.library.upsert(custom)
         editor.selected_id = custom["id"]
-        delete_box = theme_screen_boxes(editor)["delete:6"]
+        editor.page = 1
+        delete_box = theme_screen_boxes(editor)["delete:0"]
         for _ in range(2):
             editor.tap((delete_box[0] + delete_box[2]) / 2,
                        (delete_box[1] + delete_box[3]) / 2)
@@ -655,7 +674,8 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(restarted.get(saved_id)["colors"]["passband_border"],
                          [170, 187, 204, border_alpha])
         editor = ThemeEditor(restarted)
-        tap("edit:6")
+        editor.page = 1
+        tap("edit:0")
         tap("section:COLORS")
         tap("group:5")
         tap("color:0")

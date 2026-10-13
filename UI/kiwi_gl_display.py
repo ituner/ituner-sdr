@@ -6579,6 +6579,10 @@ def draw_text(text_cache, x, y, text, color, size, bold=False, mono=False, ancho
         x -= width / 2
     elif "r" in anchor:
         x -= width
+    # Text is rasterized before OpenGL sees it. Snapping the final quad to
+    # logical pixels prevents the bitmap from being linearly filtered across
+    # two pixels merely because a centered label landed on a half pixel.
+    x, y = round(x), round(y)
     draw_textured_quad(tex, x, y, x + width, y + height, 0, 0, 1, 1, alpha)
 
 
@@ -8382,15 +8386,15 @@ def themed_overlay_color(name, original):
     return (*themed_instrument_color(name, original)[:3], original[3])
 
 
-def button_label_for_box(text_cache, label, box, style=None):
+def button_label_for_box(text_cache, label, box, style=None, size=None, bold=True):
     """Keep 13 px button text inside its touch target without changing its size."""
     style = style or APP_UI_STYLE.button
     label = str(label).upper()
     if not callable(getattr(text_cache, "texture", None)):
         return label
     return fit_station_text(
-        text_cache, label, box[2] - box[0] - 8, style.label_size,
-        bold=True, family=style.font_family,
+        text_cache, label, box[2] - box[0] - 8, size or style.label_size,
+        bold=bold, family=style.font_family,
     )
 
 
@@ -8410,19 +8414,21 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
                                 style=None):
-    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
+    """Shared instrument title plus deliberately secondary subtitle."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
     visual = draw_styled_button_frame(box, active=active, style=style)
-    center_x = (x0 + x1) / 2
+    center_x = round((x0 + x1) / 2)
     if subtitle:
-        center_y = (y0 + y1) / 2
-        draw_text(text_cache, center_x, center_y - 12,
-                  button_label_for_box(text_cache, title, box, style),
-                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
-        draw_text(text_cache, center_x, center_y + 12,
-                  button_label_for_box(text_cache, subtitle, box, style),
-                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
+        center_y = round((y0 + y1) / 2)
+        draw_text(text_cache, center_x, center_y - 11,
+                  button_label_for_box(text_cache, title, box, style,
+                                       size=style.title_size, bold=True),
+                  visual.text, style.title_size, True, False, "cm", family=style.font_family)
+        draw_text(text_cache, center_x, center_y + 13,
+                  button_label_for_box(text_cache, subtitle, box, style,
+                                       size=style.subtitle_size, bold=False),
+                  style.subtitle_color, style.subtitle_size, False, False, "cm", family=style.font_family)
     else:
         draw_text(text_cache, center_x, (y0 + y1) / 2,
                   button_label_for_box(text_cache, title, box, style),
@@ -15380,14 +15386,14 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
                      border_radius=style.radius)
     subtitle = HOME_MENU_SUBTITLES.get(kind, "")
-    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
-    for caption, center_y, color in (
-        (label, 23 if subtitle else height / 2, visual.text),
-        (subtitle, 46, style.subtitle_color),
+    for caption, center_y, color, size, bold in (
+        (label, 21 if subtitle else height / 2, visual.text, style.title_size, True),
+        (subtitle, 45, style.subtitle_color, style.subtitle_size, False),
     ):
         if caption:
+            font = text_cache.font(size, bold=bold, family=style.font_family)
             rendered = font.render(str(caption).upper(), True, color[:3])
-            surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
+            surface.blit(rendered, rendered.get_rect(center=(round(width / 2), round(center_y))))
     return text_cache.surface_texture(key, surface)
 
 
@@ -16499,7 +16505,8 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
 
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
                         digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle",
-                        active_decoders=(), running_decoder_count=0, decoder_counts=None):
+                        active_decoders=(), running_decoder_count=0, decoder_counts=None,
+                        receiver_playing=False, captions_running=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -16531,6 +16538,25 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
             button_label = f"{count} {label}" if count > 0 else label
             draw_styled_text_button(text_cache, nav_box, button_label)
+        if home_items and kind in ("rx", "digital", "vosc"):
+            led_active = {
+                "rx": receiver_playing,
+                "digital": running_decoder_count > 0,
+                "vosc": captions_running,
+            }[kind]
+            # A physical-instrument lamp: dark when idle, green with a quiet
+            # rim when its background process is genuinely running.
+            led_x, led_y = round(bx1 - 10), round(by0 + 10)
+            draw_logical_circle(
+                led_x, led_y, 5,
+                APP_UI_STYLE.palette.ready if led_active else (18, 24, 22, 255),
+                segments=20,
+            )
+            draw_logical_circle(
+                led_x, led_y, 5,
+                (126, 255, 178, 210) if led_active else APP_UI_STYLE.palette.border,
+                segments=20, outline=True, width=1,
+            )
         if digital_open and kind in active_decoders:
             center_x = (bx0 + bx1) / 2
             draw_logical_circle(
@@ -18642,6 +18668,7 @@ def draw_ui(
     active_decoders=(),
     running_decoder_count=0,
     decoder_counts=None,
+    receiver_playing=False,
     instrument_layout="middle",
     compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
@@ -18769,6 +18796,8 @@ def draw_ui(
         active_decoders=active_decoders,
         running_decoder_count=running_decoder_count,
         decoder_counts=decoder_counts,
+        receiver_playing=receiver_playing,
+        captions_running=transcription_enabled,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
@@ -29928,6 +29957,7 @@ def main():
                 ),
                 running_decoder_count=sum(decoder_counts.values()),
                 decoder_counts=decoder_counts,
+                receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
                 instrument_layout=instrument_layout,
                 # Font Review is a live specimen: arrowing through candidates
                 # must visibly update the Home frequency readout. ``USE`` is
