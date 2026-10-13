@@ -97,6 +97,8 @@ class ButtonStyle:
     height: int = 64
     gap: int = 8
     label_size: int = 13
+    title_size: int = 14
+    subtitle_size: int = 12
     font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
 
     @property

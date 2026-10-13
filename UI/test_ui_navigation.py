@@ -196,13 +196,14 @@ class DrawerGeometryTests(unittest.TestCase):
             x0, y0, x1, _y1 = ui.lcd_nav_box(
                 index, len(ui.DIGITAL_MENU_ITEMS), True,
             )
-            self.assertIn((round(x1 - 10), round(y0 + 10), 5,
+            self.assertIn((round(x1 - 10), round(y0 + 10), ui.NAV_STATUS_LED_RADIUS,
                            ui.APP_UI_STYLE.palette.ready), dots)
         active_rims = [call for call in circles.call_args_list
                        if call.kwargs.get("outline")]
         self.assertEqual(len(active_rims), 3)
         self.assertTrue(all(call.args[2] == ui.NAV_STATUS_LED_RADIUS
                             for call in circles.call_args_list))
+        self.assertEqual(ui.NAV_STATUS_LED_RADIUS * 2, 7)
 
     def test_home_digi_button_counts_enabled_decoder_sessions(self):
         ui.configure_output(True)
@@ -219,17 +220,17 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
-                      if call.args[2] == "DIGI"]
+                      if call.args[2] == "4 DECODERS"]
         self.assertEqual(len(digi_calls), 1)
-        self.assertEqual(digi_calls[0][3], "4 DECODERS")
+        self.assertEqual(digi_calls[0][3], "5 DIGITAL MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
-                           if call.args[2] == "DIGI"]
-        self.assertEqual(zero_digi_calls[0][3], "DECODERS")
+                           if call.args[2] == "DECODERS"]
+        self.assertEqual(zero_digi_calls[0][3], "5 DIGITAL MODES")
 
     def test_home_digi_100_count_fits_or_ellipsizes(self):
         ui.configure_output(True)
@@ -239,18 +240,20 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
-                    if call.args[2] == "DIGI")
-        self.assertEqual(digi[3], "100 DECODERS")
+                    if call.args[2] == "100 DECODERS")
+        self.assertEqual(digi[3], "5 DIGITAL MODES")
         cache = ui.TextCache()
-        font = cache.font(ui.APP_UI_STYLE.button.label_size, bold=True,
+        font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
                           family=ui.APP_UI_STYLE.button.font_family)
         label_cache = mock.Mock()
         label_cache.texture.side_effect = lambda text, *_args, **_kwargs: (
             None, font.size(text)[0], font.size(text)[1]
         )
-        visible = ui.button_label_for_box(label_cache, digi[3], digi[1])
+        visible = ui.button_label_for_box(
+            label_cache, digi[2], digi[1], size=ui.APP_UI_STYLE.button.title_size,
+        )
         self.assertLessEqual(font.size(visible)[0], digi[1][2] - digi[1][0] - 8)
-        if visible != digi[3]:
+        if visible != digi[2]:
             self.assertTrue(visible.endswith("…"))
 
     def test_home_status_leds_follow_receiver_decoder_and_asr_state(self):
@@ -335,11 +338,41 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_settings_uses_info_and_has_no_duplicate_kiwi_route(self):
         labels = dict(ui.SETTINGS_MENU_ITEMS)
-        self.assertEqual(labels["tests"], "APPS")
-        self.assertEqual(labels["system"], "INFO")
+        self.assertEqual(labels["tests"], "TOOLS")
+        self.assertEqual(labels["system"], "SYSTEM")
         self.assertEqual(labels["settings_back"], "BACK")
         self.assertNotIn("kiwi", labels)
         self.assertEqual(ui.menu_icon_filename("system"), "info.png")
+
+    def test_home_and_settings_tiles_use_requested_copy_and_full_subtitles(self):
+        self.assertEqual(dict(ui.MENU_ITEMS), {
+            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DECODERS",
+            "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
+            "settings": "SETTINGS",
+        })
+        self.assertEqual(ui.HOME_MENU_SUBTITLES["digital"], "5 DIGITAL MODES")
+        self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "SPEECH TO TEXT")
+        self.assertEqual(ui.SETTINGS_MENU_SUBTITLES["theme"], "COLORS & LAYOUT")
+        self.assertEqual((ui.APP_UI_STYLE.button.title_size,
+                          ui.APP_UI_STYLE.button.subtitle_size), (14, 12))
+
+        cache = mock.Mock()
+        cache.texture.side_effect = lambda text, *_args, **_kwargs: (
+            None, 117 if text == "COLORS & LAYOUT" else 50, 14,
+        )
+        box = (1034, 512, 1148, 576)
+        with mock.patch.object(ui, "draw_styled_button_frame",
+                               return_value=ui.APP_UI_STYLE.button.resolve()), \
+             mock.patch.object(ui, "draw_text") as drawn, \
+             mock.patch.object(ui, "draw_text_scaled_x") as scaled:
+            ui.draw_styled_two_line_button(
+                cache, box, "THEME", "COLORS & LAYOUT", fit_full_subtitle=True,
+            )
+        self.assertEqual((drawn.call_args.args[3], drawn.call_args.args[5]),
+                         ("THEME", 14))
+        self.assertEqual((scaled.call_args.args[3], scaled.call_args.args[5]),
+                         ("COLORS & LAYOUT", 12))
+        self.assertLess(scaled.call_args.args[6], 1)
 
     def test_drawers_share_one_back_target(self):
         expected = ui.lcd_drawer_back_box()

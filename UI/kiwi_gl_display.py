@@ -2057,20 +2057,20 @@ MENU_ROWS = 4
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DIGI"),
-    ("vosc", "VOSC"),
+    ("digital", "DECODERS"),
+    ("vosc", "CAPTIONS"),
     ("display", "DISPLAY"),
-    ("dual", "DUAL"),
+    ("dual", "DUAL RX"),
     ("settings", "SETTINGS"),
 )
 HOME_MENU_SUBTITLES = {
     "rx": "BROWSE",
-    "audio": "OUTPUT",
-    "digital": "DECODERS",
-    "vosc": "CAPTIONS",
-    "display": "WATERFALL",
-    "dual": "2 VFO",
-    "settings": "PREFERENCES",
+    "audio": "VOLUME & DSP",
+    "digital": "5 DIGITAL MODES",
+    "vosc": "SPEECH TO TEXT",
+    "display": "COLOR & LAYOUT",
+    "dual": "TWO RECEIVERS",
+    "settings": "DEVICE & TOOLS",
 }
 
 
@@ -2494,12 +2494,19 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
     return None, None
 SETTINGS_MENU_ITEMS = (
     ("network", "NETWORK"),
-    ("stats", "STATS"),
-    ("tests", "APPS"),
-    ("system", "INFO"),
+    ("stats", "CPU LOAD"),
+    ("tests", "TOOLS"),
+    ("system", "SYSTEM"),
     ("theme", "THEME"),
     ("settings_back", "BACK"),
 )
+SETTINGS_MENU_SUBTITLES = {
+    "network": "WI-FI & LAN",
+    "stats": "USAGE HISTORY",
+    "tests": "EST & EXPLORE",
+    "system": "LOCATION & FAN",
+    "theme": "COLORS & LAYOUT",
+}
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
     ("sstv", "SSTV"),
@@ -8385,14 +8392,15 @@ def themed_overlay_color(name, original):
     return (*themed_instrument_color(name, original)[:3], original[3])
 
 
-def button_label_for_box(text_cache, label, box, style=None):
-    """Keep 13 px button text inside its touch target without changing its size."""
+def button_label_for_box(text_cache, label, box, style=None, *, size=None):
+    """Keep button text inside its touch target without changing its size."""
     style = style or APP_UI_STYLE.button
     label = str(label).upper()
     if not callable(getattr(text_cache, "texture", None)):
         return label
     return fit_station_text(
-        text_cache, label, box[2] - box[0] - 8, style.label_size,
+        text_cache, label, box[2] - box[0] - 8,
+        style.label_size if size is None else size,
         bold=True, family=style.font_family,
     )
 
@@ -8412,26 +8420,39 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None):
-    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
+                                style=None, fit_full_subtitle=False):
+    """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
     pressed = ui_button_pressed(box)
     visual = draw_styled_button_frame(box, active=active, pressed=pressed, style=style)
     center_x = (x0 + x1) / 2
+
+    def draw_line(caption, center_y, color, size, *, fit_full=False):
+        caption = str(caption).upper()
+        if not fit_full:
+            draw_text(text_cache, center_x, center_y,
+                      button_label_for_box(text_cache, caption, box, style, size=size),
+                      color, size, True, False, "cm", family=style.font_family)
+            return
+        texture = getattr(text_cache, "texture", None)
+        width = texture(caption, size, color, bold=True, family=style.font_family)[1] if callable(texture) else 0
+        x_scale = min(1.0, (x1 - x0 - 4) / width) if isinstance(width, (int, float)) and width > 0 else 1.0
+        if x_scale < 1.0:
+            draw_text_scaled_x(text_cache, center_x, center_y, caption, color,
+                               size, x_scale, True, False, "cm", family=style.font_family)
+        else:
+            draw_text(text_cache, center_x, center_y, caption, color,
+                      size, True, False, "cm", family=style.font_family)
+
     if subtitle:
         center_y = (y0 + y1) / 2
-        draw_text(text_cache, center_x, center_y - 12,
-                  button_label_for_box(text_cache, title, box, style),
-                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
-        draw_text(text_cache, center_x, center_y + 12,
-                  button_label_for_box(text_cache, subtitle, box, style),
-                  visual.text if pressed else style.subtitle_color,
-                  style.label_size, True, False, "cm", family=style.font_family)
+        draw_line(title, center_y - 12, visual.text, style.title_size)
+        draw_line(subtitle, center_y + 12,
+                  visual.text if pressed else style.subtitle_color, style.subtitle_size,
+                  fit_full=fit_full_subtitle)
     else:
-        draw_text(text_cache, center_x, (y0 + y1) / 2,
-                  button_label_for_box(text_cache, title, box, style),
-                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
+        draw_line(title, (y0 + y1) / 2, visual.text, style.title_size)
     return visual
 
 
@@ -15393,13 +15414,15 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
                      border_radius=style.radius)
     subtitle = HOME_MENU_SUBTITLES.get(kind, "")
-    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
-    for caption, center_y, color in (
-        (label, 23 if subtitle else height / 2, visual.text),
-        (subtitle, 46, visual.text if pressed else style.subtitle_color),
+    for caption, center_y, color, size in (
+        (label, 23 if subtitle else height / 2, visual.text, style.title_size),
+        (subtitle, 46, visual.text if pressed else style.subtitle_color, style.subtitle_size),
     ):
         if caption:
+            font = text_cache.font(size, bold=True, family=style.font_family)
             rendered = font.render(str(caption).upper(), True, color[:3])
+            if rendered.get_width() > width - 4:
+                rendered = pygame.transform.smoothscale(rendered, (width - 4, rendered.get_height()))
             surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
@@ -15418,6 +15441,7 @@ def draw_main_menu(text_cache, scroll):
             continue
         draw_styled_two_line_button(
             text_cache, box, label, HOME_MENU_SUBTITLES.get(kind, ""),
+            fit_full_subtitle=True,
         )
 
 
@@ -16504,7 +16528,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_sidebar_header(text_cache, "PASSBAND")
 
 
-NAV_STATUS_LED_RADIUS = 5
+NAV_STATUS_LED_RADIUS = 3.5
 NAV_STATUS_LED_INSET = 10
 
 
@@ -16551,11 +16575,13 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        subtitle = HOME_MENU_SUBTITLES.get(kind, "") if home_items else ""
+        subtitle = (HOME_MENU_SUBTITLES.get(kind, "") if home_items else
+                    SETTINGS_MENU_SUBTITLES.get(kind, "") if settings_open else "")
         if home_items and kind == "digital" and running_decoder_count > 0:
-            subtitle = f"{running_decoder_count} {subtitle}"
+            label = f"{running_decoder_count} {label}"
         if subtitle:
-            draw_styled_two_line_button(text_cache, nav_box, label, subtitle)
+            draw_styled_two_line_button(text_cache, nav_box, label, subtitle,
+                                        fit_full_subtitle=True)
         else:
             count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
             button_label = f"{count} {label}" if count > 0 else label
