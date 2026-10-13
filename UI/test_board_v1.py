@@ -1728,9 +1728,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
     COASTLINE_COLOR = (94, 204, 188, 182)
 
-    def _polyline_colors(self, map_view, scale=0.9):
+    def _polyline_colors(self, map_view, scale=0.9, interactive=False):
         colors = []
-        with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
+        with patch.object(ui._globe_borders, 'draw',
+                          side_effect=lambda _matrix, color: colors.append(tuple(color))), \
+             patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline',
@@ -1746,7 +1748,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
              patch.object(ui, 'draw_logical_points'):
             ui.draw_receiver_map(
                 None, self.receivers(), 0.0, 0.0, scale, '', None, 'idle', {},
-                map_view=map_view,
+                map_view=map_view, interactive=interactive,
             )
         return colors
 
@@ -1756,12 +1758,12 @@ class ReceiverMapLegendTests(unittest.TestCase):
             self.assertNotIn(self.COASTLINE_COLOR, self._polyline_colors(view), view)
 
     def test_outline_views_still_draw_country_borders(self):
-        for view in ('borders', 'satellite'):
-            colors = self._polyline_colors(view)
-            self.assertTrue(
-                any(color in ((177, 203, 201, 196), (207, 222, 211, 150)) for color in colors),
-                view,
-            )
+        for moving in (False, True):
+            for view in ('borders', 'satellite'):
+                colors = self._polyline_colors(view, interactive=moving)
+                self.assertIn((160, 190, 180, 140), colors)
+            self.assertNotIn((160, 190, 180, 140),
+                             self._polyline_colors('satellite_only', interactive=moving))
 
     def test_legend_toggle_hides_and_shows_a_group(self):
         self.assertTrue(ui.receiver_map_group_visible('fmdx'))

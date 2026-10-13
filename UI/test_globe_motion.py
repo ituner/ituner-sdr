@@ -1,8 +1,21 @@
 import unittest
+from unittest.mock import patch
 import kiwi_gl_display as ui
 
 
 class GlobeMotionTests(unittest.TestCase):
+    def test_fast_satellite_view_keeps_base_but_skips_hd_work(self):
+        with patch.object(ui, 'satellite_map_texture', return_value=1), \
+             patch.object(ui._globe_meshes, 'draw') as base, \
+             patch.object(ui, 'globe_hd_tiles_enabled', return_value=True), \
+             patch.object(ui, 'draw_receiver_map_satellite_tiles') as tiles:
+            self.assertTrue(ui.draw_receiver_map_satellite(
+                None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True, fast_motion=True))
+            base.assert_called_once()
+            tiles.assert_not_called()
+            ui.draw_receiver_map_satellite(None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True)
+            tiles.assert_called_once()
+
     def setUp(self):
         ui._receiver_map_render_cache = None
         self.rows=[dict(server=f'http://rx{i}.test:8073',lat=i%90,lon=i%180,

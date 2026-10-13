@@ -11,6 +11,34 @@ import math
 from OpenGL import GL
 
 
+class MotionDetail:
+    """Hide HD overlays during fast motion, with hysteresis to prevent flicker."""
+    def __init__(self):
+        self.previous = None
+        self.reduced = False
+        self.last_fast = -math.inf
+
+    def update(self, yaw, pitch, radius, now, interactive):
+        previous = self.previous
+        self.previous = (yaw, pitch, radius, now)
+        if not interactive or previous is None or not 0 < now - previous[3] < 0.25:
+            self.reduced = False
+            self.last_fast = -math.inf
+            return False
+        old_yaw, old_pitch, old_radius, old_time = previous
+        # Wrap longitude so crossing the dateline is not a sudden full turn.
+        dyaw = (yaw - old_yaw + math.pi) % math.tau - math.pi
+        distance = max(radius, old_radius) * math.hypot(
+            dyaw * math.cos((pitch + old_pitch) / 2), pitch - old_pitch)
+        speed = max(distance, abs(radius - old_radius)) / (now - old_time)
+        if speed >= (120 if self.reduced else 180):
+            self.reduced = True
+            self.last_fast = now
+        elif now - self.last_fast >= 0.18:
+            self.reduced = False
+        return self.reduced
+
+
 def view_matrix(yaw, pitch, radius, center, native_point):
     """Column-major world-sphere -> native display transform.
 
@@ -66,6 +94,69 @@ def mesh_data(bounds, columns, rows, sun_lon, sun_lat):
                            grid[row + 1][col + 1], grid[row + 1][col]):
                 data.extend(vertex)
     return data
+
+
+def border_data(paths):
+    """Build disconnected line segments once; never join separate islands/rings."""
+    data = array('f')
+    seen = set()
+    for path in paths:
+        previous = None
+        for lat, lon in path:
+            lat, lon = math.radians(lat), math.radians(lon)
+            point = (math.cos(lat)*math.sin(lon), math.sin(lat), math.cos(lat)*math.cos(lon))
+            if previous is not None:
+                # Shared national boundaries must not become twice as bright.
+                edge = tuple(sorted((tuple(round(v, 7) for v in previous),
+                                     tuple(round(v, 7) for v in point))))
+                if edge[0] != edge[1] and edge not in seen:
+                    seen.add(edge)
+                    data.extend(previous)
+                    data.extend(point)
+            previous = point
+    return data
+
+
+class GlobeBorders:
+    def __init__(self, paths):
+        # CPU geometry is prepared during UI startup, not on the first swipe.
+        self.data = border_data(paths)
+        self.buffer = None
+
+    def draw(self, matrix, color):
+        if not self.data:
+            return
+        GL.glPushAttrib(GL.GL_ENABLE_BIT | GL.GL_CURRENT_BIT | GL.GL_TRANSFORM_BIT
+                        | GL.GL_LINE_BIT | GL.GL_COLOR_BUFFER_BIT)
+        GL.glPushClientAttrib(GL.GL_CLIENT_VERTEX_ARRAY_BIT)
+        GL.glPushMatrix()
+        try:
+            if self.buffer is None:
+                self.buffer = GL.glGenBuffers(1)
+                GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.buffer)
+                payload = self.data.tobytes()
+                GL.glBufferData(GL.GL_ARRAY_BUFFER, len(payload), payload, GL.GL_STATIC_DRAW)
+            else:
+                GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.buffer)
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glEnable(GL.GL_BLEND)
+            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+            GL.glEnable(GL.GL_LINE_SMOOTH)
+            GL.glLineWidth(1.0)
+            GL.glColor4f(*(v/255 for v in color))
+            GL.glClipPlane(GL.GL_CLIP_PLANE0, (0.0, 0.0, 1.0, 0.0))
+            GL.glEnable(GL.GL_CLIP_PLANE0)
+            GL.glMultMatrixf(matrix)
+            GL.glDisableClientState(GL.GL_TEXTURE_COORD_ARRAY)
+            GL.glDisableClientState(GL.GL_COLOR_ARRAY)
+            GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glVertexPointer(3, GL.GL_FLOAT, 0, ctypes.c_void_p(0))
+            GL.glDrawArrays(GL.GL_LINES, 0, len(self.data)//3)
+        finally:
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+            GL.glPopMatrix()
+            GL.glPopClientAttrib()
+            GL.glPopAttrib()
 
 
 class GlobeMeshes:

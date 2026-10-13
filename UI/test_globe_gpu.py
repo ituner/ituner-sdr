@@ -1,9 +1,60 @@
 import math
 import unittest
+from unittest.mock import patch
 import globe_gpu
 
 
+class MotionDetailTests(unittest.TestCase):
+    def test_fast_swipe_restores_after_slowdown_without_flicker(self):
+        state = globe_gpu.MotionDetail()
+        self.assertFalse(state.update(0, 0, 300, 1, False))
+        self.assertTrue(state.update(.02, 0, 300, 1.02, True))  # 300 px/s
+        self.assertTrue(state.update(.03, 0, 300, 1.04, True))  # 150 px/s: hold
+        self.assertTrue(state.update(.03, 0, 300, 1.10, True))
+        self.assertFalse(state.update(.03, 0, 300, 1.23, True))
+        self.assertFalse(state.update(.04, 0, 300, 1.25, True))  # no re-entry at 150
+        self.assertTrue(state.update(.06, 0, 300, 1.27, True))
+        self.assertFalse(state.update(.06, 0, 300, 1.28, False))
+
+    def test_dateline_gentle_drag_and_reopening_keep_detail(self):
+        state = globe_gpu.MotionDetail()
+        state.update(math.pi-.001, 0, 300, 1, False)
+        self.assertFalse(state.update(-math.pi+.001, 0, 300, 1.02, True))
+        self.assertFalse(state.update(0, 0, 300, 3, True))
+        self.assertFalse(state.update(.001, 0, 300, 3.02, True))
+
+    def test_fast_pitch_and_zoom_reduce_detail(self):
+        for yaw, pitch, radius in ((0, .02, 300), (0, 0, 310)):
+            state = globe_gpu.MotionDetail()
+            state.update(0, 0, 300, 1, False)
+            self.assertTrue(state.update(yaw, pitch, radius, 1.02, True))
+
+
 class ProjectionTests(unittest.TestCase):
+    def test_border_segments_do_not_join_islands_or_duplicate_shared_edges(self):
+        data = globe_gpu.border_data([
+            [(0, 0), (0, 10), (10, 10)],
+            [(0, 10), (0, 0)],  # same boundary in reverse
+            [(40, 40), (40, 41)],
+            [(0, 180), (0, -180)],  # identical dateline endpoints
+        ])
+        self.assertEqual(len(data), 3*2*3)
+        for i in range(0, len(data), 3):
+            self.assertAlmostEqual(sum(x*x for x in data[i:i+3]), 1, places=6)
+
+    def test_borders_upload_once_and_restore_gl_state(self):
+        borders = globe_gpu.GlobeBorders([[(0, 0), (0, 10)]])
+        with patch.object(globe_gpu, 'GL') as gl:
+            gl.glGenBuffers.return_value = 123
+            for _ in range(2):
+                borders.draw([1]*16, (170, 190, 181, 105))
+            gl.glBufferData.assert_called_once()
+            self.assertEqual(gl.glDrawArrays.call_count, 2)
+            gl.glDrawArrays.assert_called_with(gl.GL_LINES, 0, 2)
+            self.assertEqual(gl.glPushAttrib.call_count, gl.glPopAttrib.call_count)
+            self.assertEqual(gl.glPushClientAttrib.call_count, gl.glPopClientAttrib.call_count)
+            self.assertEqual(gl.glPushMatrix.call_count, gl.glPopMatrix.call_count)
+
     def test_gpu_view_matches_existing_projection_and_lcd_orientations(self):
         # Independent scalar reference: same geographic point must remain under
         # its existing receiver marker across the dateline, poles and zooms.

@@ -13963,6 +13963,9 @@ def satellite_light_color(latitude, longitude, sun_lon, sun_lat):
 
 
 _globe_meshes = globe_gpu.GlobeMeshes()
+_globe_motion_detail = globe_gpu.MotionDetail()
+_globe_borders = globe_gpu.GlobeBorders(
+    ring for country in GLOBE_COUNTRY_SHAPES for ring in country["rings"])
 
 
 def globe_gpu_matrix(center_lon, center_lat, box, scale):
@@ -13972,7 +13975,8 @@ def globe_gpu_matrix(center_lon, center_lat, box, scale):
     )
 
 
-def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, interactive=False):
+def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, interactive=False,
+                                fast_motion=False):
     """Draw cached world geometry; the GPU handles view rotation and clipping."""
     texture = satellite_map_texture(text_cache)
     if texture is None:
@@ -13985,7 +13989,9 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
         globe_gpu_matrix(center_lon, center_lat, box, scale),
         (sun_lon, sun_lat), time.monotonic(), interactive,
     )
-    if globe_hd_tiles_enabled() and scale >= 1.5:
+    # The base globe stays sharp; skip HD tile traversal/draws during fast swipes.
+    # Cached tiles remain available when motion slows, without another download.
+    if not fast_motion and globe_hd_tiles_enabled() and scale >= 1.5:
         draw_receiver_map_satellite_tiles(
             text_cache, center_lon, center_lat, box, scale, interactive,
             sun_lon, sun_lat,
@@ -14163,60 +14169,30 @@ def draw_receiver_map(
     center_lon, center_lat = yaw, pitch
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     radius = radiogarden_radius(box, scale)
+    fast_motion = _globe_motion_detail.update(yaw, pitch, radius, time.monotonic(), interactive)
     # SAT ONLY is the default: real satellite imagery with no political or
     # coastline overlay, leaving the receiver constellation unambiguous.
     satellite_drawn = map_view in ("satellite", "satellite_only") and draw_receiver_map_satellite(
-        text_cache, center_lon, center_lat, box, scale, interactive,
+        text_cache, center_lon, center_lat, box, scale, interactive, fast_motion=fast_motion,
     )
     if not satellite_drawn:
         draw_logical_circle(cx, cy, radius, (14, 40, 48, 255), 96)
     draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
-    # The old CLEAN coastline layer is gone from every presentation: it read as
-    # a second, conflicting set of borders over the political outlines. Country
-    # boundaries are now the only geographic layer.
-    # At broad view, a few substantial political boundaries are enough. Once
-    # the user zooms toward a region, change to complete country exteriors.
-    # The source boundary-line dataset is segmented, and those loose segments
-    # look exactly like rivers over the Blue Marble texture. Country outlines
-    # draw at every zoom; only SAT ONLY (pure imagery) omits them.
-    if not interactive and map_view != "satellite_only":
-        if scale < 1.5:
-            for border in GLOBE_COUNTRY_BORDERS:
-                segment = []
-                for lat, lon in border:
-                    point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
-                    if point is None:
-                        draw_logical_polyline(segment, (207, 222, 211, 150) if satellite_drawn else (177, 203, 201, 196), 1)
-                        segment = []
-                    else:
-                        segment.append((point[0], point[1]))
-                draw_logical_polyline(segment, (207, 222, 211, 150) if satellite_drawn else (177, 203, 201, 196), 1)
-        else:
-            country_color = (241, 218, 132, 228) if satellite_drawn else (179, 224, 212, 220)
-            country_shadow = (6, 12, 14, 150) if satellite_drawn else (4, 15, 18, 126)
-            visible_countries = tuple(visible_country_shapes(GLOBE_COUNTRY_SHAPES, center_lon, center_lat, box, scale))
-            for country in visible_countries:
-                for ring in country["rings"]:
-                    segment = []
-                    for lat, lon in ring:
-                        point = radiogarden_project({"lat": lat, "lon": lon}, center_lon, center_lat, box, scale)
-                        if point is None:
-                            draw_logical_polyline(segment, country_shadow, 3)
-                            draw_logical_polyline(segment, country_color, 1)
-                            segment = []
-                        else:
-                            segment.append((point[0], point[1]))
-                    draw_logical_polyline(segment, country_shadow, 3)
-                    draw_logical_polyline(segment, country_color, 1)
-            # Country names make the political outlines immediately legible at
-            # a close regional view, without cluttering the globe at overview.
-            if scale >= 3.0:
-                for country in visible_countries:
-                    point = radiogarden_project(country["label"], center_lon, center_lat, box, scale)
-                    if not point or point[2] < 0.16 or not country["name"]:
-                        continue
-                    draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
-                    draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
+    # Cached world-space outlines rotate on the GPU, including during swipes.
+    # Thin translucent lines need no expensive shadow pass or motion redraw.
+    if map_view != "satellite_only":
+        _globe_borders.draw(
+            globe_gpu_matrix(center_lon, center_lat, box, scale),
+            (170, 190, 181, 105) if satellite_drawn else (160, 190, 180, 140),
+        )
+        # Keep names off the moving map; outlines remain visible throughout.
+        if not interactive and scale >= 3.0:
+            for country in visible_country_shapes(GLOBE_COUNTRY_SHAPES, center_lon, center_lat, box, scale):
+                point = radiogarden_project(country["label"], center_lon, center_lat, box, scale)
+                if not point or point[2] < 0.16 or not country["name"]:
+                    continue
+                draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
+                draw_text(text_cache, point[0], point[1], country["name"].upper(), (173, 193, 183), 12, True, False, "cm", family="Cantarell")
     receiver_point_groups = defaultdict(list)
     selected_point = None
     selected_color = None
