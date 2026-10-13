@@ -8385,15 +8385,15 @@ def themed_overlay_color(name, original):
     return (*themed_instrument_color(name, original)[:3], original[3])
 
 
-def button_label_for_box(text_cache, label, box, style=None, size=None, bold=True):
+def button_label_for_box(text_cache, label, box, style=None):
     """Keep 13 px button text inside its touch target without changing its size."""
     style = style or APP_UI_STYLE.button
     label = str(label).upper()
     if not callable(getattr(text_cache, "texture", None)):
         return label
     return fit_station_text(
-        text_cache, label, box[2] - box[0] - 8, size or style.label_size,
-        bold=bold, family=style.font_family,
+        text_cache, label, box[2] - box[0] - 8, style.label_size,
+        bold=True, family=style.font_family,
     )
 
 
@@ -8413,21 +8413,19 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
                                 style=None):
-    """Shared instrument title plus deliberately secondary subtitle."""
+    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
     visual = draw_styled_button_frame(box, active=active, style=style)
-    center_x = round((x0 + x1) / 2)
+    center_x = (x0 + x1) / 2
     if subtitle:
-        center_y = round((y0 + y1) / 2)
-        draw_text(text_cache, center_x, center_y - 11,
-                  button_label_for_box(text_cache, title, box, style,
-                                       size=style.title_size, bold=True),
-                  visual.text, style.title_size, True, False, "cm", family=style.font_family)
-        draw_text(text_cache, center_x, center_y + 13,
-                  button_label_for_box(text_cache, subtitle, box, style,
-                                       size=style.subtitle_size, bold=False),
-                  style.subtitle_color, style.subtitle_size, False, False, "cm", family=style.font_family)
+        center_y = (y0 + y1) / 2
+        draw_text(text_cache, center_x, center_y - 12,
+                  button_label_for_box(text_cache, title, box, style),
+                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
+        draw_text(text_cache, center_x, center_y + 12,
+                  button_label_for_box(text_cache, subtitle, box, style),
+                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
     else:
         draw_text(text_cache, center_x, (y0 + y1) / 2,
                   button_label_for_box(text_cache, title, box, style),
@@ -15392,14 +15390,14 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
                      border_radius=style.radius)
     subtitle = HOME_MENU_SUBTITLES.get(kind, "")
-    for caption, center_y, color, size, bold in (
-        (label, 21 if subtitle else height / 2, visual.text, style.title_size, True),
-        (subtitle, 45, style.subtitle_color, style.subtitle_size, False),
+    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
+    for caption, center_y, color in (
+        (label, 23 if subtitle else height / 2, visual.text),
+        (subtitle, 46, style.subtitle_color),
     ):
         if caption:
-            font = text_cache.font(size, bold=bold, family=style.font_family)
             rendered = font.render(str(caption).upper(), True, color[:3])
-            surface.blit(rendered, rendered.get_rect(center=(round(width / 2), round(center_y))))
+            surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
 

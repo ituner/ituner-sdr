@@ -331,8 +331,9 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertLess(sum(theme["colors"]["border"][:3]),
                         sum(theme["colors"]["text"][:3]) / 4)
         self.library.activate(INSTRUMENT_THEME_ID)
-        self.assertEqual(APP_UI_STYLE.button.title_size, 18)
-        self.assertEqual(APP_UI_STYLE.button.subtitle_size, 12)
+        self.assertEqual(APP_UI_STYLE.button.label_size, 13)
+        self.assertEqual(APP_UI_STYLE.button.font_family,
+                         ("Roboto", "Inter", "DejaVu Sans"))
         self.assertEqual(APP_UI_STYLE.button.radius, 0)
 
     def test_green_and_red_smeter_trace_stands_clear_of_its_rail(self):
