@@ -1016,6 +1016,107 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertEqual(state.radio_snapshot()[0].upper(),expected)
 
 
+class DualVfoHomeControlTests(unittest.TestCase):
+    def test_receiver_list_selection_changes_only_the_requested_vfo(self):
+        primary = ui.SharedState('http://a.test', 7075, 7, -95, 142, 245, 4, 'am', True)
+        secondary = ui.SharedState('http://b.test', 7075, 7, -95, 142, 245, 4, 'lsb', True)
+        sources = {
+            'A': {'server': 'http://a.test', 'name': 'A'},
+            'B': {'server': 'http://b.test', 'name': 'B'},
+        }
+        profiles = {'A': {'mode': 'AM'}, 'B': {'mode': 'LSB'}}
+        station_b = ('New B', 'Location B', 'http://new-b.test', 0, 4)
+        server_b, freq_b, zoom_b = ui.select_dual_vfo_receiver(
+            primary, secondary, sources, profiles, 'B', station_b)
+        self.assertEqual(server_b, 'http://new-b.test')
+        self.assertEqual(primary.snapshot()[0], 'http://a.test')
+        self.assertEqual(secondary.snapshot()[0], server_b)
+        self.assertEqual(sources['B']['name'], 'New B')
+        self.assertEqual(profiles['B']['mode'], 'LSB')
+        self.assertEqual((profiles['B']['freq_khz'], profiles['B']['zoom']), (freq_b, zoom_b))
+
+        station_a = ('New A', 'Location A', 'http://new-a.test', 1, 4)
+        server_a, _freq_a, _zoom_a = ui.select_dual_vfo_receiver(
+            primary, secondary, sources, profiles, 'A', station_a)
+        self.assertEqual(primary.snapshot()[0], server_a)
+        self.assertEqual(secondary.snapshot()[0], server_b)
+        self.assertEqual(sources['A']['location'], 'Location A')
+        self.assertEqual(sources['B']['server'], server_b)
+
+    def test_zoom_buttons_match_home_and_audio_mix_sits_lower(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        layout = ui.dual_vfo_layout()
+        for vfo in ('a', 'b'):
+            waterfall = layout[f'{vfo}_waterfall']
+            for label, home_box, key in (
+                ('-', ui.ZOOM_MINUS_BOX, f'zoom_{vfo}_minus'),
+                ('+', ui.ZOOM_PLUS_BOX, f'zoom_{vfo}_plus'),
+            ):
+                box = layout[key]
+                self.assertEqual((box[0], box[2], box[3] - box[1]),
+                                 (home_box[0], home_box[2], home_box[3] - home_box[1]))
+                self.assertGreaterEqual(box[1], waterfall[1])
+                self.assertLessEqual(box[3], waterfall[3])
+                x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+                self.assertEqual(ui.dual_vfo_action_at(x, y),
+                                 f'zoom_{vfo.upper()}_{-1 if label == "-" else 1}')
+            with patch.object(ui, 'draw_zoom_button') as draw_button:
+                ui.draw_dual_vfo_zoom_controls(
+                    None, layout[f'zoom_{vfo}_minus'], layout[f'zoom_{vfo}_plus'])
+            self.assertEqual(draw_button.call_count, 2)
+            draw_button.assert_any_call(None, layout[f'zoom_{vfo}_minus'], '-')
+            draw_button.assert_any_call(None, layout[f'zoom_{vfo}_plus'], '+')
+
+        mix = layout['mix_track']
+        self.assertGreaterEqual(mix[1], layout['split'][1])
+        self.assertGreaterEqual(mix[1] - layout['clone'][3], 16)
+        self.assertLess(mix[3], layout['freq_b'][1])
+
+    def test_each_vfo_has_home_sized_meter_and_matching_mode_grid(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        layout = ui.dual_vfo_layout()
+        home_meter = ui.lcd_compact_smeter_box()
+        home_modes = tuple(ui.lcd_home_mode_boxes(True))
+        for vfo in ('A', 'B'):
+            meter = layout[f'smeter_{vfo.lower()}']
+            self.assertEqual((meter[0], meter[2]), (home_meter[0], home_meter[2]))
+            self.assertEqual(meter[3] - meter[1], home_meter[3] - home_meter[1])
+            modes = ui.dual_vfo_mode_boxes(vfo)
+            self.assertEqual([label for label, _box in modes],
+                             [label for label, _box in home_modes])
+            for (label, box), (_home_label, home_box) in zip(modes, home_modes):
+                self.assertEqual((box[0], box[2], box[3] - box[1]),
+                                 (home_box[0], home_box[2], home_box[3] - home_box[1]))
+                x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+                self.assertEqual(ui.dual_vfo_action_at(x, y), f'mode_{vfo}_{label}')
+            self.assertEqual(min(box[1] for _label, box in modes), layout[f'mode_{vfo.lower()}'][1])
+            self.assertEqual(max(box[3] for _label, box in modes), layout[f'mode_{vfo.lower()}'][3])
+
+    def test_dual_meter_uses_home_renderer_and_mode_change_is_isolated(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        meter = ui.dual_vfo_layout()['smeter_a']
+        with patch.object(ui, 'draw_lcd_compact_smeter') as draw_meter:
+            ui.draw_dual_vfo_smeter(None, meter, -95)
+        draw_meter.assert_called_once_with(None, meter, -95)
+
+        primary = ui.SharedState('http://a.test', 7075, 7, -95, 142, 245, 4, 'am', True)
+        secondary = ui.SharedState('http://b.test', 7075, 7, -95, 142, 245, 4, 'lsb', True)
+        profiles = {'A': {'mode': 'am'}, 'B': {'mode': 'LSB'}}
+        ui.set_dual_vfo_mode(primary, secondary, profiles, 'B', 'NBFM')
+        self.assertEqual(primary.radio_snapshot()[0], 'am')
+        self.assertEqual(secondary.radio_snapshot()[0], 'nbfm')
+        self.assertEqual(profiles['B']['mode'], 'NBFM')
+        self.assertEqual(profiles['A']['mode'], 'am')
+        ui.set_dual_vfo_mode(primary, secondary, profiles, 'A', 'CW')
+        self.assertEqual(primary.radio_snapshot()[0], 'cw')
+        self.assertEqual(secondary.radio_snapshot()[0], 'nbfm')
+        self.assertEqual(profiles['A']['mode'], 'cw')
+        self.assertEqual(profiles['B']['mode'], 'NBFM')
+
+
 class ReceiverHandoffTests(unittest.TestCase):
     def state(self):
         return ui.SharedState('http://kiwi.test',7075,8,-95,142,245,3,'lsb',True)

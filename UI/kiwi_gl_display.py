@@ -2082,6 +2082,13 @@ def dual_vfo_layout():
     header_h = 46
     split_y0 = 398
     split_y1 = 414
+    zoom_height = ZOOM_MINUS_BOX[3] - ZOOM_MINUS_BOX[1]
+    zoom_a_bottom = split_y0 - 12
+    zoom_b_bottom = LOGICAL_H - 14
+
+    def zoom_box(home_box, bottom):
+        return home_box[0], bottom - zoom_height, home_box[2], bottom
+
     return {
         "rf_w": rf_w,
         "a_header": (0, top_h, rf_w, top_h + header_h),
@@ -2091,14 +2098,12 @@ def dual_vfo_layout():
         "b_waterfall": (0, split_y1 + header_h, rf_w, LOGICAL_H),
         "rail": (rf_w, 0, LOGICAL_W, LOGICAL_H),
         "home": lcd_drawer_back_box(),
-        # Per-VFO zoom stays over the matching waterfall, using the same
-        # quiet glass control language as the primary receiver.
-        "zoom_a_group": (16, 324, 248, 386),
-        "zoom_a_minus": (24, 327, 88, 383),
-        "zoom_a_plus": (176, 327, 240, 383),
-        "zoom_b_group": (16, 724, 248, 786),
-        "zoom_b_minus": (24, 727, 88, 783),
-        "zoom_b_plus": (176, 727, 240, 783),
+        # Reuse Home's standalone Zoom button widths, height, and spacing
+        # inside each receiver's waterfall pane.
+        "zoom_a_minus": zoom_box(ZOOM_MINUS_BOX, zoom_a_bottom),
+        "zoom_a_plus": zoom_box(ZOOM_PLUS_BOX, zoom_a_bottom),
+        "zoom_b_minus": zoom_box(ZOOM_MINUS_BOX, zoom_b_bottom),
+        "zoom_b_plus": zoom_box(ZOOM_PLUS_BOX, zoom_b_bottom),
         # Receiver selection is part of the VFO header, where its context is
         # immediately obvious. The rail repeats the live instrument stack.
         "rx_a": (126, top_h + 6, 570, top_h + 40),
@@ -2108,20 +2113,60 @@ def dual_vfo_layout():
         # Leave a deliberate quiet gap below Home before the live VFO A
         # instrument stack begins.
         "freq_a": (1031, 80, 1273, 136),
-        "mode_a": (1034, 144, 1270, 208),
-        "smeter_a": (1042, 216, 1262, 292),
+        "mode_a": (1034, 144, 1270, 210),
+        "smeter_a": (1034, 218, 1270, 298),
         # Start B's tools immediately below its header, visually tied to the
         # top edge of the B waterfall rather than crowded against Clone.
         "freq_b": (1031, 494, 1273, 550),
-        "mode_b": (1034, 558, 1270, 622),
-        "smeter_b": (1042, 630, 1262, 706),
-        # One shared left/right audio blend lives in the calm center of the
-        # tool rail, rather than competing with either VFO header.
-        "mix_track": (1042, 372, 1262, 436),
+        "mode_b": (1034, 558, 1270, 624),
+        "smeter_b": (1034, 632, 1270, 712),
+        # Keep the shared audio blend lower in the center gap, with breathing
+        # room below Clone and above VFO B's frequency.
+        "mix_track": (1042, 410, 1262, 474),
         # Cloning is an occasional setup action, so keep it out of the
         # mixer flow, above its controls and clear of the bottom Back button.
-        "clone": (1034, 300, 1270, 364),
+        "clone": (1034, 306, 1270, 370),
     }
+
+
+def dual_vfo_mode_boxes(vfo):
+    """Place the exact Home mode grid in either Dual rail half."""
+    mode_box = dual_vfo_layout()[f"mode_{vfo.lower()}"]
+    home_modes = tuple(lcd_home_mode_boxes(True))
+    home_top = min(box[1] for _label, box in home_modes)
+    offset_y = mode_box[1] - home_top
+    return tuple(
+        (label, (box[0], box[1] + offset_y, box[2], box[3] + offset_y))
+        for label, box in home_modes
+    )
+
+
+def set_dual_vfo_mode(primary_state, secondary_state, profiles, vfo, mode):
+    """Tune only the chosen VFO and retain its matching filter defaults."""
+    target_state = primary_state if vfo == "A" else secondary_state
+    selected_mode, low_cut, high_cut, _generation = target_state.set_radio_mode(mode)
+    profile = dict(profiles.get(vfo, {}))
+    profile.update({
+        "mode": selected_mode if vfo == "A" else selected_mode.upper(),
+        "low_cut": low_cut,
+        "high_cut": high_cut,
+    })
+    profiles[vfo] = profile
+    return selected_mode
+
+
+def select_dual_vfo_receiver(primary_state, secondary_state, sources, profiles, vfo, station):
+    """Apply a receiver-list selection only to the VFO that opened it."""
+    name, location, server, _used, _total = station_fields(station)
+    target_state = primary_state if vfo == "A" else secondary_state
+    _server, freq_khz, zoom, _generation, _server_generation = target_state.set_server(
+        server, receiver_type=station_receiver_type(station),
+    )
+    sources[vfo] = {"server": server, "name": name, "location": location}
+    profile = dict(profiles.get(vfo, {}))
+    profile.update({"freq_khz": freq_khz, "zoom": zoom})
+    profiles[vfo] = profile
+    return server, freq_khz, zoom
 
 
 def dual_vfo_action_at(x, y):
@@ -2133,10 +2178,10 @@ def dual_vfo_action_at(x, y):
         return "rx_A"
     if contains(boxes["rx_b"], x, y):
         return "rx_B"
-    if contains(boxes["mode_a"], x, y):
-        return "mode_A"
-    if contains(boxes["mode_b"], x, y):
-        return "mode_B"
+    for vfo in ("A", "B"):
+        for label, box in dual_vfo_mode_boxes(vfo):
+            if contains(box, x, y):
+                return f"mode_{vfo}_{label}"
     for vfo, sign, key in (
         ("A", -1, "zoom_a_minus"), ("A", 1, "zoom_a_plus"),
         ("B", -1, "zoom_b_minus"), ("B", 1, "zoom_b_plus"),
@@ -2211,33 +2256,16 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
     draw_text(text_cache, x1 - 18, (y0 + y1) / 2 + 1, detail, detail_color, detail_size, True, False, "rm", family="Liberation Sans")
 
 
-def draw_dual_vfo_mode_annunciator(text_cache, box, vfo, mode, active=False):
-    """Draw one Home-style mode control in the matching VFO tool stack."""
-    draw_styled_two_line_button(text_cache, box, "MODE", mode, active=active)
+def draw_dual_vfo_mode_annunciator(text_cache, vfo, mode):
+    """Use Home's eight small mode buttons for this receiver."""
+    draw_home_mode_buttons(text_cache, dual_vfo_mode_boxes(vfo), mode,
+                           "IQ" if str(mode).upper() == "IQ" else "DIG")
 
 
-def draw_dual_vfo_zoom_controls(text_cache, group, minus, plus):
-    """A compact, translucent Zoom control over one VFO's own waterfall."""
-    separator_left = minus[2] - group[0] + 8
-    separator_right = plus[0] - group[0] - 8
-    draw_control_group_background(
-        text_cache, group, "dual_vfo_zoom_glass_v1", (separator_left, separator_right), 0.82, separator_bottom=11
-    )
-    draw_zoom_button(text_cache, minus, "-", 0.86)
-    draw_zoom_button(text_cache, plus, "+", 0.86)
-    draw_text(
-        text_cache,
-        (minus[2] + plus[0]) / 2,
-        (group[1] + group[3]) / 2,
-        "ZOOM",
-        (211, 227, 231),
-        16,
-        True,
-        False,
-        "cm",
-        0.86,
-        family="Liberation Sans",
-    )
+def draw_dual_vfo_zoom_controls(text_cache, minus, plus):
+    """Draw the same standalone rounded Zoom buttons used on HOME."""
+    draw_zoom_button(text_cache, minus, "-")
+    draw_zoom_button(text_cache, plus, "+")
 
 
 def dual_vfo_squelch_level_at_x(x, box, maximum):
@@ -2248,33 +2276,9 @@ def dual_vfo_squelch_level_at_x(x, box, maximum):
     return int(round(fraction * max(0, int(maximum))))
 
 
-def draw_dual_vfo_smeter(text_cache, box, smeter_dbm, accent=None, staged=False):
-    """The Home rail S-meter, reused without a Dual-specific variant."""
-    x0, y0, x1, y1 = box
-    dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
-    live_segments = smeter_segment_position(dbm)
-    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
-    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
-    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 14, True, False, "rt", family="Liberation Sans")
-    track_x0, track_x1 = x0 + 12, x1 - 12
-    track_y = y0 + 47
-    segment_w = (track_x1 - track_x0) / 36.0
-    for index in range(36):
-        sx0 = track_x0 + index * segment_w + 1
-        sx1 = track_x0 + (index + 1) * segment_w - 1
-        active = index + 0.5 <= live_segments
-        red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
-        if active:
-            color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
-        else:
-            color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
-        draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
-    for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
-        lx = track_x0 + (track_x1 - track_x0) * position / 36.0
-        draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+def draw_dual_vfo_smeter(text_cache, box, smeter_dbm):
+    """Draw the same 236 px meter used on HOME, at this VFO's level."""
+    draw_lcd_compact_smeter(text_cache, box, smeter_dbm)
 
 
 def draw_dual_vfo_audio_mixer(text_cache, box, mix):
@@ -2329,10 +2333,10 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
     draw_radio_close_button(text_cache, boxes["home"])
 
     draw_dual_vfo_zoom_controls(
-        text_cache, boxes["zoom_a_group"], boxes["zoom_a_minus"], boxes["zoom_a_plus"]
+        text_cache, boxes["zoom_a_minus"], boxes["zoom_a_plus"]
     )
     draw_dual_vfo_zoom_controls(
-        text_cache, boxes["zoom_b_group"], boxes["zoom_b_minus"], boxes["zoom_b_plus"]
+        text_cache, boxes["zoom_b_minus"], boxes["zoom_b_plus"]
     )
 
     # Each VFO keeps the same compact Home instrument order: frequency, mode,
@@ -2369,15 +2373,9 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
         )
         draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
-        draw_dual_vfo_mode_annunciator(
-            text_cache,
-            boxes[f"mode_{suffix}"],
-            vfo,
-            profile.get("mode", mode),
-            active_vfo == vfo,
-        )
+        draw_dual_vfo_mode_annunciator(text_cache, vfo, profile.get("mode", mode))
 
-        draw_dual_vfo_smeter(text_cache, boxes[f"smeter_{suffix}"], smeters.get(vfo, SMETER_FLOOR_DBM), (90, 222, 245))
+        draw_dual_vfo_smeter(text_cache, boxes[f"smeter_{suffix}"], smeters.get(vfo, SMETER_FLOOR_DBM))
 
     draw_dual_vfo_audio_mixer(text_cache, boxes["mix_track"], mix)
     for key, label, active in (("clone", "CLONE VFO A", False),):
@@ -16143,6 +16141,20 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
         draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
 
+def draw_home_mode_buttons(text_cache, buttons, mode, digital):
+    """Keep HOME and each Dual VFO's mode buttons visually identical."""
+    exact_mode = str(mode).upper()
+    active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
+    for label, box in buttons:
+        active = mode_annunciator_active(label, active_mode, digital)
+        pressed = ui_button_pressed(box)
+        visual = draw_styled_button_frame(box, active=active, pressed=pressed)
+        bx0, by0, bx1, by1 = box
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
+                  visual.text, 13, True, False, "cm",
+                  family=APP_UI_STYLE.button.font_family)
+
+
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
                                show_compact_readouts=True,
                                compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY):
@@ -16153,8 +16165,6 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     surface_bottom = lcd_annunciator_surface_bottom(show_compact_readouts)
     # Keep the frequency and mode cluster open, with no obsolete square-cell
     # background peeking out around the rounded mode controls.
-    exact_mode = mode.upper()
-    active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     draw_logical_rect(x0, y0, x1, surface_bottom, APP_UI_STYLE.palette.sidebar)
 
     if show_compact_readouts:
@@ -16180,14 +16190,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # instrument rather than touching either the band tag or mode grid.
         draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm)
 
-    for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts, mode):
-        active = mode_annunciator_active(label, active_mode, digital)
-        box = (bx0, by0, bx1, by1)
-        pressed = ui_button_pressed(box)
-        visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  visual.text, 13, True, False, "cm",
-                  family=APP_UI_STYLE.button.font_family)
+    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital)
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -23297,6 +23300,7 @@ def main():
     dual_vfo_picker_open = False
     dual_vfo_picker_target = "A"
     dual_vfo_picker_page = 0
+    dual_vfo_receiver_list_target = None
     dual_vfo_mode_open = False
     dual_vfo_mode_target = "A"
     dual_vfo_gesture_vfo = None
@@ -24378,6 +24382,27 @@ def main():
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
         nonlocal picker_map_selected_server
+        if dual_vfo_receiver_list_target in ("A", "B"):
+            target_vfo = dual_vfo_receiver_list_target
+            if target_vfo == "A":
+                FMDX_SHARED_CONTROL.revoke()
+            server, frequency, zoom = select_dual_vfo_receiver(
+                state, dual_b_state, dual_vfo_sources, dual_vfo_profiles,
+                target_vfo, station,
+            )
+            if target_vfo == "A":
+                drain_queue(line_queue)
+                wf_texture.clear()
+                animate_to(frequency, receiver_display_span(zoom, station_receiver_type(station)), 0.20)
+                write_remembered_view(save_current_frequency=True, force=True)
+            else:
+                drain_queue(dual_b_line_queue)
+                dual_b_wf_texture.clear()
+                write_remembered_view(force=True)
+            picker_map_selected_server = server
+            return_to_dual_vfo()
+            print(f"gl dual VFO {target_vfo} station {server}", flush=True)
+            return
         # Switching receivers always returns FM-DX to read-only; the shared
         # tuner acknowledgement is never carried across a receiver change.
         FMDX_SHARED_CONTROL.revoke()
@@ -24512,11 +24537,13 @@ def main():
         nonlocal receiver_list_focus_on_entry
         nonlocal fmdx_disclaimer_open, fmdx_disclaimer_shown
         nonlocal picker_map_selected_server
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_state = receiver_list_active_state()
+        active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
+        receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
         station_query = ""
-        station_route_filter = active_receiver_source(
-            all_stations, active_server, receiver_type,
+        station_route_filter = (
+            "all" if dual_vfo_receiver_list_target else
+            active_receiver_source(all_stations, active_server, receiver_type)
         )
         fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
             station_route_filter,
@@ -24544,10 +24571,61 @@ def main():
                 station_page_max(stations, int(fmdx_disclaimer_open)),
             )
 
+    def receiver_list_active_state():
+        """Highlight the VFO that opened RECEIVERS, including VFO B."""
+        return dual_b_state if dual_vfo_receiver_list_target == "B" else state
+
+    def open_dual_receiver_list(vfo):
+        """Open the regular RECEIVERS / ALL list from a DUAL CHANGE button."""
+        nonlocal dual_vfo_receiver_list_target, dual_vfo_open, dual_vfo_picker_open
+        nonlocal picker_open, picker_map_open, picker_map_garden_mode, picker_parent
+        nonlocal station_route_filter, station_query, station_sort, stations, station_scroll
+        nonlocal receiver_list_focus_on_entry, receiver_list_sort_used, search_open
+        nonlocal station_pending_server, station_connected_at, fmdx_disclaimer_open
+        nonlocal picker_map_selected_server
+        stop_dual_vfo_clients()
+        dual_vfo_open = False
+        dual_vfo_picker_open = False
+        dual_vfo_receiver_list_target = vfo
+        picker_parent = "home"
+        picker_open = True
+        picker_map_open = False
+        picker_map_garden_mode = True
+        station_route_filter = "all"
+        station_query = ""
+        station_sort = RECEIVER_SORT_MODES[0]
+        stations = filtered_stations(
+            all_stations, station_query, station_sort, station_route_filter,
+            favorite_servers, station_health, receiver_home_profile,
+        )
+        station_scroll = 0
+        receiver_list_sort_used = False
+        receiver_list_focus_on_entry = True
+        search_open = False
+        fmdx_disclaimer_open = False
+        station_pending_server = None
+        station_connected_at = 0.0
+        picker_map_selected_server = receiver_list_active_state().snapshot()[0]
+
+    def return_to_dual_vfo():
+        """Restore the two receiver panes after a list choice or BACK."""
+        nonlocal dual_vfo_receiver_list_target, picker_open, picker_map_open, search_open
+        nonlocal station_pending_server, station_connected_at, fmdx_disclaimer_open
+        dual_vfo_receiver_list_target = None
+        picker_open = False
+        picker_map_open = False
+        search_open = False
+        station_pending_server = None
+        station_connected_at = 0.0
+        fmdx_disclaimer_open = False
+        dual_index = next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "dual")
+        activate_navigation_item(dual_index)
+
     def current_receiver_rows():
         """Return the complete directory in the same focused order for draw and taps."""
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_state = receiver_list_active_state()
+        active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
+        receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
         active_source = active_receiver_source(
             all_stations, active_server, receiver_type,
         )
@@ -24582,7 +24660,7 @@ def main():
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
         nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
@@ -24593,6 +24671,8 @@ def main():
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
+        if kind != "dual":
+            dual_vfo_receiver_list_target = None
         sstv_workspace.open = False
         hell_workspace.open = False
         qrss_workspace.open = False
@@ -24763,6 +24843,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         elif kind == "dual":
+            dual_vfo_receiver_list_target = None
             dual_vfo_parent = parent
             settings_menu_open = False
             digital_menu_open = False
@@ -25149,6 +25230,12 @@ def main():
             picker_map_notice = "DRAG A REGION UNDER CENTER, THEN TAP THE RETICLE"
             picker_map_notice_until = time.monotonic() + 3.0
             return False
+        if dual_vfo_receiver_list_target in ("A", "B"):
+            connect_to_station((
+                selected["name"], selected["location"], selected["server"],
+                None, None, None, None, selected.get("receiver_type", "kiwi"),
+            ))
+            return True
         picker_map_selected_server = selected["server"]
         picker_map_hover_server = selected["server"]
         picker_map_lock_target = (math.radians(selected["lon"]), math.radians(selected["lat"]))
@@ -25225,9 +25312,9 @@ def main():
         return True
 
     def focus_receiver_map_on_active():
-        """Select, reveal, and centre the receiver currently feeding Home."""
+        """Centre the receiver whose list is open, including DUAL VFO B."""
         nonlocal picker_map_selected_server, picker_map_hover_server
-        active_server, _frequency, _zoom, _smeter, _view, _generation = state.snapshot()
+        active_server, _frequency, _zoom, _smeter, _view, _generation = receiver_list_active_state().snapshot()
         picker_map_selected_server = active_server
         picker_map_hover_server = active_server
         receiver = next(
@@ -26422,12 +26509,20 @@ def main():
                                     )
                                     dual_audio_mixer.set_mix(dual_vfo_mix)
                                 elif action in ("rx_A", "rx_B"):
-                                    dual_vfo_picker_target = action[-1]
-                                    dual_vfo_picker_page = 0
-                                    dual_vfo_picker_open = True
-                                elif action in ("mode_A", "mode_B"):
-                                    dual_vfo_mode_target = action[-1]
-                                    dual_vfo_mode_open = True
+                                    open_dual_receiver_list(action[-1])
+                                elif action and action.startswith("mode_"):
+                                    _prefix, target_vfo, label = action.split("_", 2)
+                                    selected_mode = "NBFM" if label == "FM" else label
+                                    next_mode = set_dual_vfo_mode(
+                                        state, dual_b_state, dual_vfo_profiles,
+                                        target_vfo, selected_mode,
+                                    )
+                                    if target_vfo == "A":
+                                        radio_mode = next_mode
+                                        manual_radio_mode = True
+                                        filter_custom_width = False
+                                        digital_mode = "IQ" if next_mode.upper() == "IQ" else "DIG"
+                                    remember_current_view()
                                 elif action and action.startswith("zoom_"):
                                     _prefix, target_vfo, direction = action.split("_", 2)
                                     delta = -1 if direction == "-1" else 1
@@ -28324,6 +28419,8 @@ def main():
                                     picker_map_hover_server = None
                                     search_open = False
                                     sync_receiver_browser_to_active()
+                                elif dual_vfo_receiver_list_target in ("A", "B"):
+                                    return_to_dual_vfo()
                                 else:
                                     picker_open = False
                                     picker_map_open = False
@@ -29449,7 +29546,8 @@ def main():
                 else:
                     visible_stations = current_receiver_rows()
                     draw_station_picker(
-                        text_cache, visible_stations, station_scroll, server, station_query,
+                        text_cache, visible_stations, station_scroll,
+                        receiver_list_active_state().snapshot()[0], station_query,
                         station_sort, station_health, station_pending_server, station_connection_status,
                         station_route_filter, receiver_home_profile, fmdx_disclaimer_open,
                         picker_list_notice if time.monotonic() < picker_list_notice_until else "",
