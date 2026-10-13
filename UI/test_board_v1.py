@@ -592,10 +592,9 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(calls[ui.ZOOM_MINUS_BOX])   # pressed tile is active
         self.assertFalse(calls[ui.ZOOM_PLUS_BOX])   # the other stays idle
 
-    def test_waterfall_zoom_pressed_palette_is_opaque_shared_feedback(self):
+    def test_waterfall_zoom_pressed_palette_keeps_translucent_feedback(self):
         fill, border, icon = ui.zoom_button_palette(active=True, pressed=True)
-        self.assertEqual(fill, ui.UI_PRESSED_FILL)
-        self.assertEqual(fill[3], 255)
+        self.assertEqual(fill, (*ui.UI_PRESSED_FILL[:3], 216))
         self.assertEqual(border, ui.UI_PRESSED_EDGE)
         self.assertEqual(icon, (*ui.UI_PRESSED_TEXT, 255))
 
@@ -630,7 +629,8 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_styled_button_frame', return_value=visual) as frame, \
              patch.object(ui, 'draw_logical_line') as line:
             ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, '+')
-        frame.assert_called_once_with(ui.ZOOM_PLUS_BOX, active=False, pressed=False)
+        frame.assert_called_once_with(ui.ZOOM_PLUS_BOX, active=False, pressed=False,
+                                      fill_alpha=184)
         self.assertEqual(line.call_count, 2)
 
     def test_waterfall_pause_uses_the_zoom_icon_stroke_weight(self):
