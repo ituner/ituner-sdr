@@ -62,9 +62,21 @@ class SSTVWorkspace:
             return 0
         return 1 if dy < 0 else -1
 
-    def text(self, cache, x, y, value, size=18, color=(217, 233, 238), width=None):
+    def theme_color(self, role, original):
+        themed = getattr(self.ui, 'themed_instrument_color', None)
+        return themed(role, original) if callable(themed) else original
+
+    def text(self, cache, x, y, value, size=18, color=None, width=None):
         if width:
             value = self.ui.fit_station_text(cache, str(value), width, size, False, False, 'Liberation Sans')
+        if color is None or color == (217, 233, 238):
+            color = self.theme_color('text', (217, 233, 238))
+        elif color in ((104, 234, 194), (126, 255, 212)):
+            color = self.theme_color('ready', color)
+        elif color in ((255, 190, 90), (255, 210, 103)):
+            color = self.theme_color('waiting', color)
+        elif color == (7, 18, 25):
+            color = self.theme_color('focus_text', color)
         self.ui.draw_text(cache, x, y, str(value), color, size, False, False, 'lm', family='Liberation Sans')
 
     def button(self, cache, box, title, action, subtitle='', active=False):
@@ -217,7 +229,7 @@ class SSTVWorkspace:
         for index, row in enumerate(rows):
             x = 16 + (index % 2) * 630
             y = 96 + (index // 2) * 202
-            ui.draw_logical_rect(x, y, x+612, y+188, (17, 40, 47, 255))
+            ui.draw_logical_rect(x, y, x+612, y+188, self.theme_color('section_surface', (17, 40, 47, 255)))
             self.actions.append(((x,y,x+612,y+120),('filter',row['id'])))
             item = next((item for item in images if item['session_id'] == row['id']), None)
             width = 370 if item else 580
@@ -239,7 +251,7 @@ class SSTVWorkspace:
                 left=x+16+offset*122
                 self.button(cache, (left, y+120, left+114, y+184), label, action)
         if self.delete_armed:
-            ui.draw_logical_rect(16, 714, 1258, 792, (49, 30, 28, 255))
+            ui.draw_logical_rect(16, 714, 1258, 792, self.theme_color('danger', (49, 30, 28, 255)))
             self.text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
             self.button(cache, (782, 728, 896, 792), 'DELETE', ('confirm_delete', self.delete_armed))
             self.button(cache, (904, 728, 1018, 792), 'CANCEL', ('cancel_delete', None))

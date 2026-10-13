@@ -219,6 +219,8 @@ import receiver_catalog
 from directory_refresh import DailyDirectoryRefresh
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
+import theme_system
+from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 
 
 LCD_NATIVE_W = 800
@@ -2003,10 +2005,9 @@ def configure_popup_layout():
         PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
         # Source categories live in the rail; the list uses the full height.
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 6, 0
-        # RadioGarden gets the same dedicated 256 px right rail as Home.
-        # Keeping map gestures in the 1024 px radio canvas prevents an
-        # accidental globe rotation while reaching for a navigation command.
-        PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
+        # The Globe owns the entire display. Its familiar right-side controls
+        # float over the map instead of reserving an opaque 256 px rail.
+        PICKER_MAP_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
         # Source selectors start below the rail title. Four rail commands
         # stay directly above the bottom-anchored Back button.
         (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
@@ -2056,20 +2057,20 @@ MENU_ROWS = 4
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DIGI"),
-    ("vosc", "VOSC"),
+    ("digital", "DECODERS"),
+    ("vosc", "CAPTIONS"),
     ("display", "DISPLAY"),
-    ("dual", "DUAL"),
+    ("dual", "DUAL RX"),
     ("settings", "SETTINGS"),
 )
 HOME_MENU_SUBTITLES = {
     "rx": "BROWSE",
-    "audio": "OUTPUT",
-    "digital": "DECODERS",
-    "vosc": "CAPTIONS",
-    "display": "WATERFALL",
-    "dual": "2 VFO",
-    "settings": "PREFERENCES",
+    "audio": "VOLUME & DSP",
+    "digital": "5 DIGITAL MODES",
+    "vosc": "SPEECH TO TEXT",
+    "display": "COLOR & LAYOUT",
+    "dual": "TWO RECEIVERS",
+    "settings": "DEVICE & TOOLS",
 }
 
 
@@ -2202,8 +2203,8 @@ def dual_vfo_action_at(x, y):
 def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, receiver_name, status="LIVE", best=False):
     """One compact VFO instrument strip above an unscaled RF pane."""
     x0, y0, x1, y1 = box
-    active_accent = (90, 222, 245, 255)
-    muted = (102, 126, 134, 255)
+    active_accent = themed_instrument_color("ready", (90, 222, 245, 255))
+    muted = themed_instrument_color("secondary_text", (102, 126, 134, 255))
     # Keep the header completely open to the waterfall. The brighter VFO
     # name alone communicates focus without introducing any perimeter or
     # side marker into either RF pane.
@@ -2217,32 +2218,32 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
         text_cache, receiver_name or "CURRENT RECEIVER", change_x0 - rx0 - 14,
         16, True, False, family=VFO_FONT_FAMILY,
     )
-    draw_text(text_cache, rx0, (ry0 + ry1) / 2, name, (224, 240, 241), 16, True, False, "lm", family=VFO_FONT_FAMILY)
+    draw_text(text_cache, rx0, (ry0 + ry1) / 2, name, themed_instrument_color("text", (224, 240, 241)), 16, True, False, "lm", family=VFO_FONT_FAMILY)
     draw_logical_rect(change_x0, ry0, rx1, ry1, (18, 42, 50, 204))
     draw_logical_line(change_x0, ry0, rx1, ry0, (90, 164, 176, 176), 1)
     draw_logical_line(change_x0, ry1, rx1, ry1, (45, 86, 97, 178), 1)
-    draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", (221, 241, 243), 14, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", themed_instrument_color("text", (221, 241, 243)), 14, True, False, "cm", family="Liberation Sans")
     detail = status.upper()
     badge_x0 = None
     if detail.startswith("MATCH "):
-        detail_color = (119, 244, 177)
+        detail_color = themed_instrument_color("ready", (119, 244, 177))
         detail_size = 25
         badge_x0 = max(x0 + 260, x1 - 178)
         draw_logical_rect(badge_x0, y0 + 4, x1 - 12, y1 - 4, (20, 91, 65, 172))
         draw_logical_line(badge_x0, y0 + 4, x1 - 12, y0 + 4, (119, 244, 177, 225), 1)
     elif detail.startswith("SCORE "):
-        detail_color = (124, 215, 239)
+        detail_color = themed_instrument_color("waiting", (124, 215, 239))
         detail_size = 21
         badge_x0 = max(x0 + 260, x1 - 166)
         draw_logical_rect(badge_x0, y0 + 5, x1 - 12, y1 - 5, (20, 62, 79, 166))
     elif detail.startswith("MATCHING"):
-        detail_color = (124, 215, 239)
+        detail_color = themed_instrument_color("waiting", (124, 215, 239))
         detail_size = 16
     elif detail in ("LIVE", "WAITING AUDIO"):
-        detail_color = (126, 230, 188)
+        detail_color = themed_instrument_color("ready", (126, 230, 188))
         detail_size = 15
     else:
-        detail_color = (165, 177, 178)
+        detail_color = themed_instrument_color("secondary_text", (165, 177, 178))
         detail_size = 14
     if best:
         # Keep reception quality with the programme-match conclusion rather
@@ -2252,7 +2253,7 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
         best_x0 = best_x1 - 54
         draw_logical_rect(best_x0, y0 + 9, best_x1, y1 - 9, (23, 112, 74, 214))
         draw_logical_line(best_x0, y0 + 9, best_x1, y0 + 9, (126, 252, 181, 244), 1)
-        draw_text(text_cache, (best_x0 + best_x1) / 2, (y0 + y1) / 2, "BEST", (220, 255, 235), 12, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, (best_x0 + best_x1) / 2, (y0 + y1) / 2, "BEST", themed_instrument_color("text", (220, 255, 235)), 12, True, False, "cm", family="Liberation Sans")
     draw_text(text_cache, x1 - 18, (y0 + y1) / 2 + 1, detail, detail_color, detail_size, True, False, "rm", family="Liberation Sans")
 
 
@@ -2285,20 +2286,21 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     """One shared horizontal mixer, styled as a Home-rail instrument."""
     x0, y0, x1, y1 = box
     mix = clamp(float(mix), 0.0, 1.0)
-    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
-    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
-    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 6, "AUDIO MIX", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (9, 17, 23, 228)))
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
+    draw_text(text_cache, x0 + 12, y0 + 6, "AUDIO MIX", themed_instrument_color("section_heading", (170, 201, 207)), 14, True, False, "lt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 14, x1 - 14
     track_y = y0 + 33
     knob_x = track_x0 + (track_x1 - track_x0) * mix
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (29, 52, 61, 255))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, (83, 216, 248, 228))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (228, 244, 245, 238))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (29, 52, 61, 255)))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (83, 216, 248, 228)))
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (228, 244, 245, 238)))
     legend_y = y1 - 9
-    draw_text(text_cache, track_x0, legend_y, "VFO A", (138, 166, 176), 10, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, (track_x0 + track_x1) / 2, legend_y, "MIX", (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
-    draw_text(text_cache, track_x1, legend_y, "VFO B", (138, 166, 176), 10, True, False, "rm", family="Liberation Sans")
+    legend_color = themed_instrument_color("secondary_text", (138, 166, 176))
+    draw_text(text_cache, track_x0, legend_y, "VFO A", legend_color, 10, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, (track_x0 + track_x1) / 2, legend_y, "MIX", legend_color, 10, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, track_x1, legend_y, "VFO B", legend_color, 10, True, False, "rm", family="Liberation Sans")
 
 
 def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_khz, span_khz, mode, active_vfo, mix, smeters, sources, profiles, b_status="CONNECTING", best_vfo=None, frequency_font_family=None):
@@ -2367,11 +2369,11 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
         frequency_right = fx1 - unit_right_margin - unit_width - frequency_unit_gap
         draw_text_scaled_x(
             text_cache, frequency_right, (fy0 + fy1) / 2 + 2,
-            frequency_text, VFO_NEON_COLOR, frequency_size,
+            frequency_text, APP_UI_STYLE.palette.frequency, frequency_size,
             min(1.0, available_width / max(1, source_width)),
             bold=True, anchor="rm", family=frequency_font_family,
         )
-        draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
+        draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, themed_instrument_color("secondary_text", (183, 194, 200)), unit_size, True, False, "rm", family="Liberation Sans")
 
         draw_dual_vfo_mode_annunciator(text_cache, vfo, profile.get("mode", mode))
 
@@ -2418,12 +2420,12 @@ def dual_vfo_mode_picker_action_at(x, y):
 def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
     boxes = dual_vfo_mode_picker_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    accent = (90, 222, 245) if target_vfo == "A" else (242, 181, 92)
+    accent = themed_instrument_color("ready", (90, 222, 245)) if target_vfo == "A" else themed_instrument_color("waiting", (242, 181, 92))
     draw_logical_rect(0, 58, LOGICAL_W, LOGICAL_H, (0, 0, 0, 128))
-    draw_logical_rect(x0, y0, x1, y1, (7, 18, 25, 244))
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (7, 18, 25, 244)))
     draw_logical_line(x0, y0, x1, y0, (*accent, 220), 2)
-    draw_logical_line(x0, y1, x1, y1, (82, 116, 126, 160), 1)
-    draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", (231, 246, 247), 24, True, False, "lm", family="Liberation Sans")
+    draw_section_divider(x0, y1, x1)
+    draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", themed_instrument_color("text", (231, 246, 247)), 24, True, False, "lm", family="Liberation Sans")
     state_label = "APPLIES LIVE" if target_vfo == "A" else "STAGES VFO B"
     draw_text(text_cache, x0 + 26, y0 + 66, state_label, accent, 13, True, False, "lm", family="Liberation Sans")
     draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
@@ -2454,8 +2456,8 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
     draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (0, 4, 8, 188))
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 250))
     draw_logical_line(x0, y0, x1, y0, (111, 214, 210, 220), 2)
-    draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", (230, 245, 246), 22, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 24, y0 + 56, "VFO A changes the live receiver. VFO B is staged for the second client.", (144, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", themed_instrument_color("text", (230, 245, 246)), 22, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 24, y0 + 56, "VFO A changes the live receiver. VFO B is staged for the second client.", themed_instrument_color("secondary_text", (144, 181, 187)), 14, False, False, "lm", family="Liberation Sans")
     draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
     start = max(0, int(page)) * len(boxes["rows"])
     for row_index, box in enumerate(boxes["rows"]):
@@ -2467,13 +2469,13 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
         bx0, by0, bx1, by1 = box
         draw_logical_rect(bx0, by0, bx1, by1, (15, 33, 42, 244))
         draw_logical_line(bx0, by0, bx1, by0, (82, 125, 134, 165), 1)
-        draw_text(text_cache, bx0 + 18, by0 + 27, fit_station_text(text_cache, name, bx1 - bx0 - 36, 19, True, False, family="Liberation Sans"), (228, 244, 245), 19, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 18, by0 + 27, fit_station_text(text_cache, name, bx1 - bx0 - 36, 19, True, False, family="Liberation Sans"), themed_instrument_color("text", (228, 244, 245)), 19, True, False, "lm", family="Liberation Sans")
         detail = bottom_station_title(name, location) if location else server
-        draw_text(text_cache, bx0 + 18, by1 - 20, fit_station_text(text_cache, detail, bx1 - bx0 - 36, 14, False, False, family="Liberation Sans"), (138, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 18, by1 - 20, fit_station_text(text_cache, detail, bx1 - bx0 - 36, 14, False, False, family="Liberation Sans"), themed_instrument_color("secondary_text", (138, 181, 187)), 14, False, False, "lm", family="Liberation Sans")
     for key, label in (("previous", "PREV"), ("next", "NEXT")):
         draw_styled_text_button(text_cache, boxes[key], label)
     page_count = max(1, math.ceil(len(stations) / len(boxes["rows"])))
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 40, f"PAGE {page + 1} / {page_count}", (147, 188, 194), 13, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y1 - 40, f"PAGE {page + 1} / {page_count}", themed_instrument_color("secondary_text", (147, 188, 194)), 13, True, False, "cm", family="Liberation Sans")
 
 
 def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
@@ -2492,11 +2494,19 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
     return None, None
 SETTINGS_MENU_ITEMS = (
     ("network", "NETWORK"),
-    ("stats", "STATS"),
-    ("tests", "APPS"),
-    ("system", "INFO"),
+    ("stats", "CPU LOAD"),
+    ("tests", "TOOLS"),
+    ("system", "SYSTEM"),
+    ("theme", "THEME"),
     ("settings_back", "BACK"),
 )
+SETTINGS_MENU_SUBTITLES = {
+    "network": "WI-FI & LAN",
+    "stats": "USAGE HISTORY",
+    "tests": "EST & EXPLORE",
+    "system": "LOCATION & FAN",
+    "theme": "COLORS & LAYOUT",
+}
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
     ("sstv", "SSTV"),
@@ -3240,7 +3250,7 @@ def format_station_distance(station, home_profile):
     distance_miles = station_distance_miles(station, home_profile)
     if distance_miles is None:
         return "DISTANCE: ?"
-    return f"DISTANCE: {int(round(distance_miles)):,} mi"
+    return "DISTANCE: " + theme_system.display_distance(distance_miles / 0.621371, default_unit="mi")
 
 
 RECEIVER_SORT_MODES = (
@@ -6234,6 +6244,7 @@ class TextCache:
         self.cache.clear()
 
     def font(self, size, bold=False, mono=False, family=None):
+        size = theme_system.scaled_text_size(size)
         key = ("font", size, bold, mono, family)
         font = self.cache.get(key)
         if font is None:
@@ -6258,7 +6269,7 @@ class TextCache:
         return font
 
     def texture(self, text, size, color, bold=False, mono=False, family=None):
-        key = ("text", text, size, color, bold, mono, family)
+        key = ("text", text, theme_system.scaled_text_size(size), color, bold, mono, family)
         cached = self._cached_texture(key)
         if cached is not None:
             return cached
@@ -6564,6 +6575,7 @@ def draw_logical_disc_points(points, color, radius, segments=10):
 
 
 def draw_text(text_cache, x, y, text, color, size, bold=False, mono=False, anchor="lt", alpha=1.0, family=None):
+    color = tuple(color)
     tex, width, height = text_cache.texture(text, size, color, bold=bold, mono=mono, family=family)
     if "m" in anchor:
         y -= height / 2
@@ -6573,11 +6585,16 @@ def draw_text(text_cache, x, y, text, color, size, bold=False, mono=False, ancho
         x -= width / 2
     elif "r" in anchor:
         x -= width
+    # Text is rasterized before OpenGL sees it. Snapping the final quad to
+    # logical pixels prevents the bitmap from being linearly filtered across
+    # two pixels merely because a centered label landed on a half pixel.
+    x, y = round(x), round(y)
     draw_textured_quad(tex, x, y, x + width, y + height, 0, 0, 1, 1, alpha)
 
 
 def draw_text_scaled_x(text_cache, x, y, text, color, size, x_scale, bold=False, mono=False, anchor="lt", alpha=1.0, family=None):
     """Draw text with a controlled horizontal squeeze for instrument faces."""
+    color = tuple(color)
     tex, width, height = text_cache.texture(text, size, color, bold=bold, mono=mono, family=family)
     width *= clamp(x_scale, 0.1, 2.0)
     if "m" in anchor:
@@ -6689,6 +6706,51 @@ def draw_textured_quad(tex, x0, y0, x1, y1, u0, v0, u1, v1, alpha=1.0):
     GL.glEnd()
 
 
+class SidebarComposer:
+    """Move the complete rendered rail with a GPU copy, preserving UI geometry."""
+
+    def __init__(self):
+        self.texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, NATIVE_W, NATIVE_H,
+                        0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+
+    def compose_left(self):
+        # Draw from the window rather than any offscreen layer. The default
+        # read buffer is GL_BACK or GL_FRONT according to the actual drawable;
+        # forcing GL_BACK fails on single-buffered macOS contexts.
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        GL.glEnable(GL.GL_TEXTURE_2D)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture)
+        GL.glCopyTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 0, 0, NATIVE_W, NATIVE_H)
+        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDisable(GL.GL_BLEND)
+        GL.glColor4f(1.0, 1.0, 1.0, 1.0)
+        for source_x0, source_x1, target_x0, target_x1 in (
+            (0, LCD_NAV_X0, 256, LOGICAL_W),
+            (LCD_NAV_X0, LOGICAL_W, 0, 256),
+        ):
+            corners = (
+                (source_x0, 0, target_x0, 0),
+                (source_x1, 0, target_x1, 0),
+                (source_x1, LOGICAL_H, target_x1, LOGICAL_H),
+                (source_x0, LOGICAL_H, target_x0, LOGICAL_H),
+            )
+            GL.glBegin(GL.GL_QUADS)
+            for sx, sy, tx, ty in corners:
+                source_native_x, source_native_y = logical_to_native(sx, sy)
+                GL.glTexCoord2f(source_native_x / NATIVE_W,
+                                1.0 - source_native_y / NATIVE_H)
+                GL.glVertex2f(*logical_to_native(tx, ty))
+            GL.glEnd()
+        GL.glEnable(GL.GL_BLEND)
+
+
 def draw_native_rect(x0, y0, x1, y1, color):
     """Draw directly in the desktop-wide framebuffer coordinate system."""
     GL.glDisable(GL.GL_TEXTURE_2D)
@@ -6723,6 +6785,7 @@ def draw_native_textured_quad(tex, x0, y0, x1, y1, u0=0, v0=0, u1=1, v1=1, alpha
 
 
 def draw_native_text(text_cache, x, y, text, color, size, bold=False, mono=False, anchor="lt", alpha=1.0, family=None):
+    color = tuple(color)
     tex, width, height = text_cache.texture(text, size, color, bold=bold, mono=mono, family=family)
     if "m" in anchor:
         y -= height / 2
@@ -6735,12 +6798,66 @@ def draw_native_text(text_cache, x, y, text, color, size, bold=False, mono=False
     draw_native_textured_quad(tex, x, y, x + width, y + height, alpha=alpha)
 
 
+def themed_waterfall_pixels(data, theme=None, palette=None):
+    """Recolor stored waterfall pixels without discarding their RF history."""
+    theme = theme or theme_system.runtime_theme
+    palette = palette or APP_UI_STYLE.palette
+    identifier = theme["id"]
+    if identifier == theme_system.DEFAULT_THEME_ID:
+        return bytes(data)
+    if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
+                           theme_system.GREEN_THEME_ID)
+            and tuple(palette.waterfall_low) == (0, 0, 0)
+            and tuple(palette.waterfall_high) == (255, 255, 255)):
+        return bytes(data)
+    inverted = identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
+    if np is None:
+        pixels = bytearray(data)
+        if inverted:
+            inverse = bytes(reversed(range(256)))
+            for channel in range(3):
+                pixels[channel::4] = bytes(pixels[channel::4]).translate(inverse)
+            return bytes(pixels)
+        low, high = palette.waterfall_low, palette.waterfall_high
+        color_map = tuple(bytes(
+            max(0, min(255, round(low[index] + level / 255.0 * (high[index] - low[index]))))
+            for index in range(3)
+        ) for level in range(256))
+        red_part = tuple(0.2126 * value for value in range(256))
+        green_part = tuple(0.7152 * value for value in range(256))
+        blue_part = tuple(0.0722 * value for value in range(256))
+        for offset in range(0, len(pixels), 4):
+            lightness = round(red_part[pixels[offset]] + green_part[pixels[offset + 1]]
+                              + blue_part[pixels[offset + 2]])
+            pixels[offset:offset + 3] = color_map[lightness]
+        return bytes(pixels)
+    pixels = np.frombuffer(data, dtype=np.uint8).reshape(-1, 4).copy()
+    rgb = pixels[:, :3]
+    if inverted:
+        rgb[:] = 255 - rgb
+    else:
+        lightness = rgb.astype(np.float32) @ np.array((0.2126, 0.7152, 0.0722),
+                                                       dtype=np.float32)
+        low = np.asarray(palette.waterfall_low, dtype=np.float32)
+        high = np.asarray(palette.waterfall_high, dtype=np.float32)
+        rgb[:] = np.clip(np.rint(low + lightness[:, None] / 255.0 * (high - low)),
+                         0, 255).astype(np.uint8)
+    return pixels.tobytes()
+
+
+def waterfall_empty_background_color():
+    """Color exposed by transparent waterfall rows before RF data arrives."""
+    return (*themed_instrument_color("waterfall_low", (4, 7, 11))[:3], 255)
+
+
 class WaterfallTexture:
     def __init__(self):
         self.tex = GL.glGenTextures(1)
         self.row = 0
         self.row_center_khz = [None] * WF_TEX_H
         self.row_span_khz = [None] * WF_TEX_H
+        self.base_pixels = bytearray(WF_TEX_W * WF_TEX_H * 4)
+        self.theme_revision = theme_system.runtime_revision
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
@@ -6755,13 +6872,15 @@ class WaterfallTexture:
             0,
             GL.GL_RGBA,
             GL.GL_UNSIGNED_BYTE,
-            bytes(WF_TEX_W * WF_TEX_H * 4),
+            bytes(self.base_pixels),
         )
 
     def clear(self):
         self.row = 0
         self.row_center_khz = [None] * WF_TEX_H
         self.row_span_khz = [None] * WF_TEX_H
+        self.base_pixels = bytearray(WF_TEX_W * WF_TEX_H * 4)
+        self.theme_revision = theme_system.runtime_revision
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glTexImage2D(
             GL.GL_TEXTURE_2D,
@@ -6772,8 +6891,17 @@ class WaterfallTexture:
             0,
             GL.GL_RGBA,
             GL.GL_UNSIGNED_BYTE,
-            bytes(WF_TEX_W * WF_TEX_H * 4),
+            bytes(self.base_pixels),
         )
+
+    def ensure_theme(self):
+        if self.theme_revision == theme_system.runtime_revision:
+            return
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
+        GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, WF_TEX_W, WF_TEX_H,
+                           GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                           themed_waterfall_pixels(self.base_pixels))
+        self.theme_revision = theme_system.runtime_revision
 
     def push_line(self, line, center_khz=None, span_khz=None):
         self.row = (self.row - 1) % WF_TEX_H
@@ -6791,10 +6919,16 @@ class WaterfallTexture:
             # A malformed producer row must never terminate the display.
             print(f"gl discarded waterfall row: {exc}", flush=True)
             return False
-        GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, self.row, WF_TEX_W, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
+        self.ensure_theme()
+        start = self.row * WF_TEX_W * 4
+        self.base_pixels[start:start + WF_TEX_W * 4] = data
+        GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, self.row, WF_TEX_W, 1,
+                           GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, themed_waterfall_pixels(data))
         return True
 
     def draw(self, x0, y0, x1, y1, center_khz=None, span_khz=None, row_offset=0):
+        self.ensure_theme()
+        draw_logical_rect(x0, y0, x1, y1, waterfall_empty_background_color())
         if center_khz is not None and span_khz is not None:
             self._draw_frequency_aligned(x0, y0, x1, y1, center_khz, span_khz, row_offset)
             return
@@ -8212,9 +8346,9 @@ class SpectrumLayerCache:
 # immediate, high-contrast press feedback.  It is session-only display state;
 # actions still commit on release through the existing gesture handlers.
 UI_PRESS_POINT = None
-UI_PRESSED_FILL = APP_UI_STYLE.palette.active_surface
-UI_PRESSED_TEXT = APP_UI_STYLE.palette.text
-UI_PRESSED_EDGE = APP_UI_STYLE.palette.active_border
+UI_PRESSED_FILL = (0, 229, 255, 255)
+UI_PRESSED_TEXT = (0, 0, 0)
+UI_PRESSED_EDGE = (0, 229, 255, 255)
 
 
 def set_ui_press_point(x=None, y=None):
@@ -8226,31 +8360,55 @@ def ui_button_pressed(box):
     return UI_PRESS_POINT is not None and contains(box, *UI_PRESS_POINT)
 
 
-def draw_styled_button_frame(box, *, active=False, pressed=None, danger=False,
-                             style=APP_UI_STYLE.button):
+def draw_styled_button_frame(box, *, active=False, pressed=None, selected=False, danger=False,
+                             style=None, fill_alpha=None):
     """Render the common rounded button surface and return its text color."""
+    style = style or APP_UI_STYLE.button
     pressed = ui_button_pressed(box) if pressed is None else bool(pressed)
-    visual = style.resolve(active=active, pressed=pressed, danger=danger)
+    visual = style.resolve(active=active, pressed=pressed, selected=selected, danger=danger)
+    if fill_alpha is not None:
+        visual = ButtonVisualState(
+            (*visual.fill[:3], min(visual.fill[3], fill_alpha)),
+            visual.border, visual.text, visual.border_width,
+        )
     draw_logical_rounded_rect(
         *box, style.radius, visual.fill, visual.border, visual.border_width,
     )
     return visual
 
 
-def button_label_for_box(text_cache, label, box, style=APP_UI_STYLE.button):
-    """Keep 13 px button text inside its touch target without changing its size."""
+def themed_instrument_color(name, original):
+    """Resolve instrument colors through the active theme."""
+    return getattr(APP_UI_STYLE.palette, name)
+
+
+def draw_section_divider(x0, y, x1):
+    """Draw one quiet, theme-controlled horizontal section boundary."""
+    draw_logical_line(x0, y, x1, y, APP_UI_STYLE.palette.divider, 1)
+
+
+def themed_overlay_color(name, original):
+    """Use theme RGB while keeping a floating panel's original transparency."""
+    return (*themed_instrument_color(name, original)[:3], original[3])
+
+
+def button_label_for_box(text_cache, label, box, style=None, *, size=None):
+    """Keep button text inside its touch target without changing its size."""
+    style = style or APP_UI_STYLE.button
     label = str(label).upper()
     if not callable(getattr(text_cache, "texture", None)):
         return label
     return fit_station_text(
-        text_cache, label, box[2] - box[0] - 8, style.label_size,
+        text_cache, label, box[2] - box[0] - 8,
+        style.label_size if size is None else size,
         bold=True, family=style.font_family,
     )
 
 
 def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
-                            danger=False, bold=True, style=APP_UI_STYLE.button):
+                            danger=False, bold=True, style=None):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
+    style = style or APP_UI_STYLE.button
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
@@ -8262,22 +8420,39 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=APP_UI_STYLE.button):
-    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
+                                style=None, fit_full_subtitle=False):
+    """The shared title/subtitle treatment for rail and workspace tiles."""
+    style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
-    visual = draw_styled_button_frame(box, active=active, style=style)
+    pressed = ui_button_pressed(box)
+    visual = draw_styled_button_frame(box, active=active, pressed=pressed, style=style)
     center_x = (x0 + x1) / 2
+
+    def draw_line(caption, center_y, color, size, *, fit_full=False):
+        caption = str(caption).upper()
+        if not fit_full:
+            draw_text(text_cache, center_x, center_y,
+                      button_label_for_box(text_cache, caption, box, style, size=size),
+                      color, size, True, False, "cm", family=style.font_family)
+            return
+        texture = getattr(text_cache, "texture", None)
+        width = texture(caption, size, color, bold=True, family=style.font_family)[1] if callable(texture) else 0
+        x_scale = min(1.0, (x1 - x0 - 4) / width) if isinstance(width, (int, float)) and width > 0 else 1.0
+        if x_scale < 1.0:
+            draw_text_scaled_x(text_cache, center_x, center_y, caption, color,
+                               size, x_scale, True, False, "cm", family=style.font_family)
+        else:
+            draw_text(text_cache, center_x, center_y, caption, color,
+                      size, True, False, "cm", family=style.font_family)
+
     if subtitle:
-        draw_text(text_cache, center_x, y0 + 23,
-                  button_label_for_box(text_cache, title, box, style),
-                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
-        draw_text(text_cache, center_x, y0 + 46,
-                  button_label_for_box(text_cache, subtitle, box, style),
-                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
+        center_y = (y0 + y1) / 2
+        draw_line(title, center_y - 12, visual.text, style.title_size)
+        draw_line(subtitle, center_y + 12,
+                  visual.text if pressed else style.subtitle_color, style.subtitle_size,
+                  fit_full=fit_full_subtitle)
     else:
-        draw_text(text_cache, center_x, (y0 + y1) / 2,
-                  button_label_for_box(text_cache, title, box, style),
-                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
+        draw_line(title, (y0 + y1) / 2, visual.text, style.title_size)
     return visual
 
 
@@ -8324,7 +8499,13 @@ def draw_control_group_background(text_cache, box, key, separators, alpha=1.0, s
 def zoom_button_palette(active=False, pressed=False):
     """Return the waterfall zoom tile colors for one interaction state."""
     visual = APP_UI_STYLE.button.resolve(active=active, pressed=pressed)
-    return visual.fill, visual.border, (*visual.text, 255)
+    return ((*visual.fill[:3], min(visual.fill[3], waterfall_button_fill_alpha(active, pressed))),
+            visual.border, (*visual.text, 255))
+
+
+def waterfall_button_fill_alpha(active=False, pressed=False):
+    """Keep waterfall controls translucent, including selected and pressed states."""
+    return 216 if active or pressed else 184
 
 
 def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
@@ -8332,7 +8513,10 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         return
     x0, y0, x1, y1 = box
     pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
+    visual = draw_styled_button_frame(
+        box, active=active, pressed=pressed,
+        fill_alpha=waterfall_button_fill_alpha(active, pressed),
+    )
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     half_sign = 16
     draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, 4)
@@ -8345,9 +8529,10 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
         return
     x0, y0, x1, y1 = SPECTRUM_TOGGLE_BOX
     pressed = ui_button_pressed(SPECTRUM_TOGGLE_BOX)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
     if pressed:
-        draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
-    key = f"spectrum_toggle_display_v1_{int(enabled)}_{int(pressed)}"
+        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.pressed_surface)
+    key = f"spectrum_toggle_display_v1_{int(enabled)}_{int(pressed)}_{theme_system.runtime_revision}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -8358,7 +8543,7 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (*UI_PRESSED_TEXT, 255) if pressed else ((218, 223, 225, 234) if enabled else (220, 224, 226, 170))
+        color = (*visual.text, 255) if pressed else ((218, 223, 225, 234) if enabled else (220, 224, 226, 170))
         label_size = max(16, round(h * 0.24))
         screen_w = min(w - 30, round(h * 0.84))
         screen_h = round(h * 0.38)
@@ -8379,9 +8564,10 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         return
     x0, y0, x1, y1 = FILTER_TOGGLE_BOX
     pressed = ui_button_pressed(FILTER_TOGGLE_BOX)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
     if pressed:
-        draw_logical_rect(x0, y0, x1, y1, UI_PRESSED_FILL)
-    key = f"filter_toggle_v3_{int(pressed)}"
+        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.pressed_surface)
+    key = f"filter_toggle_v3_{int(pressed)}_{theme_system.runtime_revision}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
         w = int(x1 - x0)
@@ -8392,8 +8578,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (*UI_PRESSED_TEXT, 255) if pressed else (219, 223, 225, 178)
-        dim = (*UI_PRESSED_TEXT, 150) if pressed else (174, 180, 184, 54)
+        color = (*visual.text, 255) if pressed else (219, 223, 225, 178)
+        dim = (*visual.text, 150) if pressed else (174, 180, 184, 54)
         label_size = max(16, round(h * 0.24))
         baseline = h * 0.46
         icon_w = min(w - 22, round(h * 0.88))
@@ -8508,7 +8694,10 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     x0, y0, x1, y1 = stream_waterfall_box()
     paused = bool(stream_paused)
     pressed = ui_button_pressed((x0, y0, x1, y1))
-    visual = draw_styled_button_frame((x0, y0, x1, y1), active=paused, pressed=pressed)
+    visual = draw_styled_button_frame(
+        (x0, y0, x1, y1), active=paused, pressed=pressed,
+        fill_alpha=waterfall_button_fill_alpha(paused, pressed),
+    )
     icon_color = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     if paused:
@@ -8526,6 +8715,7 @@ def draw_favorite_waterfall_button(favorited):
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
         (x0, y0, x1, y1), active=favorited, pressed=pressed,
+        fill_alpha=waterfall_button_fill_alpha(favorited, pressed),
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -8540,16 +8730,16 @@ def draw_audio_transport_graph(text_cache, history, box):
     span_seconds = 30.0
     now = time.monotonic()
     samples = tuple(sample for sample in history if sample[0] >= now - span_seconds)
-    draw_logical_rect(x0, y0, x1, y1, (4, 12, 19, 210))
-    draw_logical_line(x0, y0, x1, y0, (91, 221, 241, 220), 2)
-    draw_logical_line(x0, y1, x1, y1, (91, 221, 241, 160), 1)
+    draw_logical_rect(x0, y0, x1, y1, themed_overlay_color("section_surface", (4, 12, 19, 210)))
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     output_gaps = sum(1 for sample in samples if len(sample) > 4 and sample[4])
     clock_lates = sum(1 for sample in samples if len(sample) > 5 and sample[5] >= KIWI_RAW_AUDIO_QUANTUM_FRAMES / 12000.0)
     latest = samples[-1] if samples else None
     latest_gap_ms = int(round(latest[3] * 1000)) if latest and latest[3] is not None else None
     latest_depth = latest[2] if latest else 0
     latest_target = latest[1] if latest else SDR_AUDIO_JITTER_TARGET_PACKETS
-    draw_text(text_cache, x0 + 14, y0 + 17, "LIVE PCM TRANSPORT", (161, 235, 246), 18, True, True, "lm")
+    draw_text(text_cache, x0 + 14, y0 + 17, "LIVE PCM TRANSPORT", themed_instrument_color("section_heading", (161, 235, 246)), 18, True, True, "lm")
     close_x0, close_y0, close_x1, close_y1 = audio_transport_graph_close_box(box)
     draw_styled_text_button(
         text_cache, (close_x0, close_y0, close_x1, close_y1), "CLOSE", size=12,
@@ -8559,20 +8749,20 @@ def draw_audio_transport_graph(text_cache, history, box):
         if output_gaps == 0 and clock_lates == 0 else
         (f"OUTPUT GAPS: {output_gaps}" if output_gaps else f"CLOCK LATE: {clock_lates}")
     )
-    summary_color = (170, 193, 199) if output_gaps == 0 and clock_lates == 0 else ((255, 120, 104) if output_gaps else (255, 192, 76))
+    summary_color = themed_instrument_color("secondary_text", (170, 193, 199)) if output_gaps == 0 and clock_lates == 0 else (themed_instrument_color("danger_border", (255, 120, 104)) if output_gaps else themed_instrument_color("waiting", (255, 192, 76)))
     draw_text(text_cache, close_x0 - 12, y0 + 17, summary, summary_color, 13, True, True, "rm")
     for fraction in (0.25, 0.5, 0.75):
         y = plot_y0 + (plot_y1 - plot_y0) * fraction
-        draw_logical_line(x0 + 42, y, x1 - 10, y, (89, 134, 147, 58), 1)
-    draw_text(text_cache, x0 + 10, plot_y0 + 3, "500 ms / 24 pkt", (140, 174, 183), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 10, plot_y1 - 3, "0", (140, 174, 183), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 44, y1 - 10, "cyan: packet gap", (103, 218, 238), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 210, y1 - 10, "green: queue", (113, 226, 172), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 335, y1 - 10, "amber: reserve", (244, 186, 102), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 490, y1 - 10, "red: concealment inserted", (255, 120, 104), 11, False, True, "lm")
-    draw_text(text_cache, x0 + 660, y1 - 10, "orange: clock late", (255, 192, 76), 11, False, True, "lm")
+        draw_logical_line(x0 + 42, y, x1 - 10, y, themed_instrument_color("section_border", (89, 134, 147, 58)), 1)
+    draw_text(text_cache, x0 + 10, plot_y0 + 3, "500 ms / 24 pkt", themed_instrument_color("secondary_text", (140, 174, 183)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 10, plot_y1 - 3, "0", themed_instrument_color("secondary_text", (140, 174, 183)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 44, y1 - 10, "cyan: packet gap", themed_instrument_color("focus", (103, 218, 238)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 210, y1 - 10, "green: queue", themed_instrument_color("ready", (113, 226, 172)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 335, y1 - 10, "amber: reserve", themed_instrument_color("waiting", (244, 186, 102)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 490, y1 - 10, "red: concealment inserted", themed_instrument_color("danger_border", (255, 120, 104)), 11, False, True, "lm")
+    draw_text(text_cache, x0 + 660, y1 - 10, "orange: clock late", themed_instrument_color("waiting", (255, 192, 76)), 11, False, True, "lm")
     if not samples:
-        draw_text(text_cache, (x0 + x1) / 2, (plot_y0 + plot_y1) / 2, "WAITING FOR PCM PACKETS", (176, 204, 210), 18, True, True, "cm")
+        draw_text(text_cache, (x0 + x1) / 2, (plot_y0 + plot_y1) / 2, "WAITING FOR PCM PACKETS", themed_instrument_color("secondary_text", (176, 204, 210)), 18, True, True, "cm")
         return
     def sample_x(sample):
         return x0 + 44 + (x1 - x0 - 54) * clamp((sample[0] - (now - span_seconds)) / span_seconds, 0.0, 1.0)
@@ -8580,24 +8770,24 @@ def draw_audio_transport_graph(text_cache, history, box):
     depth_points = [(sample_x(sample), plot_y1 - (sample[2] / reserve_scale) * (plot_y1 - plot_y0)) for sample in samples]
     target_points = [(sample_x(sample), plot_y1 - (sample[1] / reserve_scale) * (plot_y1 - plot_y0)) for sample in samples]
     if len(depth_points) > 1:
-        draw_logical_polyline(depth_points, (113, 226, 172, 220), 1.7)
-        draw_logical_polyline(target_points, (244, 186, 102, 225), 1.7)
+        draw_logical_polyline(depth_points, themed_instrument_color("ready", (113, 226, 172, 220)), 1.7)
+        draw_logical_polyline(target_points, themed_instrument_color("waiting", (244, 186, 102, 225)), 1.7)
     gap_points = [
         (sample_x(sample), plot_y1 - clamp(sample[3] / 0.5, 0.0, 1.0) * (plot_y1 - plot_y0))
         for sample in samples if sample[3] is not None
     ]
     if len(gap_points) > 1:
-        draw_logical_polyline(gap_points, (103, 218, 238, 245), 1.35)
+        draw_logical_polyline(gap_points, themed_instrument_color("focus", (103, 218, 238, 245)), 1.35)
     # These are the important markers: a red line means our playback clock
     # found no real PCM packet and had to synthesize a quiet packet. A pop
     # without one of these is not a network-reserve starvation.
     for sample in samples:
         if len(sample) > 4 and sample[4]:
             x = sample_x(sample)
-            draw_logical_line(x, plot_y0, x, plot_y1, (255, 99, 84, 245), 2)
+            draw_logical_line(x, plot_y0, x, plot_y1, themed_instrument_color("danger_border", (255, 99, 84, 245)), 2)
         if len(sample) > 5 and sample[5] >= KIWI_RAW_AUDIO_QUANTUM_FRAMES / 12000.0:
             x = sample_x(sample)
-            draw_logical_line(x, plot_y0, x, plot_y1, (255, 185, 62, 235), 1)
+            draw_logical_line(x, plot_y0, x, plot_y1, themed_instrument_color("waiting", (255, 185, 62, 235)), 1)
 
 
 def audio_transport_graph_close_box(box):
@@ -8624,26 +8814,26 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
     plot_x0, plot_x1 = x0 + 46, x1 - 12
     plot_y0, plot_y1 = y0 + header_h, y1 - footer_h
     colors = (
-        (92, 220, 242, 245),
-        (104, 232, 161, 245),
-        (246, 190, 96, 245),
-        (205, 143, 242, 245),
+        themed_instrument_color("focus", (92, 220, 242, 245)),
+        themed_instrument_color("ready", (104, 232, 161, 245)),
+        themed_instrument_color("waiting", (246, 190, 96, 245)),
+        themed_instrument_color("slider_fill", (205, 143, 242, 245)),
     )
-    draw_logical_rect(x0, y0, x1, y1, (4, 12, 19, 224))
-    draw_logical_line(x0, y0, x1, y0, (91, 221, 241, 230), 2)
-    draw_logical_line(x0, y1, x1, y1, (91, 221, 241, 170), 1)
-    draw_text(text_cache, x0 + 14, y0 + 18, "CPU UTILIZATION", (161, 235, 246), 18, True, True, "lm")
+    draw_logical_rect(x0, y0, x1, y1, themed_overlay_color("section_surface", (4, 12, 19, 224)))
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
+    draw_text(text_cache, x0 + 14, y0 + 18, "CPU UTILIZATION", themed_instrument_color("section_heading", (161, 235, 246)), 18, True, True, "lm")
     close_x0, close_y0, close_x1, close_y1 = cpu_utilization_graph_close_box(box)
     draw_styled_text_button(
         text_cache, (close_x0, close_y0, close_x1, close_y1), "CLOSE", size=12,
     )
-    draw_text(text_cache, close_x0 - 12, y0 + 18, "120 s", (170, 193, 199), 12, False, True, "rm")
+    draw_text(text_cache, close_x0 - 12, y0 + 18, "120 s", themed_instrument_color("secondary_text", (170, 193, 199)), 12, False, True, "rm")
     for percent in (25, 50, 75):
         y = plot_y1 - (percent / 100.0) * (plot_y1 - plot_y0)
-        draw_logical_line(plot_x0, y, plot_x1, y, (89, 134, 147, 66), 1)
-        draw_text(text_cache, x0 + 38, y, str(percent), (140, 174, 183), 11, False, True, "rm")
-    draw_text(text_cache, x0 + 38, plot_y0 + 2, "100", (140, 174, 183), 11, False, True, "rm")
-    draw_text(text_cache, x0 + 38, plot_y1 - 2, "0", (140, 174, 183), 11, False, True, "rm")
+        draw_logical_line(plot_x0, y, plot_x1, y, themed_instrument_color("section_border", (89, 134, 147, 66)), 1)
+        draw_text(text_cache, x0 + 38, y, str(percent), themed_instrument_color("secondary_text", (140, 174, 183)), 11, False, True, "rm")
+    draw_text(text_cache, x0 + 38, plot_y0 + 2, "100", themed_instrument_color("secondary_text", (140, 174, 183)), 11, False, True, "rm")
+    draw_text(text_cache, x0 + 38, plot_y1 - 2, "0", themed_instrument_color("secondary_text", (140, 174, 183)), 11, False, True, "rm")
     labels = []
     for index, color in enumerate(colors):
         value = latest[index] if latest is not None and index < len(latest) else None
@@ -8657,7 +8847,7 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
     samples = tuple(sample for sample in history if sample[0] >= now - 120.0)
     if not samples:
         draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2,
-                  "COLLECTING CPU SAMPLES", (176, 204, 210), 18, True, True, "cm")
+                  "COLLECTING CPU SAMPLES", themed_instrument_color("secondary_text", (176, 204, 210)), 18, True, True, "cm")
         return
     # Time, rather than sample count, is mapped onto the panel: the newest
     # second enters on the right and reaches the left edge after two minutes.
@@ -8715,7 +8905,7 @@ def draw_home_button(text_cache, alpha=1.0):
         return
     x0, y0, x1, y1 = HOME_BOX
     pressed = ui_button_pressed(HOME_BOX)
-    draw_styled_button_frame(HOME_BOX, pressed=pressed)
+    visual = draw_styled_button_frame(HOME_BOX, pressed=pressed)
     w, h = int(x1 - x0), int(y1 - y0)
     surface = pygame.Surface((w, h), pygame.SRCALPHA)
     try:
@@ -8726,11 +8916,11 @@ def draw_home_button(text_cache, alpha=1.0):
     except (pygame.error, OSError):
         draw_menu_icon(
             surface, "home", w // 2, h // 2,
-            UI_PRESSED_TEXT if pressed else (231, 235, 237, 238),
-            UI_PRESSED_TEXT if pressed else (82, 235, 231, 150),
+            visual.text if pressed else (231, 235, 237, 238),
+            visual.text if pressed else (82, 235, 231, 150),
         )
     if pressed:
-        surface.fill((*UI_PRESSED_TEXT, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.fill((*visual.text, 255), special_flags=pygame.BLEND_RGBA_MULT)
     tex, tex_w, tex_h = text_cache.surface_texture(
         f"home_button_v12_{'pressed' if pressed else 'normal'}", surface
     )
@@ -8745,7 +8935,7 @@ def draw_utc_clock(text_cache):
         8,
         12,
         f"{timestamp} UTC ({TIME_SOURCE_LABEL})",
-        VFO_NEON_COLOR,
+        APP_UI_STYLE.palette.frequency,
         16,
         True,
         True,
@@ -8766,6 +8956,27 @@ def normalize_frequency_position(value):
     return position if position in ("left", "middle", "right") else "right"
 
 
+def visible_frequency_position(position, sidebar=None):
+    """Name LEFT and RIGHT for their physical location after rail relocation."""
+    sidebar = sidebar or theme_system.runtime_theme["sidebar"]
+    if sidebar == "left":
+        return {"left": "right", "right": "left"}.get(position, position)
+    return position
+
+
+def mirror_top_instruments():
+    return LCD_800_MODE and theme_system.runtime_theme["sidebar"] == "left"
+
+
+def mirror_rf_box(box):
+    canvas_width = rf_canvas_width()
+    return canvas_width - box[2], box[1], canvas_width - box[0], box[3]
+
+
+def mirror_smeter_trace_x(trace_x, right_padding=24):
+    return rf_canvas_width() - (trace_x + SMETER_TRACE_WIDTH + right_padding) + 105
+
+
 def big_frequency_rendered_width(text_cache, freq_khz, font_family):
     """Match LEFT/MIDDLE frequency hit targets to the 330 px readout."""
     font = text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=font_family)
@@ -8774,14 +8985,16 @@ def big_frequency_rendered_width(text_cache, freq_khz, font_family):
     return min(text_width, 330.0)
 
 
-def frequency_display_box(text_cache, freq_khz, font_family=None, position="middle"):
+def frequency_display_box(text_cache, freq_khz, font_family=None, position="middle", mirrored=None):
     if position == "right":
         return compact_frequency_touch_box()
     font_family = font_family or VFO_FONT_FAMILY
     width = big_frequency_rendered_width(text_cache, freq_khz, font_family)
     if position == "left":
-        return LEFT_FREQUENCY_X - 8, 4, LEFT_FREQUENCY_X + width + 8, 70
-    return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
+        box = (LEFT_FREQUENCY_X - 8, 4, LEFT_FREQUENCY_X + width + 8, 70)
+    else:
+        box = (frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70)
+    return mirror_rf_box(box) if (mirror_top_instruments() if mirrored is None else mirrored) else box
 
 
 def top_instrument_layout(text_cache, freq_khz, font_family=None):
@@ -8880,7 +9093,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
             bx0 + 7,
             (by0 + by1) / 2 + 1,
             label,
-            UI_PRESSED_TEXT if pressed else ((235, 255, 239) if active else (130, 151, 157)),
+            visual.text if pressed else ((235, 255, 239) if active else (130, 151, 157)),
             12,
             True,
             False,
@@ -8889,7 +9102,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         )
     footer_y = y0 + 75
     draw_native_line(x0 + 9, footer_y, x1 - 9, footer_y, (64, 103, 112, 150), 1)
-    footer_color = UI_PRESSED_TEXT if pressed else (192, 218, 222)
+    footer_color = visual.text if pressed else (192, 218, 222)
     draw_native_text(text_cache, grid_x + 7, y1 - 9, f"BW  {format_filter_width(bandwidth_hz)}", footer_color, 12, True, False, "lm", family="Liberation Sans")
     draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", footer_color, 12, True, False, "rm", family="Liberation Sans")
 
@@ -9277,8 +9490,8 @@ def draw_radio_setup_panel(
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 242))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 112), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     server_controlled = receiver_worker_protocol(receiver_type) == "fmdx"
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "FM-FMDX" if server_controlled else "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Mode is controlled by the FM-DX server" if server_controlled else "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
@@ -9382,11 +9595,13 @@ def draw_display_slider_section(text_cache, box, title, value, maximum, detail, 
               13, True, False, "rm", family=APP_UI_STYLE.button.font_family)
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1, track_y = x0 + 4, x1 - 4, y1 - 13
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (27, 45, 52, 255))
+    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3,
+                      themed_instrument_color("slider_track", (27, 45, 52, 255)))
     current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, (80, 226, 164, 235))
+    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3,
+                      themed_instrument_color("slider_fill", (80, 226, 164, 235)))
     draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9,
-                      (229, 246, 246, 250))
+                      themed_instrument_color("slider_thumb", (229, 246, 246, 250)))
 
 
 def volume_at_x(x, box):
@@ -10957,15 +11172,14 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
 
 def draw_sidebar_header(text_cache, title):
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar)
-    draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, (215, 235, 239),
+    draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, APP_UI_STYLE.palette.sidebar_title,
               15, True, False, "cm", family="Liberation Sans")
-    draw_logical_line(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H,
-                      LOGICAL_W - 10, LCD_DRAWER_HEADER_H, (72, 101, 112, 160), 1)
+    draw_section_divider(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H, LOGICAL_W - 10)
 
 
 def draw_lcd_drawer_heading(text_cache, x, y, title):
     """Shared quiet heading treatment for LCD right-rail drawers."""
-    draw_text(text_cache, x, y, title, LCD_DRAWER_HEADING_COLOR, LCD_DRAWER_HEADING_SIZE,
+    draw_text(text_cache, x, y, title, APP_UI_STYLE.palette.section_heading, LCD_DRAWER_HEADING_SIZE,
               True, False, "lm", family=APP_UI_STYLE.button.font_family)
 
 
@@ -10996,7 +11210,13 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
     fan_curve = fan_curve or load_fan_curve()
-    draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", f"{fan_curve['start_c']}→{fan_curve['full_c']} C", True)
+    fan_range = (
+        f"{fan_curve['start_c']}→{fan_curve['full_c']} C"
+        if theme_system.runtime_theme["units"] == "original"
+        else (f"{theme_system.display_temperature(float(fan_curve['start_c']))}→"
+              f"{theme_system.display_temperature(float(fan_curve['full_c']))}")
+    )
+    draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", fan_range, True)
     draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
     draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
     draw_sidebar_header(text_cache, "INFO")
@@ -11019,14 +11239,15 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
-    live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
+    live = f"CPU {theme_system.display_temperature(temp_c)}" if isinstance(temp_c, (int, float)) else "CPU WAITING"
     draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 178, "SMOOTHED · STOPS 3 C BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
+    stop_delta = "5 F" if theme_system.runtime_theme["units"] == "imperial" else "3 C"
+    draw_text(text_cache, x0 + 12, 178, f"SMOOTHED · STOPS {stop_delta} BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
     start = float(curve["start_c"])
     full = float(curve["full_c"])
-    draw_lcd_audio_slider_tile(text_cache, boxes["start"], "FAN START", start - 45.0, 20.0, f"{start:.0f} C", True)
-    draw_lcd_audio_slider_tile(text_cache, boxes["full"], "FULL SPEED", full - (start + 8.0), 82.0 - (start + 8.0), f"{full:.0f} C", True)
+    draw_lcd_audio_slider_tile(text_cache, boxes["start"], "FAN START", start - 45.0, 20.0, theme_system.display_temperature(start), True)
+    draw_lcd_audio_slider_tile(text_cache, boxes["full"], "FULL SPEED", full - (start + 8.0), 82.0 - (start + 8.0), theme_system.display_temperature(full), True)
     minimum = float(curve.get("min_percent", 15.0))
     draw_lcd_audio_slider_tile(text_cache, boxes["minimum"], "START SPEED", minimum - 10.0, 60.0, f"{minimum:.0f}%", True)
     draw_sidebar_header(text_cache, "FAN CURVE")
@@ -11038,20 +11259,21 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     x0, y0, x1, y1 = box
     # Sliders are instruments, not buttons: leave the drawer's calm black
     # background visible, exactly as the Volume control does.
-    draw_text(text_cache, x0 + 10, y0 + 20, title, (230, 246, 247), 14 if len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, y0 + 20, detail, (112, 223, 169) if active else (153, 185, 191), 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, y0 + 20, title, themed_instrument_color("footer_primary", (230, 246, 247)), 14 if len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, y0 + 20, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, 13, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = (x0, x1) if full_width else (x0 + 10, x1 - 10)
     track_y = y1 - 15
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (27, 45, 52, 255))
+    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
     current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, (80, 226, 164, 235))
+    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, themed_instrument_color("slider_fill", (80, 226, 164, 235)))
     if steps:
         for index in range(steps):
             marker_x = track_x0 + (track_x1 - track_x0) * index / max(1, steps - 1)
-            draw_logical_line(marker_x, track_y - 5, marker_x, track_y + 5, (112, 238, 177, 190) if index <= value else (107, 139, 147, 128), 1)
+            draw_logical_line(marker_x, track_y - 5, marker_x, track_y + 5,
+                              themed_instrument_color("slider_marker", (112, 238, 177, 190)) if index <= value else themed_instrument_color("slider_track", (107, 139, 147, 128)), 1)
     thumb_x = clamp(current_x, x0 + 5, x1 - 5) if full_width else current_x
-    draw_logical_rect(thumb_x - 5, track_y - 9, thumb_x + 5, track_y + 9, (229, 246, 246, 250))
+    draw_logical_rect(thumb_x - 5, track_y - 9, thumb_x + 5, track_y + 9, themed_instrument_color("slider_thumb", (229, 246, 246, 250)))
 
 
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
@@ -11062,15 +11284,15 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
-    draw_text(text_cache, vx0 + 10, vy0 + 11, "VOLUME", (164, 193, 198), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, vx0 + 10, vy0 + 11, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 14, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 18, True, False, "rt", family="Liberation Sans")
     track_y = vy1 - 16
     track_x0, track_x1 = vx0, vx1
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (22, 35, 43, 230))
-    draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * level, track_y + 3, (68, 209, 151, 226))
+    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (20, 34, 42, 235)))
+    draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * level, track_y + 3, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
     knob_x = track_x0 + (track_x1 - track_x0) * level
     knob_x = clamp(knob_x, vx0 + 6, vx1 - 6)
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (226, 246, 246, 255))
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
 
     muted = controls["mute"]
     voice_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
@@ -11122,8 +11344,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 28, y0 + 19, "AUDIO", (229, 243, 246), 20 if LCD_800_MODE else 18, True, True, "lm", family="Liberation Sans")
     output_label = "USB SPEAKER" if output_available else "OUTPUT UNAVAILABLE"
     output_color = (104, 230, 151) if output_available else (242, 163, 104)
@@ -11133,12 +11355,12 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     track_y = (vy0 + vy1) / 2 + 9
-    draw_text(text_cache, vx0, vy0 + 2, "VOLUME", (164, 193, 198), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
-    draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 35, 43, 230))
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx0 + (vx1 - vx0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, (68, 209, 151, 226))
+    draw_text(text_cache, vx0, vy0 + 2, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
+    draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
+    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
+    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx0 + (vx1 - vx0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
     knob_x = vx0 + (vx1 - vx0) * level
-    draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, (226, 246, 246, 255))
+    draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
 
     def panel_button(box, title, detail, active=False, accent=(92, 229, 174, 220)):
         bx0, by0, bx1, by1 = box
@@ -11152,46 +11374,47 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     def panel_slider(box, title, value, maximum):
         bx0, by0, bx1, by1 = box
         fraction = clamp(value / maximum, 0.0, 1.0)
-        draw_logical_rect(bx0, by0, bx1, by1, (18, 29, 38, 220))
+        draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("section_surface", (18, 29, 38, 220)))
         for line_y in (by0, by1):
-            draw_logical_line(bx0, line_y, bx1, line_y, (115, 140, 151, 82), 1)
-        draw_logical_line(bx0, by0, bx0, by1, (115, 140, 151, 82), 1)
-        draw_logical_line(bx1, by0, bx1, by1, (115, 140, 151, 82), 1)
+            draw_section_divider(bx0, line_y, bx1)
+        draw_logical_line(bx0, by0, bx0, by1, themed_instrument_color("section_border", (115, 140, 151, 82)), 1)
+        draw_logical_line(bx1, by0, bx1, by1, themed_instrument_color("section_border", (115, 140, 151, 82)), 1)
         label_y = by0 + (19 if LCD_800_MODE else 16)
-        draw_text(text_cache, bx0 + 14, label_y, title, (230, 246, 247), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, label_y, title, themed_instrument_color("section_heading", (230, 246, 247)), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
         label = "OFF" if value <= 0 else f"{value:02d}"
-        draw_text(text_cache, bx1 - 14, label_y, label, (112, 223, 169) if value else (153, 185, 191), 17 if LCD_800_MODE else 15, True, True, "rm", family="Liberation Sans")
+        draw_text(text_cache, bx1 - 14, label_y, label, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if value else themed_instrument_color("secondary_text", (153, 185, 191)), 17 if LCD_800_MODE else 15, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
         track_y = by1 - (18 if LCD_800_MODE else 15)
-        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (31, 48, 57, 255))
-        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * fraction, track_y + 3, (76, 221, 159, 230))
+        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (31, 48, 57, 255)))
+        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * fraction, track_y + 3, themed_instrument_color("slider_fill", (76, 221, 159, 230)))
         knob_x = track_x0 + (track_x1 - track_x0) * fraction
-        draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, (229, 246, 246, 245))
+        draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, themed_instrument_color("slider_thumb", (229, 246, 246, 245)))
 
     def denoise_slider(box, level, bypassed=False):
         bx0, by0, bx1, by1 = box
         level = int(clamp(level, 0, len(kiwi.DENOISE_PRESETS) - 1))
         active = level > 0 and not bypassed
-        draw_logical_rect(bx0, by0, bx1, by1, (24, 63, 57, 224) if active else (18, 29, 38, 220))
-        line = (93, 235, 174, 184) if active else (115, 140, 151, 82)
+        draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("active_surface", (24, 63, 57, 224)) if active else themed_instrument_color("section_surface", (18, 29, 38, 220)))
+        line = (themed_instrument_color("slider_marker", (93, 235, 174, 184)) if active
+                else themed_instrument_color("section_border", (115, 140, 151, 82)))
         for line_y in (by0, by1):
             draw_logical_line(bx0, line_y, bx1, line_y, line, 1)
         draw_logical_line(bx0, by0, bx0, by1, line, 1)
         draw_logical_line(bx1, by0, bx1, by1, line, 1)
         label_y = by0 + (19 if LCD_800_MODE else 16)
-        draw_text(text_cache, bx0 + 14, label_y, "DENOISE", (230, 246, 247), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 14, label_y, "DENOISE", themed_instrument_color("section_heading", (230, 246, 247)), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
         label = "BYPASS" if bypassed else kiwi.DENOISE_PRESETS[level][0]
-        draw_text(text_cache, bx1 - 14, label_y, label, (112, 235, 175) if active else (153, 185, 191), 15 if LCD_800_MODE else 14, True, True, "rm", family="Liberation Sans")
+        draw_text(text_cache, bx1 - 14, label_y, label, themed_instrument_color("slider_fill", (112, 235, 175))[:3] if active else themed_instrument_color("secondary_text", (153, 185, 191)), 15 if LCD_800_MODE else 14, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
         denoise_track_y = by1 - (18 if LCD_800_MODE else 15)
-        draw_logical_rect(track_x0, denoise_track_y - 3, track_x1, denoise_track_y + 3, (27, 45, 52, 255))
+        draw_logical_rect(track_x0, denoise_track_y - 3, track_x1, denoise_track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
         current_x = track_x0 + (track_x1 - track_x0) * DENOISE_SLIDER_POSITIONS[level]
-        draw_logical_rect(track_x0, denoise_track_y - 3, current_x, denoise_track_y + 3, (80, 226, 164, 235))
+        draw_logical_rect(track_x0, denoise_track_y - 3, current_x, denoise_track_y + 3, themed_instrument_color("slider_fill", (80, 226, 164, 235)))
         for index, position in enumerate(DENOISE_SLIDER_POSITIONS):
             marker_x = track_x0 + (track_x1 - track_x0) * position
-            marker_color = (112, 238, 177, 230) if index <= level else (107, 139, 147, 128)
+            marker_color = themed_instrument_color("slider_marker", (112, 238, 177, 230)) if index <= level else themed_instrument_color("slider_track", (107, 139, 147, 128))
             draw_logical_line(marker_x, denoise_track_y - 5, marker_x, denoise_track_y + 5, marker_color, 1)
-        draw_logical_rect(current_x - 6, denoise_track_y - 10, current_x + 6, denoise_track_y + 10, (229, 246, 246, 255))
+        draw_logical_rect(current_x - 6, denoise_track_y - 10, current_x + 6, denoise_track_y + 10, themed_instrument_color("slider_thumb", (229, 246, 246, 255)))
 
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
@@ -11321,8 +11544,8 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
@@ -11491,10 +11714,10 @@ def draw_wspr_mrtg_graph(text_cache, history, window_s, selected_band):
         draw_logical_line(x0 + 8, y, x1 - 8, y, (79, 133, 142, 50), 1)
         x = x0 + (x1 - x0) * fraction
         draw_logical_line(x, y0 + 20, x, y1 - 8, (79, 133, 142, 34), 1)
-    draw_text(text_cache, x0 + 12, y0 + 14, "RF AVERAGE", (159, 205, 209), 13, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 14, f"{selected_band} m / {window_s // 60:g} MIN", (104, 232, 174), 13, True, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, y0 + 14, "RF AVERAGE", themed_instrument_color("secondary_text", (159, 205, 209)), 13, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 14, f"{selected_band} m / {window_s // 60:g} MIN", themed_instrument_color("ready", (104, 232, 174)), 13, True, True, "rm", family="Liberation Sans")
     if not samples:
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 8, "Collecting live RF history", (119, 162, 170), 16, False, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 8, "Collecting live RF history", themed_instrument_color("secondary_text", (119, 162, 170)), 16, False, True, "cm", family="Liberation Sans")
         return
     buckets = 42
     averages, peaks = [], []
@@ -11528,8 +11751,8 @@ def draw_wspr_mrtg_graph(text_cache, history, window_s, selected_band):
     draw_logical_area(avg_points, plot_y1, (46, 159, 126, 115))
     draw_logical_polyline(avg_points, (88, 234, 175, 235), 2)
     draw_logical_polyline(peak_points, (180, 225, 228, 184), 1)
-    draw_text(text_cache, x0 + 10, plot_y0 + 2, f"{high:.0f}", (123, 157, 165), 11, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 10, plot_y1 - 4, f"{low:.0f}", (123, 157, 165), 11, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, plot_y0 + 2, f"{high:.0f}", themed_instrument_color("secondary_text", (123, 157, 165)), 11, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, plot_y1 - 4, f"{low:.0f}", themed_instrument_color("secondary_text", (123, 157, 165)), 11, True, True, "lm", family="Liberation Sans")
 
 
 def wspr_grid_is_valid(value):
@@ -12301,21 +12524,21 @@ def draw_wspr_identity_panel(text_cache, values, active_field, error=""):
     draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 146))
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 248))
     draw_logical_line(x0, y0, x1, y0, (114, 222, 182, 168), 1)
-    draw_text(text_cache, x0 + 24, y0 + 19, "WSPR REPORTER ID", (232, 246, 247), 20, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 24, y0 + 19, "WSPR REPORTER ID", themed_instrument_color("text", (232, 246, 247)), 20, True, True, "lm", family="Liberation Sans")
     state_text = "UPLOAD READY" if identity["upload_ready"] else "LOCAL LOG ONLY"
-    state_color = (104, 243, 176) if identity["upload_ready"] else (241, 181, 108)
+    state_color = themed_instrument_color("ready", (104, 243, 176)) if identity["upload_ready"] else themed_instrument_color("waiting", (241, 181, 108))
     draw_text(text_cache, x1 - 26, y0 + 19, state_text, state_color, 13, True, True, "rm", family="Liberation Sans")
 
     def field(box, label, value, selected, placeholder):
         bx0, by0, bx1, by1 = box
-        draw_text(text_cache, x0 + 26, (by0 + by1) / 2, label, (157, 192, 198), 15, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 26, (by0 + by1) / 2, label, themed_instrument_color("secondary_text", (157, 192, 198)), 15, True, True, "lm", family="Liberation Sans")
         fill = (13, 37, 43, 250) if selected else (10, 28, 35, 242)
         edge = (93, 237, 173, 230) if selected else (86, 126, 137, 142)
         draw_logical_rect(bx0, by0, bx1, by1, fill)
         draw_logical_line(bx0, by0, bx1, by0, edge, 2 if selected else 1)
         draw_logical_line(bx0, by1, bx1, by1, (45, 79, 88, 170), 1)
         text = value or placeholder
-        color = (232, 246, 247) if value else (130, 157, 164)
+        color = themed_instrument_color("text", (232, 246, 247)) if value else themed_instrument_color("secondary_text", (130, 157, 164))
         draw_text(text_cache, bx0 + 14, (by0 + by1) / 2, text, color, 21, True, True, "lm", family="Liberation Sans")
 
     field(reporter, "REPORTER", values.get("reporter", ""), active_field == "reporter", "SWL")
@@ -12324,19 +12547,19 @@ def draw_wspr_identity_panel(text_cache, values, active_field, error=""):
         bx0, by0, bx1, by1 = box
         draw_logical_rect(bx0, by0, bx1, by1, (16, 34, 42, 236))
         draw_logical_line(bx0, by0, bx1, by0, (95, 144, 153, 126), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "DEL" if key == "<" else key, (221, 238, 240), 17 if key == "<" else 20, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "DEL" if key == "<" else key, themed_instrument_color("text", (221, 238, 240)), 17 if key == "<" else 20, True, True, "cm", family="Liberation Sans")
 
     def action(box, label, accent, active=False):
         bx0, by0, bx1, by1 = box
         draw_logical_rect(bx0, by0, bx1, by1, accent if active else (15, 32, 40, 242))
         draw_logical_line(bx0, by0, bx1, by0, accent if active else (81, 123, 133, 140), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (238, 250, 250), 16, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, themed_instrument_color("text", (238, 250, 250)), 16, True, True, "cm", family="Liberation Sans")
 
     action(defaults, "SWL DEFAULT", (37, 87, 73, 244), True)
     action(cancel, "CANCEL", (15, 32, 40, 242))
     action(save, "SAVE", (40, 112, 83, 246), True)
     message = error or "Grid is optional for local logs; a valid 4/6-char grid is required before external upload."
-    draw_text(text_cache, x0 + 26, y1 - 63, message, (245, 157, 119) if error else (139, 184, 190), 12, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 26, y1 - 63, message, themed_instrument_color("waiting", (245, 157, 119)) if error else themed_instrument_color("secondary_text", (139, 184, 190)), 12, True, True, "lm", family="Liberation Sans")
 
 
 def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_band, smeter_dbm, identity_values):
@@ -12344,10 +12567,10 @@ def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_
     x0, y0, x1, y1 = WSPR_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 106))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 238))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 104), 1)
-    draw_text(text_cache, 36, y0 + 22, "WSPR", (232, 246, 247), 21, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 146, y0 + 22, f"{len(sessions):02d} SELECTED", (98, 241, 169), 14, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 272, y0 + 22, "DECODER OFF", (241, 181, 108), 13, True, True, "lm", family="Liberation Sans")
+    draw_section_divider(x0, y0, x1)
+    draw_text(text_cache, 36, y0 + 22, "WSPR", themed_instrument_color("text", (232, 246, 247)), 21, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 146, y0 + 22, f"{len(sessions):02d} SELECTED", themed_instrument_color("ready", (98, 241, 169)), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 272, y0 + 22, "DECODER OFF", themed_instrument_color("waiting", (241, 181, 108)), 13, True, True, "lm", family="Liberation Sans")
     identity = wspr_log_identity(identity_values)
     open_box = wspr_identity_open_box()
     id_label = f"ID {identity['rx_id']} / {identity['rx_grid'] or 'GRID?'}"
@@ -12355,14 +12578,14 @@ def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_
     draw_wspr_mrtg_graph(text_cache, history, WSPR_GRAPH_WINDOWS[window_index], selected_band)
     for index, box in enumerate(WSPR_WINDOW_BOXES):
         draw_wspr_button(text_cache, box, WSPR_GRAPH_LABELS[index], active=index == window_index)
-    draw_text(text_cache, WSPR_BAND_GRID_BOX[0], y0 + 22, "ALL BANDS", (151, 190, 197), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, WSPR_BAND_GRID_BOX[0], y0 + 22, "ALL BANDS", themed_instrument_color("secondary_text", (151, 190, 197)), 14, True, True, "lm", family="Liberation Sans")
     for (label, freq_khz), box in wspr_band_boxes(page):
         selected = label in sessions
         detail = f"{freq_khz / 1000:.3f} MHz" if freq_khz >= 1000 else f"{freq_khz:.1f} kHz"
         draw_wspr_button(text_cache, box, f"{label} m", detail, selected, label == selected_band)
-    draw_text(text_cache, 42, y1 - 11, "AVG", (84, 224, 163), 11, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 78, y1 - 11, "PEAK", (178, 221, 224), 11, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 918, y1 - 11, "SELECTED BANDS ARE SAVED. LIVE DECODING IS NOT RUNNING YET.", (190, 151, 103), 11, True, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, 42, y1 - 11, "AVG", themed_instrument_color("ready", (84, 224, 163)), 11, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 78, y1 - 11, "PEAK", themed_instrument_color("secondary_text", (178, 221, 224)), 11, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 918, y1 - 11, "SELECTED BANDS ARE SAVED. LIVE DECODING IS NOT RUNNING YET.", themed_instrument_color("waiting", (190, 151, 103)), 11, True, True, "rm", family="Liberation Sans")
 
 
 def wspr_workspace_card_boxes(item_count=WSPR_WORKSPACE_SLOT_COUNT, scroll_y=0.0):
@@ -12480,6 +12703,10 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         "ERROR": (244, 143, 108), "NO AUDIO": (244, 164, 99),
         "STOPPED": (142, 158, 161), "WAIT UI": (152, 194, 203),
     }.get(decode_status, (154, 206, 194))
+    status_role = ("ready" if decode_status in ("CAPTURE", "DECODED") else
+                   "waiting" if decode_status in ("DECODING", "NO AUDIO") else
+                   "danger_border" if decode_status == "ERROR" else "secondary_text")
+    status_color = themed_instrument_color(status_role, status_color)
     if decode_status == "CAPTURE":
         detail = f"CAPTURE {snapshot.get('decode_audio_seconds', 0.0):.0f}/120 s"
     elif decode_status == "ARMED" and snapshot.get("decode_cycle_start", 0.0):
@@ -12492,10 +12719,11 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         "utc": log_x0 + 2, "snr": log_x0 + 67, "call": log_x0 + 89,
         "grid": log_x0 + 189, "pwr": log_x0 + 261, "km": log_x1 - 3,
     }
-    header_color = (108, 169, 174)
+    header_color = themed_instrument_color("secondary_text", (108, 169, 174))
     for key, label, anchor in (
         ("utc", "UTC", "lm"), ("snr", "SNR", "rm"), ("call", "CALLSIGN", "lm"),
-        ("grid", "GRID", "lm"), ("pwr", "PWR", "rm"), ("km", "KM", "rm"),
+        ("grid", "GRID", "lm"), ("pwr", "PWR", "rm"),
+        ("km", "MI" if theme_system.runtime_theme["units"] == "imperial" else "KM", "rm"),
     ):
         draw_text(text_cache, columns[key], y0 + 16, label, header_color, 13, True, True, anchor, family="Liberation Mono")
     draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, (84, 142, 148, 112), 1)
@@ -12516,10 +12744,10 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
             "call": str(spot.get("callsign", "?"))[:11],
             "grid": str(spot.get("grid", "?"))[:6],
             "pwr": str(int(spot.get("power_dbm", 0))),
-            "km": f"{distance:,}" if distance is not None else "--",
+            "km": theme_system.display_distance(distance).rsplit(" ", 1)[0] if distance is not None else "--",
         }
         for key, anchor in (("utc", "lm"), ("snr", "rm"), ("call", "lm"), ("grid", "lm"), ("pwr", "rm"), ("km", "rm")):
-            draw_text(text_cache, columns[key], y, values[key], (225, 241, 242), 15, False, True, anchor, family="Liberation Mono")
+            draw_text(text_cache, columns[key], y, values[key], themed_instrument_color("text", (225, 241, 242)), 15, False, True, anchor, family="Liberation Mono")
 
     # Status moves to the right, so it cannot steal rows from the decode log.
     detail_label = "NEXT" if detail.startswith("NEXT ") else "INFO"
@@ -12542,7 +12770,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
     )
     for index, (label, value, color) in enumerate(side_items):
         sy = y0 + 18 + index * 25
-        draw_text(text_cache, side_x0 + 12, sy, label, (104, 159, 166), 11, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, side_x0 + 12, sy, label, themed_instrument_color("secondary_text", (104, 159, 166)), 11, True, True, "lm", family="Liberation Sans")
         draw_text(text_cache, x1 - 12, sy, value, color, 13, True, True, "rm", family="Liberation Sans")
     if settings_box is not None:
         draw_wspr_settings_button(text_cache, settings_box)
@@ -12560,21 +12788,24 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
     draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
-    draw_text(text_cache, x0, 28, f"{band} m  WSPR LOG", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0, 59, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 28, f"{band} m  WSPR LOG", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 59, receiver, themed_instrument_color("secondary_text", (149, 211, 207)), 18, True, False, "lm", family="Liberation Sans")
     status = str(snapshot.get("decode_status", "ARMED"))
-    status_color = (114, 235, 180) if status in ("CAPTURE", "DECODED") else ((243, 190, 102) if status == "DECODING" else (183, 213, 215))
+    status_color = (themed_instrument_color("ready", (114, 235, 180)) if status in ("CAPTURE", "DECODED")
+                    else (themed_instrument_color("waiting", (243, 190, 102)) if status == "DECODING"
+                          else themed_instrument_color("secondary_text", (183, 213, 215))))
     draw_text(text_cache, x1, 28, status, status_color, 18, True, True, "rm", family="Liberation Sans")
-    draw_text(text_cache, x1, 57, str(receiver_grid or "NO RX GRID"), (160, 205, 208), 15, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, x1, 57, str(receiver_grid or "NO RX GRID"), themed_instrument_color("secondary_text", (160, 205, 208)), 15, True, True, "rm", family="Liberation Mono")
     columns = {
         "utc": x0 + 6, "snr": x0 + 150, "call": x0 + 230,
         "grid": x0 + 520, "pwr": x0 + 720, "km": x1 - 12,
     }
     for key, label, anchor in (
         ("utc", "UTC", "lm"), ("snr", "SNR", "rm"), ("call", "CALLSIGN", "lm"),
-        ("grid", "GRID", "lm"), ("pwr", "PWR dBm", "rm"), ("km", "DISTANCE km", "rm"),
+        ("grid", "GRID", "lm"), ("pwr", "PWR dBm", "rm"),
+        ("km", "DISTANCE mi" if theme_system.runtime_theme["units"] == "imperial" else "DISTANCE km", "rm"),
     ):
-        draw_text(text_cache, columns[key], header_h + 30, label, (112, 181, 184), 16, True, True, anchor, family="Liberation Mono")
+        draw_text(text_cache, columns[key], header_h + 30, label, themed_instrument_color("secondary_text", (112, 181, 184)), 16, True, True, anchor, family="Liberation Mono")
     draw_logical_line(x0, header_h + 43, x1, header_h + 43, (92, 158, 160, 145), 1)
     spots = tuple(snapshot.get("decoded_spots", ()))
     max_scroll = max(0, len(spots) - WSPR_EXPANDED_LOG_ROWS)
@@ -12593,12 +12824,12 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
             "call": str(spot.get("callsign", "?"))[:14],
             "grid": str(spot.get("grid", "?"))[:6],
             "pwr": str(int(spot.get("power_dbm", 0))),
-            "km": f"{distance:,}" if distance is not None else "--",
+            "km": theme_system.display_distance(distance).rsplit(" ", 1)[0] if distance is not None else "--",
         }
         for key, anchor in (("utc", "lm"), ("snr", "rm"), ("call", "lm"), ("grid", "lm"), ("pwr", "rm"), ("km", "rm")):
-            draw_text(text_cache, columns[key], y, values[key], (230, 244, 245), 21, False, True, anchor, family="Liberation Mono")
+            draw_text(text_cache, columns[key], y, values[key], themed_instrument_color("text", (230, 244, 245)), 21, False, True, anchor, family="Liberation Mono")
     footer = f"{len(spots)} RECENT SPOTS  ·  SWIPE TO REVIEW" if len(spots) > WSPR_EXPANDED_LOG_ROWS else f"{len(spots)} RECENT SPOTS"
-    draw_text(text_cache, x0, LOGICAL_H - 22, footer, (112, 185, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, LOGICAL_H - 22, footer, themed_instrument_color("secondary_text", (112, 185, 182)), 14, True, True, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
@@ -12613,16 +12844,16 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
-    draw_text(text_cache, x0, 28, f"{band} m  WSPR WATERFALL", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0, 59, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 28, f"{band} m  WSPR WATERFALL", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 59, receiver, themed_instrument_color("secondary_text", (149, 211, 207)), 18, True, False, "lm", family="Liberation Sans")
     count = texture.history_count() if texture is not None else 0
     max_scroll = texture.history_scroll_max() if texture is not None else 0
     scroll_rows = int(clamp(scroll_rows, 0, max_scroll))
     status = str(snapshot.get("status", "QUEUED"))
     state_text = "LIVE" if scroll_rows == 0 else f"HISTORY {scroll_rows} ROWS"
-    state_color = (112, 239, 183) if scroll_rows == 0 else (230, 194, 113)
+    state_color = themed_instrument_color("ready", (112, 239, 183)) if scroll_rows == 0 else themed_instrument_color("waiting", (230, 194, 113))
     draw_text(text_cache, x1, 28, state_text, state_color, 18, True, True, "rm", family="Liberation Sans")
-    draw_text(text_cache, x1, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", (160, 205, 208), 14, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, x1, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", themed_instrument_color("secondary_text", (160, 205, 208)), 14, True, True, "rm", family="Liberation Mono")
 
     draw_logical_rect(x0, wf_y0, x1, wf_y1, (1, 7, 14, 255))
     if texture is not None and count:
@@ -12630,15 +12861,15 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
             loaded = min(count, int(texture.history_backfill_index))
             draw_text(
                 text_cache, (x0 + x1) / 2, (wf_y0 + wf_y1) / 2,
-                f"LOADING HISTORY {loaded}/{count} ROWS", (132, 205, 196), 20,
+                f"LOADING HISTORY {loaded}/{count} ROWS", themed_instrument_color("ready", (132, 205, 196)), 20,
                 True, True, "cm", family="Liberation Sans",
             )
     else:
-        draw_text(text_cache, (x0 + x1) / 2, (wf_y0 + wf_y1) / 2, "WAITING FOR WSPR WATERFALL ROWS", (126, 169, 177), 20, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, (wf_y0 + wf_y1) / 2, "WAITING FOR WSPR WATERFALL ROWS", themed_instrument_color("secondary_text", (126, 169, 177)), 20, True, True, "cm", family="Liberation Sans")
     for ax0, ay0, ax1, ay1 in ((x0, wf_y0, x1, wf_y0), (x0, wf_y1, x1, wf_y1), (x0, wf_y0, x0, wf_y1), (x1, wf_y0, x1, wf_y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (86, 166, 170, 150), 1)
     footer = "SWIPE UP FOR OLDER WATERFALL  ·  TAP BACK TO RETURN" if max_scroll else "BUILDING 800-ROW RAM HISTORY"
-    draw_text(text_cache, x0, LOGICAL_H - 18, footer, (113, 187, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, LOGICAL_H - 18, footer, themed_instrument_color("secondary_text", (113, 187, 182)), 14, True, True, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
@@ -12648,11 +12879,11 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
     draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
     spots = tuple(snapshot.get("decoded_spots", ()))
     model = graph_cache.model_for(tile_id, spots, receiver_grid)
-    draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", (203, 235, 234), 14, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 15, f"{model['count']} SPOTS", (108, 229, 179), 13, True, True, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", themed_instrument_color("text", (203, 235, 234)), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 15, f"{model['count']} SPOTS", themed_instrument_color("ready", (108, 229, 179)), 13, True, True, "rm", family="Liberation Sans")
     if not model["count"]:
         message = "WAITING FOR DECODED SPOTS" if receiver_grid else "WAITING FOR RECEIVER GRID"
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, message, (127, 177, 181), 15, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, message, themed_instrument_color("secondary_text", (127, 177, 181)), 15, True, True, "cm", family="Liberation Sans")
         return
 
     plot_x0, plot_x1 = x0 + 42, x1 - 12
@@ -12663,7 +12894,9 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
         draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 78), 1)
-        draw_text(text_cache, plot_x0 - 6, y - 1, f"{int(distance_top * fraction / 1000)}k", (123, 176, 180), 11, True, True, "rm", family="Liberation Mono")
+        draw_text(text_cache, plot_x0 - 6, y - 1,
+                  theme_system.distance_axis_label(distance_top * fraction),
+                  themed_instrument_color("secondary_text", (123, 176, 180)), 11, True, True, "rm", family="Liberation Mono")
 
     step = (plot_x1 - plot_x0) / max(1, WSPR_MRTG_CYCLE_BINS - 1)
     # Spread simultaneous paths slightly within their two-minute bin. This
@@ -12676,9 +12909,11 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
         )
         for slot, spread, distance_fraction in model["dots"]
     )
-    draw_logical_square_points(points, 3.4, (186, 232, 229, 235))
-    draw_text(text_cache, plot_x0, y1 - 7, "1 HOUR · TWO-MINUTE BINS", (93, 184, 174), 10, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, plot_x1, y1 - 7, "DOTS = PATH km", (143, 190, 193), 10, True, True, "rm", family="Liberation Sans")
+    draw_logical_square_points(points, 3.4, (186, 231, 214, 180))
+    draw_text(text_cache, plot_x0, y1 - 7, "1 HOUR · TWO-MINUTE BINS", themed_instrument_color("ready", (93, 184, 174)), 10, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, plot_x1, y1 - 7,
+              "DOTS = PATH mi" if theme_system.runtime_theme["units"] == "imperial" else "DOTS = PATH km",
+              themed_instrument_color("secondary_text", (143, 190, 193)), 10, True, True, "rm", family="Liberation Sans")
 
 
 def wspr_distance_range_boxes():
@@ -12704,18 +12939,21 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 680, 20, True, False, "Liberation Sans")
-    draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0, 57, receiver, (149, 211, 207), 18, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, 57, receiver, themed_instrument_color("secondary_text", (149, 211, 207)), 18, True, False, "lm", family="Liberation Sans")
     state = "LOADING HISTORY" if loading else ("PRECOMPUTED" if ready else "WAITING")
     draw_text(text_cache, 888, 57, state, (118, 224, 185) if ready else (234, 187, 106), 15, True, True, "lm", family="Liberation Sans")
     draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
     max_distance = max((distance for _stamp, distance in points), default=0.0)
     distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
+    distance_unit = "mi" if theme_system.runtime_theme["units"] == "imperial" else "km"
     for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
         draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 94), 1)
-        draw_text(text_cache, plot_x0 - 11, y, f"{int(distance_top * fraction / 1000)}k", (151, 199, 200), 15, True, True, "rm", family="Liberation Mono")
-    draw_text(text_cache, plot_x0 - 12, plot_y0 - 11, "km", (108, 185, 180), 13, True, True, "rm", family="Liberation Sans")
+        draw_text(text_cache, plot_x0 - 11, y,
+                  theme_system.distance_axis_label(distance_top * fraction),
+                  themed_instrument_color("secondary_text", (151, 199, 200)), 15, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, plot_x1, plot_y0 - 11, distance_unit, themed_instrument_color("secondary_text", (108, 185, 180)), 13, True, True, "rm", family="Liberation Sans")
     for index in range(1, 5):
         x = plot_x0 + (plot_x1 - plot_x0) * index / 5
         draw_logical_line(x, plot_y0, x, plot_y1, (74, 127, 132, 56), 1)
@@ -12728,7 +12966,7 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
         draw_logical_circle(x, y, 10.0, (143, 204, 199, 205), segments=20)
     if not points:
         message = "LOADING LOCAL WSPR HISTORY" if loading else "NO DISTANCE SPOTS IN THIS RANGE"
-        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, (132, 192, 192), 21, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, themed_instrument_color("secondary_text", (132, 192, 192)), 21, True, True, "cm", family="Liberation Sans")
     span_labels = {
         0: ("60m", "45m", "30m", "15m", "NOW"),
         1: ("2h", "90m", "60m", "30m", "NOW"),
@@ -12738,9 +12976,9 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     }[window_index]
     for index, label in enumerate(span_labels):
         x = plot_x0 + (plot_x1 - plot_x0) * index / (len(span_labels) - 1)
-        draw_text(text_cache, x, plot_y1 + 24, label, (123, 186, 184), 15, True, True, "cm", family="Liberation Mono")
+        draw_text(text_cache, x, plot_y1 + 24, label, themed_instrument_color("secondary_text", (123, 186, 184)), 15, True, True, "cm", family="Liberation Mono")
     footer = f"{len(points)} CACHED DISTANCE POINTS  ·  DOTS = DECODED PATHS"
-    draw_text(text_cache, x0, LOGICAL_H - 22, footer, (112, 185, 182), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0, LOGICAL_H - 22, footer, themed_instrument_color("secondary_text", (112, 185, 182)), 14, True, True, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 
@@ -12770,9 +13008,9 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
         draw_logical_line(ax0, ay0, ax1, ay1, border, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), x1 - x0 - 114, 16, True, False, "Liberation Sans")
-    draw_text(text_cache, x0 + 14, y0 + 17, f"{band} m", (235, 248, 248), 18, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 70, y0 + 17, receiver, (155, 207, 208), 15, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 17, f"{len(points)}", (111, 229, 181), 14, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, x0 + 14, y0 + 17, f"{band} m", themed_instrument_color("text", (235, 248, 248)), 18, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 70, y0 + 17, receiver, themed_instrument_color("secondary_text", (155, 207, 208)), 15, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 17, f"{len(points)}", themed_instrument_color("ready", (111, 229, 181)), 14, True, True, "rm", family="Liberation Mono")
     plot_x0, plot_x1 = x0 + 49, x1 - 14
     plot_y0, plot_y1 = y0 + 38, y1 - 30
     draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
@@ -12780,7 +13018,9 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
         draw_logical_line(plot_x0, y, plot_x1, y, (76, 134, 140, 90), 1)
-        draw_text(text_cache, plot_x0 - 7, y, f"{int(distance_top * fraction / 1000)}k", (126, 184, 186), 11, True, True, "rm", family="Liberation Mono")
+        draw_text(text_cache, plot_x0 - 7, y,
+                  theme_system.distance_axis_label(distance_top * fraction),
+                  themed_instrument_color("secondary_text", (126, 184, 186)), 11, True, True, "rm", family="Liberation Mono")
     cutoff = now - window_s
     for stamp, distance in points:
         x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
@@ -12788,9 +13028,11 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
         draw_logical_circle(x, y, 3.0, (188, 233, 230, 235), segments=12)
     if not points:
         message = "LOADING" if loading else ("WAITING" if not ready else "NO SPOTS")
-        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, (133, 190, 190), 15, True, True, "cm", family="Liberation Sans")
-    draw_text(text_cache, plot_x0, y1 - 12, WSPR_DISTANCE_WINDOW_LABELS[window_index], (97, 186, 174), 12, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, plot_x1, y1 - 12, "km", (135, 183, 186), 12, True, True, "rm", family="Liberation Sans")
+        draw_text(text_cache, (plot_x0 + plot_x1) / 2, (plot_y0 + plot_y1) / 2, message, themed_instrument_color("secondary_text", (133, 190, 190)), 15, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, plot_x0, y1 - 12, WSPR_DISTANCE_WINDOW_LABELS[window_index], themed_instrument_color("ready", (97, 186, 174)), 12, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, plot_x1, y1 - 12,
+              "mi" if theme_system.runtime_theme["units"] == "imperial" else "km",
+              themed_instrument_color("secondary_text", (135, 183, 186)), 12, True, True, "rm", family="Liberation Sans")
 
 
 def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, window_index, page, focused_id=""):
@@ -12800,8 +13042,8 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
     draw_logical_rect(0, 0, rf_canvas_width(), 140, (8, 29, 35, 250))
     draw_logical_line(0, 139, rf_canvas_width(), 139, (81, 184, 166, 176), 1)
-    draw_text(text_cache, 28, 28, "WSPR DISTANCE", (235, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 28, 28, "WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", themed_instrument_color("secondary_text", (139, 205, 201)), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
         draw_styled_text_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active=active)
@@ -12816,7 +13058,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
             )
         else:
             draw_logical_rect(*box, (4, 14, 20, 160))
-    draw_text(text_cache, rf_canvas_width() - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", (132, 194, 191), 14, True, True, "rm", family="Liberation Mono")
+    draw_text(text_cache, rf_canvas_width() - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", themed_instrument_color("secondary_text", (132, 194, 191)), 14, True, True, "rm", family="Liberation Mono")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
 def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(None, None), receiver_grid=None,
@@ -12837,27 +13079,31 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         "RETRY": (244, 188, 104), "AUDIO FFT": (104, 211, 239), "NO W/F": (244, 176, 103),
         "QUEUED": (134, 159, 167), "STOPPED": (134, 159, 167),
     }.get(status, (134, 159, 167))
+    status_role = ("ready" if status == "LIVE" else
+                   "waiting" if status in ("CONNECTING", "RETRY", "NO W/F") else
+                   "focus" if status == "AUDIO FFT" else "secondary_text")
+    color = themed_instrument_color(status_role, color)[:3]
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 238))
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (*color, 150), 1)
     band = str(tile.get("band", "?"))
     used, total = capacity
     capacity_label = f"{used}/{total}" if used is not None and total is not None else "--/--"
-    capacity_color = (127, 230, 186) if used is not None and total is not None else (113, 146, 151)
+    capacity_color = themed_instrument_color("ready", (127, 230, 186)) if used is not None and total is not None else themed_instrument_color("secondary_text", (113, 146, 151))
     capacity_x = x1 - 52
     rate_info = rate_info or {}
     leader = bool(rate_info.get("leader")) and int(rate_info.get("rate", 0)) > 0
     leader_x1 = capacity_x - 18
     leader_x0 = leader_x1 - 88 if leader else capacity_x
     name = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), leader_x0 - (x0 + 86) - 14, 19, True, False, "Liberation Sans")
-    draw_text(text_cache, x0 + 16, y0 + 20, f"{band} m", (234, 247, 247), 22, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 86, y0 + 20, name, (179, 208, 212), 17, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 16, y0 + 20, f"{band} m", themed_instrument_color("text", (234, 247, 247)), 22, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 86, y0 + 20, name, themed_instrument_color("secondary_text", (179, 208, 212)), 17, True, False, "lm", family="Liberation Sans")
     if leader:
         # Annunciator, not another button: a compact bright indicator placed
         # in the instrument header immediately before receiver capacity.
         draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, (19, 91, 65, 240))
         draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, (120, 255, 187, 250), 1.5)
-        draw_text(text_cache, (leader_x0 + leader_x1) / 2, y0 + 20, "LEADER", (202, 255, 220), 12, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (leader_x0 + leader_x1) / 2, y0 + 20, "LEADER", themed_instrument_color("ready", (202, 255, 220)), 12, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, capacity_x, y0 + 20, capacity_label, capacity_color, 15, True, True, "rm", family="Liberation Sans")
     draw_wspr_cycle_timer(x1 - 28, y0 + 22, 10)
     view = int(tile.get("view", 0)) % 3
@@ -12870,7 +13116,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         if texture is not None:
             texture.draw(*wf_box)
         else:
-            draw_text(text_cache, (wf_box[0] + wf_box[2]) / 2, (wf_box[1] + wf_box[3]) / 2, "W/F WAIT", (116, 150, 159), 16, True, True, "cm", family="Liberation Sans")
+            draw_text(text_cache, (wf_box[0] + wf_box[2]) / 2, (wf_box[1] + wf_box[3]) / 2, "W/F WAIT", themed_instrument_color("secondary_text", (116, 150, 159)), 16, True, True, "cm", family="Liberation Sans")
         draw_wspr_waterfall_expand_button(text_cache, wspr_card_waterfall_expand_box(box))
     elif view == 1:
         draw_wspr_decode_placeholder(
@@ -12899,7 +13145,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         source_box = (wf_box[0] + 8, wf_box[1] + 8, wf_box[0] + 8 + source_width, wf_box[1] + 31)
         draw_logical_rect(*source_box, source_fill)
         draw_logical_line(source_box[0], source_box[1], source_box[2], source_box[1], (*source_color, 190), 1)
-        draw_text(text_cache, (source_box[0] + source_box[2]) / 2, (source_box[1] + source_box[3]) / 2, source_label, source_color, 13, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (source_box[0] + source_box[2]) / 2, (source_box[1] + source_box[3]) / 2, source_label, themed_instrument_color("ready" if status == "LIVE" else "waiting" if status in ("NO W/F", "RETRY", "CONNECTING") else "secondary_text", source_color), 13, True, True, "cm", family="Liberation Sans")
     if view != 1:
         level = snapshot["smeter_dbm"]
         detail = f"{float(tile.get('freq_khz', 0)) / 1000:.6f} MHz" if tile.get("freq_khz") else "WSPR DIAL"
@@ -12944,8 +13190,8 @@ def draw_wspr_add_card(text_cache, box):
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2 - 15
     draw_logical_line(cx - 22, cy, cx + 22, cy, (96, 236, 175, 230), 3)
     draw_logical_line(cx, cy - 22, cx, cy + 22, (96, 236, 175, 230), 3)
-    draw_text(text_cache, cx, cy + 43, "ADD WSPR", (225, 249, 245), 22, True, True, "cm", family="Liberation Sans")
-    draw_text(text_cache, cx, cy + 66, "CURRENT RADIO PRESELECTED", (118, 190, 181), 13, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, cx, cy + 43, "ADD WSPR", themed_instrument_color("text", (225, 249, 245)), 22, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, cx, cy + 66, "CURRENT RADIO PRESELECTED", themed_instrument_color("ready", (118, 190, 181)), 13, True, True, "cm", family="Liberation Sans")
 
 
 def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False):
@@ -13024,10 +13270,10 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
     band = str(tile.get("band", "?"))
     name = str(tile.get("name", "CURRENT RECEIVER"))
     status_color = (92, 241, 177) if status == "LIVE" else (244, 188, 104) if status == "CONNECTING" else (173, 193, 197)
-    draw_text(text_cache, x0 + 32, y0 + 38, f"{band} m WSPR", (232, 247, 247), 25, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 32, y0 + 38, f"{band} m WSPR", themed_instrument_color("text", (232, 247, 247)), 25, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 32, y0 + 38, status, status_color, 16, True, True, "rm", family="Liberation Sans")
     if band_picker_open:
-        draw_text(text_cache, x0 + 32, y0 + 70, "CHANGE BAND", (117, 238, 180), 18, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 32, y0 + 70, "CHANGE BAND", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
         for label, frequency, box in boxes["band_boxes"]:
             active = label == band
             detail = f"{frequency / 1000.0:.3f} MHz" if frequency >= 1000 else f"{frequency:.1f} kHz"
@@ -13035,7 +13281,7 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
         draw_wspr_button(text_cache, boxes["cancel"], "CANCEL")
         return
     if receiver_picker_open:
-        draw_text(text_cache, x0 + 32, y0 + 70, "RECEIVER", (117, 238, 180), 18, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 32, y0 + 70, "RECEIVER", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
         pages = max(1, math.ceil(len(receiver_rows) / 3))
         receiver_page = int(clamp(receiver_page, 0, pages - 1))
         visible = receiver_rows[receiver_page * 3:receiver_page * 3 + 3]
@@ -13050,14 +13296,14 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
                 (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)),
                 1,
             )
-            draw_text(text_cache, box[0] + 16, box[1] + 23, fit_station_text(text_cache, station_name, box[2] - box[0] - 32, 18, True, False, "Liberation Sans"), (235, 247, 248), 18, True, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, box[0] + 16, box[1] + 23, fit_station_text(text_cache, station_name, box[2] - box[0] - 32, 18, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 18, True, False, "lm", family="Liberation Sans")
             detail = location or server
             if used is not None and total is not None:
                 detail += f"  ·  {used}/{total}"
             if local_receiver:
                 detail = "LAN  ·  kiwisdr.local"
             draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 13, False, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, x0 + 32, y0 + 300, "WSPR HF BAND", (117, 238, 180), 18, True, True, "lm", family="Liberation Sans")
+        draw_text(text_cache, x0 + 32, y0 + 300, "WSPR HF BAND", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
         for label, frequency, box in boxes["hf_band_boxes"]:
             active = label == band
             draw_wspr_button(text_cache, box, f"{label} m", f"{frequency / 1000.0:.3f} MHz", active, active)
@@ -13065,17 +13311,17 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
         draw_wspr_button(text_cache, boxes["cancel"], "DONE", active=True)
         draw_wspr_button(text_cache, boxes["next"], "NEXT >")
         draw_text(text_cache, (x0 + x1) / 2, boxes["prev"][1] - 14,
-                  f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+                 f"{receiver_page + 1}/{pages}", themed_instrument_color("secondary_text", (179, 206, 209)), 13,
                   True, True, "cm", family="Liberation Sans")
         return
     receiver_box = boxes["receiver"]
     draw_logical_rect(*receiver_box, (14, 37, 44, 235))
     draw_logical_line(receiver_box[0], receiver_box[1], receiver_box[2], receiver_box[1], (91, 171, 164, 165), 1)
-    draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 22, fit_station_text(text_cache, name, receiver_box[2] - receiver_box[0] - 170, 19, True, False, "Liberation Sans"), (232, 246, 247), 19, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 22, fit_station_text(text_cache, name, receiver_box[2] - receiver_box[0] - 170, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (232, 246, 247)), 19, True, False, "lm", family="Liberation Sans")
     location = str(tile.get("location", "") or tile.get("server", ""))
-    draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 56, fit_station_text(text_cache, location, receiver_box[2] - receiver_box[0] - 170, 14, False, False, "Liberation Sans"), (160, 195, 199), 14, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 56, fit_station_text(text_cache, location, receiver_box[2] - receiver_box[0] - 170, 14, False, False, "Liberation Sans"), themed_instrument_color("secondary_text", (160, 195, 199)), 14, False, False, "lm", family="Liberation Sans")
     draw_wspr_button(text_cache, (receiver_box[2] - 140, receiver_box[1] + 16, receiver_box[2] - 16, receiver_box[3] - 16), "CHANGE")
-    draw_text(text_cache, x0 + 32, y0 + 224, "WSPR HF BAND", (117, 238, 180), 18, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 32, y0 + 224, "WSPR HF BAND", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
     for label, frequency, box in boxes["hf_band_boxes"]:
         active = label == band
         draw_wspr_button(text_cache, box, f"{label} m", f"{frequency / 1000.0:.3f} MHz", active, active)
@@ -13083,7 +13329,7 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
     detail = f"{frequency / 1000:.6f} MHz" if frequency else "WSPR DIAL"
     if snapshot.get("smeter_dbm") is not None:
         detail += f"  ·  {snapshot['smeter_dbm']:.0f} dBm"
-    draw_text(text_cache, x0 + 32, y0 + 430, detail, (190, 220, 222), 17, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 32, y0 + 430, detail, themed_instrument_color("secondary_text", (190, 220, 222)), 17, True, True, "lm", family="Liberation Sans")
     draw_wspr_button(text_cache, boxes["toggle"], "START" if paused else "STOP")
     draw_wspr_danger_button(text_cache, boxes["delete"], "DELETE? TAP AGAIN" if delete_armed else "DELETE")
     draw_wspr_button(text_cache, boxes["close"], "CLOSE")
@@ -13132,7 +13378,7 @@ def draw_wspr_cpu_debug_backdrop(text_cache):
     x0, y0, x1, y1 = WSPR_CPU_DETAIL_BOX
     draw_logical_rect(0, WSPR_WORKSPACE_HEADER_H, LOGICAL_W, LOGICAL_H, (0, 5, 8, 172))
     draw_logical_rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, (11, 38, 44, 232))
-    draw_text(text_cache, (x0 + x1) / 2, y0 - 19, "CPU DEBUG  ·  TAP PANEL TO RETURN", (148, 224, 213), 15, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y0 - 19, "CPU DEBUG  ·  TAP PANEL TO RETURN", themed_instrument_color("ready", (148, 224, 213)), 15, True, True, "cm", family="Liberation Sans")
 
 
 def wspr_decoder_settings_layout():
@@ -13164,8 +13410,8 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
     draw_logical_rect(x0, y0, x1, y1, (8, 23, 30, 246))
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (93, 216, 181, 196), 1)
-    draw_text(text_cache, x0 + 28, y0 + 38, "WSPR DECODE", (236, 248, 248), 28, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 28, y0 + 68, "GLOBAL PROFILE  ·  APPLIES ON THE NEXT TWO-MINUTE DECODE", (126, 203, 191), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 28, y0 + 38, "WSPR DECODE", themed_instrument_color("text", (236, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 28, y0 + 68, "GLOBAL PROFILE  ·  APPLIES ON THE NEXT TWO-MINUTE DECODE", themed_instrument_color("ready", (126, 203, 191)), 14, True, True, "lm", family="Liberation Sans")
     details = {
         "normal": "Standard full decode",
         "deep": "Weak signals · slower",
@@ -13178,7 +13424,7 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
             text_cache, box, WSPR_DECODER_PROFILE_LABELS[candidate],
             details[candidate], active=active, selected=active,
         )
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", (156, 203, 208), 16, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", themed_instrument_color("secondary_text", (156, 203, 208)), 16, True, True, "cm", family="Liberation Sans")
     draw_wspr_button(text_cache, boxes["osd_down"], "LESS", "OSD")
     osd_label = "OFF" if not osd_depth else f"LEVEL {osd_depth}"
     osd_detail = "NO EXTRA SEARCH" if not osd_depth else "MORE WEAK-SIGNAL SEARCH"
@@ -13223,13 +13469,13 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     # Cards may scroll under this fixed header. Redraw it after the grid so
     # the header also forms the viewport's clean clipping edge.
     draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, (8, 22, 29, 250))
-    draw_logical_line(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W, WSPR_WORKSPACE_HEADER_H - 1, (69, 151, 144, 165), 1)
-    draw_text(text_cache, 22, 27, "WSPR MONITOR", (234, 247, 247), 27, True, True, "lm", family="Liberation Sans")
+    draw_section_divider(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W)
+    draw_text(text_cache, 22, 27, "WSPR MONITOR", themed_instrument_color("text", (234, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     live_count = sum(
         1 for session in monitor_manager.sessions.values()
         if session.snapshot()["status"] in ("LIVE", "AUDIO FFT")
     )
-    draw_text(text_cache, 22, 53, f"{live_count}/{WSPR_MONITOR_MAX_LIVE} LIVE MONITORS  ·  TWO-MINUTE CYCLES", (102, 214, 177), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 22, 53, f"{live_count}/{WSPR_MONITOR_MAX_LIVE} LIVE MONITORS  ·  TWO-MINUTE CYCLES", themed_instrument_color("ready", (102, 214, 177)), 14, True, True, "lm", family="Liberation Sans")
     decoder_profile, decoder_osd_depth = monitor_manager.decoder_settings.snapshot()
     decode_active = decoder_profile != "normal" or bool(decoder_osd_depth)
     decode_detail = WSPR_DECODER_PROFILE_LABELS[decoder_profile]
@@ -13241,7 +13487,7 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, (11, 37, 43, 212))
     draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, (87, 211, 190, 156), 1)
     cpu_label = "CPU --" if cpu_percent is None else f"CPU {cpu_percent:.0f}%"
-    draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, (163, 238, 226), 17, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, themed_instrument_color("ready", (163, 238, 226)), 17, True, True, "cm", family="Liberation Sans")
     draw_styled_text_button(text_cache, WSPR_ADD_BOX, "ADD WSPR")
     draw_styled_text_button(text_cache, WSPR_HOME_BOX, "HOME")
 
@@ -13279,10 +13525,10 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 224))
     draw_logical_rect(x0, y0, x1, y1, (8, 20, 27, 250))
     draw_logical_line(x0, y0, x1, y0, (87, 209, 175, 200), 1)
-    draw_text(text_cache, 42, 57, "ADD WSPR SESSION", (232, 247, 247), 27, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, 42, 80, "LAN KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", (120, 196, 185), 14, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LAN FIRST", (177, 209, 213), 16, True, True, "lm", family="Liberation Sans")
-    draw_text(text_cache, bands_box[0], 422, "WSPR HF BAND", (177, 209, 213), 16, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 42, 57, "ADD WSPR SESSION", themed_instrument_color("text", (232, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, 42, 80, "LAN KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", themed_instrument_color("ready", (120, 196, 185)), 14, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LAN FIRST", themed_instrument_color("secondary_text", (177, 209, 213)), 16, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, bands_box[0], 422, "WSPR HF BAND", themed_instrument_color("secondary_text", (177, 209, 213)), 16, True, True, "lm", family="Liberation Sans")
     for (label, frequency), box in wspr_add_band_boxes():
         active = label == selected_band
         draw_wspr_button(text_cache, box, f"{label} m", f"{frequency / 1000:.3f} MHz", active, active)
@@ -13296,7 +13542,7 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
         active = server.rstrip("/") == str(selected_server or "").rstrip("/")
         draw_logical_rect(*box, (27, 76, 66, 232) if active else (14, 31, 39, 235))
         draw_logical_line(box[0], box[1], box[2], box[1], (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)), 1)
-        draw_text(text_cache, box[0] + 16, box[1] + 24, fit_station_text(text_cache, name, box[2] - box[0] - 32, 19, True, False, "Liberation Sans"), (235, 247, 248), 19, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, box[0] + 16, box[1] + 24, fit_station_text(text_cache, name, box[2] - box[0] - 32, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 19, True, False, "lm", family="Liberation Sans")
         detail = location or server
         if used is not None and total is not None:
             detail += f"  ·  {used}/{total}"
@@ -13307,7 +13553,7 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
         draw_wspr_button(text_cache, box, label, active=active)
     pages = max(1, math.ceil(len(receiver_rows) / 3))
     draw_text(text_cache, (x0 + x1) / 2, prev[1] - 16,
-              f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+             f"{receiver_page + 1}/{pages}", themed_instrument_color("secondary_text", (179, 206, 209)), 13,
               True, True, "cm", family="Liberation Sans")
 
 
@@ -13875,14 +14121,6 @@ def draw_receiver_map(
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
-    if DESKTOP_1280_MODE:
-        draw_native_rect(DESKTOP_1280_MAIN_W, 0, NATIVE_W, NATIVE_H, (5, 6, 8, 255))
-    elif LCD_800_MODE:
-        # The map deliberately stops before the permanent LCD rail. It gives
-        # the three globe commands a large, reliable touch target and makes
-        # the globe itself a single, unambiguous gesture surface.
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (5, 12, 18, 255))
-        draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
     draw_logical_rect(*box, (7, 19, 29, 255))
     center_lon, center_lat = yaw, pitch
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
@@ -14052,8 +14290,19 @@ def draw_receiver_map(
         draw_logical_rect(notice_x0, notice_y0, notice_x1, notice_y1, (5, 30, 28, 228))
         draw_logical_line(notice_x0, notice_y0, notice_x1, notice_y0, (101, 255, 191, 220), 2)
         draw_text(text_cache, (notice_x0 + notice_x1) / 2, (notice_y0 + notice_y1) / 2, fit_station_text(text_cache, notice, notice_x1 - notice_x0 - 24, 20, True, False, family="Cantarell"), (226, 255, 244), 20, True, False, "cm", family="Cantarell")
-    # Globe controls stay in the rail, leaving the map as a drag surface.
-    draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
+    # The title floats with the controls. Do not call draw_sidebar_header here:
+    # that shared helper intentionally paints an opaque rail background.
+    title_x = (LCD_NAV_X0 + LOGICAL_W) / 2
+    draw_text(
+        text_cache, title_x + 1, 33, "RECEIVERS / GLOBE",
+        (0, 0, 0), 17, True, False, "cm",
+        family=APP_UI_STYLE.button.font_family,
+    )
+    draw_text(
+        text_cache, title_x, 32, "RECEIVERS / GLOBE",
+        APP_UI_STYLE.palette.sidebar_title, 17, True, False, "cm",
+        family=APP_UI_STYLE.button.font_family,
+    )
 
     # The legend doubles as the visibility filter. Its underline matches the
     # source dots when visible, and turns gray when the source is hidden.
@@ -14085,7 +14334,11 @@ def draw_receiver_map(
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_IN_BOX, "ZOOM IN")
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_OUT_BOX, "ZOOM OUT")
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
-    draw_text(text_cache, box[2] - 18, box[3] - 16, "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
+    draw_text(
+        text_cache, min(box[2], LCD_NAV_X0) - 18, box[3] - 16,
+        "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm",
+        family="Cantarell",
+    )
 
 
 def scout_rf_strength(smeter_dbm):
@@ -14351,8 +14604,8 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
     tx0, ty0, tx1, ty1 = DJ_TRACK_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 22, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
     delta_hz = round((current_khz - origin_khz) * 1000)
     delta_label = f"{delta_hz:+d} Hz" if delta_hz else "CENTRE"
@@ -14389,7 +14642,8 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
                                 DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
                                 "FREQUENCY POSITION")
         for layout, box in DISPLAY_LAYOUT_BOXES:
-            draw_display_control(text_cache, box, layout.upper(), layout == instrument_layout)
+            draw_display_control(text_cache, box, layout.upper(),
+                                 layout == visible_frequency_position(instrument_layout))
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
@@ -14422,8 +14676,8 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 29, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM", spectrum_enabled)
     draw_display_control(text_cache, DISPLAY_AUTO_BOX, "SPECTRUM AUTO", spectrum_auto)
@@ -14573,8 +14827,8 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
 def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=False):
     x0, y0, x1, y1 = FILTER_PANEL_BOX
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 174))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 132), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 132), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 34, y0 + 22, f"FILTER  {mode}", (229, 243, 246), 24, True, True, "lm")
     width_hz = high_cut - low_cut
     draw_text(text_cache, 926, y0 + 22, f"BW {width_hz / 1000:.2f} kHz", (205, 210, 213), 24, True, True, "rm")
@@ -14599,17 +14853,17 @@ def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=Fa
         draw_logical_rect(handle_x - 12, block_y0 - 8, handle_x + 12, block_y1 + 8, (166, 172, 176, 188))
         draw_logical_line(handle_x - 4, block_y0 + 5, handle_x - 4, block_y1 - 5, (47, 51, 54, 220), 2)
         draw_logical_line(handle_x + 4, block_y0 + 5, handle_x + 4, block_y1 - 5, (47, 51, 54, 220), 2)
-    draw_text(text_cache, (low_x + high_x) / 2, (block_y0 + block_y1) / 2, "PASSBAND", (236, 239, 241), 14, True, True, "cm")
-    draw_text(text_cache, sx0 + 8, sy0 + 13, "LEFT EDGE", (202, 208, 211), 13, True, True, "lm")
-    draw_text(text_cache, sx1 - 8, sy0 + 13, "RIGHT EDGE", (202, 208, 211), 13, True, True, "rm")
-    draw_text(text_cache, sx0 + 8, sy0 + 29, format_filter_cut(view_low_cut), (225, 229, 231), 23, True, True, "lm")
-    draw_text(text_cache, sx1 - 8, sy0 + 29, format_filter_cut(view_high_cut), (225, 229, 231), 23, True, True, "rm")
-    draw_text(text_cache, zero_x, sy1 - 7, "CARRIER", (152, 181, 187), 12, True, True, "cm")
+    draw_text(text_cache, (low_x + high_x) / 2, (block_y0 + block_y1) / 2, "PASSBAND", themed_instrument_color("text", (236, 239, 241)), 14, True, True, "cm")
+    draw_text(text_cache, sx0 + 8, sy0 + 13, "LEFT EDGE", themed_instrument_color("secondary_text", (202, 208, 211)), 13, True, True, "lm")
+    draw_text(text_cache, sx1 - 8, sy0 + 13, "RIGHT EDGE", themed_instrument_color("secondary_text", (202, 208, 211)), 13, True, True, "rm")
+    draw_text(text_cache, sx0 + 8, sy0 + 29, format_filter_cut(view_low_cut), themed_instrument_color("text", (225, 229, 231)), 23, True, True, "lm")
+    draw_text(text_cache, sx1 - 8, sy0 + 29, format_filter_cut(view_high_cut), themed_instrument_color("text", (225, 229, 231)), 23, True, True, "rm")
+    draw_text(text_cache, zero_x, sy1 - 7, "CARRIER", themed_instrument_color("secondary_text", (152, 181, 187)), 12, True, True, "cm")
     preset_index = filter_preset_index(width_hz)
     is_preset = preset_index is not None and not custom_width
     draw_filter_width_control(text_cache, FILTER_WIDTH_MINUS_BOX, "-")
     draw_filter_width_control(text_cache, FILTER_WIDTH_PLUS_BOX, "+")
-    label_color = (236, 239, 241) if is_preset else (199, 204, 207)
+    label_color = themed_instrument_color("text" if is_preset else "secondary_text", (236, 239, 241) if is_preset else (199, 204, 207))
     label_fill = (86, 91, 95, 104) if is_preset else (54, 58, 62, 78)
     label_line = (190, 196, 199, 172) if is_preset else (143, 149, 153, 126)
     lx0, ly0, lx1, ly1 = FILTER_WIDTH_LABEL_BOX
@@ -14638,9 +14892,10 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
         return
     x0, y0, x1, y1 = ZOOM_OSD_BOX
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
-    green = (72, 255, 122, alpha)
-    dim = (72, 255, 122, int(alpha * 0.18))
-    soft = (72, 255, 122, int(alpha * 0.35))
+    notice = APP_UI_STYLE.palette.notice
+    green = (*notice, alpha)
+    dim = (*notice, int(alpha * 0.18))
+    soft = (*notice, int(alpha * 0.35))
     digital_factor = kiwi.DIGITAL_ZOOM_FACTORS.get(int(zoom))
     zoom_label = f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM"
     draw_text(text_cache, x0 + 18, y0 + 22, zoom_label, green[:3], 28, True, True, "lm")
@@ -14666,9 +14921,10 @@ def draw_globe_zoom_osd(text_cache, scale, alpha=220):
     scale = clamp(float(scale), RADIOGARDEN_ZOOM_MIN, RADIOGARDEN_ZOOM_MAX)
     x0, y0, x1, _y1 = ZOOM_OSD_BOX
     draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
-    green = (72, 255, 122, alpha)
-    dim = (72, 255, 122, int(alpha * 0.18))
-    soft = (72, 255, 122, int(alpha * 0.35))
+    notice = APP_UI_STYLE.palette.notice
+    green = (*notice, alpha)
+    dim = (*notice, int(alpha * 0.18))
+    soft = (*notice, int(alpha * 0.35))
     value = f"{scale:.0f}x" if scale >= 10 else f"{scale:.1f}x"
     draw_text(text_cache, x0 + 18, y0 + 22, "GLOBE ZOOM", green[:3], 28, True, True, "lm")
     draw_text(text_cache, x1 - 18, y0 + 22, value, green[:3], 28, True, True, "rm")
@@ -14700,11 +14956,30 @@ def draw_vosc_error_osd(text_cache, message, alpha):
         return
     x0, y0, x1, y1 = ZOOM_OSD_BOX
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
-    color = (72, 255, 122)
+    color = APP_UI_STYLE.palette.notice
     detail = fit_station_text(text_cache, str(message).upper(), x1 - x0 - 150,
                               28, True, True)
     draw_text(text_cache, x0 + 18, y0 + 22, "ERROR", color, 28, True, True, "lm")
     draw_text(text_cache, x1 - 18, y0 + 22, detail, color, 28, True, True, "rm")
+
+
+def draw_theme_notice_osd(text_cache, action, detail, alpha):
+    """Theme feedback uses the Zoom popup's position, wash and typography."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or not action:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    color = APP_UI_STYLE.palette.notice
+    opacity = alpha / 255.0
+    draw_text(text_cache, x0 + 18, y0 + 22, "THEME", color,
+              28, True, True, "lm", alpha=opacity)
+    draw_text(text_cache, x1 - 18, y0 + 22, action, color,
+              28, True, True, "rm", alpha=opacity)
+    detail = fit_station_text(text_cache, detail, x1 - x0 - 36,
+                              24, True, True)
+    draw_text(text_cache, x0 + 18, y0 + 65, detail, color,
+              24, True, True, "lm", alpha=opacity)
 
 
 def draw_green_osd_panel(box, alpha):
@@ -14713,7 +14988,7 @@ def draw_green_osd_panel(box, alpha):
     draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
     for offset, line_alpha in ((32, 0.20), (64, 0.12)):
         y = y0 + offset
-        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (*APP_UI_STYLE.palette.notice, int(alpha * line_alpha)), 1)
 
 
 def sort_chevron_points(box, sort_mode):
@@ -14732,7 +15007,7 @@ def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_nea
         return
     x0, y0, x1, y1 = receiver_list_notice_box()
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
-    color = (72, 255, 122)
+    color = APP_UI_STYLE.palette.notice
     opacity = alpha / 255.0
     draw_text(text_cache, x0 + 18, y0 + 22, "SORTED BY", color,
               28, True, True, "lm", alpha=opacity)
@@ -14750,7 +15025,7 @@ def draw_rc28_mode_osd(text_cache, mode, alpha):
         return
     x0, y0, x1, y1 = ZOOM_OSD_BOX
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
-    green = (72, 255, 122)
+    green = APP_UI_STYLE.palette.notice
     draw_text(text_cache, x0 + 18, y0 + 22, "RC-28", green, 28, True, True, "lm")
     draw_text(text_cache, x1 - 18, y0 + 22, mode, green, 28, True, True, "rm")
 
@@ -14807,7 +15082,7 @@ def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_
         if index:
             draw_logical_line(x0 + 14, row_y - 24, x1 - 14, row_y - 24, (98, 151, 166, int(alpha * 0.35)), 1)
         distance = frequency_identity_distance_km(candidate, receiver_coordinates)
-        distance_label = f"{int(round(distance)):,} km" if distance is not None else "DIST ?"
+        distance_label = theme_system.display_distance(distance) if distance is not None else "DIST ?"
         # The flag intentionally spans both information rows. It acts as a
         # compact country marker, not a tiny inline ornament on the detail row.
         flag_x = x0 + 16
@@ -14869,14 +15144,14 @@ def draw_wspr_decode_osd(text_cache, active_tiles, y0):
     dot_x, dot_y = x0 + 22, y0 + 21
     draw_logical_circle(dot_x, dot_y, 7 + 3 * pulse, (*amber, int(65 + 95 * pulse)), 24, True)
     draw_logical_circle(dot_x, dot_y, 5, (*amber, 245), 20)
-    draw_text(text_cache, x0 + 40, y0 + 20, "WSPR DECODING", (255, 224, 160), 20, True, True, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 40, y0 + 20, "WSPR DECODING", themed_instrument_color("secondary_text", (255, 224, 160)), 20, True, True, "lm", family="Liberation Sans")
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 215, 15, True, False, "Liberation Sans")
     profile = str(snapshot.get("decode_detail", "NORMAL")).upper() or "NORMAL"
     detail = f"{band} m  ·  {receiver}  ·  {profile}"
     if len(active_tiles) > 1:
         detail += f"  ·  +{len(active_tiles) - 1} QUEUED"
-    draw_text(text_cache, x0 + 18, y0 + 43, detail, (239, 199, 120), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 18, y0 + 43, detail, themed_instrument_color("waiting", (239, 199, 120)), 15, True, False, "lm", family="Liberation Sans")
 
 
 def station_page_max(stations, leading_rows=0):
@@ -15125,7 +15400,9 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
 
 def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False, pressed=False):
     """Build the legacy native rail's rounded, text-only button texture."""
-    key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}_{'pressed' if pressed else 'normal'}"
+    key = (f"menu_asset_{kind}_{label}_{width}x{height}_"
+           f"{'muted' if muted else 'live'}_{'pressed' if pressed else 'normal'}_"
+           f"{theme_system.runtime_revision}")
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -15137,13 +15414,15 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
                      border_radius=style.radius)
     subtitle = HOME_MENU_SUBTITLES.get(kind, "")
-    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
-    for caption, center_y, color in (
-        (label, 23 if subtitle else height / 2, visual.text),
-        (subtitle, 46, style.subtitle_color),
+    for caption, center_y, color, size in (
+        (label, 23 if subtitle else height / 2, visual.text, style.title_size),
+        (subtitle, 46, visual.text if pressed else style.subtitle_color, style.subtitle_size),
     ):
         if caption:
+            font = text_cache.font(size, bold=True, family=style.font_family)
             rendered = font.render(str(caption).upper(), True, color[:3])
+            if rendered.get_width() > width - 4:
+                rendered = pygame.transform.smoothscale(rendered, (width - 4, rendered.get_height()))
             surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
@@ -15152,7 +15431,7 @@ def draw_main_menu(text_cache, scroll):
     x0, y0, x1, y1 = MENU_BOX
     # Let the waterfall remain legible behind a single calm, temporary veil.
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
-    draw_logical_line(x0 + 12, y0, x1 - 12, y0, (174, 201, 205, 72), 1)
+    draw_section_divider(x0 + 12, y0, x1 - 12)
     for idx, (kind, label) in enumerate(MENU_ITEMS):
         box = menu_item_box(idx, scroll)
         if box is None:
@@ -15162,6 +15441,7 @@ def draw_main_menu(text_cache, scroll):
             continue
         draw_styled_two_line_button(
             text_cache, box, label, HOME_MENU_SUBTITLES.get(kind, ""),
+            fit_full_subtitle=True,
         )
 
 
@@ -15279,7 +15559,7 @@ def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
     )
     x_scale = min(1.0, max_width / max(1, source_width))
     draw_text_scaled_x(
-        text_cache, right_x, center_y, frequency_text, BIG_FREQUENCY_COLOR,
+        text_cache, right_x, center_y, frequency_text, APP_UI_STYLE.palette.frequency,
         size, x_scale, bold=True, anchor=anchor, family=family,
     )
 
@@ -15327,9 +15607,178 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     draw_sidebar_header(text_cache, title)
     draw_text(
         text_cache, LCD_NAV_X0 + 18, 96, detail,
-        (139, 174, 183), 13, False, False, "lm", family="Liberation Sans",
+        themed_instrument_color("secondary_text", (139, 174, 183)), 13, False, False, "lm", family="Liberation Sans",
     )
     draw_radio_close_button(text_cache, lcd_drawer_back_box())
+
+
+def draw_theme_panel(text_cache, editor):
+    """Touch-friendly two-column theme browser and live editor."""
+    theme = editor.preview
+    colors = theme["colors"]
+    active_colors = APP_UI_STYLE.palette
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, active_colors.background)
+    draw_logical_rect(512, 0, 1024, LOGICAL_H, active_colors.section_surface)
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, active_colors.sidebar)
+    draw_sidebar_header(text_cache, "THEME")
+    draw_text(text_cache, 536, 42, "SAVED THEMES" if editor.mode == "browse" else theme["name"],
+              active_colors.text, 24, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+    draw_text(text_cache, 24, 42, "LIVE PREVIEW", active_colors.section_heading,
+              20, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+    boxes = theme_screen_boxes(editor)
+    for action, box in boxes.items():
+        if action == "back":
+            draw_styled_text_button(text_cache, box, "BACK")
+        elif action in ("new", "save", "previous", "next"):
+            label = {"new": "NEW THEME", "save": "SAVE THEME",
+                     "previous": "PREVIOUS", "next": "NEXT"}[action]
+            draw_styled_text_button(text_cache, box, label)
+        elif action.startswith("section:"):
+            name = action.split(":")[1]
+            label = {"UNITS": "UNITS & TEXT SIZE", "SIDEBAR": "SIDEBAR POSITION"}.get(name, name)
+            draw_styled_text_button(text_cache, box, label, active=editor.section == name)
+        elif action.startswith("theme:"):
+            index = editor.page * 7 + int(action.split(":")[1])
+            if index < len(editor.themes):
+                item = editor.themes[index]
+                visual = draw_styled_button_frame(box, active=item["id"] == editor.library.active_id)
+                draw_text(text_cache, box[0] + 12, (box[1] + box[3]) / 2,
+                          button_label_for_box(text_cache, item["name"], box),
+                          visual.text, 13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+        elif action.startswith(("edit:", "delete:")):
+            index = editor.page * 7 + int(action.split(":")[1])
+            if index < len(editor.themes):
+                deleting = action.startswith("delete:")
+                draw_styled_text_button(
+                    text_cache, box, "DELETE" if deleting else "EDIT",
+                    danger=deleting and editor.confirm_delete_id == editor.themes[index]["id"],
+                )
+        elif action.startswith("option:"):
+            name = action.split(":")[1]
+            selected = (name == theme["sidebar"] or name == theme["units"]
+                        or name == ("rounded" if theme["radius"] else "straight"))
+            label = {"straight": "STRAIGHT CORNERS", "rounded": "ROUND CORNERS"}.get(name, name)
+            draw_styled_text_button(text_cache, box, label, active=selected)
+        elif action.startswith("group:"):
+            index = int(action.split(":")[1])
+            draw_styled_text_button(text_cache, box, COLOR_GROUPS[index][0], active=editor.color_group == index)
+        elif action.startswith("color:"):
+            index = int(action.split(":")[1])
+            key = COLOR_GROUPS[editor.color_group][1][index]
+            draw_styled_button_frame(box)
+            draw_text(text_cache, box[0] + 12, box[1] + 20, key.replace("_", " ").upper(),
+                      active_colors.text, 13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+            swatch = tuple(theme["colors"][key])
+            draw_logical_rounded_rect(box[2] - 68, box[1] + 8, box[2] - 12, box[3] - 8,
+                                      4, (*swatch[:3], 255), active_colors.border)
+            draw_text(text_cache, box[0] + 12, box[1] + 45,
+                      theme_system.color_hex(swatch), active_colors.secondary_text,
+                      13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+        elif action.startswith(("hex:", "name:")):
+            draw_styled_text_button(text_cache, box, action.split(":")[1])
+        elif action.startswith("text:"):
+            label = {"text:smaller": "SMALLER", "text:larger": "LARGER",
+                     "text:reset": "RESET TEXT SIZE TO 100%"}[action]
+            draw_styled_text_button(text_cache, box, label)
+        elif action.startswith("swatch:"):
+            swatches = ((255, 255, 255), (0, 0, 0), (160, 160, 160), (115, 255, 177))
+            rgb = swatches[int(action.split(":")[1])]
+            draw_logical_rounded_rect(*box, 8, (*rgb, 255), active_colors.border)
+    if editor.mode == "edit":
+        if editor.section == "STYLE":
+            draw_text(text_cache, 536, 96, "BUTTON CORNERS", active_colors.section_heading,
+                      13, True, False, "lm")
+        elif editor.section == "SIDEBAR":
+            draw_text(text_cache, 536, 96, "SIDEBAR POSITION", active_colors.section_heading,
+                      13, True, False, "lm")
+        elif editor.section == "UNITS":
+            draw_text(text_cache, 536, 96, "DISTANCE AND TEMPERATURE", active_colors.section_heading,
+                      13, True, False, "lm")
+            draw_text(text_cache, 536, 270, "ALL APP TEXT", active_colors.section_heading,
+                      13, True, False, "lm")
+            draw_text(text_cache, 768, 305, f"{theme['text_scale_percent']}%",
+                      active_colors.text, 24, True, False, "cm")
+            draw_text(text_cache, 1000, 270, "80–120%", active_colors.secondary_text,
+                      13, True, False, "rm")
+        elif editor.section == "COLORS" and editor.color_key:
+            draw_text(text_cache, 536, 100, editor.color_key.replace("_", " ").upper(),
+                      active_colors.section_heading, 13, True, False, "lm")
+            draw_text(text_cache, 536, 132, "#" + editor.hex_value, active_colors.text,
+                      22, True, True, "lm")
+            current_color = theme["colors"][editor.color_key]
+            draw_logical_rounded_rect(916, 116, 1000, 160, 4,
+                                      (*current_color[:3], 255), active_colors.border)
+        elif editor.section == "NAME":
+            draw_text(text_cache, 536, 102, "NAME: " + theme["name"], active_colors.text,
+                      18, True, False, "lm")
+    # Representative live instruments use the draft palette without changing
+    # the operating receiver until SAVE THEME is tapped.
+    px0, px1 = 24, 488
+    def preview_size(size):
+        return max(1, round(size * theme["text_scale_percent"] /
+                            theme_system.runtime_theme["text_scale_percent"]))
+    draw_logical_rect(px0, 82, px1, 742, colors["sidebar"])
+    draw_text(text_cache, (px0 + px1) / 2, 139, "1.088.900", colors["frequency"],
+              preview_size(36), True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    draw_text(text_cache, (px0 + px1) / 2, 177, "MW  AM", colors["secondary_text"],
+              preview_size(13), True, False, "cm")
+    draw_logical_rect(px0 + 16, 218, px1 - 16, 304, colors["section_surface"])
+    draw_text(text_cache, px0 + 24, 237, "S-METER", colors["section_heading"], preview_size(13), True, False, "lm")
+    for index in range(35):
+        x = px0 + 24 + index * 11.7
+        draw_logical_rect(x, 258, x + 8, 284,
+                          colors["meter_on"] if index < 19 else colors["meter_off"])
+    for index, (label, fill_key, border_key) in enumerate((
+        ("NORMAL", "surface", "border"),
+        ("ACTIVE", "active_surface", "active_border"),
+        ("SELECTED", "selected_surface", "selected_border"),
+        ("PRESSED", "pressed_surface", "pressed_border"),
+    )):
+        left = px0 + 24 + index * 106
+        draw_logical_rounded_rect(left, 330, left + 98, 394,
+                                  theme["radius"], colors[fill_key], colors[border_key])
+        draw_text(text_cache, left + 49, 350, label, colors["text"],
+                  preview_size(11 if len(label) > 6 else 13), True, False, "cm")
+        draw_text(text_cache, left + 49, 373, "SUBTITLE", colors["secondary_text"],
+                  preview_size(11), True, False, "cm")
+    draw_logical_rect(px0 + 24, 414, px1 - 24, 478, colors["background"])
+    draw_logical_rect(px0 + 183, 414, px0 + 272, 478, colors["passband_fill"])
+    draw_logical_line(px0 + 183, 414, px0 + 183, 478, colors["passband_border"], 1)
+    draw_logical_line(px0 + 272, 414, px0 + 272, 478, colors["passband_border"], 1)
+    draw_logical_line(px0 + 227, 414, px0 + 227, 478, colors["passband_center"], 1)
+    draw_text(text_cache, px0 + 24, 530, "ZOOM  24x", colors["notice"],
+              preview_size(22), True, True, "lm")
+    draw_text(text_cache, px1 - 24, 530,
+              theme_system.display_distance(100, theme) + "   " + theme_system.display_temperature(40, theme),
+              colors["secondary_text"], preview_size(16), True, False, "rm")
+    mini_x0, mini_x1 = px0 + 24, px1 - 24
+    mini_y0, mini_y1 = 584, 726
+    rail_preview = (
+        (mini_x0, mini_y0, mini_x0 + 104, mini_y1)
+        if theme["sidebar"] == "left"
+        else (mini_x1 - 104, mini_y0, mini_x1, mini_y1)
+    )
+    draw_logical_rect(mini_x0, mini_y0, mini_x1, mini_y1, colors["background"])
+    draw_logical_rect(*rail_preview, colors["sidebar"])
+    for x0, y0, x1, y1 in (
+        (mini_x0, mini_y0, mini_x1, mini_y0),
+        (mini_x0, mini_y1, mini_x1, mini_y1),
+        (mini_x0, mini_y0, mini_x0, mini_y1),
+        (mini_x1, mini_y0, mini_x1, mini_y1),
+    ):
+        draw_logical_line(x0, y0, x1, y1, colors["section_border"], 1)
+    for x0, y0, x1, y1 in (
+        (rail_preview[0], rail_preview[1], rail_preview[2], rail_preview[1]),
+        (rail_preview[0], rail_preview[3], rail_preview[2], rail_preview[3]),
+        (rail_preview[0], rail_preview[1], rail_preview[0], rail_preview[3]),
+        (rail_preview[2], rail_preview[1], rail_preview[2], rail_preview[3]),
+    ):
+        draw_logical_line(x0, y0, x1, y1, colors["section_border"], 1)
+    draw_text(text_cache, (rail_preview[0] + rail_preview[2]) / 2, (mini_y0 + mini_y1) / 2,
+              "RAIL", colors["text"], preview_size(12), True, False, "cm")
+    screen_center = (mini_x0 + mini_x1 + (104 if theme["sidebar"] == "left" else -104)) / 2
+    draw_text(text_cache, screen_center, (mini_y0 + mini_y1) / 2, "SCREEN", colors["secondary_text"],
+              preview_size(12), True, False, "cm")
 
 
 def lcd_radio_drawer_close_box():
@@ -15346,9 +15795,8 @@ def lcd_nav_top(item_count=None, has_back=False):
     """Bottom-align only the rows actually present in this rail view."""
     item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
     rows = math.ceil((item_count - int(has_back)) / 2)
-    tiles_h = rows * LCD_NAV_TILE_H + (rows - 1) * LCD_NAV_GAP
-    # The last square row uses the same gutter above BACK as the gaps within
-    # the square grid, so the five-button group reads as one unit.
+    tile_height = LCD_NAV_TILE_H
+    tiles_h = rows * tile_height + (rows - 1) * LCD_NAV_GAP
     bottom = (
         lcd_drawer_back_box()[1] - LCD_NAV_GAP
         if has_back else lcd_rail_bottom() - 8
@@ -15474,16 +15922,18 @@ def compact_band_context_touch_box():
 
 def main_band_context_box(text_cache, freq_khz, font_family=VFO_FONT_FAMILY, position="middle"):
     """Keep each band label on the frequency and S-meter center line."""
-    freq_box = frequency_display_box(text_cache, freq_khz, font_family, position)
+    freq_box = frequency_display_box(text_cache, freq_khz, font_family, position, mirrored=False)
     if position == "left":
-        meter_box = left_smeter_box(text_cache, freq_khz, font_family)
+        meter_box = left_smeter_box(text_cache, freq_khz, font_family, mirrored=False)
         x0 = meter_box[2] + 8
-        return x0, 24, min(rf_canvas_width() - 12, x0 + 176), 53
+        box = (x0, 24, min(rf_canvas_width() - 12, x0 + 176), 53)
+        return mirror_rf_box(box) if mirror_top_instruments() else box
     x1 = freq_box[0] - 12
     x0 = max(HOME_BOX[2] + 14, x1 - 142)
     # draw_band_context_chip adds a 0.5 px text offset; this centers the
     # MIDDLE label on the large frequency's 39 px line.
-    return x0, 24, x1, 53
+    box = (x0, 24, x1, 53)
+    return mirror_rf_box(box) if mirror_top_instruments() else box
 
 
 def draw_band_context_chip(text_cache, box, freq_khz, mode, compact=False):
@@ -15492,7 +15942,7 @@ def draw_band_context_chip(text_cache, box, freq_khz, mode, compact=False):
     label, _kind = frequency_band_context(freq_khz, mode)
     # The band label identifies context; it should never compete with the
     # frequency by looking like a coloured button or a separate status lamp.
-    color = (171, 178, 181) if compact else (188, 195, 197)
+    color = themed_instrument_color("secondary_text", (171, 178, 181) if compact else (188, 195, 197))
     size = 17 if compact else 18
     draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 0.5, label, color, size, True, False, "cm", family="Liberation Sans")
 
@@ -15610,7 +16060,7 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
     preview_scale = min(1.0, (px1 - px0 - 18) / max(1, preview_width))
     draw_text_scaled_x(
         text_cache, px1 - 9, (py0 + py1) / 2, frequency_text,
-        BIG_FREQUENCY_COLOR, preview_size, preview_scale,
+        APP_UI_STYLE.palette.frequency, preview_size, preview_scale,
         bold=True, anchor="rm", family=family,
     )
 
@@ -15684,15 +16134,16 @@ def lcd_compact_smeter_box():
 def left_smeter_trace_x(text_cache, freq_khz, font_family=None):
     """Start the MIDDLE-style meter beside the LEFT frequency readout."""
     frequency_right = frequency_display_box(
-        text_cache, freq_khz, font_family, position="left",
+        text_cache, freq_khz, font_family, position="left", mirrored=False,
     )[2]
     return max(320, frequency_right + 121)
 
 
-def left_smeter_box(text_cache, freq_khz, font_family=None):
+def left_smeter_box(text_cache, freq_khz, font_family=None, mirrored=None):
     """Protect the horizontal LEFT meter from waterfall tuning taps."""
     trace_x = left_smeter_trace_x(text_cache, freq_khz, font_family)
-    return trace_x - 105, 0, trace_x + SMETER_TRACE_WIDTH + 24, 80
+    box = (trace_x - 105, 0, trace_x + SMETER_TRACE_WIDTH + 24, 80)
+    return mirror_rf_box(box) if (mirror_top_instruments() if mirrored is None else mirrored) else box
 
 
 def lcd_nav_box(index, item_count=None, has_back=False):
@@ -15703,8 +16154,9 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     row = index // 2
     grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
     x0 = LCD_NAV_X0 + (LOGICAL_W - LCD_NAV_X0 - grid_width) / 2 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
-    y0 = lcd_nav_top(item_count, has_back) + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-    return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
+    tile_height = LCD_NAV_TILE_H
+    y0 = lcd_nav_top(item_count, has_back) + row * (tile_height + LCD_NAV_GAP)
+    return x0, y0, x0 + LCD_NAV_TILE_W, y0 + tile_height
 
 
 def lcd_nav_items(settings_open=False, digital_open=False):
@@ -15789,10 +16241,10 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
     mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box(show_compact_readouts)
     status = "MUTE" if muted else main_volume_label(level)
-    status_color = MUTE_ACCENT if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248)
-    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
-    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
-    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    status_color = themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (239, 247, 248))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+    draw_section_divider(x0, y0, x1)
+    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
     mute_visual = draw_styled_button_frame(
         (mute_x0, mute_y0, mute_x1, mute_y1), active=muted,
@@ -15805,10 +16257,10 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
     track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box(show_compact_readouts)
     track_y = (track_y0 + track_y1) / 2
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (20, 34, 42, 235))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, (67, 205, 149, 230))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
     knob_x = track_x0 + (track_x1 - track_x0) * level
-    draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, (233, 247, 248, 255))
+    draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
 
 
 def compact_smeter_label(dbm):
@@ -15828,12 +16280,14 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
     x0, y0, x1, y1 = lcd_home_smeter_box()
     dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     live_segments = smeter_segment_position(dbm)
-    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
-    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
-    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 14, True, False, "rt", family="Liberation Sans")
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
+    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER",
+              APP_UI_STYLE.palette.section_heading,
+              14, True, False, "lt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), themed_instrument_color("smeter_scale", (226, 244, 247)), 17, True, False, "rt", family="Liberation Sans")
+    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", themed_instrument_color("smeter_dbm", (142, 181, 191)), 14, True, False, "rt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 12, x1 - 12
     track_y = y0 + 47
     segment_w = (track_x1 - track_x0) / 36.0
@@ -15843,13 +16297,13 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         active = index + 0.5 <= live_segments
         red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
         if active:
-            color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
+            color = APP_UI_STYLE.palette.meter_hot if red else APP_UI_STYLE.palette.meter_on
         else:
-            color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
+            color = APP_UI_STYLE.palette.meter_off
         draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
     for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
         lx = track_x0 + (track_x1 - track_x0) * position / 36.0
-        draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, lx, y1 - 10, label, themed_instrument_color("smeter_dbm", (138, 166, 176)), 10, True, False, "cm", family="Liberation Sans")
 
 
 def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASSBAND"):
@@ -15868,14 +16322,14 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
 
     low_x, high_x = cut_x(low_cut), cut_x(high_cut)
     width_hz = max(0.0, high_cut - low_cut)
-    fill = (42, 154, 176, 88)
-    edge = (113, 234, 240, 238)
-    grid = (87, 125, 138, 132)
-    quiet = (174, 203, 208)
-    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
-    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
+    fill = APP_UI_STYLE.palette.home_passband_fill
+    edge = APP_UI_STYLE.palette.home_passband_border
+    grid = themed_instrument_color("section_border", (87, 125, 138, 132))
+    quiet = APP_UI_STYLE.palette.section_heading
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+    draw_section_divider(x0, y0, x1)
     draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", themed_instrument_color("secondary_text", (180, 214, 220)), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
     # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
     for index in range(-5, 6):
@@ -15883,7 +16337,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
         major = index in (-5, 0, 5)
         tick_h = 10 if major else 5
         draw_logical_line(x, plot_y, x, plot_y - tick_h, (grid[0], grid[1], grid[2], 206 if major else 126), 1 if not major else 1.5)
-    draw_logical_line(plot_x0, plot_y, plot_x1, plot_y, (107, 151, 162, 188), 1)
+    draw_logical_line(plot_x0, plot_y, plot_x1, plot_y, themed_instrument_color("section_border", (107, 151, 162, 188)), 1)
     # Raise the trace from 23 to 29 logical pixels above its baseline: a
     # 25% taller passband silhouette without changing the panel or labels.
     top_y = y0 + 32
@@ -15902,15 +16356,15 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, (238, 202, 96, 232), 1.5)
+    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, APP_UI_STYLE.palette.home_passband_center, 1.5)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
-        draw_text(text_cache, x, y1 - 8, label, (137, 171, 181), 12, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
     draw_text(
         text_cache,
         center_x,
         y0 + 21,
         f"{width_hz / 1000.0:.1f} kHz",
-        (214, 240, 242),
+        themed_instrument_color("text", (214, 240, 242)),
         14,
         True,
         False,
@@ -16013,15 +16467,15 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
-    draw_text(text_cache, x0 + 10, label_y, "SHIFT", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, shift_label, (113, 236, 190), 17, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 39, 47, 248))
+    draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], 17, True, False, "rm", family="Liberation Sans")
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
     zero_x = (track_x0 + track_x1) / 2
-    draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, (241, 193, 82, 248), 2)
-    draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, (77, 126, 139, 188), 1)
-    draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, (77, 126, 139, 188), 1)
-    draw_logical_rect(min(zero_x, knob_x), track_y - SLIDER_STEM_HALF_HEIGHT, max(zero_x, knob_x), track_y + SLIDER_STEM_HALF_HEIGHT, (76, 214, 170, 184))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (231, 247, 247, 255))
+    draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, themed_instrument_color("slider_marker", (241, 193, 82, 248)), 2)
+    draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
+    draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
+    draw_logical_rect(min(zero_x, knob_x), track_y - SLIDER_STEM_HALF_HEIGHT, max(zero_x, knob_x), track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (76, 214, 170, 184)))
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
 
 
 def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
@@ -16032,14 +16486,14 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     track_y = y1 - 14
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_text(text_cache, x0 + 10, label_y, "WIDTH", (221, 241, 243), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), (110, 222, 242), 17, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, (22, 39, 47, 248))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, (84, 188, 226, 184))
+    draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], 17, True, False, "rm", family="Liberation Sans")
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
+    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (84, 188, 226, 184)))
     for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
         mark_x = track_x0 + (track_x1 - track_x0) * fraction_mark
-        draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, (98, 154, 170, 156), 1)
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (231, 247, 247, 255))
+        draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, themed_instrument_color("slider_marker", (98, 154, 170, 156)), 1)
+    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
 
 
 def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
@@ -16055,7 +16509,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
     draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
     draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
-    draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", (169, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", themed_instrument_color("section_heading", (169, 203, 208)), 13, True, False, "lm", family="Liberation Sans")
     current_preset = filter_preset_index(width_hz)
     for index, (name, preset_width_hz, box) in enumerate(boxes["presets"]):
         active = current_preset == index or (
@@ -16074,9 +16528,31 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_sidebar_header(text_cache, "PASSBAND")
 
 
+NAV_STATUS_LED_RADIUS = 3.5
+NAV_STATUS_LED_INSET = 10
+
+
+def draw_nav_status_led(box, active):
+    """Draw the common instrument lamp used by Home and decoder tiles."""
+    _x0, y0, x1, _y1 = box
+    led_x = round(x1 - NAV_STATUS_LED_INSET)
+    led_y = round(y0 + NAV_STATUS_LED_INSET)
+    draw_logical_circle(
+        led_x, led_y, NAV_STATUS_LED_RADIUS,
+        APP_UI_STYLE.palette.ready if active else (18, 24, 22, 255),
+        segments=20,
+    )
+    draw_logical_circle(
+        led_x, led_y, NAV_STATUS_LED_RADIUS,
+        (126, 255, 178, 210) if active else APP_UI_STYLE.palette.border,
+        segments=20, outline=True, width=1,
+    )
+
+
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
                         digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle",
-                        active_decoders=(), running_decoder_count=0, decoder_counts=None):
+                        active_decoders=(), running_decoder_count=0, decoder_counts=None,
+                        receiver_playing=False, captions_running=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
@@ -16088,6 +16564,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DIGI")
     items = lcd_nav_items(settings_open, digital_open)
+    home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
     # the mode annunciators, so the mode surface can never cover them.
     for index, (kind, label) in enumerate(items):
@@ -16098,21 +16575,28 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
-        if items is MENU_ITEMS and kind == "digital" and running_decoder_count > 0:
-            subtitle = f"{running_decoder_count} {subtitle}"
+        subtitle = (HOME_MENU_SUBTITLES.get(kind, "") if home_items else
+                    SETTINGS_MENU_SUBTITLES.get(kind, "") if settings_open else "")
+        if home_items and kind == "digital" and running_decoder_count > 0:
+            label = f"{running_decoder_count} {label}"
         if subtitle:
-            draw_styled_two_line_button(text_cache, nav_box, label, subtitle)
+            draw_styled_two_line_button(text_cache, nav_box, label, subtitle,
+                                        fit_full_subtitle=True)
         else:
             count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
             button_label = f"{count} {label}" if count > 0 else label
             draw_styled_text_button(text_cache, nav_box, button_label)
+        if home_items and kind in ("rx", "digital", "vosc"):
+            led_active = {
+                "rx": receiver_playing,
+                "digital": running_decoder_count > 0,
+                "vosc": captions_running,
+            }[kind]
+            # A physical-instrument lamp: dark when idle, green with a quiet
+            # rim when its background process is genuinely running.
+            draw_nav_status_led(nav_box, led_active)
         if digital_open and kind in active_decoders:
-            center_x = (bx0 + bx1) / 2
-            draw_logical_circle(
-                center_x, by0 + 47, 3, APP_UI_STYLE.palette.ready,
-                segments=16,
-            )
+            draw_nav_status_led(nav_box, True)
 
 
 def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
@@ -16120,24 +16604,24 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
     meter_x0, meter_y0, meter_x1, meter_y1 = box
     meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     meter_level = smeter_segment_position(meter_value)
-    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (11, 20, 27, 255))
-    draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (112, 136, 146, 255), 1)
-    draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", (190, 218, 223), 13, True, False, "rm", family="Liberation Sans")
+    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, APP_UI_STYLE.palette.section_surface)
+    draw_section_divider(meter_x0, meter_y0, meter_x1)
+    draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", themed_instrument_color("smeter_dbm", (190, 218, 223)), 13, True, False, "rm", family="Liberation Sans")
     meter_track_x0 = meter_x0 + ((meter_x1 - meter_x0) - (35 * 4.65 + 34 * 2)) / 2
     meter_track_y = meter_y0 + 25
     for index in range(35):
         sx0 = meter_track_x0 + index * (4.65 + 2)
         sx1 = sx0 + 4.65
         active = index + 0.5 <= meter_level
-        color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
+        color = APP_UI_STYLE.palette.meter_on if index < 28 else APP_UI_STYLE.palette.meter_hot
         draw_logical_rect(
             sx0, meter_track_y, sx1, meter_track_y + 26,
-            color if active else (31, 52, 61, 208),
+            color if active else APP_UI_STYLE.palette.meter_off,
         )
     for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
         lx = max(meter_x0 + 14, meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0)
-        color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
+        color = APP_UI_STYLE.palette.smeter_hot[:3] if label in ("S9", "+20") else themed_instrument_color("smeter_dbm", (151, 183, 191))[:3]
         draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
 
@@ -16310,12 +16794,12 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
         draw_sidebar_header(text_cache, "VOSC")
         draw_lcd_drawer_heading(text_cache, boxes["field"][0] + 4, 88, "DEEPGRAM API KEY")
         field = boxes["field"]
-        draw_logical_rect(*field, (11, 20, 27, 255) if not error else (72, 36, 32, 255))
-        draw_logical_line(field[0], field[1], field[2], field[1], (112, 136, 146, 255), 1)
+        draw_logical_rect(*field, themed_instrument_color("section_surface", (11, 20, 27, 255)) if not error else themed_instrument_color("danger", (72, 36, 32, 255)))
+        draw_logical_line(field[0], field[1], field[2], field[1], themed_instrument_color("section_border", (112, 136, 146, 255)), 1)
         masked = "*" * min(len(value), 22) + ("..." if len(value) > 22 else "")
         field_text = masked or ("TAP TO PASTE OR TYPE" if DESKTOP_MODE else "ENTER KEY BELOW")
         draw_text(text_cache, field[0] + 8, (field[1] + field[3]) / 2,
-                  field_text, (229, 241, 243) if value else (145, 171, 174),
+                  field_text, themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174)),
                   13, bool(value), False, "lm", family=APP_UI_STYLE.button.font_family)
         mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
         for action, box in boxes["actions"].items():
@@ -16325,16 +16809,16 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
             draw_styled_text_button(text_cache, box, "DEL" if key == "BACK" else key)
         if error:
             draw_text(text_cache, field[0] + 4, 562, "ERROR",
-                      (72, 255, 122), 13, True, False, "lm",
+                      themed_instrument_color("notice", (72, 255, 122)), 13, True, False, "lm",
                       family=APP_UI_STYLE.button.font_family)
             draw_text(text_cache, field[0] + 4, 586,
                       fit_station_text(text_cache, error.upper(), 228, 13, False, False,
                                        family=APP_UI_STYLE.button.font_family),
-                      (72, 255, 122), 13, False, False, "lm",
+                      themed_instrument_color("notice", (72, 255, 122)), 13, False, False, "lm",
                       family=APP_UI_STYLE.button.font_family)
         else:
             draw_text(text_cache, field[0] + 4, 562, "SAVED LOCALLY ON THIS DEVICE",
-                      (174, 203, 208), 13, False, False, "lm",
+                      themed_instrument_color("secondary_text", (174, 203, 208)), 13, False, False, "lm",
                       family=APP_UI_STYLE.button.font_family)
         draw_radio_close_button(text_cache, boxes["close"])
         return
@@ -16342,8 +16826,8 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
     draw_logical_line(x0, y0, x1, y0, (103, 215, 210, 188), 1)
-    draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", (224, 241, 243), 20, True, False, "lm", family="Cantarell")
-    draw_text(text_cache, x1 - 28, y0 + 23, "LOCAL ONLY", (116, 184, 183), 13, False, False, "rm", family="Cantarell")
+    draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", themed_instrument_color("section_heading", (224, 241, 243)), 20, True, False, "lm", family="Cantarell")
+    draw_text(text_cache, x1 - 28, y0 + 23, "LOCAL ONLY", themed_instrument_color("secondary_text", (116, 184, 183)), 13, False, False, "rm", family="Cantarell")
     field_color = (48, 75, 80, 246) if not error else (90, 47, 42, 246)
     draw_logical_rect(*DEEPGRAM_KEY_FIELD_BOX, field_color)
     draw_logical_line(DEEPGRAM_KEY_FIELD_BOX[0], DEEPGRAM_KEY_FIELD_BOX[1], DEEPGRAM_KEY_FIELD_BOX[2], DEEPGRAM_KEY_FIELD_BOX[1], (132, 190, 190, 184), 1)
@@ -16353,7 +16837,7 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
         if DESKTOP_MODE
         else "Touch keys to enter your key"
     )
-    field_color = (229, 241, 243) if value else (145, 171, 174)
+    field_color = themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174))
     draw_text(text_cache, DEEPGRAM_KEY_FIELD_BOX[0] + 14, (DEEPGRAM_KEY_FIELD_BOX[1] + DEEPGRAM_KEY_FIELD_BOX[3]) / 2, field_text, field_color, 19, False, False, "lm", family="Cantarell")
     mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
     draw_picker_button(text_cache, DEEPGRAM_KEY_MODE_BOX, mode_label, 15, mode != "lower")
@@ -16369,7 +16853,7 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
         if DESKTOP_MODE
         else "Saved only on this device. The key is never shown again."
     )
-    draw_text(text_cache, x0 + 30, y1 - 18, message, (246, 163, 116) if error else (124, 184, 187), 14, False, False, "lm", family="Cantarell")
+    draw_text(text_cache, x0 + 30, y1 - 18, message, themed_instrument_color("waiting", (246, 163, 116)) if error else themed_instrument_color("secondary_text", (124, 184, 187)), 14, False, False, "lm", family="Cantarell")
     draw_keyboard_modal_sidebar(text_cache, "ASR", "DEEPGRAM API KEY")
 
 
@@ -16448,8 +16932,8 @@ def network_password_key_at(x, y, mode, caps=False):
 def draw_network_password_eye(box, revealed):
     """Draw a compact eye toggle that remains legible over the dark field."""
     x0, y0, x1, y1 = box
-    color = (116, 238, 189, 245) if revealed else (171, 205, 209, 220)
-    draw_logical_rect(x0, y0, x1, y1, (16, 50, 55, 238) if revealed else (10, 28, 35, 238))
+    color = themed_instrument_color("ready", (116, 238, 189, 245)) if revealed else themed_instrument_color("secondary_text", (171, 205, 209, 220))
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("active_surface", (16, 50, 55, 238)) if revealed else themed_instrument_color("section_surface", (10, 28, 35, 238)))
     draw_logical_line(x0, y0, x1, y0, (*color[:3], 170), 1)
     draw_logical_line(x0, y1, x1, y1, (*color[:3], 120), 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -16458,7 +16942,7 @@ def draw_network_password_eye(box, revealed):
     draw_logical_polyline(eye, color, 1.7)
     draw_logical_circle(cx, cy, 4.2, color, 18, True)
     if revealed:
-        draw_logical_line(cx - 22, cy + 14, cx + 22, cy - 14, (225, 241, 243, 235), 2)
+        draw_logical_line(cx - 22, cy + 14, cx + 22, cy - 14, themed_instrument_color("text", (225, 241, 243, 235)), 2)
 
 
 def network_status_text(device):
@@ -16472,15 +16956,15 @@ def draw_network_status_card(text_cache, box, label, device, preferred):
     x0, y0, x1, y1 = box
     state, connection, address = network_status_text(device or {})
     active = state == "CONNECTED"
-    edge = (83, 229, 165, 220) if active else (117, 140, 151, 110)
-    fill = (10, 35, 34, 236) if active else (13, 23, 30, 232)
+    edge = themed_instrument_color("active_border", (83, 229, 165, 220)) if active else themed_instrument_color("section_border", (117, 140, 151, 110))
+    fill = themed_instrument_color("active_surface", (10, 35, 34, 236)) if active else themed_instrument_color("section_surface", (13, 23, 30, 232))
     draw_logical_rect(x0, y0, x1, y1, fill)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
-    draw_text(text_cache, x0 + 20, y0 + 24, label, (225, 241, 243), 21, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 20, y0 + 24, "PRIMARY" if preferred else "STANDBY", (105, 238, 177) if active else (143, 169, 173), 14, True, False, "rm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 62, connection, (112, 229, 169) if active else (162, 182, 185), 16, False, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 103, address, (206, 225, 228), 22, True, True, "lm")
+    draw_text(text_cache, x0 + 20, y0 + 24, label, themed_instrument_color("text", (225, 241, 243)), 21, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 20, y0 + 24, "PRIMARY" if preferred else "STANDBY", themed_instrument_color("ready", (105, 238, 177)) if active else themed_instrument_color("secondary_text", (143, 169, 173)), 14, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 20, y0 + 62, connection, themed_instrument_color("ready", (112, 229, 169)) if active else themed_instrument_color("secondary_text", (162, 182, 185)), 16, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 20, y0 + 103, address, themed_instrument_color("text", (206, 225, 228)), 22, True, True, "lm")
 
 
 def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
@@ -16488,59 +16972,59 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
     x0, y0, x1, y1 = boxes["panel"]
     devices = snapshot.get("devices") or {}
     networks = snapshot.get("networks") or []
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 8, 12, 196))
-    draw_logical_rect(x0, y0, x1, y1, (7, 18, 25, 248))
-    draw_logical_line(x0, y0, x1, y0, (93, 205, 192, 205), 2)
-    draw_text(text_cache, x0 + 20, y0 + 35, "NETWORK", (230, 245, 247), 26, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 66, "ETHERNET PREFERRED  ·  WI-FI AUTOMATIC BACKUP", (121, 187, 184), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 91, "SELECT A WI-FI NETWORK, THEN ENTER ITS KEY", (171, 220, 215), 14, True, False, "lm", family="Liberation Sans")
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, themed_instrument_color("footer_background", (2, 8, 12, 196)))
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (7, 18, 25, 248)))
+    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (93, 205, 192, 205)), 2)
+    draw_text(text_cache, x0 + 20, y0 + 35, "NETWORK", themed_instrument_color("text", (230, 245, 247)), 26, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 20, y0 + 66, "ETHERNET PREFERRED  ·  WI-FI AUTOMATIC BACKUP", themed_instrument_color("secondary_text", (121, 187, 184)), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 20, y0 + 91, "SELECT A WI-FI NETWORK, THEN ENTER ITS KEY", themed_instrument_color("secondary_text", (171, 220, 215)), 14, True, False, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO SETTINGS")
     draw_network_status_card(text_cache, boxes["ethernet"], "ETHERNET", devices.get("eth0"), True)
     draw_network_status_card(text_cache, boxes["wifi"], "WI-FI", devices.get("wlan0"), False)
     lx0, ly0, lx1, ly1 = boxes["list"]
-    draw_text(text_cache, lx0, ly0 + 14, "WI-FI NETWORKS", (207, 232, 234), 18, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, lx0, ly0 + 14, "WI-FI NETWORKS", themed_instrument_color("section_heading", (207, 232, 234)), 18, True, False, "lm", family="Liberation Sans")
     scanning = bool(snapshot.get("scanning"))
     status_label = "SCANNING..." if scanning else ("UPDATING..." if busy else f"{len(networks)} FOUND")
-    draw_text(text_cache, lx1, ly0 + 14, status_label, (109, 235, 178) if scanning else (145, 184, 189), 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, lx1, ly0 + 14, status_label, themed_instrument_color("ready", (109, 235, 178)) if scanning else themed_instrument_color("secondary_text", (145, 184, 189)), 13, True, False, "rm", family="Liberation Sans")
     scan_boxes = network_scan_boxes(networks)
     for network, box in zip(networks, scan_boxes):
         bx0, by0, bx1, by1 = box
         selected = network.get("ssid") == selected_ssid
         active = bool(network.get("active"))
-        draw_logical_rect(bx0, by0, bx1, by1, (24, 65, 58, 236) if selected else (14, 31, 40, 230))
-        edge = (104, 236, 177, 246) if selected else ((72, 212, 156, 184) if active else (95, 125, 136, 120))
+        draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("selected_surface", (24, 65, 58, 236)) if selected else themed_instrument_color("section_surface", (14, 31, 40, 230)))
+        edge = themed_instrument_color("selected_border", (104, 236, 177, 246)) if selected else (themed_instrument_color("active_border", (72, 212, 156, 184)) if active else themed_instrument_color("section_border", (95, 125, 136, 120)))
         for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
             draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
         ssid = fit_station_text(text_cache, str(network.get("ssid", "")), bx1 - bx0 - 26, 17, True, False, family="Liberation Sans")
-        draw_text(text_cache, bx0 + 13, by0 + 21, ssid, (232, 246, 247), 17, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 13, by0 + 21, ssid, themed_instrument_color("text", (232, 246, 247)), 17, True, False, "lm", family="Liberation Sans")
         security = "LOCKED" if network.get("security") not in ("", "--") else "OPEN"
         detail = "SELECTED - ENTER WI-FI KEY" if selected else f"{network.get('signal', 0):.0f}%  {security}"
-        draw_text(text_cache, bx0 + 13, by1 - 16, detail, (109, 233, 177) if selected or active else (158, 188, 193), 13, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, bx0 + 13, by1 - 16, detail, themed_instrument_color("ready", (109, 233, 177)) if selected or active else themed_instrument_color("secondary_text", (158, 188, 193)), 13, True, False, "lm", family="Liberation Sans")
     if not networks and not busy:
-        draw_text(text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2, "NO NETWORKS YET", (139, 166, 170), 19, True, False, "cm", family="Liberation Sans")
+        draw_text(text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2, "NO NETWORKS YET", themed_instrument_color("secondary_text", (139, 166, 170)), 19, True, False, "cm", family="Liberation Sans")
     draw_picker_button(text_cache, boxes["rescan"], "SCANNING" if scanning else "RESCAN", 16, scanning)
     join_label = "ENTER WI-FI KEY" if selected_ssid else "SELECT WI-FI"
     draw_picker_button(text_cache, boxes["join"], join_label, 14 if selected_ssid else 15, bool(selected_ssid) and not busy)
     notice = str(snapshot.get("notice") or "Select a network, then enter its Wi-Fi key.")
-    draw_text(text_cache, x0 + 408, y1 - 43, fit_station_text(text_cache, notice, x1 - (x0 + 430) - 18, 15, False, False, family="Liberation Sans"), (241, 175, 121) if not snapshot.get("ok") else (156, 194, 197), 15, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 408, y1 - 43, fit_station_text(text_cache, notice, x1 - (x0 + 430) - 18, 15, False, False, family="Liberation Sans"), themed_instrument_color("waiting", (241, 175, 121)) if not snapshot.get("ok") else themed_instrument_color("secondary_text", (156, 194, 197)), 15, False, False, "lm", family="Liberation Sans")
 
 
 def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
     boxes = network_password_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (1, 6, 10, 202))
-    draw_logical_rect(x0, y0, x1, y1, (8, 20, 27, 250))
-    draw_logical_line(x0, y0, x1, y0, (100, 230, 185, 220), 2)
-    draw_text(text_cache, x0 + 26, y0 + 30, "JOIN WI-FI", (229, 246, 247), 24, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 26, y0 + 57, fit_station_text(text_cache, ssid, x1 - x0 - 52, 19, False, False, family="Liberation Sans"), (112, 237, 178), 19, False, False, "lm", family="Liberation Sans")
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, themed_instrument_color("footer_background", (1, 6, 10, 202)))
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (8, 20, 27, 250)))
+    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (100, 230, 185, 220)), 2)
+    draw_text(text_cache, x0 + 26, y0 + 30, "JOIN WI-FI", themed_instrument_color("text", (229, 246, 247)), 24, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 26, y0 + 57, fit_station_text(text_cache, ssid, x1 - x0 - 52, 19, False, False, family="Liberation Sans"), themed_instrument_color("ready", (112, 237, 178)), 19, False, False, "lm", family="Liberation Sans")
     fx0, fy0, fx1, fy1 = boxes["field"]
-    draw_logical_rect(fx0, fy0, fx1, fy1, (4, 12, 17, 246))
-    draw_logical_line(fx0, fy0, fx1, fy0, (84, 153, 152, 185), 1)
+    draw_logical_rect(fx0, fy0, fx1, fy1, themed_instrument_color("section_surface", (4, 12, 17, 246)))
+    draw_logical_line(fx0, fy0, fx1, fy0, themed_instrument_color("section_border", (84, 153, 152, 185)), 1)
     field_text = (value if revealed else "*" * len(value)) or ("WI-FI PASSWORD" if placeholder_visible else "")
     field_size = 32 if value else 20
     field_width = boxes["reveal"][0] - fx0 - 28
     rendered_text = fit_station_text(text_cache, field_text, field_width, field_size, False, False, family="Liberation Sans")
-    draw_text(text_cache, fx0 + 14, (fy0 + fy1) / 2, rendered_text, (226, 241, 243) if value else (130, 163, 167), field_size, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, fx0 + 14, (fy0 + fy1) / 2, rendered_text, themed_instrument_color("text", (226, 241, 243)) if value else themed_instrument_color("secondary_text", (130, 163, 167)), field_size, False, False, "lm", family="Liberation Sans")
     draw_network_password_eye(boxes["reveal"], revealed)
     draw_picker_button(text_cache, boxes["mode"], "123" if mode != "symbols" else "ABC", 16)
     draw_picker_button(text_cache, boxes["caps"], "CAPS", 16, caps and mode != "symbols")
@@ -16552,7 +17036,7 @@ def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, e
             box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 58)
             draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 14 if key == "<" else 22)
     message = error or "Password stays on this Pi only. Ethernet remains preferred."
-    draw_text(text_cache, x0 + 26, y1 - 18, message, (244, 165, 117) if error else (143, 183, 187), 14, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 26, y1 - 18, message, themed_instrument_color("waiting", (244, 165, 117)) if error else themed_instrument_color("secondary_text", (143, 183, 187)), 14, False, False, "lm", family="Liberation Sans")
     draw_keyboard_modal_sidebar(text_cache, "NETWORK", "WI-FI KEY")
 
 
@@ -16941,9 +17425,36 @@ STATION_LIST_FILL = RECEIVER_LIST_THEME.row_background
 STATION_LIST_OUTLINE = RECEIVER_LIST_THEME.row_outline
 
 
+def refresh_receiver_list_theme():
+    """Keep the legacy receiver-row adapter aligned with the active palette."""
+    global STATION_LIST_FILL, STATION_LIST_OUTLINE
+    palette = APP_UI_STYLE.palette
+    for key, value in (
+        ("main_background", palette.background),
+        ("sidebar_background", palette.sidebar),
+        ("row_background", palette.background),
+        ("selected_background", palette.selected_surface),
+        ("primary_text", palette.text),
+        ("secondary_text", palette.secondary_text),
+        ("focus", palette.focus),
+        ("row_outline", (*palette.border[:3], 210)),
+        ("ready", palette.ready),
+        ("waiting", palette.waiting),
+        ("untested", palette.untested),
+        ("untested_text", palette.untested_text),
+        ("kiwi", palette.focus),
+        ("openwebrx", themed_instrument_color("meter_on", (41, 121, 255, 255))),
+        ("lan", palette.ready),
+        ("fmdx", themed_instrument_color("waiting", (255, 109, 0, 255))),
+    ):
+        object.__setattr__(RECEIVER_LIST_THEME, key, value)
+    STATION_LIST_FILL = RECEIVER_LIST_THEME.row_background
+    STATION_LIST_OUTLINE = RECEIVER_LIST_THEME.row_outline
+
+
 def draw_station_list_frame(box, fill, outline, border_width=1):
     """Draw the common full-border frame used by every receiver-list row."""
-    draw_logical_rounded_rect(*box, 8, fill, outline, border_width)
+    draw_logical_rounded_rect(*box, APP_UI_STYLE.button.radius, fill, outline, border_width)
 
 
 def fit_receiver_name(text_cache, text, max_width, theme=RECEIVER_LIST_THEME):
@@ -17002,7 +17513,7 @@ def draw_receiver_badge(text_cache, x, y, badge, theme=RECEIVER_LIST_THEME,
     height = 28
     color = badge.fill
     draw_logical_rounded_rect(
-        x, y, x + width, y + height, 7,
+        x, y, x + width, y + height, APP_UI_STYLE.button.radius,
         theme.row_background if background is None else background,
         color, 2,
     )
@@ -17161,7 +17672,8 @@ def draw_station_picker(
         fill = APP_UI_STYLE.palette.active_surface if pressed else (theme.selected_background if focused else theme.row_background)
         outline = APP_UI_STYLE.palette.active_border if focused or pressed else theme.row_outline
         if focused and not pressed:
-            draw_logical_rounded_rect(*box, 8, fill, (*APP_UI_STYLE.palette.active_border[:3], 80), 5)
+            draw_logical_rounded_rect(*box, APP_UI_STYLE.button.radius, fill,
+                                      (*APP_UI_STYLE.palette.active_border[:3], 80), 5)
         draw_station_list_frame(box, fill, outline, 2 if focused or pressed else 1)
         text_color = theme.primary_text
         secondary_color = theme.secondary_text
@@ -17244,12 +17756,13 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None, meter_x0=N
     # horizontal starting point changes beside the selected VFO position.
     meter_x0 = 675 + smeter_x_offset if meter_x0 is None else meter_x0
     meter_x1 = meter_x0 + SMETER_TRACE_WIDTH
-    green = (222, 255, 228, 255)
-    red = (230, 20, 42, 255)
-    rail = (160, 178, 182, 155)
-    tick = (192, 211, 214, 220)
-    blue = (0, 76, 245, 255)
-    dbm_color = (189, 198, 201, 225)
+    smeter_colors = APP_UI_STYLE.palette
+    green = (*smeter_colors.smeter_scale, 255)
+    red = smeter_colors.smeter_hot
+    rail = smeter_colors.smeter_minor
+    tick = smeter_colors.smeter_tick
+    blue = smeter_colors.smeter_active
+    dbm_color = smeter_colors.smeter_dbm
     # The trace is the optical center of one calibrated assembly: S-units
     # above, dBm below. Keep every tick balanced around this datum.
     # The taller desktop scope gives this assembly a little more room below
@@ -17263,7 +17776,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None, meter_x0=N
 
     # Keep the rail deliberately neutral and flat. The calibration and live
     # level are the information; decorative glass treatment obscures both.
-    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, (27, 43, 51, 230), 8)
+    draw_logical_line(meter_x0, trace_y, meter_x1, trace_y, smeter_colors.smeter_rail, 8)
     live_x = clamp(dbx(smeter_dbm), meter_x0, meter_x1)
     # The active trace belongs behind the scale too. The calibrated tick
     # geometry must remain uninterrupted at every level. Blue covers the
@@ -17301,20 +17814,21 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None, meter_x0=N
 
     # A single-line reading is quickest to parse. The scale begins farther
     # right so the large value and its unit do not touch the live trace.
-    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", (194, 211, 214), 31, True, True, "rm")
-    draw_text(text_cache, meter_x0 - 32, trace_y, "dBm", (164, 184, 188), 17, True, True, "lm")
+    draw_text(text_cache, meter_x0 - 35, trace_y, f"{int(round(smeter_dbm))}", themed_instrument_color("smeter_dbm", (194, 211, 214)), 31, True, True, "rm")
+    draw_text(text_cache, meter_x0 - 32, trace_y, "dBm", themed_instrument_color("smeter_dbm", (164, 184, 188)), 17, True, True, "lm")
     draw_logical_circle(
         live_x,
         trace_y - 1,
         6.5,
-        (139, 234, 255, 255) if smeter_dbm < SMETER_PLUS20_DBM else (255, 174, 178, 255),
+        smeter_colors.smeter_marker if smeter_dbm < SMETER_PLUS20_DBM else smeter_colors.smeter_hot,
     )
-    draw_logical_circle(live_x - 1, trace_y - 2.5, 1.6, (237, 254, 255, 245))
+    draw_logical_circle(live_x - 1, trace_y - 2.5, 1.6,
+                        themed_instrument_color("smeter_scale", (237, 254, 255, 245)))
     # The retained peak is a quiet vertical reference, independent from the
     # live marker, so a changing signal remains easy to read at a glance.
     if peak_dbm is not None and peak_dbm > smeter_dbm + 0.75:
         peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
-        draw_logical_line(peak_x, trace_y - 10, peak_x, trace_y + 10, (182, 197, 200, 178), 2)
+        draw_logical_line(peak_x, trace_y - 10, peak_x, trace_y + 10, smeter_colors.smeter_peak, 2)
 
     # Put each lower dBm value directly under its calibrated major bar.
     # The tighter type keeps all seven values readable in the 293 px scale.
@@ -17416,28 +17930,29 @@ def draw_system_annunciator(text_cache, cpu_percent, temp_c, input_power_ok, y, 
     # historical magic x coordinate: the neighbouring CALL and ASR targets
     # have their own lanes and must remain visually distinct.
     x0, _y0, x1, _y1 = CPU_ANNUNCIATOR_BOX
+    stats_color = themed_instrument_color("footer_primary", (118, 218, 229))
     if secondary_y is not None:
         if cpu_percent is not None:
             if input_power_ok is None:
-                draw_text(text_cache, (x0 + x1) / 2, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
+                draw_text(text_cache, (x0 + x1) / 2, y, f"CPU {cpu_percent:.0f}%", stats_color, size, True, False, "cm", alpha, family="Cantarell")
             else:
-                draw_text(text_cache, x0 + 6, y, f"CPU {cpu_percent:.0f}%", (118, 218, 229), max(16, size - 3), True, False, "lm", alpha, family="Cantarell")
+                draw_text(text_cache, x0 + 6, y, f"CPU {cpu_percent:.0f}%", stats_color, max(16, size - 3), True, False, "lm", alpha, family="Cantarell")
         if input_power_ok is not None:
             power_label = "VIN OK" if input_power_ok else "VIN LOW"
-            power_color = (119, 229, 175) if input_power_ok else (255, 105, 88)
+            power_color = APP_UI_STYLE.palette.footer_live if input_power_ok else APP_UI_STYLE.palette.danger_border[:3]
             draw_text(text_cache, x1 - 5, y, power_label, power_color, max(12, size - 6), True, False, "rm", alpha, family="Cantarell")
         if temp_c is not None:
-            draw_text(text_cache, (x0 + x1) / 2, secondary_y, f"{temp_c:.0f}C", (149, 208, 214), max(16, size - 1), True, False, "cm", alpha, family="Cantarell")
+            draw_text(text_cache, (x0 + x1) / 2, secondary_y, theme_system.display_temperature(temp_c, compact=True), themed_instrument_color("footer_primary", (149, 208, 214)), max(16, size - 1), True, False, "cm", alpha, family="Cantarell")
         return
     parts = []
     if cpu_percent is not None:
         parts.append(f"CPU {cpu_percent:.0f}%")
     if temp_c is not None:
-        parts.append(f"{temp_c:.0f}C")
+        parts.append(theme_system.display_temperature(temp_c, compact=True))
     if input_power_ok is not None:
         parts.append("VIN OK" if input_power_ok else "VIN LOW")
     label = fit_station_text(text_cache, " ".join(parts), x1 - x0 - 12, size, True, False, family="Cantarell")
-    draw_text(text_cache, (x0 + x1) / 2, y, label, (118, 218, 229), size, True, False, "cm", alpha, family="Cantarell")
+    draw_text(text_cache, (x0 + x1) / 2, y, label, stats_color, size, True, False, "cm", alpha, family="Cantarell")
 
 
 def format_smeter_readout(smeter_dbm):
@@ -17456,7 +17971,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         return
     if LCD_800_MODE:
         status_x1 = DESKTOP_1280_MAIN_W
-        draw_logical_rect(0, y0, status_x1, y1, (4, 8, 12, int(208 * alpha)))
+        footer_back = APP_UI_STYLE.palette.footer_background
+        draw_logical_rect(0, y0, status_x1, y1, (*footer_back[:3], int(footer_back[3] * alpha)))
         size = 13
         first_y = y0 + 27
         second_y = y0 + 59
@@ -17464,25 +17980,25 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
             text_cache, station_name or "NO RECEIVER", status_x1 - 300,
             size, True, False, family="Liberation Sans",
         )
-        draw_text(text_cache, 18, first_y, server, (162, 175, 179), size,
+        draw_text(text_cache, 18, first_y, server, APP_UI_STYLE.palette.footer_primary, size,
                   True, False, "lm", alpha, family="Liberation Sans")
         buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-        draw_text(text_cache, 18, second_y, buffer_label, (120, 255, 179), size,
+        draw_text(text_cache, 18, second_y, buffer_label, APP_UI_STYLE.palette.footer_live, size,
                   False, False, "lm", alpha, family="Liberation Sans")
         buffer_width = text_cache.font(size, family="Liberation Sans").size(buffer_label)[0]
         clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
         draw_text(text_cache, 18 + buffer_width + 16, second_y, clock_label,
-                  (120, 255, 179), size, False, False, "lm", alpha,
+                  APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
                   family="Liberation Sans")
         ram_mb = read_process_ram_mb()
         cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
         ram_label = f"RAM {ram_mb:.0f} MB" if ram_mb is not None else "RAM --"
-        temp_label = f"TEMP {temp_c:.0f} C" if temp_c is not None else "TEMP --"
+        temp_label = f"TEMP {theme_system.display_temperature(temp_c)}" if temp_c is not None else "TEMP --"
         draw_text(text_cache, status_x1 - 18, first_y, f"{cpu_label}   {ram_label}",
-                  (162, 175, 179), size, True, False, "rm", alpha,
+                  APP_UI_STYLE.palette.footer_primary, size, True, False, "rm", alpha,
                   family="Liberation Sans")
         draw_text(text_cache, status_x1 - 18, second_y, temp_label,
-                  (162, 175, 179), size, True, False, "rm", alpha,
+                  APP_UI_STYLE.palette.footer_primary, size, True, False, "rm", alpha,
                   family="Liberation Sans")
         return
     height = y1 - y0
@@ -17498,7 +18014,9 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     # Keeping this at the 1024 px RF canvas prevents status text or its dark
     # backing from appearing beneath Home controls.
     status_x1 = DESKTOP_1280_MAIN_W if LCD_800_MODE else LOGICAL_W
-    draw_logical_rect(0, y0, status_x1, y1, (4, 8, 12, int((164 if compact else 208) * alpha)))
+    footer_back = APP_UI_STYLE.palette.footer_background
+    draw_logical_rect(0, y0, status_x1, y1,
+                      (*footer_back[:3], int(footer_back[3] * alpha * (164 / 208 if compact else 1))))
     if station_name:
         # Keep the station/capacity pair wholly left of the CPU lane. The old
         # 43% allowance could run into it on long receiver names.
@@ -17511,7 +18029,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         )
         title_limit = station_lane_x1 - 18 - (cap_w + 14 if cap_label else 0)
         title = fit_station_text(text_cache, station_name, max(80, title_limit), size, False, False, family="Cantarell")
-        draw_text(text_cache, 18, primary_y, title, (151, 160, 165), size, False, False, "lm", alpha, family="Cantarell")
+        draw_text(text_cache, 18, primary_y, title, themed_instrument_color("footer_primary", (151, 160, 165)), size, False, False, "lm", alpha, family="Cantarell")
         if cap_label:
             title_w = text_cache.font(size, family="Cantarell").size(title)[0]
             cap_x0 = 18 + title_w + 14
@@ -17524,14 +18042,14 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     if smeter_readout_dbm is not None:
         # Center this calm numeric readout in the permanent lane between the
         # 40%-wide station title and the CPU/decoder status on the right.
-        draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), (163, 181, 185), size, False, False, "cm", alpha, family="Cantarell")
+        draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), themed_instrument_color("footer_primary", (163, 181, 185)), size, False, False, "cm", alpha, family="Cantarell")
     # Temporary operator diagnostic: this will be removed once public Kiwi
     # receiver jitter has been characterized across a few stations.
     # Queue depth may legitimately sit above the target while incoming Kiwi
     # packets arrive in a burst. Label both values explicitly so ``15/12`` is
     # not mistaken for an invalid min/max reading.
     jitter_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-    jitter_color = (113, 226, 172) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else (244, 186, 102)
+    jitter_color = themed_instrument_color("footer_live", (113, 226, 172)) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else APP_UI_STYLE.palette.waiting[:3]
     draw_text(text_cache, 18 if two_row else 560, secondary_y if two_row else status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if two_row else 14), True, False, "lm" if two_row else "rm", alpha, family="Cantarell")
     if two_row:
         # Subtle dividers make the live status hierarchy scan as distinct
@@ -17600,7 +18118,7 @@ def whisper_caption_toggle_label(caption_mode):
 
 def draw_vosc_live_popup_frame(text_cache, box):
     """The common waterfall panel and Close control for VOSC live output."""
-    draw_logical_rect(*box, (3, 8, 12, 190))
+    draw_logical_rect(*box, themed_overlay_color("section_surface", (3, 8, 12, 190)))
     draw_styled_text_button(text_cache, compact_header_close_box(box), "CLOSE", size=12)
 
 
@@ -17608,7 +18126,7 @@ def draw_vosc_live_popup_error(text_cache, box, message):
     """Leave a live-engine error visible after its brief Zoom-style notice."""
     x0, y0, _x1, y1 = box
     draw_text(text_cache, x0 + 20, (y0 + y1) / 2, str(message).upper(),
-              (100, 135, 145), 24, True, False, "lm", family=caption_font_family())
+              themed_instrument_color("secondary_text", (100, 135, 145)), 24, True, False, "lm", family=caption_font_family())
 
 
 def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
@@ -17626,19 +18144,19 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
         # Explicitly identify this as acoustic-phone evidence. It must never
         # look like a polished ham transcription or a callsign assertion.
         draw_text(text_cache, x0 + 20, y0 + 17, "ALLOSAURUS · RAW PHONEMES · ENGLISH INVENTORY",
-                  (112, 221, 181), 14, True, False, "lm", family=family)
-        draw_logical_line(x0 + 18, y0 + 31, x1 - 18, y0 + 31, (60, 139, 121, 130), 1)
+                  themed_instrument_color("section_heading", (112, 221, 181)), 14, True, False, "lm", family=family)
+        draw_section_divider(x0 + 18, y0 + 31, x1 - 18)
         content_y0 = y0 + 18
     if whisper_mode_control:
         toggle_box = caption_translation_toggle_box((x0, y0, x1, y1))
         # It is intentionally translucent: the radio remains visible, but
         # the source/translation state can never be mistaken for a caption.
-        draw_logical_rect(*toggle_box, (10, 34, 43, 166))
+        draw_logical_rect(*toggle_box, themed_instrument_color("section_surface", (10, 34, 43, 166)))
         draw_logical_rect(toggle_box[0], toggle_box[3] - 2, toggle_box[2], toggle_box[3],
-                          (102, 236, 180, 220) if caption_mode == "english" else (108, 185, 207, 210))
+                          themed_instrument_color("active_border", (102, 236, 180, 220)) if caption_mode == "english" else themed_instrument_color("section_border", (108, 185, 207, 210)))
         draw_text(text_cache, (toggle_box[0] + toggle_box[2]) / 2, (toggle_box[1] + toggle_box[3]) / 2,
                   whisper_caption_toggle_label(caption_mode),
-                  (189, 249, 219) if caption_mode == "english" else (176, 211, 224),
+                  themed_instrument_color("text", (189, 249, 219)) if caption_mode == "english" else themed_instrument_color("secondary_text", (176, 211, 224)),
                   14, True, False, "cm", family=family)
     if "ERROR" in str(status).upper():
         draw_vosc_live_popup_error(text_cache, (x0, y0, x1, y1), status)
@@ -17647,21 +18165,21 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
         if not source and not english:
-            draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
+            draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
             return
-        draw_text(text_cache, x0 + 20, y0 + 15, "ORIGINAL", (112, 184, 202), 13, True, False, "lm", family=family)
+        draw_text(text_cache, x0 + 20, y0 + 15, "ORIGINAL", themed_instrument_color("section_heading", (112, 184, 202)), 13, True, False, "lm", family=family)
         source_rows = wrap_caption_lines(
             text_cache, source, content_x1 - x0 - 20, 20, max_rows=2, max_characters=66, family=family
         )
         for index, caption in enumerate(source_rows):
-            draw_text(text_cache, x0 + 20, y0 + 36 + index * 22, caption, (165, 204, 213), 20, False, False, "lm", family=family)
+            draw_text(text_cache, x0 + 20, y0 + 36 + index * 22, caption, themed_instrument_color("secondary_text", (165, 204, 213)), 20, False, False, "lm", family=family)
         english_y = y0 + 79
-        draw_text(text_cache, x0 + 20, english_y, "ENGLISH", (120, 241, 183), 13, True, False, "lm", family=family)
+        draw_text(text_cache, x0 + 20, english_y, "ENGLISH", themed_instrument_color("ready", (120, 241, 183)), 13, True, False, "lm", family=family)
         english_rows = wrap_caption_lines(
             text_cache, english or "TRANSLATING...", content_x1 - x0 - 20, 24, max_rows=2, max_characters=55, family=family
         )
         for index, caption in enumerate(english_rows):
-            draw_text(text_cache, x0 + 20, english_y + 23 + index * 25, caption, (230, 248, 240), 24, True, False, "lm", family=family)
+            draw_text(text_cache, x0 + 20, english_y + 23 + index * 25, caption, themed_instrument_color("text", (230, 248, 240)), 24, True, False, "lm", family=family)
         return
     # Keep finished phrases on screen and append the current live hypothesis.
     # Selecting only lines[-1] made a four-row panel appear to be one row.
@@ -17672,9 +18190,9 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
         text_cache, source, content_x1 - x0 - 20, 26, max_rows=4, max_characters=62, family=family
     )
     if not display:
-        draw_text(text_cache, x0 + 20, (content_y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, (133, 180, 190), 24, False, False, "lm", family=family)
+        draw_text(text_cache, x0 + 20, (content_y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
         return
-    color = (157, 218, 198) if phoneme_mode else ((166, 204, 213) if partial else (230, 241, 244))
+    color = themed_instrument_color("text", (157, 218, 198)) if phoneme_mode else (themed_instrument_color("secondary_text", (166, 204, 213)) if partial else themed_instrument_color("text", (230, 241, 244)))
     line_spacing = 30
     first_y = (content_y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
     for index, caption in enumerate(display):
@@ -17689,7 +18207,7 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
     draw_vosc_live_popup_frame(text_cache, box)
     family = caption_font_family()
     close_box = compact_header_close_box(box)
-    draw_text(text_cache, x0 + 20, y0 + 17, "CALL SIGN", (112, 221, 181),
+    draw_text(text_cache, x0 + 20, y0 + 17, "CALL SIGN", themed_instrument_color("section_heading", (112, 221, 181)),
               14, True, False, "lm", family=family)
     if status == "ERROR":
         draw_vosc_live_popup_error(text_cache, box, "VOSK ERROR")
@@ -17698,7 +18216,7 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
     if not history:
         draw_text(text_cache, x0 + 20, (y0 + y1) / 2,
                   "LISTENING..." if status == "LISTENING" else status,
-                  (133, 180, 190), 24, False, False, "lm", family=family)
+                  themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
         return
     # Keep the strict callsign evidence, but use the same typography and row
     # rhythm as live transcription instead of a second green-chip design.
@@ -17707,7 +18225,7 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
         label = fit_station_text(text_cache, value, close_box[0] - x0 - 32,
                                  26, True, False, family=family)
         draw_text(text_cache, x0 + 20, first_y + index * 30, label,
-                  (230, 241, 244), 26, True, False, "lm", family=family)
+                  themed_instrument_color("text", (230, 241, 244)), 26, True, False, "lm", family=family)
 
 
 def asr_option_at(x, y, moon_language_menu=False):
@@ -17763,14 +18281,14 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
     """A large explicit ASR selector rather than a mystery on/off toggle."""
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
-        draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+        draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, themed_instrument_color("section_border", (125, 147, 158, 118)), 1)
         draw_sidebar_header(text_cache, "VOSC")
         draw_text(text_cache, LCD_NAV_X0 + 14, 86,
                   "LANGUAGE" if moon_language_menu else "ENGINE",
-                  (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+                  themed_instrument_color("section_heading", (174, 203, 208)), 13, True, False, "lm", family="Liberation Sans")
         if not moon_language_menu:
             draw_text(text_cache, LCD_NAV_X0 + 14, 478, "CAPTIONS",
-                      (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+                      themed_instrument_color("section_heading", (174, 203, 208)), 13, True, False, "lm", family="Liberation Sans")
         for kind, value, box in vosc_sidebar_options(moon_language_menu):
             if kind == "callsign":
                 draw_styled_two_line_button(
@@ -17795,7 +18313,7 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
         return
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
-        draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 232))
+        draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (5, 13, 18, 232)))
         active_language = moonshine_language(engine) or "en"
         cell_w = (x1 - x0) / 4
         cell_h = (y1 - y0) / 2
@@ -17806,27 +18324,27 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
             top = y0 + row * cell_h + 4
             bottom = y0 + (row + 1) * cell_h - 4
             active = language == active_language
-            draw_logical_rect(left, top, right, bottom, (24, 82, 61, 230) if active else (20, 32, 39, 214))
+            draw_logical_rect(left, top, right, bottom, themed_instrument_color("active_surface", (24, 82, 61, 230)) if active else themed_instrument_color("section_surface", (20, 32, 39, 214)))
             if active:
-                draw_logical_rect(left, bottom - 3, right, bottom, (100, 255, 163, 245))
+                draw_logical_rect(left, bottom - 3, right, bottom, themed_instrument_color("active_border", (100, 255, 163, 245)))
             draw_text(text_cache, (left + right) / 2, (top + bottom) / 2, label,
-                      (180, 248, 207) if active else (197, 211, 215), 18, active, False, "cm", family="Cantarell")
+                      themed_instrument_color("text", (180, 248, 207)) if active else themed_instrument_color("secondary_text", (197, 211, 215)), 18, active, False, "cm", family="Cantarell")
         return
 
     x0, y0, x1, y1 = ASR_PANEL_BOX
-    draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 224))
+    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (5, 13, 18, 224)))
     engine_y1 = y0 + ASR_ENGINE_ROW_HEIGHT
     cell_w = (x1 - x0) / len(ASR_ENGINES)
     for index, candidate in enumerate(ASR_ENGINES):
         left = x0 + index * cell_w + 4
         right = x0 + (index + 1) * cell_w - 4
         active = candidate == asr_engine_family(engine)
-        draw_logical_rect(left, y0 + 5, right, engine_y1 - 5, (24, 82, 61, 230) if active else (20, 32, 39, 210))
+        draw_logical_rect(left, y0 + 5, right, engine_y1 - 5, themed_instrument_color("active_surface", (24, 82, 61, 230)) if active else themed_instrument_color("section_surface", (20, 32, 39, 210)))
         if active:
-            draw_logical_rect(left, engine_y1 - 8, right, engine_y1 - 5, (100, 255, 163, 245))
+            draw_logical_rect(left, engine_y1 - 8, right, engine_y1 - 5, themed_instrument_color("active_border", (100, 255, 163, 245)))
         draw_text(
             text_cache, (left + right) / 2, (y0 + engine_y1) / 2,
-            ASR_ENGINE_LABELS[candidate], (180, 248, 207) if active else (197, 211, 215),
+            ASR_ENGINE_LABELS[candidate], themed_instrument_color("text", (180, 248, 207)) if active else themed_instrument_color("secondary_text", (197, 211, 215)),
             17 if candidate != "whisper" else 15, active, False, "cm", family="Cantarell",
         )
     mode_y0 = engine_y1
@@ -17835,16 +18353,16 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
         left = x0 + index * mode_cell_w + 4
         right = x0 + (index + 1) * mode_cell_w - 4
         active = mode == caption_mode
-        draw_logical_rect(left, mode_y0 + 4, right, y1 - 5, (22, 74, 59, 230) if active else (15, 29, 36, 214))
+        draw_logical_rect(left, mode_y0 + 4, right, y1 - 5, themed_instrument_color("active_surface", (22, 74, 59, 230)) if active else themed_instrument_color("section_surface", (15, 29, 36, 214)))
         if active:
-            draw_logical_rect(left, y1 - 8, right, y1 - 5, (105, 239, 177, 245))
+            draw_logical_rect(left, y1 - 8, right, y1 - 5, themed_instrument_color("active_border", (105, 239, 177, 245)))
         label = "ENGLISH\nWHISPER" if mode == "english" else ("BOTH\nWHISPER" if mode == "both" else "ORIGINAL")
         if "\n" in label:
             first, second = label.split("\n")
-            draw_text(text_cache, (left + right) / 2, mode_y0 + 22, first, (181, 248, 210) if active else (197, 211, 215), 16, active, False, "cm", family="Cantarell")
-            draw_text(text_cache, (left + right) / 2, mode_y0 + 39, second, (132, 206, 172) if active else (141, 164, 170), 11, True, False, "cm", family="Cantarell")
+            draw_text(text_cache, (left + right) / 2, mode_y0 + 22, first, themed_instrument_color("text", (181, 248, 210)) if active else themed_instrument_color("secondary_text", (197, 211, 215)), 16, active, False, "cm", family="Cantarell")
+            draw_text(text_cache, (left + right) / 2, mode_y0 + 39, second, themed_instrument_color("ready", (132, 206, 172)) if active else themed_instrument_color("secondary_text", (141, 164, 170)), 11, True, False, "cm", family="Cantarell")
         else:
-            draw_text(text_cache, (left + right) / 2, (mode_y0 + y1) / 2, label, (181, 248, 210) if active else (197, 211, 215), 16, active, False, "cm", family="Cantarell")
+            draw_text(text_cache, (left + right) / 2, (mode_y0 + y1) / 2, label, themed_instrument_color("text", (181, 248, 210)) if active else themed_instrument_color("secondary_text", (197, 211, 215)), 16, active, False, "cm", family="Cantarell")
 
 
 def draw_ruler(
@@ -17860,12 +18378,13 @@ def draw_ruler(
     if alpha <= 0.01:
         return
     canvas_w = rf_canvas_width()
+    ruler_background = themed_instrument_color("waterfall_ruler_background", (10, 15, 21, 185))
     draw_logical_rect(
         0,
         y0,
         canvas_w,
         y0 + height,
-        (10, 15, 21, int(background_alpha * alpha)),
+        (*ruler_background[:3], int(min(255, background_alpha * ruler_background[3] / 185) * alpha)),
     )
     span_hz = max(1, int(round(span_khz * 1000)))
     center_hz = int(round(center_khz * 1000))
@@ -17888,12 +18407,17 @@ def draw_ruler(
     label_color = (145, 178, 191) if subdued else (
         (160, 187, 197) if tall_ruler else (231, 240, 244)
     )
+    minor_color = themed_instrument_color("waterfall_ruler_minor", minor_color)
+    major_color = themed_instrument_color("waterfall_ruler_major", major_color)
+    label_color = themed_instrument_color("waterfall_ruler_label", label_color)
     label_alpha = 0.84 if subdued else 1.0
     if tall_ruler:
         # Keep the axis spine away from the scope's bright lower trace. The
         # baseline sits at the waterfall side; ticks rise into the ruler and
         # labels occupy the calm upper portion.
-        draw_logical_line(0, y0 + height - 3, canvas_w, y0 + height - 3, (189, 211, 220, int(145 * alpha)), 1)
+        baseline = themed_instrument_color("waterfall_ruler_major", (189, 211, 220, 145))
+        draw_logical_line(0, y0 + height - 3, canvas_w, y0 + height - 3,
+                          (*baseline[:3], int(baseline[3] * alpha)), 1)
 
     hz = minor_start_hz
     while hz <= end_hz:
@@ -17976,7 +18500,9 @@ def draw_spectrum(
     # remains behind the live trace rather than becoming a separate hard box.
     field_alpha = 156 if foreground else 236
     canvas_w = rf_canvas_width()
-    draw_logical_rect(0, y0, canvas_w, y1, (2, 7, 12, field_alpha))
+    spectrum_colors = APP_UI_STYLE.palette
+    draw_logical_rect(0, y0, canvas_w, y1,
+                      (*spectrum_colors.spectrum_field[:3], field_alpha))
     show_dbm_scale = (y1 - y0) >= 120
     ruler_visible = show_dbm_scale and text_cache is not None
     if ruler_visible:
@@ -17984,7 +18510,7 @@ def draw_spectrum(
         # reaches the top of the screen. Use its actual rendered height so
         # font changes cannot make it clip again.
         label_height = text_cache.texture(
-            "-40 dBm", 13, (180, 207, 211), bold=True, mono=True,
+            "-40 dBm", 13, spectrum_colors.spectrum_label, bold=True, mono=True,
         )[2]
         plot_top = y0 + 18 + label_height / 2
         plot_bottom = y1 - 2 - label_height / 2
@@ -17996,21 +18522,23 @@ def draw_spectrum(
     scale_fractions = (0.0, 0.25, 0.50, 0.75, 1.0) if show_dbm_scale else (0.25, 0.50, 0.75)
     for fraction in scale_fractions:
         y = grid_top + (grid_bottom - grid_top) * fraction
-        draw_logical_line(0, y, canvas_w, y, (89, 139, 155, 48 if show_dbm_scale else 34), 1)
+        draw_logical_line(0, y, canvas_w, y,
+                          (*spectrum_colors.spectrum_grid[:3], 48 if show_dbm_scale else 34), 1)
     if ruler_visible:
         # This is a visual reference scale for the normalized Kiwi spectrum,
         # not a calibrated RF-power meter. Keep it as a compact left-edge
         # instrument ruler, separated from the live trace by its own gutter.
         axis_x = 8
         label_x = 30
-        draw_logical_rect(0, y0, 68, y1, (3, 11, 17, 102))
-        draw_logical_line(axis_x, plot_top, axis_x, plot_bottom, (125, 169, 181, 118), 1)
+        draw_logical_rect(0, y0, 68, y1,
+                          themed_instrument_color("spectrum_field", (3, 11, 17, 102)))
+        draw_logical_line(axis_x, plot_top, axis_x, plot_bottom, spectrum_colors.spectrum_axis, 1)
         for index in range(17):
             fraction = index / 16
             y = plot_top + (plot_bottom - plot_top) * fraction
             major = index % 4 == 0
             tick_length = 14 if major else 6
-            tick_color = (163, 203, 211, 172) if major else (100, 151, 165, 106)
+            tick_color = spectrum_colors.spectrum_tick if major else themed_instrument_color("spectrum_tick", (100, 151, 165, 106))
             draw_logical_line(axis_x, y, axis_x + tick_length, y, tick_color, 1)
             if major:
                 label = f"{-40 - index * 5}"
@@ -18019,7 +18547,7 @@ def draw_spectrum(
                 # Font ascenders/figures look fractionally low when centered
                 # on a 1 px rule, so lift the label optically, not the tick.
                 label_y = y - 2
-                draw_text(text_cache, label_x, label_y, label, (180, 207, 211), 13, True, True, "lm")
+                draw_text(text_cache, label_x, label_y, label, spectrum_colors.spectrum_label, 13, True, True, "lm")
     if source_span_khz is not None and visible_span_khz is not None:
         values = zoomed_spectrum_values(values, source_span_khz, visible_span_khz)
         peak_values = zoomed_spectrum_values(peak_values, source_span_khz, visible_span_khz)
@@ -18032,16 +18560,16 @@ def draw_spectrum(
             (index * (canvas_w - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
             for index, value in enumerate(peak_values)
         ]
-        draw_logical_area(peak_points, y1, (145, 159, 168, 76))
-        draw_logical_polyline(peak_points, (174, 187, 194, 142), 1.0)
+        draw_logical_area(peak_points, y1, spectrum_colors.spectrum_peak_fill)
+        draw_logical_polyline(peak_points, spectrum_colors.spectrum_peak_line, 1.0)
     points = [
         (index * (canvas_w - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
         for index, value in enumerate(values)
     ]
     # Keep dBm labels inset, but fill the remaining pixels right to the
     # waterfall boundary so that inset cannot look like a blank divider.
-    draw_logical_area(points, y1, (161, 184, 196, 154))
-    draw_logical_polyline(points, (204, 219, 224, 208), 1.25)
+    draw_logical_area(points, y1, spectrum_colors.spectrum_fill)
+    draw_logical_polyline(points, spectrum_colors.spectrum_line, 1.25)
 
 
 def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_seconds=None):
@@ -18074,7 +18602,10 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
     label = labels.get(status)
     if not label:
         return
-    color = colors[status]
+    color_role = ("danger_border" if status in ("failed", "access_blocked") else
+                  "waiting" if status in ("server_timeout", "no_waterfall") else
+                  "focus" if status == "paused" else "ready")
+    color = themed_instrument_color(color_role, colors[status])
     if status == "server_timeout" and timeout_seconds:
         label = f"SERVER LIMIT {int(timeout_seconds)} S · RECONNECTING"
     elif retry_seconds is not None and status in ("retrying", "no_waterfall", "waterfall_audio_retry", "audio_wf_retry"):
@@ -18084,7 +18615,11 @@ def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_
     # single calm dark lane is more legible at a distance.
     x0, y0, x1, y1 = 454, 132, 864, 176
     alert = status in ("failed", "access_blocked", "no_waterfall", "server_timeout", "paused")
-    draw_logical_rect(x0, y0, x1, y1, (4, 17, 13, 228) if not alert else (32, 12, 9, 230))
+    draw_logical_rect(
+        x0, y0, x1, y1,
+        themed_overlay_color("section_surface", (4, 17, 13, 228)) if not alert
+        else themed_overlay_color("danger", (32, 12, 9, 230)),
+    )
     if status == "connected":
         draw_logical_line(x0 + 15, y0 + 22, x0 + 23, y0 + 30, color, 4)
         draw_logical_line(x0 + 23, y0 + 30, x0 + 38, y0 + 12, color, 4)
@@ -18167,6 +18702,7 @@ def draw_ui(
     active_decoders=(),
     running_decoder_count=0,
     decoder_counts=None,
+    receiver_playing=False,
     instrument_layout="middle",
     compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
@@ -18174,18 +18710,20 @@ def draw_ui(
     sidebar_open=False,
     zoom_pressed=None,
 ):
-    # Previous comparison color: (5, 9, 14, 252). Keep the instrument strip
-    # deliberately pure black until a requested visual comparison restores it.
+    # Keep the large frequency's translucent strip aligned with the active
+    # theme; RIGHT has no such strip over the RF canvas.
+    show_large_instruments = instrument_layout != "right"
+    band_color = themed_instrument_color("top_instrument_band", (0, 0, 0, 144))
     if DESKTOP_1280_MODE:
         # The wide unit has one uninterrupted instrument strip spanning the
         # receiver canvas and the navigation rail.
-        draw_native_rect(0, 0, NATIVE_W, DESKTOP_1280_TOP_H, (0, 0, 0, 255))
-    show_large_instruments = instrument_layout != "right"
+        strip_color = (*band_color[:3], 255) if show_large_instruments else (0, 0, 0, 255)
+        draw_native_rect(0, 0, NATIVE_W, DESKTOP_1280_TOP_H, strip_color)
     if show_large_instruments:
         # The scope stays visible through one continuous top band. RIGHT has
         # its readout in the rail and needs no wash over the RF canvas.
         band_height = LCD_TOP_INSTRUMENT_BAND_H if LCD_800_MODE else sdr_ui.TOP_H
-        draw_logical_rect(0, 0, rf_canvas_width(), band_height, (0, 0, 0, 144))
+        draw_logical_rect(0, 0, rf_canvas_width(), band_height, band_color)
     _frequency_text, radio_box = top_instrument_layout(
         text_cache, freq_khz, compact_frequency_font_family
     )
@@ -18195,6 +18733,7 @@ def draw_ui(
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
     if show_large_instruments:
         left_instruments = LCD_800_MODE and instrument_layout == "left"
+        mirrored_instruments = mirror_top_instruments()
         if LCD_800_MODE:
             draw_band_context_chip(
                 text_cache, main_band_context_box(
@@ -18203,18 +18742,25 @@ def draw_ui(
             )
         draw_big_frequency(
             text_cache, freq_khz,
-            LEFT_FREQUENCY_X if instrument_layout == "left" else frequency_right_x(),
+            (rf_canvas_width() - (LEFT_FREQUENCY_X if left_instruments else frequency_right_x())
+             if mirrored_instruments else
+             (LEFT_FREQUENCY_X if left_instruments else frequency_right_x())),
             LCD_TOP_INSTRUMENT_CENTER_Y if LCD_800_MODE else 39,
             330.0, family=compact_frequency_font_family,
-            anchor="lm" if instrument_layout == "left" else "rm",
+            anchor=("rm" if left_instruments else "lm") if mirrored_instruments
+                   else ("lm" if left_instruments else "rm"),
         )
         if left_instruments:
+            trace_x = left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family)
             draw_smeter(
                 text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
-                meter_x0=left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family),
+                meter_x0=(mirror_smeter_trace_x(trace_x) if mirrored_instruments else trace_x),
             )
         else:
-            draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
+            trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
+            draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                        meter_x0=(mirror_smeter_trace_x(trace_x, 6)
+                                  if mirrored_instruments else None))
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
         text_cache,
@@ -18284,6 +18830,8 @@ def draw_ui(
         active_decoders=active_decoders,
         running_decoder_count=running_decoder_count,
         decoder_counts=decoder_counts,
+        receiver_playing=receiver_playing,
+        captions_running=transcription_enabled,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
@@ -22696,6 +23244,7 @@ def main():
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
     parser.add_argument("--server", default="http://21662.proxy2.kiwisdr.com:8073")
     parser.add_argument("--receiver-state-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-receiver.json")
+    parser.add_argument("--theme-file", type=Path, default=Path.home() / ".local/state/kiwi-gl-display-themes.json")
     parser.add_argument(
         "--wspr-log-file",
         type=Path,
@@ -22764,6 +23313,9 @@ def main():
     parser.add_argument("--audio-backend", choices=AUDIO_BACKENDS, default="alsa" if CM5_AUDIO else "pipewire", help=argparse.SUPPRESS)
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
+    theme_editor = ThemeEditor(theme_system.ThemeLibrary(args.theme_file),
+                               notice_duration=args.zoom_osd_seconds)
+    refresh_receiver_list_theme()
     remembered_radio_mode = None
     remembered_receiver_type = None
     remembered_preferences = {}
@@ -22821,6 +23373,7 @@ def main():
     configure_output(args.desktop)
     set_display_orientation(args.orientation)
     setup_gl(args.desktop)
+    sidebar_composer = None
     print(
         "OpenGL:",
         GL.glGetString(GL.GL_VENDOR).decode(),
@@ -22925,7 +23478,7 @@ def main():
                 restored_audio["voice_clean_level"] = 1
             state.set_audio_controls(**restored_audio)
     instrument_layout = normalize_frequency_position(
-        remembered_preferences.get("instrument_layout", "right")
+        remembered_preferences.get("instrument_layout", visible_frequency_position("right"))
     )
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
@@ -24671,6 +25224,8 @@ def main():
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
+        if kind != "theme":
+            theme_editor.open = False
         if kind != "dual":
             dual_vfo_receiver_list_target = None
         sstv_workspace.open = False
@@ -24759,6 +25314,15 @@ def main():
         elif kind == "settings_back":
             settings_menu_open = False
             digital_menu_open = False
+        elif kind == "theme":
+            settings_menu_open = False
+            digital_menu_open = False
+            theme_editor.open = True
+            theme_editor.mode = "browse"
+            theme_editor.selected_id = theme_editor.library.active_id
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
+            receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "network":
             print("gl network panel requested", flush=True)
             network_panel_open = True
@@ -25136,15 +25700,23 @@ def main():
     desktop_map_velocity = (0.0, 0.0)
     desktop_map_motion_at = 0.0
 
-    def desktop_logical_point(position):
+    def rail_relocation_active():
+        return (
+            theme_system.runtime_theme["sidebar"] == "left"
+            and not (wspr_panel_open or font_lab_open or rtl_lab_open
+                     or (picker_open and picker_map_open) or globe_open)
+        )
+
+    def desktop_logical_point(position, apply_theme=True):
         """Map a desktop mouse position directly into logical UI space."""
         window_w, window_h = pygame.display.get_window_size()
         nx = clamp(round(position[0] * NATIVE_W / max(1, window_w)), 0, NATIVE_W - 1)
         ny = clamp(round(position[1] * NATIVE_H / max(1, window_h)), 0, NATIVE_H - 1)
-        if DESKTOP_1280_MODE:
-            return clamp(nx, 0, LOGICAL_W - 1), clamp(ny, 0, LOGICAL_H - 1)
-        if DESKTOP_MODE:
-            return nx, ny
+        if DESKTOP_1280_MODE or DESKTOP_MODE:
+            logical_x, logical_y = clamp(nx, 0, LOGICAL_W - 1), clamp(ny, 0, LOGICAL_H - 1)
+            if apply_theme and rail_relocation_active():
+                logical_x = theme_system.display_to_logical_x(logical_x)
+            return logical_x, logical_y
         if args.orientation == "normal":
             return clamp(ny, 0, LOGICAL_W - 1), clamp(ACTIVE_H - 1 - nx, 0, LOGICAL_H - 1)
         return clamp(NATIVE_H - 1 - ny, 0, LOGICAL_W - 1), clamp(nx - VISIBLE_Y_OFFSET, 0, LOGICAL_H - 1)
@@ -25153,7 +25725,7 @@ def main():
         """Feed mouse input to the established EV_ABS touch gesture pipeline."""
         if desktop_event_writer is None:
             return
-        x, y = desktop_logical_point(position)
+        x, y = desktop_logical_point(position, apply_theme=False)
 
         def write(kind, code, value):
             os.write(desktop_event_writer, kiwi.EVENT_STRUCT.pack(0, 0, kind, code, int(value)))
@@ -25509,6 +26081,10 @@ def main():
                         mt_slots.clear()
                 elif event_type == kiwi.EV_SYN and code == kiwi.SYN_REPORT:
                     points = kiwi.touch_points(mt_slots, raw_x, raw_y, active, args)
+                    if rail_relocation_active():
+                        points = tuple(
+                            (theme_system.display_to_logical_x(px), py) for px, py in points
+                        )
                     is_active = bool(points)
                     if not is_active:
                         if raw_x is None or raw_y is None:
@@ -25518,6 +26094,9 @@ def main():
                             x, y = kiwi.transform_touch(raw_x, raw_y, args)
                     else:
                         x, y = points[0] if len(points) == 1 else kiwi.midpoint(points[:2])
+
+                    if rail_relocation_active() and not is_active and raw_x is not None:
+                        x = theme_system.display_to_logical_x(x)
 
                     # Shared renderers read this point during the next frame
                     # to give every visible button immediate press feedback.
@@ -25561,6 +26140,7 @@ def main():
                                 LCD_800_MODE
                                 and 0 <= x < rf_canvas_width()
                                 and len(points) == 1
+                                and not theme_editor.open
                                 and not (
                                     picker_open or font_lab_open or network_password_open
                                     or dual_vfo_open or dual_vfo_mode_open
@@ -25633,7 +26213,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if cw_workspace.open:
+                            if theme_editor.open:
+                                gesture = "theme"
+                            elif cw_workspace.open:
                                 gesture = "cw_workspace"
                                 cw_workspace.drag_begin(x, y)
                             elif qrss_workspace.open:
@@ -27810,8 +28392,9 @@ def main():
                                                     SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H
                                                 )
                                             )
-                                            instrument_layout = "right"
+                                            instrument_layout = visible_frequency_position("right")
                                         elif kind == "layout":
+                                            value = visible_frequency_position(value)
                                             if instrument_layout != value:
                                                 instrument_layout = value
                                                 preferences_dirty = True
@@ -27903,6 +28486,23 @@ def main():
                                 if idx is not None:
                                     activate_navigation_item(idx)
                         elif touch_started and gesture == "network_launch":
+                            wake_controls()
+                        elif touch_started and gesture == "theme":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                previous_sidebar = theme_system.runtime_theme["sidebar"]
+                                theme_editor.tap(x, y)
+                                if theme_system.runtime_theme["sidebar"] != previous_sidebar:
+                                    # Preserve the operator's visible LEFT/RIGHT choice
+                                    # while the rail itself moves to the opposite edge.
+                                    instrument_layout = visible_frequency_position(
+                                        instrument_layout, "left"
+                                    )
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                refresh_receiver_list_theme()
+                                if not theme_editor.open:
+                                    restore_navigation_parent("settings")
                             wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28577,6 +29177,7 @@ def main():
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
                 and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open)
+                and not theme_editor.open
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -29245,7 +29846,8 @@ def main():
                 spectrum_layer.draw(
                     spectrum_values,
                     spectrum_peak_values,
-                    (spectrum_y0, spectrum_y1, source_span_khz, display_span),
+                    (spectrum_y0, spectrum_y1, source_span_khz, display_span,
+                     theme_system.runtime_revision),
                     lambda: draw_spectrum(
                         spectrum_y0,
                         spectrum_y1,
@@ -29389,6 +29991,7 @@ def main():
                 ),
                 running_decoder_count=sum(decoder_counts.values()),
                 decoder_counts=decoder_counts,
+                receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
                 instrument_layout=instrument_layout,
                 # Font Review is a live specimen: arrowing through candidates
                 # must visibly update the Home frequency readout. ``USE`` is
@@ -29847,6 +30450,18 @@ def main():
                 hell_workspace.draw(text_cache, wspr_receiver_choices())
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
+            if theme_editor.open:
+                draw_theme_panel(text_cache, theme_editor)
+                theme_notice_remaining = theme_editor.notice_until - now
+                if theme_notice_remaining > 0:
+                    draw_theme_notice_osd(
+                        text_cache, theme_editor.notice_action, theme_editor.notice_detail,
+                        green_osd_alpha(theme_notice_remaining, args.zoom_osd_seconds),
+                    )
+            if rail_relocation_active():
+                if sidebar_composer is None:
+                    sidebar_composer = SidebarComposer()
+                sidebar_composer.compose_left()
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -29900,6 +30515,8 @@ def main():
         caption_thread.join(timeout=1.5)
         callsign_thread.join(timeout=1.5)
         text_cache.close()
+        if sidebar_composer is not None:
+            GL.glDeleteTextures([sidebar_composer.texture])
         elapsed = max(0.001, time.monotonic() - start)
         print(f"gl frames={frames} fps={frames / elapsed:.1f}", flush=True)
         pygame.quit()

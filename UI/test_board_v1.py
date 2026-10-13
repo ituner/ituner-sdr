@@ -592,12 +592,11 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(calls[ui.ZOOM_MINUS_BOX])   # pressed tile is active
         self.assertFalse(calls[ui.ZOOM_PLUS_BOX])   # the other stays idle
 
-    def test_waterfall_zoom_pressed_palette_is_opaque_shared_feedback(self):
+    def test_waterfall_zoom_pressed_palette_keeps_translucent_feedback(self):
         fill, border, icon = ui.zoom_button_palette(active=True, pressed=True)
-        self.assertEqual(fill, ui.UI_PRESSED_FILL)
-        self.assertEqual(fill[3], 255)
-        self.assertEqual(border, ui.UI_PRESSED_EDGE)
-        self.assertEqual(icon, (*ui.UI_PRESSED_TEXT, 255))
+        self.assertEqual(fill, (*ui.APP_UI_STYLE.palette.pressed_surface[:3], 216))
+        self.assertEqual(border, ui.APP_UI_STYLE.palette.pressed_border)
+        self.assertEqual(icon, (0, 0, 0, 255))
 
     def test_waterfall_zoom_matches_favorite_and_pause_size_and_spacing(self):
         ui.configure_output(True)
@@ -630,7 +629,8 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_styled_button_frame', return_value=visual) as frame, \
              patch.object(ui, 'draw_logical_line') as line:
             ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, '+')
-        frame.assert_called_once_with(ui.ZOOM_PLUS_BOX, active=False, pressed=False)
+        frame.assert_called_once_with(ui.ZOOM_PLUS_BOX, active=False, pressed=False,
+                                      fill_alpha=184)
         self.assertEqual(line.call_count, 2)
 
     def test_waterfall_pause_uses_the_zoom_icon_stroke_weight(self):
@@ -874,8 +874,8 @@ class BoardLayoutTests(unittest.TestCase):
         )
 
     def test_globe_commands_all_live_in_the_right_rail(self):
-        # The Globe's controls (including zoom) belong to the rail, never
-        # floating over the map canvas where they could swallow a drag.
+        # Controls retain the familiar right-side geometry while floating over
+        # a full-width Globe canvas.
         ui.configure_output(True)
         ui.configure_popup_layout()
         zoom_in, zoom_out = ui.receiver_map_zoom_boxes()
@@ -885,13 +885,7 @@ class BoardLayoutTests(unittest.TestCase):
         for box in rail_boxes:
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-        map_box = ui.PICKER_MAP_BOX
-        for box in (zoom_in, zoom_out):
-            self.assertFalse(
-                box[0] < map_box[2] and map_box[0] < box[2]
-                and box[1] < map_box[3] and map_box[1] < box[3],
-                f"Globe zoom control floats over the map: {box}",
-            )
+        self.assertEqual(ui.PICKER_MAP_BOX, (0, 0, ui.LOGICAL_W, ui.LOGICAL_H))
         for index, first in enumerate(rail_boxes):
             for second in rail_boxes[index + 1:]:
                 self.assertFalse(
@@ -1439,6 +1433,37 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ['kiwi', 'openwebrx', 'local', 'fmdx'],
         )
 
+    def test_globe_has_no_rail_background_at_any_zoom(self):
+        """The map remains visible behind floating controls at every zoom."""
+        for scale in (ui.RADIOGARDEN_ZOOM_MIN, ui.GLOBE_DEFAULT_SCALE,
+                      20.5, ui.RADIOGARDEN_ZOOM_MAX):
+            events = []
+            with patch.object(
+                    ui, 'draw_receiver_map_satellite',
+                    side_effect=lambda *_a, **_k: events.append('map') or False,
+                ), patch.object(
+                    ui, 'draw_logical_rect',
+                    side_effect=lambda *args: events.append(('rect', args)),
+                ), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_logical_rounded_rect'), \
+                 patch.object(ui, 'draw_logical_polyline'), \
+                 patch.object(ui, 'draw_logical_circle'), \
+                 patch.object(ui, 'draw_logical_points'), \
+                 patch.object(ui, 'draw_text'), \
+                 patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
+                 patch.object(ui, 'draw_sidebar_header') as sidebar_header, \
+                 patch.object(ui, 'draw_styled_text_button'), \
+                 patch.object(ui, 'draw_picker_two_line_button'), \
+                 patch.object(ui, 'draw_radio_close_button'):
+                ui.draw_receiver_map(
+                    None, self.receivers(), 0.0, 0.0, scale,
+                    '', None, 'idle', {}, map_view='satellite_only',
+                )
+            rail_rects = [event for event in events if event[0] == 'rect'
+                          and event[1][:4] == (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H)]
+            self.assertEqual(rail_rects, [])
+            sidebar_header.assert_not_called()
+
     def test_legend_lists_only_present_groups(self):
         entries = ui.receiver_map_legend_entries(self.receivers())
         self.assertEqual([group for group, _label, _color in entries],
@@ -1899,6 +1924,9 @@ class GlobeDefaultViewTests(unittest.TestCase):
 
 
 class SharedButtonPressFeedbackTests(unittest.TestCase):
+    def setUp(self):
+        ui.theme_system.apply_theme(ui.theme_system.DEFAULT_THEME)
+
     def tearDown(self):
         ui.set_ui_press_point()
 
@@ -1930,14 +1958,14 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         self.assertEqual(fills[0], ui.APP_UI_STYLE.palette.active_surface)
         self.assertEqual(colors[0], ui.APP_UI_STYLE.palette.text)
 
-    def test_two_line_button_keeps_secondary_subtitle_when_pressed(self):
+    def test_two_line_button_turns_title_and_subtitle_black_when_pressed(self):
         box = (10, 20, 104, 114)
         colors = []
         ui.set_ui_press_point(40, 50)
         with patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
-        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.APP_UI_STYLE.palette.secondary_text])
+        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
 
     def test_legacy_close_entry_point_draws_the_shared_text_back_button(self):
         box = (10, 20, 104, 114)
@@ -1982,6 +2010,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         # would cover the expanded instruments sitting under the mode buttons.
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_logical_rounded_rect'), \
+             patch.object(ui, 'draw_nav_status_led'), \
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'lcd_nav_tile_background', return_value=(1, 1, 1)), \
              patch.object(ui, 'menu_icon_texture', return_value=(1, 1, 1)), \
@@ -1996,6 +2025,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         normal = ui.APP_UI_STYLE.button.resolve()
         frames = []
         with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_nav_status_led'), \
              patch.object(ui, 'draw_sidebar_header'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_styled_button_frame', side_effect=lambda box, **kwargs: frames.append((box, kwargs)) or normal), \
              patch.object(ui, 'draw_text'):
@@ -2004,7 +2034,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         self.assertTrue(all(kwargs.get('active') is False for _box, kwargs in frames))
         self.assertTrue(all(kwargs.get('style') is ui.APP_UI_STYLE.button for _box, kwargs in frames))
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (88, 88, 88, 255))
+        self.assertEqual(normal.border, (46, 46, 46, 255))
 
 
 class ReceiverBrowserEmptyStateTests(unittest.TestCase):

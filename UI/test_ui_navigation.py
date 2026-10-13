@@ -189,16 +189,21 @@ class DrawerGeometryTests(unittest.TestCase):
             ["2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE"],
         )
         dots = [call.args for call in circles.call_args_list]
-        self.assertEqual(len(dots), 3)
+        self.assertEqual(len(dots), 6)
         for kind in active:
             index = next(i for i, item in enumerate(ui.DIGITAL_MENU_ITEMS)
                          if item[0] == kind)
             x0, y0, x1, _y1 = ui.lcd_nav_box(
                 index, len(ui.DIGITAL_MENU_ITEMS), True,
             )
-            center_x = (x0 + x1) / 2
-            self.assertIn((center_x, y0 + 47, 3,
+            self.assertIn((round(x1 - 10), round(y0 + 10), ui.NAV_STATUS_LED_RADIUS,
                            ui.APP_UI_STYLE.palette.ready), dots)
+        active_rims = [call for call in circles.call_args_list
+                       if call.kwargs.get("outline")]
+        self.assertEqual(len(active_rims), 3)
+        self.assertTrue(all(call.args[2] == ui.NAV_STATUS_LED_RADIUS
+                            for call in circles.call_args_list))
+        self.assertEqual(ui.NAV_STATUS_LED_RADIUS * 2, 7)
 
     def test_home_digi_button_counts_enabled_decoder_sessions(self):
         ui.configure_output(True)
@@ -211,40 +216,66 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(sum(ui.digital_decoder_session_counts([], [], [], [], []).values()), 0)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
-                      if call.args[2] == "DIGI"]
+                      if call.args[2] == "4 DECODERS"]
         self.assertEqual(len(digi_calls), 1)
-        self.assertEqual(digi_calls[0][3], "4 DECODERS")
+        self.assertEqual(digi_calls[0][3], "5 DIGITAL MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
-                           if call.args[2] == "DIGI"]
-        self.assertEqual(zero_digi_calls[0][3], "DECODERS")
+                           if call.args[2] == "DECODERS"]
+        self.assertEqual(zero_digi_calls[0][3], "5 DIGITAL MODES")
 
     def test_home_digi_100_count_fits_or_ellipsizes(self):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
-                    if call.args[2] == "DIGI")
-        self.assertEqual(digi[3], "100 DECODERS")
+                    if call.args[2] == "100 DECODERS")
+        self.assertEqual(digi[3], "5 DIGITAL MODES")
         cache = ui.TextCache()
-        font = cache.font(ui.APP_UI_STYLE.button.label_size, bold=True,
+        font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
                           family=ui.APP_UI_STYLE.button.font_family)
         label_cache = mock.Mock()
         label_cache.texture.side_effect = lambda text, *_args, **_kwargs: (
             None, font.size(text)[0], font.size(text)[1]
         )
-        visible = ui.button_label_for_box(label_cache, digi[3], digi[1])
+        visible = ui.button_label_for_box(
+            label_cache, digi[2], digi[1], size=ui.APP_UI_STYLE.button.title_size,
+        )
         self.assertLessEqual(font.size(visible)[0], digi[1][2] - digi[1][0] - 8)
-        if visible != digi[3]:
+        if visible != digi[2]:
             self.assertTrue(visible.endswith("…"))
+
+    def test_home_status_leds_follow_receiver_decoder_and_asr_state(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as circles:
+            ui.draw_lcd_navigation(
+                None, receiver_playing=True, running_decoder_count=2,
+                captions_running=True,
+            )
+        fills = [item.args[3] for item in circles.call_args_list if not item.kwargs.get("outline")]
+        self.assertEqual(fills, [ui.APP_UI_STYLE.palette.ready] * 3)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as idle_circles:
+            ui.draw_lcd_navigation(None)
+        idle_fills = [item.args[3] for item in idle_circles.call_args_list
+                      if not item.kwargs.get("outline")]
+        self.assertEqual(idle_fills, [(18, 24, 22, 255)] * 3)
 
     def test_apps_no_longer_contains_dual_vfo_action(self):
         cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
@@ -307,11 +338,41 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_settings_uses_info_and_has_no_duplicate_kiwi_route(self):
         labels = dict(ui.SETTINGS_MENU_ITEMS)
-        self.assertEqual(labels["tests"], "APPS")
-        self.assertEqual(labels["system"], "INFO")
+        self.assertEqual(labels["tests"], "TOOLS")
+        self.assertEqual(labels["system"], "SYSTEM")
         self.assertEqual(labels["settings_back"], "BACK")
         self.assertNotIn("kiwi", labels)
         self.assertEqual(ui.menu_icon_filename("system"), "info.png")
+
+    def test_home_and_settings_tiles_use_requested_copy_and_full_subtitles(self):
+        self.assertEqual(dict(ui.MENU_ITEMS), {
+            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DECODERS",
+            "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
+            "settings": "SETTINGS",
+        })
+        self.assertEqual(ui.HOME_MENU_SUBTITLES["digital"], "5 DIGITAL MODES")
+        self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "SPEECH TO TEXT")
+        self.assertEqual(ui.SETTINGS_MENU_SUBTITLES["theme"], "COLORS & LAYOUT")
+        self.assertEqual((ui.APP_UI_STYLE.button.title_size,
+                          ui.APP_UI_STYLE.button.subtitle_size), (14, 12))
+
+        cache = mock.Mock()
+        cache.texture.side_effect = lambda text, *_args, **_kwargs: (
+            None, 117 if text == "COLORS & LAYOUT" else 50, 14,
+        )
+        box = (1034, 512, 1148, 576)
+        with mock.patch.object(ui, "draw_styled_button_frame",
+                               return_value=ui.APP_UI_STYLE.button.resolve()), \
+             mock.patch.object(ui, "draw_text") as drawn, \
+             mock.patch.object(ui, "draw_text_scaled_x") as scaled:
+            ui.draw_styled_two_line_button(
+                cache, box, "THEME", "COLORS & LAYOUT", fit_full_subtitle=True,
+            )
+        self.assertEqual((drawn.call_args.args[3], drawn.call_args.args[5]),
+                         ("THEME", 14))
+        self.assertEqual((scaled.call_args.args[3], scaled.call_args.args[5]),
+                         ("COLORS & LAYOUT", 12))
+        self.assertLess(scaled.call_args.args[6], 1)
 
     def test_drawers_share_one_back_target(self):
         expected = ui.lcd_drawer_back_box()
@@ -1301,7 +1362,8 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in frame.call_args_list], [box, box])
         body = {call.args[3]: call.args for call in draw.call_args_list}
         self.assertEqual(body["CQ TEST"][4:8], body["G4ZFE"][4:8])
-        self.assertEqual(body["G4ZFE"][4:8], ((230, 241, 244), 26, True, False))
+        self.assertEqual(body["G4ZFE"][4:8],
+                         (ui.APP_UI_STYLE.palette.text, 26, True, False))
 
     def test_vosc_errors_remain_in_live_popups_even_with_old_text(self):
         box = (16, 360, 1008, 500)
@@ -1316,7 +1378,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         with mock.patch.object(ui, "draw_text") as draw:
             ui.draw_vosc_live_popup_error(None, (16, 360, 1008, 500), "error")
         self.assertEqual(draw.call_args.args[3], "ERROR")
-        self.assertEqual(draw.call_args.args[4], (100, 135, 145))
+        self.assertEqual(draw.call_args.args[4], ui.APP_UI_STYLE.palette.secondary_text)
 
     def test_deepgram_key_error_remains_in_vosc_rail(self):
         ui.configure_output(True)
@@ -1388,17 +1450,27 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertAlmostEqual(inner / outer, 0.38196601125)
 
     def test_shared_button_style_separates_inactive_active_and_pressed_states(self):
+        ui.theme_system.apply_theme(ui.theme_system.DEFAULT_THEME)
         normal = ui.APP_UI_STYLE.button.resolve()
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (88, 88, 88, 255))
-        self.assertEqual(active.fill, (42, 42, 42, 255))
-        self.assertEqual(active.border, (160, 160, 160, 255))
+        self.assertEqual(normal.border, (46, 46, 46, 255))
+        self.assertEqual(active.fill, (30, 30, 30, 255))
+        self.assertEqual(active.border, (96, 96, 96, 255))
         self.assertEqual(active.text, (255, 255, 255))
-        self.assertEqual(pressed.fill, active.fill)
-        self.assertEqual(pressed.border, active.border)
-        self.assertEqual(pressed.text, active.text)
+        self.assertEqual(pressed.fill, (0, 229, 255, 255))
+        self.assertEqual(pressed.border, (0, 229, 255, 255))
+        self.assertEqual(pressed.text, (0, 0, 0))
+
+    def test_pressed_two_line_button_uses_black_title_and_subtitle(self):
+        pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
+        with mock.patch.object(ui, "ui_button_pressed", return_value=True), \
+                mock.patch.object(ui, "draw_styled_button_frame", return_value=pressed), \
+                mock.patch.object(ui, "draw_text") as text:
+            ui.draw_styled_two_line_button(None, (10, 20, 124, 84), "TITLE", "SUBTITLE")
+        self.assertEqual([call.args[4] for call in text.call_args_list],
+                         [(0, 0, 0), (0, 0, 0)])
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
