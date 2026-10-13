@@ -1439,6 +1439,38 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ['kiwi', 'openwebrx', 'local', 'fmdx'],
         )
 
+    def test_globe_repaints_an_opaque_rail_after_map_content_at_every_zoom(self):
+        """Zoomed globe geometry must never remain visible beneath the rail."""
+        for scale in (ui.RADIOGARDEN_ZOOM_MIN, ui.GLOBE_DEFAULT_SCALE,
+                      20.5, ui.RADIOGARDEN_ZOOM_MAX):
+            events = []
+            with patch.object(
+                    ui, 'draw_receiver_map_satellite',
+                    side_effect=lambda *_a, **_k: events.append('map') or False,
+                ), patch.object(
+                    ui, 'draw_logical_rect',
+                    side_effect=lambda *args: events.append(('rect', args)),
+                ), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_logical_rounded_rect'), \
+                 patch.object(ui, 'draw_logical_polyline'), \
+                 patch.object(ui, 'draw_logical_circle'), \
+                 patch.object(ui, 'draw_logical_points'), \
+                 patch.object(ui, 'draw_text'), \
+                 patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
+                 patch.object(ui, 'draw_sidebar_header'), \
+                 patch.object(ui, 'draw_styled_text_button'), \
+                 patch.object(ui, 'draw_picker_two_line_button'), \
+                 patch.object(ui, 'draw_radio_close_button'):
+                ui.draw_receiver_map(
+                    None, self.receivers(), 0.0, 0.0, scale,
+                    '', None, 'idle', {}, map_view='satellite_only',
+                )
+            rail = ('rect', (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H,
+                             ui.APP_UI_STYLE.palette.sidebar))
+            self.assertIn(rail, events)
+            self.assertGreater(max(index for index, event in enumerate(events) if event == rail),
+                               events.index('map'))
+
     def test_legend_lists_only_present_groups(self):
         entries = ui.receiver_map_legend_entries(self.receivers())
         self.assertEqual([group for group, _label, _color in entries],
