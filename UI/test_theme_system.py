@@ -7,9 +7,8 @@ from unittest.mock import MagicMock, call, patch
 
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
-    BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID, RED_THEME_ID,
-    INSTRUMENT_THEME_ID,
-    ROUNDED_INVERTED_THEME_ID, STRAIGHT_INVERTED_THEME_ID, STRAIGHT_THEME_ID,
+    BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID,
+    INSTRUMENT_THEME_ID, REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
     ThemeLibrary, apply_theme,
     display_distance, display_temperature, distance_axis_label,
     display_to_logical_x, new_theme, runtime_theme,
@@ -227,11 +226,11 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_text") as labels:
             ui.draw_theme_panel(None, editor)
         first_name = next(item for item in labels.call_args_list
-                          if item.args[3] == "DEFAULT ROUNDED")
+                          if item.args[3] == "DEFAULT STRAIGHT")
         self.assertEqual(first_name.args[1:3], (548, 132))
         self.assertEqual(first_name.args[8], "lm")
         self.assertEqual([item.args[2] for item in buttons.call_args_list
-                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 7)
+                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 4)
 
     def test_row_delete_confirmation_is_tied_to_its_theme(self):
         first = new_theme("First")
@@ -239,22 +238,19 @@ class ThemeSystemTests(unittest.TestCase):
         self.library.upsert(first)
         self.library.upsert(second)
         editor = ThemeEditor(self.library)
-        editor.page = 1
-
         def tap(action):
             box = theme_screen_boxes(editor)[action]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
-        tap("delete:1")
+        tap("delete:5")
         self.assertEqual(editor.confirm_delete_id, second["id"])
         tap("previous")
         self.assertIsNone(editor.confirm_delete_id)
-        tap("delete:6")
+        tap("delete:3")
         self.assertEqual(editor.notice_action, "LOCKED")
-        tap("next")
-        tap("delete:0")
+        tap("delete:4")
         self.assertEqual(editor.confirm_delete_id, first["id"])
-        tap("delete:0")
+        tap("delete:4")
         self.assertIsNone(self.library.get(first["id"]))
         self.assertIsNotNone(self.library.get(second["id"]))
         tap("previous")
@@ -273,54 +269,59 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(display_temperature(40), "40 C")
         self.assertEqual(json.loads(self.path.read_text())["themes"], [])
 
-    def test_both_builtin_themes_share_colors_and_straight_selection_survives_restart(self):
-        rounded = self.library.get(DEFAULT_THEME_ID)
-        straight = self.library.get(STRAIGHT_THEME_ID)
-        self.assertEqual((rounded["name"], straight["name"]),
-                         ("Default Rounded", "Default Straight"))
-        self.assertEqual(rounded["colors"], straight["colors"])
-        self.assertEqual((rounded["radius"], straight["radius"]), (8, 0))
+    def test_default_straight_selection_survives_restart(self):
+        straight = self.library.get(DEFAULT_THEME_ID)
+        self.assertEqual(straight["name"], "Default Straight")
+        self.assertEqual(straight["radius"], 0)
         editor = ThemeEditor(self.library)
-        self.assertEqual([theme["id"] for theme in editor.themes[:2]],
-                         [DEFAULT_THEME_ID, STRAIGHT_THEME_ID])
-        self.library.activate(STRAIGHT_THEME_ID)
+        self.assertEqual([theme["id"] for theme in editor.themes], list(BUILTIN_THEME_IDS))
+        self.library.activate(DEFAULT_THEME_ID)
         restarted = ThemeLibrary(self.path)
-        self.assertEqual(restarted.active_id, STRAIGHT_THEME_ID)
+        self.assertEqual(restarted.active_id, DEFAULT_THEME_ID)
         self.assertEqual(APP_UI_STYLE.button.radius, 0)
         self.assertEqual(APP_UI_STYLE.button.height, 64)
         self.assertEqual(display_temperature(40), "40 C")
         with self.assertRaises(ValueError):
-            restarted.delete(STRAIGHT_THEME_ID)
+            restarted.delete(DEFAULT_THEME_ID)
 
-    def test_editing_straight_builtin_creates_a_custom_copy(self):
-        self.library.activate(STRAIGHT_THEME_ID)
+    def test_editing_default_builtin_creates_a_custom_copy(self):
+        self.library.activate(DEFAULT_THEME_ID)
         editor = ThemeEditor(self.library)
-        box = theme_screen_boxes(editor)["edit:1"]
+        box = theme_screen_boxes(editor)["edit:0"]
         editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-        self.assertNotEqual(editor.draft["id"], STRAIGHT_THEME_ID)
+        self.assertNotEqual(editor.draft["id"], DEFAULT_THEME_ID)
         self.assertEqual(editor.draft["radius"], 0)
-        self.assertEqual(editor.draft["colors"], self.library.get(STRAIGHT_THEME_ID)["colors"])
+        self.assertEqual(editor.draft["colors"], self.library.get(DEFAULT_THEME_ID)["colors"])
 
     def test_inverted_and_monochrome_builtins_preserve_alpha_and_corner_choices(self):
-        self.assertEqual(len(BUILTIN_THEME_IDS), 7)
+        self.assertEqual(BUILTIN_THEME_IDS, (
+            DEFAULT_THEME_ID, STRAIGHT_INVERTED_THEME_ID,
+            GREEN_THEME_ID, INSTRUMENT_THEME_ID,
+        ))
         original = self.library.get(DEFAULT_THEME_ID)
-        for identifier, radius in ((STRAIGHT_INVERTED_THEME_ID, 0),
-                                   (ROUNDED_INVERTED_THEME_ID, 8)):
-            theme = self.library.get(identifier)
-            self.assertEqual(theme["radius"], radius)
-            for key, color in original["colors"].items():
-                self.assertEqual(theme["colors"][key][:3], [255 - value for value in color[:3]])
-                self.assertEqual(theme["colors"][key][3:], color[3:])
-        for identifier, dominant in ((GREEN_THEME_ID, 1), (RED_THEME_ID, 0)):
-            theme = self.library.get(identifier)
-            self.assertEqual(theme["radius"], 0)
-            for key, color in theme["colors"].items():
-                self.assertGreaterEqual(color[dominant], max(color[:3]))
-                self.assertEqual(color[3:], original["colors"][key][3:])
+        inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
+        self.assertEqual(inverted["radius"], 0)
+        for key, color in original["colors"].items():
+            self.assertEqual(inverted["colors"][key][:3], [255 - value for value in color[:3]])
+            self.assertEqual(inverted["colors"][key][3:], color[3:])
+        green = self.library.get(GREEN_THEME_ID)
+        for key, color in green["colors"].items():
+            self.assertGreaterEqual(color[1], max(color[:3]))
+            self.assertEqual(color[3:], original["colors"][key][3:])
+        for identifier in (STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID):
             self.library.activate(identifier)
             self.assertEqual(ThemeLibrary(self.path).active_id, identifier)
             with self.assertRaises(ValueError):
                 self.library.delete(identifier)
+
+    def test_removed_builtin_ids_migrate_without_reappearing(self):
+        for removed_id, replacement_id in REMOVED_THEME_MIGRATIONS.items():
+            self.path.write_text(json.dumps({
+                "version": 1, "active_id": removed_id, "themes": [],
+            }))
+            restarted = ThemeLibrary(self.path)
+            self.assertEqual(restarted.active_id, replacement_id)
+            self.assertNotIn(removed_id, BUILTIN_THEME_IDS)
 
     def test_instrument_theme_uses_quiet_square_controls(self):
         theme = self.library.get(INSTRUMENT_THEME_ID)
@@ -336,8 +337,19 @@ class ThemeSystemTests(unittest.TestCase):
                          ("Roboto", "Inter", "DejaVu Sans"))
         self.assertEqual(APP_UI_STYLE.button.radius, 0)
 
-    def test_green_and_red_smeter_trace_stands_clear_of_its_rail(self):
-        for identifier in (GREEN_THEME_ID, RED_THEME_ID):
+    def test_section_divider_is_dark_thin_and_theme_editable(self):
+        self.assertEqual(DEFAULT_THEME["colors"]["divider"], [42, 42, 42, 180])
+        self.assertIn("divider", next(
+            keys for name, keys in ui.COLOR_GROUPS if name == "BASE"))
+        custom = new_theme("Quiet rules")
+        custom["colors"]["divider"] = [21, 22, 23, 96]
+        self.library.upsert(custom)
+        with patch.object(ui, "draw_logical_line") as line:
+            ui.draw_section_divider(10, 40, 90)
+        line.assert_called_once_with(10, 40, 90, 40, (21, 22, 23, 96), 1)
+
+    def test_green_smeter_trace_stands_clear_of_its_rail(self):
+        for identifier in (GREEN_THEME_ID,):
             self.library.activate(identifier)
             palette = APP_UI_STYLE.palette
             self.assertGreater(sum(palette.smeter_active[:3]),
@@ -367,7 +379,7 @@ class ThemeSystemTests(unittest.TestCase):
                 stack.enter_context(patch.object(ui, name))
             stack.enter_context(patch.object(ui, "top_instrument_layout",
                                             return_value=("7.075.000", (0, 0, 1, 1))))
-            for theme_id in (ROUNDED_INVERTED_THEME_ID, STRAIGHT_INVERTED_THEME_ID):
+            for theme_id in (STRAIGHT_INVERTED_THEME_ID,):
                 self.library.activate(theme_id)
                 self.assertEqual(APP_UI_STYLE.palette.top_instrument_band,
                                  (255, 255, 255, 144))
@@ -387,7 +399,7 @@ class ThemeSystemTests(unittest.TestCase):
     def test_theme_success_notices_use_zoom_panel_data(self):
         editor = ThemeEditor(self.library)
         editor.open = True
-        first_box = theme_screen_boxes(editor)["theme:1"]
+        first_box = theme_screen_boxes(editor)["theme:0"]
         editor.tap((first_box[0] + first_box[2]) / 2,
                    (first_box[1] + first_box[3]) / 2)
         self.assertEqual((editor.notice_action, editor.notice_detail),
@@ -401,8 +413,8 @@ class ThemeSystemTests(unittest.TestCase):
         custom = new_theme("Delete me")
         self.library.upsert(custom)
         editor.selected_id = custom["id"]
-        editor.page = 1
-        delete_box = theme_screen_boxes(editor)["delete:0"]
+        editor.page = 0
+        delete_box = theme_screen_boxes(editor)["delete:4"]
         for _ in range(2):
             editor.tap((delete_box[0] + delete_box[2]) / 2,
                        (delete_box[1] + delete_box[3]) / 2)
@@ -415,7 +427,7 @@ class ThemeSystemTests(unittest.TestCase):
         self.library.activate(STRAIGHT_INVERTED_THEME_ID)
         self.assertEqual(ui.themed_waterfall_pixels(original),
                          bytes((245, 235, 225, 255, 155, 105, 55, 42)))
-        for identifier, dominant in ((GREEN_THEME_ID, 1), (RED_THEME_ID, 0)):
+        for identifier, dominant in ((GREEN_THEME_ID, 1),):
             self.library.activate(identifier)
             recolored = ui.themed_waterfall_pixels(original)
             self.assertEqual(recolored[3::4], original[3::4])
@@ -475,7 +487,6 @@ class ThemeSystemTests(unittest.TestCase):
             gl.glGenTextures.return_value = 9
             texture = ui.WaterfallTexture()
             for identifier, expected in ((DEFAULT_THEME_ID, (4, 7, 11, 255)),
-                                         (ROUNDED_INVERTED_THEME_ID, (255, 255, 255, 255)),
                                          (STRAIGHT_INVERTED_THEME_ID, (255, 255, 255, 255))):
                 self.library.activate(identifier)
                 texture.draw(0, 100, 1024, 800, center_khz=7075, span_khz=20)
@@ -537,7 +548,7 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(s_label.args[4], APP_UI_STYLE.palette.smeter_scale)
 
     def test_footer_and_display_slider_use_active_theme_colors(self):
-        self.library.activate(RED_THEME_ID)
+        self.library.activate(GREEN_THEME_ID)
         with patch.object(ui, "draw_logical_rect") as rectangle, \
                 patch.object(ui, "draw_text"), \
                 patch.object(ui, "draw_logical_line"):
@@ -561,7 +572,7 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(colors["BUFFER Q3/T6"], APP_UI_STYLE.palette.footer_live)
 
     def test_audio_volume_uses_the_same_theme_colors_as_home(self):
-        self.library.activate(RED_THEME_ID)
+        self.library.activate(GREEN_THEME_ID)
         ui.configure_output(True)
         controls = dict(mute=False, voice_clean_level=0, hf_enhance_level=0,
                         tone_profile=0, squelch_level=0, agc=True,
@@ -675,8 +686,8 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(restarted.get(saved_id)["colors"]["passband_border"],
                          [170, 187, 204, border_alpha])
         editor = ThemeEditor(restarted)
-        editor.page = 1
-        tap("edit:0")
+        editor.page = 0
+        tap("edit:4")
         tap("section:COLORS")
         tap("group:5")
         tap("color:0")

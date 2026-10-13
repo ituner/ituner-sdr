@@ -25,6 +25,7 @@ class UIPalette:
     section_heading: tuple = (174, 203, 208)
     section_surface: tuple = (11, 20, 27, 255)
     section_border: tuple = (112, 136, 146, 255)
+    divider: tuple = (42, 42, 42, 180)
     top_instrument_band: tuple = (0, 0, 0, 144)
     sidebar_title: tuple = (215, 235, 239)
     sidebar_rule: tuple = (72, 101, 112, 160)

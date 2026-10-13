@@ -10,27 +10,27 @@ from ui_style import UIPalette, apply_ui_style
 
 
 DEFAULT_THEME_ID = "default"
-STRAIGHT_THEME_ID = "default-straight"
 STRAIGHT_INVERTED_THEME_ID = "straight-inverted"
-ROUNDED_INVERTED_THEME_ID = "rounded-inverted"
 GREEN_THEME_ID = "green"
-RED_THEME_ID = "red"
 INSTRUMENT_THEME_ID = "instrument"
+REMOVED_THEME_MIGRATIONS = {
+    "default-straight": DEFAULT_THEME_ID,
+    "rounded-inverted": STRAIGHT_INVERTED_THEME_ID,
+    "red": DEFAULT_THEME_ID,
+}
 TEXT_SCALE_MIN = 80
 TEXT_SCALE_MAX = 120
 DEFAULT_THEME = {
     "id": DEFAULT_THEME_ID,
-    "name": "Default Rounded",
+    "name": "Default Straight",
     "colors": {field.name: list(getattr(UIPalette(), field.name)) for field in fields(UIPalette)},
-    "radius": 8,
+    "radius": 0,
     "sidebar": "right",
     "text_scale_percent": 100,
     # The historical UI mixes station miles and WSPR kilometres. Keep the
     # built-in theme visually unchanged; saved themes choose a unified system.
     "units": "original",
 }
-STRAIGHT_THEME = {**DEFAULT_THEME, "id": STRAIGHT_THEME_ID,
-                  "name": "Default Straight", "radius": 0}
 
 
 def invert_colors(colors):
@@ -39,36 +39,30 @@ def invert_colors(colors):
             for name, value in colors.items()}
 
 
-def tinted_colors(colors, tone):
-    """Map the original palette's lightness to one consistent color family."""
-    factors = (0.45, 1.0, 0.53) if tone == "green" else (1.0, 0.68, 0.62)
+def green_colors(colors):
+    """Map the original palette's lightness to the green color family."""
+    factors = (0.45, 1.0, 0.53)
     result = {}
     for name, value in colors.items():
         lightness = round(0.2126 * value[0] + 0.7152 * value[1] + 0.0722 * value[2])
         result[name] = [round(lightness * factor) for factor in factors] + list(value[3:])
     # The live S-meter trace starts blue in the default palette. Its luminance
     # becomes nearly the same as the dark rail under a monochrome tint.
-    signal_colors = (
-        {"smeter_active": (96, 244, 130), "smeter_hot": (171, 255, 189),
-         "smeter_marker": (223, 255, 229)}
-        if tone == "green" else
-        {"smeter_active": (255, 110, 96), "smeter_hot": (255, 178, 166),
-         "smeter_marker": (255, 230, 224)}
-    )
+    signal_colors = {
+        "smeter_active": (96, 244, 130),
+        "smeter_hot": (171, 255, 189),
+        "smeter_marker": (223, 255, 229),
+    }
     for name, rgb in signal_colors.items():
         result[name] = [*rgb, *colors[name][3:]]
     return result
 
 
 INVERTED_COLORS = invert_colors(DEFAULT_THEME["colors"])
-STRAIGHT_INVERTED_THEME = {**STRAIGHT_THEME, "id": STRAIGHT_INVERTED_THEME_ID,
+STRAIGHT_INVERTED_THEME = {**DEFAULT_THEME, "id": STRAIGHT_INVERTED_THEME_ID,
                            "name": "Straight Inverted", "colors": INVERTED_COLORS}
-ROUNDED_INVERTED_THEME = {**DEFAULT_THEME, "id": ROUNDED_INVERTED_THEME_ID,
-                          "name": "Rounded Inverted", "colors": INVERTED_COLORS}
-GREEN_THEME = {**STRAIGHT_THEME, "id": GREEN_THEME_ID, "name": "Green",
-               "colors": tinted_colors(DEFAULT_THEME["colors"], "green")}
-RED_THEME = {**STRAIGHT_THEME, "id": RED_THEME_ID, "name": "Red",
-             "colors": tinted_colors(DEFAULT_THEME["colors"], "red")}
+GREEN_THEME = {**DEFAULT_THEME, "id": GREEN_THEME_ID, "name": "Green",
+               "colors": green_colors(DEFAULT_THEME["colors"])}
 INSTRUMENT_COLORS = {
     **DEFAULT_THEME["colors"],
     # Instrument controls should be discoverable without turning the rail
@@ -84,15 +78,14 @@ INSTRUMENT_COLORS = {
     "secondary_text": [132, 132, 132],
 }
 INSTRUMENT_THEME = {
-    **STRAIGHT_THEME,
+    **DEFAULT_THEME,
     "id": INSTRUMENT_THEME_ID,
     "name": "Instrument Quiet",
     "colors": INSTRUMENT_COLORS,
 }
 BUILTIN_THEMES = {
     theme["id"]: theme for theme in (
-        DEFAULT_THEME, STRAIGHT_THEME, STRAIGHT_INVERTED_THEME,
-        ROUNDED_INVERTED_THEME, GREEN_THEME, RED_THEME, INSTRUMENT_THEME,
+        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME, INSTRUMENT_THEME,
     )
 }
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)
@@ -103,6 +96,10 @@ runtime_revision = 0
 
 def is_builtin_theme_id(identifier):
     return identifier in BUILTIN_THEMES
+
+
+def is_reserved_theme_id(identifier):
+    return is_builtin_theme_id(identifier) or identifier in REMOVED_THEME_MIGRATIONS
 
 
 def color_hex(color):
@@ -127,7 +124,7 @@ def normalize_theme(value, *, allow_default=False):
     if not isinstance(value, dict):
         raise ValueError("theme must be an object")
     identifier = str(value.get("id") or "").strip()
-    if is_builtin_theme_id(identifier) and not allow_default:
+    if is_reserved_theme_id(identifier) and not allow_default:
         raise ValueError("the built-in theme cannot be edited")
     if not identifier or len(identifier) > 80:
         raise ValueError("invalid theme identifier")
@@ -233,6 +230,7 @@ class ThemeLibrary:
                     themes.append(normalized)
             self.themes = themes
             active_id = str(document.get("active_id") or DEFAULT_THEME_ID)
+            active_id = REMOVED_THEME_MIGRATIONS.get(active_id, active_id)
             self.active_id = active_id if self.get(active_id) else DEFAULT_THEME_ID
         except (OSError, ValueError, TypeError, AttributeError):
             pass

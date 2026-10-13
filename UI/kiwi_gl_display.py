@@ -2287,8 +2287,8 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     x0, y0, x1, y1 = box
     mix = clamp(float(mix), 0.0, 1.0)
     draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (9, 17, 23, 228)))
-    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (97, 125, 136, 116)), 1)
-    draw_logical_line(x0, y1, x1, y1, themed_instrument_color("section_border", (23, 40, 49, 210)), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 12, y0 + 6, "AUDIO MIX", themed_instrument_color("section_heading", (170, 201, 207)), 14, True, False, "lt", family="Liberation Sans")
     track_x0, track_x1 = x0 + 14, x1 - 14
     track_y = y0 + 33
@@ -2424,7 +2424,7 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
     draw_logical_rect(0, 58, LOGICAL_W, LOGICAL_H, (0, 0, 0, 128))
     draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (7, 18, 25, 244)))
     draw_logical_line(x0, y0, x1, y0, (*accent, 220), 2)
-    draw_logical_line(x0, y1, x1, y1, themed_instrument_color("section_border", (82, 116, 126, 160)), 1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", themed_instrument_color("text", (231, 246, 247)), 24, True, False, "lm", family="Liberation Sans")
     state_label = "APPLIES LIVE" if target_vfo == "A" else "STAGES VFO B"
     draw_text(text_cache, x0 + 26, y0 + 66, state_label, accent, 13, True, False, "lm", family="Liberation Sans")
@@ -6796,16 +6796,14 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     theme = theme or theme_system.runtime_theme
     palette = palette or APP_UI_STYLE.palette
     identifier = theme["id"]
-    if identifier in (theme_system.DEFAULT_THEME_ID, theme_system.STRAIGHT_THEME_ID):
+    if identifier == theme_system.DEFAULT_THEME_ID:
         return bytes(data)
     if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
-                           theme_system.ROUNDED_INVERTED_THEME_ID,
-                           theme_system.GREEN_THEME_ID, theme_system.RED_THEME_ID)
+                           theme_system.GREEN_THEME_ID)
             and tuple(palette.waterfall_low) == (0, 0, 0)
             and tuple(palette.waterfall_high) == (255, 255, 255)):
         return bytes(data)
-    inverted = identifier in (theme_system.STRAIGHT_INVERTED_THEME_ID,
-                              theme_system.ROUNDED_INVERTED_THEME_ID)
+    inverted = identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
     if np is None:
         pixels = bytearray(data)
         if inverted:
@@ -8373,11 +8371,15 @@ def draw_styled_button_frame(box, *, active=False, pressed=None, selected=False,
 
 
 def themed_instrument_color(name, original):
-    """Retain the two original themes' measured shades; theme other instruments."""
-    if theme_system.runtime_theme["id"] in (theme_system.DEFAULT_THEME_ID,
-                                             theme_system.STRAIGHT_THEME_ID):
+    """Retain the original theme's measured shades; theme other instruments."""
+    if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID:
         return original
     return getattr(APP_UI_STYLE.palette, name)
+
+
+def draw_section_divider(x0, y, x1):
+    """Draw one quiet, theme-controlled horizontal section boundary."""
+    draw_logical_line(x0, y, x1, y, APP_UI_STYLE.palette.divider, 1)
 
 
 def themed_overlay_color(name, original):
@@ -8706,8 +8708,8 @@ def draw_audio_transport_graph(text_cache, history, box):
     now = time.monotonic()
     samples = tuple(sample for sample in history if sample[0] >= now - span_seconds)
     draw_logical_rect(x0, y0, x1, y1, themed_overlay_color("section_surface", (4, 12, 19, 210)))
-    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (91, 221, 241, 220)), 2)
-    draw_logical_line(x0, y1, x1, y1, themed_instrument_color("section_border", (91, 221, 241, 160)), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     output_gaps = sum(1 for sample in samples if len(sample) > 4 and sample[4])
     clock_lates = sum(1 for sample in samples if len(sample) > 5 and sample[5] >= KIWI_RAW_AUDIO_QUANTUM_FRAMES / 12000.0)
     latest = samples[-1] if samples else None
@@ -8795,8 +8797,8 @@ def draw_cpu_utilization_graph(text_cache, history, latest, box):
         themed_instrument_color("slider_fill", (205, 143, 242, 245)),
     )
     draw_logical_rect(x0, y0, x1, y1, themed_overlay_color("section_surface", (4, 12, 19, 224)))
-    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (91, 221, 241, 230)), 2)
-    draw_logical_line(x0, y1, x1, y1, themed_instrument_color("section_border", (91, 221, 241, 170)), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 14, y0 + 18, "CPU UTILIZATION", themed_instrument_color("section_heading", (161, 235, 246)), 18, True, True, "lm")
     close_x0, close_y0, close_x1, close_y1 = cpu_utilization_graph_close_box(box)
     draw_styled_text_button(
@@ -9465,8 +9467,8 @@ def draw_radio_setup_panel(
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 242))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 112), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 112), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     server_controlled = receiver_worker_protocol(receiver_type) == "fmdx"
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(84), "FM-FMDX" if server_controlled else "MODE", (229, 243, 246), 20, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, radio_popup_x(30), radio_popup_y(101), "Mode is controlled by the FM-DX server" if server_controlled else "Tap a mode to cycle its variants", (145, 183, 190), 13, False, False, "lm", family="Liberation Sans")
@@ -11149,8 +11151,7 @@ def draw_sidebar_header(text_cache, title):
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar)
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, APP_UI_STYLE.palette.sidebar_title,
               15, True, False, "cm", family="Liberation Sans")
-    draw_logical_line(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H,
-                      LOGICAL_W - 10, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar_rule, 1)
+    draw_section_divider(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H, LOGICAL_W - 10)
 
 
 def draw_lcd_drawer_heading(text_cache, x, y, title):
@@ -11320,8 +11321,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 28, y0 + 19, "AUDIO", (229, 243, 246), 20 if LCD_800_MODE else 18, True, True, "lm", family="Liberation Sans")
     output_label = "USB SPEAKER" if output_available else "OUTPUT UNAVAILABLE"
     output_color = (104, 230, 151) if output_available else (242, 163, 104)
@@ -11352,7 +11353,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         fraction = clamp(value / maximum, 0.0, 1.0)
         draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("section_surface", (18, 29, 38, 220)))
         for line_y in (by0, by1):
-            draw_logical_line(bx0, line_y, bx1, line_y, themed_instrument_color("section_border", (115, 140, 151, 82)), 1)
+            draw_section_divider(bx0, line_y, bx1)
         draw_logical_line(bx0, by0, bx0, by1, themed_instrument_color("section_border", (115, 140, 151, 82)), 1)
         draw_logical_line(bx1, by0, bx1, by1, themed_instrument_color("section_border", (115, 140, 151, 82)), 1)
         label_y = by0 + (19 if LCD_800_MODE else 16)
@@ -11520,8 +11521,8 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
     draw_tests_button(text_cache, TEST_GLOBE_BOX, "CONSTELLATION", "3 WARM STREAMS  /  4 ROTATING SCOUTS", True)
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
@@ -12543,7 +12544,7 @@ def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_
     x0, y0, x1, y1 = WSPR_PANEL_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 106))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 238))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 104), 1)
+    draw_section_divider(x0, y0, x1)
     draw_text(text_cache, 36, y0 + 22, "WSPR", themed_instrument_color("text", (232, 246, 247)), 21, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 146, y0 + 22, f"{len(sessions):02d} SELECTED", themed_instrument_color("ready", (98, 241, 169)), 14, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 272, y0 + 22, "DECODER OFF", themed_instrument_color("waiting", (241, 181, 108)), 13, True, True, "lm", family="Liberation Sans")
@@ -13445,7 +13446,7 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     # Cards may scroll under this fixed header. Redraw it after the grid so
     # the header also forms the viewport's clean clipping edge.
     draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, (8, 22, 29, 250))
-    draw_logical_line(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W, WSPR_WORKSPACE_HEADER_H - 1, (69, 151, 144, 165), 1)
+    draw_section_divider(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W)
     draw_text(text_cache, 22, 27, "WSPR MONITOR", themed_instrument_color("text", (234, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     live_count = sum(
         1 for session in monitor_manager.sessions.values()
@@ -14580,8 +14581,8 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
     tx0, ty0, tx1, ty1 = DJ_TRACK_BOX
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 22, "DJ TUNE", (229, 243, 246), 18, True, True, "lm")
     delta_hz = round((current_khz - origin_khz) * 1000)
     delta_label = f"{delta_hz:+d} Hz" if delta_hz else "CENTRE"
@@ -14652,8 +14653,8 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 96), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 29, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM", spectrum_enabled)
     draw_display_control(text_cache, DISPLAY_AUTO_BOX, "SPECTRUM AUTO", spectrum_auto)
@@ -14803,8 +14804,8 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
 def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=False):
     x0, y0, x1, y1 = FILTER_PANEL_BOX
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 174))
-    draw_logical_line(x0, y0, x1, y0, (163, 190, 196, 132), 1)
-    draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 132), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 34, y0 + 22, f"FILTER  {mode}", (229, 243, 246), 24, True, True, "lm")
     width_hz = high_cut - low_cut
     draw_text(text_cache, 926, y0 + 22, f"BW {width_hz / 1000:.2f} kHz", (205, 210, 213), 24, True, True, "rm")
@@ -15405,7 +15406,7 @@ def draw_main_menu(text_cache, scroll):
     x0, y0, x1, y1 = MENU_BOX
     # Let the waterfall remain legible behind a single calm, temporary veil.
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
-    draw_logical_line(x0 + 12, y0, x1 - 12, y0, (174, 201, 205, 72), 1)
+    draw_section_divider(x0 + 12, y0, x1 - 12)
     for idx, (kind, label) in enumerate(MENU_ITEMS):
         box = menu_item_box(idx, scroll)
         if box is None:
@@ -16216,7 +16217,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     status = "MUTE" if muted else main_volume_label(level)
     status_color = themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (239, 247, 248))
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
-    draw_logical_line(x0, y0, x1, y0, APP_UI_STYLE.palette.section_border, 1)
+    draw_section_divider(x0, y0, x1)
     draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
     mute_visual = draw_styled_button_frame(
@@ -16253,13 +16254,11 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
     x0, y0, x1, y1 = lcd_home_smeter_box()
     dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     live_segments = smeter_segment_position(dbm)
-    default_theme = theme_system.runtime_theme["id"] in (
-        theme_system.DEFAULT_THEME_ID, theme_system.STRAIGHT_THEME_ID,
-    )
+    default_theme = theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID
     draw_logical_rect(x0, y0, x1, y1,
                       (9, 17, 23, 228) if default_theme else APP_UI_STYLE.palette.section_surface)
-    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
-    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
+    draw_section_divider(x0, y0, x1)
+    draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 12, y0 + 13, "S-METER",
               (170, 201, 207) if default_theme else APP_UI_STYLE.palette.section_heading,
               14, True, False, "lt", family="Liberation Sans")
@@ -16306,7 +16305,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     grid = themed_instrument_color("section_border", (87, 125, 138, 132))
     quiet = APP_UI_STYLE.palette.section_heading
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
-    draw_logical_line(x0, y0, x1, y0, APP_UI_STYLE.palette.section_border, 1)
+    draw_section_divider(x0, y0, x1)
     draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", themed_instrument_color("secondary_text", (180, 214, 220)), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
@@ -16575,7 +16574,7 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
     meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     meter_level = smeter_segment_position(meter_value)
     draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, APP_UI_STYLE.palette.section_surface)
-    draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, APP_UI_STYLE.palette.section_border, 1)
+    draw_section_divider(meter_x0, meter_y0, meter_x1)
     draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", themed_instrument_color("smeter_dbm", (190, 218, 223)), 13, True, False, "rm", family="Liberation Sans")
     meter_track_x0 = meter_x0 + ((meter_x1 - meter_x0) - (35 * 4.65 + 34 * 2)) / 2
@@ -17403,11 +17402,11 @@ def refresh_receiver_list_theme():
         ("main_background", palette.background),
         ("sidebar_background", palette.sidebar),
         ("row_background", palette.background),
-        ("selected_background", (palette.active_surface if theme_system.runtime_theme["id"] in (theme_system.DEFAULT_THEME_ID, theme_system.STRAIGHT_THEME_ID) else palette.selected_surface)),
+        ("selected_background", (palette.active_surface if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID else palette.selected_surface)),
         ("primary_text", palette.text),
         ("secondary_text", palette.secondary_text),
         ("focus", palette.focus),
-        ("row_outline", ((66, 66, 66, 210) if theme_system.runtime_theme["id"] in (theme_system.DEFAULT_THEME_ID, theme_system.STRAIGHT_THEME_ID) else (*palette.border[:3], 210))),
+        ("row_outline", ((66, 66, 66, 210) if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID else (*palette.border[:3], 210))),
         ("ready", palette.ready),
         ("waiting", palette.waiting),
         ("untested", palette.untested),
@@ -18115,7 +18114,7 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
         # look like a polished ham transcription or a callsign assertion.
         draw_text(text_cache, x0 + 20, y0 + 17, "ALLOSAURUS · RAW PHONEMES · ENGLISH INVENTORY",
                   themed_instrument_color("section_heading", (112, 221, 181)), 14, True, False, "lm", family=family)
-        draw_logical_line(x0 + 18, y0 + 31, x1 - 18, y0 + 31, themed_instrument_color("section_border", (60, 139, 121, 130)), 1)
+        draw_section_divider(x0 + 18, y0 + 31, x1 - 18)
         content_y0 = y0 + 18
     if whisper_mode_control:
         toggle_box = caption_translation_toggle_box((x0, y0, x1, y1))
