@@ -260,6 +260,54 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         self.assertEqual(center_khz, state.snapshot()[1])
         self.assertEqual(span_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0)
 
+    def test_hidden_globe_skips_fft_but_keeps_audio_and_speech_then_resumes(self):
+        self.addCleanup(ui.MAIN_RADIO_VISUALS_HIDDEN.clear)
+        server = self.register_fmdx()
+        state = self.state()
+        state.set_server(server, receiver_type="fmdx")
+        state.set_transcription_enabled(True)
+        generation = state.snapshot()[-1]
+        pcm = struct.pack("<8h", 1000, -1000, 2000, 0, 3000, 1000, 4000, 2000)
+        played = []
+
+        class Player:
+            def submit(self, audio, silence=False):
+                played.append((audio, silence))
+
+        class Analyzer:
+            resets = 0
+            feeds = 0
+
+            def reset(self):
+                self.resets += 1
+
+            def feed(self, mono):
+                self.feeds += 1
+                return (bytes([0, 64, 128, 255]),)
+
+        analyzer = Analyzer()
+        rows, speech, callsigns = queue.Queue(), queue.Queue(), queue.Queue()
+        args = SimpleNamespace(audio_rate=12_000, wf_row_pixels=1)
+        ui.MAIN_RADIO_VISUALS_HIDDEN.set()
+        self.assertTrue(ui.publish_fmdx_pcm(
+            pcm, args, state, generation, Player(), analyzer, rows, speech, callsigns,
+        ))
+        self.assertEqual(played, [(pcm, False)])
+        self.assertTrue(speech.get_nowait())
+        self.assertTrue(callsigns.get_nowait())
+        self.assertTrue(rows.empty())
+        self.assertEqual((analyzer.resets, analyzer.feeds), (1, 0))
+
+        ui.MAIN_RADIO_VISUALS_HIDDEN.clear()
+        self.assertTrue(ui.publish_fmdx_pcm(
+            pcm, args, state, generation, Player(), analyzer, rows, speech, callsigns,
+        ))
+        self.assertEqual(played, [(pcm, False), (pcm, False)])
+        self.assertEqual((analyzer.resets, analyzer.feeds), (1, 1))
+        self.assertFalse(rows.empty())
+        self.assertTrue(speech.get_nowait())
+        self.assertTrue(callsigns.get_nowait())
+
     def test_fmdx_scan_silences_live_playback(self):
         server = self.register_fmdx()
         state = self.state()

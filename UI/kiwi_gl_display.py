@@ -13999,6 +13999,13 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     return True
 
 
+def prepare_globe_resources(text_cache):
+    """Pay the first texture/mesh upload cost before interactive frames begin."""
+    draw_receiver_map_satellite(text_cache, 0, 0, PICKER_MAP_BOX, 1.0)
+    _globe_borders.draw(globe_gpu_matrix(0, 0, PICKER_MAP_BOX, 1.0), (170, 190, 181, 105))
+    GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+
+
 def globe_hd_tiles_enabled():
     """Prioritize CM5; allow an explicit desktop opt-in for tile debugging."""
     override = os.environ.get("ITUNER_GLOBE_HD_TILES")
@@ -19058,6 +19065,10 @@ def put_latest(target_queue, item):
         pass
 
 
+# The full-screen globe covers the radio spectrum; audio and speech stay live.
+MAIN_RADIO_VISUALS_HIDDEN = threading.Event()
+
+
 def publish_fmdx_pcm(
     pcm, args, state, server_generation, player, analyzer, line_queue,
     transcript_queue=None, callsign_queue=None,
@@ -19089,6 +19100,13 @@ def publish_fmdx_pcm(
     _server, center_khz, _zoom, _smeter, _view_generation, current_generation = state.snapshot()
     if current_generation != server_generation:
         return False
+    if MAIN_RADIO_VISUALS_HIDDEN.is_set():
+        # Pure-Python FFT work competes with the UI even though its output is
+        # covered by the globe. Discard partial history across the hidden gap.
+        analyzer.reset()
+        state.connection_ready(server_generation, "audio")
+        state.connection_ready(server_generation, "waterfall")
+        return True
     for samples in analyzer.feed(mono):
         line = kiwi.waterfall_line(samples, mapper, 0.0, 255.0, width=WF_TEX_W)
         state.update_spectrum(samples, 0.0, 255.0)
@@ -23396,6 +23414,7 @@ def main():
         flush=True,
     )
     text_cache = TextCache()
+    prepare_globe_resources(text_cache)
     wf_texture = WaterfallTexture()
     wf_presenter = WaterfallPresenter()
     spectrum_layer = SpectrumLayerCache()
@@ -26115,7 +26134,10 @@ def main():
                     # to give every visible button immediate press feedback.
                     set_ui_press_point(x, y) if is_active else set_ui_press_point()
 
-                    if is_active and picker_open and picker_map_open and picker_map_garden_mode and globe_receivers:
+                    if (is_active and picker_open and picker_map_open and picker_map_garden_mode
+                            and globe_receivers and not touch_started and len(points) == 1):
+                        # Preview on first contact only. A moving finger must not
+                        # re-project the entire receiver catalog for every report.
                         hovered_receiver = receiver_map_station_at(
                             x, y, globe_receivers, picker_map_yaw,
                             picker_map_pitch, PICKER_MAP_BOX, picker_map_scale, True,
@@ -26820,6 +26842,8 @@ def main():
                             advance_dj_tune(x - last_move_x)
                             last_move_x = x
                         elif gesture == "picker_map":
+                            if len(points) >= 2 or max(abs(x - start_x), abs(y - start_y)) > args.tap_px:
+                                picker_map_hover_server = None
                             if len(points) >= 2:
                                 picker_map_lock_target = None
                                 picker_map_zoom_target = None
@@ -29726,6 +29750,10 @@ def main():
                 display_freq = freq_khz
                 display_span = receiver_display_span(zoom, state.receiver_type_snapshot())
 
+            if picker_open and picker_map_open:
+                MAIN_RADIO_VISUALS_HIDDEN.set()
+            else:
+                MAIN_RADIO_VISUALS_HIDDEN.clear()
             if now >= next_system_sample:
                 # The compact status remains inexpensive at a two-second
                 # cadence. While the CPU popup is open, use one-second core
@@ -30498,6 +30526,7 @@ def main():
             )
             clock.tick(globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
     finally:
+        MAIN_RADIO_VISUALS_HIDDEN.clear()
         # An orderly exit commits a genuine last-minute adjustment, including
         # the current frequency, once. Unchanged state produces no write.
         write_wspr_local_log("renderer_stopped")
