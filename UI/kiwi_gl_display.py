@@ -27,11 +27,13 @@ import time
 import traceback
 import re
 import html
+import io
 import wave
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 import ipaddress
 from urllib.request import Request, urlopen
+import globe_tiles
 
 
 NETWORK_MANAGER_HELPER = "/usr/local/sbin/ituner-network"
@@ -321,6 +323,9 @@ def load_broadcast_identification_policy():
 
 BROADCAST_IDENTIFICATION_POLICY = load_broadcast_identification_policy()
 _satellite_map_surfaces = {}
+_globe_tile_fetcher = None
+_globe_tile_gpu_lru = OrderedDict()
+_globe_tile_decode_failed = set()
 
 
 def _vendor_roots():
@@ -428,7 +433,7 @@ WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
 RADIOGARDEN_DRAG_GAIN = 1.0
 RADIOGARDEN_ZOOM_MIN = 0.55
-RADIOGARDEN_ZOOM_MAX = 768.0
+RADIOGARDEN_ZOOM_MAX = 1200.0
 # Six taps traverse the complete map scale from the global overview to the
 # regional maximum. A geometric step makes each tap feel consistent.
 RADIOGARDEN_ZOOM_TAP_FACTOR = (RADIOGARDEN_ZOOM_MAX / RADIOGARDEN_ZOOM_MIN) ** (1.0 / 6.0)
@@ -1996,16 +2001,14 @@ def configure_popup_layout():
         # permanent 256 px rail used by Home; two narrow station columns made
         # names and locations needlessly difficult to scan on the LCD.
         PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
-        # The source selectors now use the previously empty upper rail. The
-        # receiver list can reclaim the full content height for station rows.
+        # Source categories live in the rail; the list uses the full height.
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 6, 0
         # RadioGarden gets the same dedicated 256 px right rail as Home.
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        # Source selectors lead the rail as full-width horizontal tabs. The
-        # four secondary commands retain their original square 2-column grid
-        # directly above the bottom-anchored Back button.
+        # Source selectors start below the rail title. Four rail commands
+        # stay directly above the bottom-anchored Back button.
         (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
          PICKER_SORT_BOX, PICKER_ROUTE_FAVORITES_BOX) = receiver_picker_command_boxes()
         PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
@@ -2320,7 +2323,7 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
     # identify the two receivers without carving a border across the RF view.
 
     rx0, ry0, rx1, ry1 = boxes["rail"]
-    draw_logical_rect(rx0, ry0, rx1, ry1, (5, 12, 18, 255))
+    draw_logical_rect(rx0, ry0, rx1, ry1, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(rx0, ry0, rx0, ry1, (105, 139, 150, 175), 1)
     draw_sidebar_header(text_cache, "DUAL VFO")
     draw_radio_close_button(text_cache, boxes["home"])
@@ -2504,6 +2507,30 @@ DIGITAL_MENU_ITEMS = (
     ("cw", "CW MORSE"),
     ("digital_back", "BACK"),
 )
+
+
+def digital_decoder_session_counts(wspr_tiles, sstv_configs, hell_configs,
+                                   qrss_configs, cw_configs):
+    """Count enabled receive sessions separately for each decoder category."""
+    groups = (
+        ("wspr", wspr_tiles), ("sstv", sstv_configs),
+        ("hell", hell_configs), ("qrss", qrss_configs), ("cw", cw_configs),
+    )
+    return {
+        kind: sum(not config.get("paused", False) for config in configs)
+        for kind, configs in groups
+    }
+
+
+def active_digital_decoder_kinds(wspr_tiles, sstv_configs, hell_configs,
+                                 qrss_configs, cw_configs):
+    """Mark decoder types with at least one enabled receive session."""
+    counts = digital_decoder_session_counts(
+        wspr_tiles, sstv_configs, hell_configs, qrss_configs, cw_configs,
+    )
+    return frozenset(kind for kind, count in counts.items() if count)
+
+
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 @dataclass(frozen=True)
@@ -2535,11 +2562,12 @@ class ReceiverBrowserState:
         )
 
 
-# Source tabs are ordered LAN, KIWI, OPENWEBRX, FM-DX, ALL and use the shared
-# two-column button grid at the top of the receiver rail.
+# Receiver categories and Globe legend filters stack in the 236 px rail.
 RECEIVER_RAIL_TAB_TOP_GAP = 12
 RECEIVER_RAIL_TAB_HEIGHT = 64
 RECEIVER_RAIL_TAB_GAP = 8
+RECEIVER_PICKER_CATEGORY_HEIGHT = 48
+RECEIVER_PICKER_CATEGORY_GAP = 14
 RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
@@ -2557,9 +2585,9 @@ RECEIVER_ACTION_ICON_SIZE = APP_ACTION_ICON_SIZE
 # line icons while remaining comfortably inside the shared 114 px tile.
 RECEIVER_GLOBE_ICON_SIZE = 58
 RECEIVER_ACTION_ICON_CENTER_Y = 42
-RECEIVER_PICKER_ROW_HEIGHT = 138
+RECEIVER_PICKER_ROW_HEIGHT = 124
 RECEIVER_PICKER_ROW_GAP = 8
-RECEIVER_PICKER_ROW_INSET = 6
+RECEIVER_PICKER_ROW_INSET = 8
 RECEIVER_PICKER_BACK_BOX = (
     RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN,
     728,
@@ -2569,24 +2597,17 @@ RECEIVER_PICKER_BACK_BOX = (
 
 
 def receiver_source_segments():
-    """Return standard two-column source buttons in priority order."""
+    """Return the five source categories just below the rail title line."""
     names = receiver_catalog.SOURCE_FILTERS
-    # This helper also seeds module-level placeholder geometry before the LCD
-    # constants later in this file are declared. The fallbacks are the native
-    # 1280x800 values; configure_output() recomputes the authoritative boxes.
-    rail_x0 = RECEIVER_PICKER_MAIN_W
-    logical_w = globals().get("LOGICAL_W", 1280)
-    header_h = globals().get("LCD_DRAWER_HEADER_H", 64)
-    x0, x1 = rail_x0 + 10, logical_w - 10
-    top = header_h + RECEIVER_RAIL_TAB_TOP_GAP
-    width = (x1 - x0 - RECEIVER_RAIL_TAB_GAP) / 2
+    # This also seeds module-level geometry before configure_output() runs.
+    x0 = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
+    x1 = x0 + RECEIVER_PICKER_SIDEBAR_W - 2 * RECEIVER_PICKER_MARGIN
+    top = globals().get("LCD_DRAWER_HEADER_H", 64) + 16
     return tuple(
         (name, (
-            x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP),
-            top + (index // 2) * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP),
-            x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP) + width,
-            top + (index // 2) * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP)
-            + RECEIVER_RAIL_TAB_HEIGHT,
+            x0, top + index * (RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP),
+            x1, top + index * (RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP)
+            + RECEIVER_PICKER_CATEGORY_HEIGHT,
         ))
         for index, name in enumerate(names)
     )
@@ -2608,11 +2629,8 @@ def receiver_picker_command_boxes():
 
 
 def receiver_list_notice_box():
-    """Centered transient notice within the Receiver list canvas."""
-    x0, y0, x1, y1 = PICKER_BOX
-    center_x = (x0 + x1) / 2
-    center_y = (y0 + y1) / 2
-    return center_x - 190, center_y - 25, center_x + 190, center_y + 25
+    """Sort uses the exact same placement and size as the Zoom OSD."""
+    return ZOOM_OSD_BOX
 
 
 def boxes_overlap(a, b):
@@ -2735,6 +2753,19 @@ def focused_receiver_rows_for_source(
     active_row = max(0, int(center_row) - max(0, int(leading_rows)))
     start = (selected_index - min(active_row, len(rows) - 1)) % len(rows)
     return rows[start:] + rows[:start]
+
+
+def receiver_rows_for_display(
+    stations, active_server, selected_source, active_source,
+    focus_on_entry=False, leading_rows=0,
+):
+    """Focus only on arrival; subsequent sorts keep their complete order."""
+    rows = list(stations or ())
+    if focus_on_entry:
+        return focused_receiver_rows_for_source(
+            rows, active_server, selected_source, active_source, leading_rows,
+        )
+    return rows
 
 
 def active_receiver_scroll_for_source(
@@ -4473,6 +4504,7 @@ def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
     return frequency_khz if 0.0 <= frequency_khz <= max_frequency_khz else None
 
 
+ZOOM_OSD_BOX = (240, 63, 720, 161)
 ZOOM_OSD_SECONDS = 1.4
 CONTROL_QUIET_SECONDS = 5.0
 CONTROL_FADE_SECONDS = 0.65
@@ -5473,6 +5505,14 @@ class SharedState:
                 and bool(self.connection_streams.get("audio"))
             )
 
+    def rf_stream_ready_snapshot(self):
+        """A current receiver has supplied audio or waterfall data."""
+        with self.lock:
+            return (
+                not self.stream_paused
+                and any(self.connection_streams.values())
+            )
+
     def connection_failed(self, generation, stream):
         with self.lock:
             if not self.connection_announce or generation != self.server_generation:
@@ -6257,6 +6297,13 @@ class TextCache:
         GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
         cached = tex, width, height
         return self._store_texture(cache_key, cached)
+
+    def discard_texture(self, key):
+        """Release a bounded Globe tile without disturbing font cache entries."""
+        cached = self.cache.pop(key, None)
+        self._texture_lru.pop(key, None)
+        if cached is not None:
+            GL.glDeleteTextures([cached[0]])
 
 
 def setup_gl(desktop=False):
@@ -9195,7 +9242,7 @@ def draw_radio_setup_panel(
         # Cover the old Home tiles as the drawer grows, but intentionally do
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, (6, 13, 19, 255))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, APP_UI_STYLE.palette.sidebar)
         draw_sidebar_header(text_cache, "MODES")
         if reveal_y < y0 + 44:
             return
@@ -10911,7 +10958,7 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
 
 
 def draw_sidebar_header(text_cache, title):
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, (6, 13, 19, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar)
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, (215, 235, 239),
               15, True, False, "cm", family="Liberation Sans")
     draw_logical_line(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H,
@@ -10941,7 +10988,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     """Show the saved reference point used by the receiver directory."""
     boxes = receiver_home_drawer_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
@@ -10972,7 +11019,7 @@ def fan_curve_drawer_boxes():
 def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     boxes = fan_curve_drawer_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
     draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
@@ -11012,7 +11059,7 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
     """Right-rail audio drawer; it never obscures the waterfall workspace."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, lcd_audio_drawer_close_box())
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
@@ -13356,15 +13403,20 @@ def draw_flat_coastlines(center_lon, center_lat, box, scale):
 
 
 def radiogarden_radius(box, scale):
-    """The globe starts near edge-to-edge, then makes a real regional zoom."""
+    """Scale the map by the zoom shown to the operator, without a hidden cap."""
     base = min(box[2] - box[0], box[3] - box[1]) * 0.92
-    # A logarithmic radius made a 36x -> 96x change look almost identical.
-    # This gentle power curve preserves a controllable world view while giving
-    # regional closeups enough magnification to read country geography.
-    # Dense urban receiver clusters need a closer view than the original map
-    # ceiling allowed. Keep the gentle curve at ordinary scales, but permit a
-    # true street/regional close-up when the operator keeps zooming.
-    return base * clamp((max(0.55, scale) / 0.62) ** 0.36, 0.72, 24.0)
+    return base * max(RADIOGARDEN_ZOOM_MIN, float(scale))
+
+
+def radiogarden_pan_angles(yaw, pitch, dx, dy, box, scale):
+    """Keep a one-pixel drag close to one map pixel at every zoom level."""
+    radius = max(1.0, radiogarden_radius(box, scale))
+    yaw = (yaw - RADIOGARDEN_DRAG_GAIN * dx / radius + math.pi) % math.tau - math.pi
+    pitch = clamp(
+        pitch + RADIOGARDEN_DRAG_GAIN * dy / radius,
+        math.radians(-82), math.radians(82),
+    )
+    return yaw, pitch
 
 
 def radiogarden_project(receiver, center_lon, center_lat, box, scale):
@@ -13477,10 +13529,9 @@ RECEIVER_MAP_GROUP_COLORS = {
 }
 # Session-only visibility; groups the operator has switched off in the legend.
 RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters follow the full-width horizontal source-tab language from
-# Receivers. Their coloured circles remain the source key while the neutral
-# label and light-gray active outline retain the Globe's visibility-filter state.
-RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + RECEIVER_RAIL_TAB_TOP_GAP
+# Legend filters match the Receivers category rows. Their full-width line
+# carries the dot colour when visible and turns gray when hidden.
+RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + 16
 RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
     "kiwi": ("KIWI",),
@@ -13528,32 +13579,29 @@ def receiver_map_legend_entries(receivers):
 
 
 def receiver_map_legend_visual(group, active, pressed=False):
-    """Use neutral legend labels; only the circle carries source identity."""
-    base = APP_UI_STYLE.button.resolve()
-    if active or pressed:
-        return ButtonVisualState(
-            APP_UI_STYLE.palette.active_surface, APP_UI_STYLE.palette.active_border,
-            APP_UI_STYLE.palette.text, 2,
-        )
-    return ButtonVisualState(
-        base.fill, base.border, APP_UI_STYLE.palette.secondary_text, base.border_width,
-    )
+    """Match the shared big-button active and pressed states."""
+    return APP_UI_STYLE.button.resolve(active=active, pressed=pressed)
+
+
+def receiver_map_legend_line_color(group, active):
+    """Use the receiver dot colour only while its group is visible."""
+    return (RECEIVER_MAP_GROUP_COLORS[group] if active
+            else APP_UI_STYLE.palette.secondary_text)
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Two-column legend filters matching Receivers source buttons."""
+    """Full-width legend filters matching Receivers source buttons."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
     x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
-    width = (LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN - RECEIVER_RAIL_TAB_GAP) / 2
+    width = LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
-        x = x0 + (index % 2) * (width + RECEIVER_RAIL_TAB_GAP)
-        y = RECEIVER_MAP_LEGEND_RAIL_TOP + (index // 2) * (
-            RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP
+        y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
+            RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP
         )
-        boxes.append((group, (x, y, x + width, y + RECEIVER_RAIL_TAB_HEIGHT)))
+        boxes.append((group, (x0, y, x0 + width, y + RECEIVER_PICKER_CATEGORY_HEIGHT)))
     return tuple(boxes)
 
 
@@ -13570,47 +13618,14 @@ def receiver_map_legend_at(x, y, receivers, box=None):
     return None
 
 
-# The CLEAN (borderless) presentation was removed: it hid the receiver
-# constellation's geographic context and read as an empty globe.
-MAP_VIEWS = ("satellite_only", "borders", "atlas", "satellite")
-# Satellite imagery with country borders is the receiver browser's entry view.
+# Globe view choices keep the earlier satellite and border presentations.
+MAP_VIEWS = ("satellite_only", "borders", "satellite")
 GLOBE_DEFAULT_VIEW = "satellite"
 MAP_VIEW_LABELS = {
     "satellite_only": "SAT ONLY",
     "borders": "BORDERS",
-    "atlas": "ATLAS",
     "satellite": "SAT",
 }
-
-
-def draw_receiver_map_graticule(center_lon, center_lat, box, scale):
-    """Subtle latitude/longitude grid for the high-context atlas view."""
-    # Keep a stable, readable grid rather than adding more geometry as the
-    # user approaches a region. Country boundaries remain the detail layer.
-    for latitude in range(-60, 61, 30):
-        segment = []
-        for longitude in range(-180, 181, 5):
-            point = radiogarden_project(
-                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
-            )
-            if point is None:
-                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-                segment = []
-            else:
-                segment.append((point[0], point[1]))
-        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-    for longitude in range(-180, 181, 30):
-        segment = []
-        for latitude in range(-85, 86, 5):
-            point = radiogarden_project(
-                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
-            )
-            if point is None:
-                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-                segment = []
-            else:
-                segment.append((point[0], point[1]))
-        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
 
 
 def satellite_map_texture(text_cache):
@@ -13707,7 +13722,125 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
                 GL.glTexCoord2f(u, v)
                 GL.glVertex2f(*logical_to_native(point[0], point[1]))
     GL.glEnd()
+    if globe_hd_tiles_enabled() and scale >= 1.5:
+        draw_receiver_map_satellite_tiles(
+            text_cache, center_lon, center_lat, box, scale, interactive,
+            sun_lon, sun_lat,
+        )
     return True
+
+
+def globe_hd_tiles_enabled():
+    """Prioritize CM5; allow an explicit desktop opt-in for tile debugging."""
+    override = os.environ.get("ITUNER_GLOBE_HD_TILES")
+    return override == "1" if override is not None else not DESKTOP_MODE
+
+
+def _globe_tile_texture(text_cache, key, payload, upload_budget):
+    texture_key = ("gibs-blue-marble", key.level, key.row, key.col)
+    cache_key = ("surface", texture_key)
+    cached = text_cache._cached_texture(cache_key)
+    if cached is None:
+        if upload_budget <= 0 or payload is None or key in _globe_tile_decode_failed:
+            return None, upload_budget
+        try:
+            surface = pygame.image.load(io.BytesIO(payload), "tile.jpeg")
+            cached = text_cache.surface_texture(texture_key, surface)
+        except (OSError, ValueError, pygame.error):
+            _globe_tile_decode_failed.add(key)
+            return None, upload_budget
+        upload_budget -= 1
+    _globe_tile_gpu_lru[texture_key] = None
+    _globe_tile_gpu_lru.move_to_end(texture_key)
+    return cached[0], upload_budget
+
+
+def _draw_globe_tile_mesh(texture, key, center_lon, center_lat, box, scale,
+                          sun_lon, sun_lat, interactive):
+    west, south, east, north = key.bounds
+    segments = 6 if interactive else 8
+    points = []
+    for row in range(segments + 1):
+        latitude = north + (south - north) * row / segments
+        points.append(tuple(
+            radiogarden_project(
+                {"lat": latitude, "lon": west + (east - west) * col / segments},
+                center_lon, center_lat, box, scale,
+            )
+            for col in range(segments + 1)
+        ))
+    GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+    GL.glBegin(GL.GL_QUADS)
+    for row in range(segments):
+        lat_top = north + (south - north) * row / segments
+        lat_bottom = north + (south - north) * (row + 1) / segments
+        for col in range(segments):
+            corners = (points[row][col], points[row][col + 1],
+                       points[row + 1][col + 1], points[row + 1][col])
+            if any(point is None for point in corners):
+                continue
+            if (max(point[0] for point in corners) < box[0]
+                    or min(point[0] for point in corners) > box[2]
+                    or max(point[1] for point in corners) < box[1]
+                    or min(point[1] for point in corners) > box[3]):
+                continue
+            lon_left = west + (east - west) * col / segments
+            lon_right = west + (east - west) * (col + 1) / segments
+            for point, longitude, latitude, u, v in (
+                (corners[0], lon_left, lat_top, col / segments, row / segments),
+                (corners[1], lon_right, lat_top, (col + 1) / segments, row / segments),
+                (corners[2], lon_right, lat_bottom, (col + 1) / segments, (row + 1) / segments),
+                (corners[3], lon_left, lat_bottom, col / segments, (row + 1) / segments),
+            ):
+                GL.glColor4f(*satellite_light_color(latitude, longitude, sun_lon, sun_lat), 1.0)
+                GL.glTexCoord2f(u, v)
+                GL.glVertex2f(*logical_to_native(point[0], point[1]))
+    GL.glEnd()
+
+
+def draw_receiver_map_satellite_tiles(text_cache, center_lon, center_lat, box, scale,
+                                      interactive, sun_lon, sun_lat):
+    """Overlay ready high-resolution tiles; never wait for the network."""
+    global _globe_tile_fetcher
+    if _globe_tile_fetcher is None:
+        _globe_tile_fetcher = globe_tiles.GlobeTileFetcher(
+            cache_dir=globe_tiles.default_cache_dir(),
+        )
+    keys = globe_tiles.visible_tiles(
+        center_lon, center_lat, box, radiogarden_radius(box, scale),
+    )
+    missing = [
+        key for key in keys
+        if ("surface", ("gibs-blue-marble", key.level, key.row, key.col)) not in text_cache.cache
+    ]
+    _globe_tile_fetcher.prefetch(missing)
+    if not keys:
+        return
+    native = tuple(logical_to_native(x, y) for x, y in (
+        (box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]),
+    ))
+    left = int(min(point[0] for point in native))
+    right = int(max(point[0] for point in native))
+    top = int(min(point[1] for point in native))
+    bottom = int(max(point[1] for point in native))
+    GL.glEnable(GL.GL_SCISSOR_TEST)
+    GL.glScissor(left, NATIVE_H - bottom, right - left, bottom - top)
+    try:
+        upload_budget = 1
+        for key in keys:
+            texture, upload_budget = _globe_tile_texture(
+                text_cache, key, _globe_tile_fetcher.ready(key), upload_budget,
+            )
+            if texture is not None:
+                _draw_globe_tile_mesh(
+                    texture, key, center_lon, center_lat, box, scale,
+                    sun_lon, sun_lat, interactive,
+                )
+    finally:
+        GL.glDisable(GL.GL_SCISSOR_TEST)
+    while len(_globe_tile_gpu_lru) > 24:
+        old_key, _unused = _globe_tile_gpu_lru.popitem(last=False)
+        text_cache.discard_texture(("surface", old_key))
 
 
 # Globe server dots stay compact throughout the overview and regional views.
@@ -13740,7 +13873,7 @@ def receiver_map_dot_pixels(scale):
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False,
+    map_view="borders", interactive=False, notice_alpha=220,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -13764,8 +13897,6 @@ def draw_receiver_map(
     if not satellite_drawn:
         draw_logical_circle(cx, cy, radius, (14, 40, 48, 255), 96)
     draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
-    if map_view == "atlas":
-        draw_receiver_map_graticule(center_lon, center_lat, box, scale)
     # The old CLEAN coastline layer is gone from every presentation: it read as
     # a second, conflicting set of borders over the political outlines. Country
     # boundaries are now the only geographic layer.
@@ -13913,7 +14044,9 @@ def draw_receiver_map(
             draw_logical_line(label_x0, label_y - 27, label_x0 + 360, label_y - 27, (102, 243, 198, 190), 1)
             draw_text(text_cache, label_x0 + 14, label_y - 10, "TAP TO LISTEN", (117, 255, 197), 20, True, False, "lm", family="Cantarell")
             draw_text(text_cache, label_x0 + 14, label_y + 16, fit_station_text(text_cache, hover_detail, 330, 22, True, False, family="Cantarell"), (232, 248, 248), 22, True, False, "lm", family="Cantarell")
-    if notice:
+    if notice == "GLOBE ZOOM":
+        draw_globe_zoom_osd(text_cache, scale, notice_alpha)
+    elif notice:
         notice_x0 = max(box[0] + 18, (box[0] + box[2]) / 2 - 286)
         notice_x1 = min(box[2] - 18, (box[0] + box[2]) / 2 + 286)
         notice_y1 = box[3] - 36
@@ -13921,13 +14054,11 @@ def draw_receiver_map(
         draw_logical_rect(notice_x0, notice_y0, notice_x1, notice_y1, (5, 30, 28, 228))
         draw_logical_line(notice_x0, notice_y0, notice_x1, notice_y0, (101, 255, 191, 220), 2)
         draw_text(text_cache, (notice_x0 + notice_x1) / 2, (notice_y0 + notice_y1) / 2, fit_station_text(text_cache, notice, notice_x1 - notice_x0 - 24, 20, True, False, family="Cantarell"), (226, 255, 244), 20, True, False, "cm", family="Cantarell")
-    # Every Globe command lives in the right rail, using the same square
-    # launcher language as Home: LIST, VIEW, ZOOM +, ZOOM −, BACK. Nothing
-    # floats over the map any more, so the whole canvas stays a drag surface.
+    # Globe controls stay in the rail, leaving the map as a drag surface.
     draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
 
-    # The horizontal legend doubles as the visibility filter. Its dot retains
-    # the source colour while the neutral label and gray outline carry state.
+    # The legend doubles as the visibility filter. Its underline matches the
+    # source dots when visible, and turns gray when the source is hidden.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -13943,19 +14074,20 @@ def draw_receiver_map(
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
             APP_UI_STYLE.button.label_size, True, False, "cm", family=APP_UI_STYLE.button.font_family,
         )
+        draw_logical_rect(
+            lx0 + 16, ly1 - 12, lx1 - 16, ly1 - 10,
+            receiver_map_legend_line_color(legend_group, legend_active),
+        )
 
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
     draw_picker_two_line_button(
-        text_cache,
-        RADIOGARDEN_VIEW_BOX,
-        "VIEW",
-        MAP_VIEW_LABELS.get(map_view, "BORDERS"),
-        18,
+        text_cache, RADIOGARDEN_VIEW_BOX, "VIEW",
+        MAP_VIEW_LABELS.get(map_view, "SAT"), 18,
     )
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_IN_BOX, "ZOOM IN")
     draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_OUT_BOX, "ZOOM OUT")
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
-    draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
+    draw_text(text_cache, box[2] - 18, box[3] - 16, "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
 def scout_rf_strength(smeter_dbm):
@@ -14252,7 +14384,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
                              instrument_layout="middle"):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
         draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
@@ -14506,14 +14638,11 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     alpha = clamp(int(alpha), 0, 255)
     if alpha <= 0:
         return
-    x0, y0, x1, y1 = 240, 63, 720, 161
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
     green = (72, 255, 122, alpha)
     dim = (72, 255, 122, int(alpha * 0.18))
     soft = (72, 255, 122, int(alpha * 0.35))
-    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
-    for offset, line_alpha in ((32, 0.20), (64, 0.12)):
-        y = y0 + offset
-        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
     digital_factor = kiwi.DIGITAL_ZOOM_FACTORS.get(int(zoom))
     zoom_label = f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM"
     draw_text(text_cache, x0 + 18, y0 + 22, zoom_label, green[:3], 28, True, True, "lm")
@@ -14529,6 +14658,77 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
         fill = green if level <= zoom else dim
         h = 36 if level == zoom else 24
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
+
+
+def draw_globe_zoom_osd(text_cache, scale, alpha=220):
+    """Show Globe magnification in Home Zoom's green panel and bar style."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    scale = clamp(float(scale), RADIOGARDEN_ZOOM_MIN, RADIOGARDEN_ZOOM_MAX)
+    x0, y0, x1, _y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
+    green = (72, 255, 122, alpha)
+    dim = (72, 255, 122, int(alpha * 0.18))
+    soft = (72, 255, 122, int(alpha * 0.35))
+    value = f"{scale:.0f}x" if scale >= 10 else f"{scale:.1f}x"
+    draw_text(text_cache, x0 + 18, y0 + 22, "GLOBE ZOOM", green[:3], 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, value, green[:3], 28, True, True, "rm")
+    track_x0, track_x1 = x0 + 24, x1 - 24
+    base_y = y0 + 81
+    draw_logical_line(track_x0, base_y, track_x1, base_y, soft, 3)
+    level_count = 16
+    active_level = round(math.log(scale / RADIOGARDEN_ZOOM_MIN) /
+                         math.log(RADIOGARDEN_ZOOM_MAX / RADIOGARDEN_ZOOM_MIN) * level_count)
+    for level in range(level_count + 1):
+        x = int(round(track_x0 + (track_x1 - track_x0) * level / level_count))
+        height = 36 if level == active_level else 24
+        draw_logical_rect(x - 8.5, base_y - height, x + 8.5, base_y - 1,
+                          green if level <= active_level else dim)
+
+
+def green_osd_alpha(remaining, duration):
+    """Use the Zoom popup's hold and fade timing for other green notices."""
+    if remaining <= 0:
+        return 0
+    fade = min(0.45, duration * 0.33)
+    return int(220 * remaining / fade) if remaining < fade else 220
+
+
+def draw_green_osd_panel(box, alpha):
+    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
+    for offset, line_alpha in ((32, 0.20), (64, 0.12)):
+        y = y0 + offset
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
+
+
+def sort_chevron_points(box, sort_mode):
+    """A font-independent up/down chevron in the Zoom value position."""
+    _x0, y0, x1, _y1 = box
+    cx, cy = x1 - 32, y0 + 22
+    direction = 1 if normalize_receiver_sort_mode(sort_mode) in ("distance_far", "name_za") else -1
+    return ((cx - 11, cy - direction * 8), (cx, cy + direction * 8),
+            (cx + 11, cy - direction * 8))
+
+
+def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_near"):
+    """Sort acknowledgement at Zoom's position, with a drawn direction cue."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or not notice:
+        return
+    x0, y0, x1, y1 = receiver_list_notice_box()
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    color = (72, 255, 122)
+    opacity = alpha / 255.0
+    draw_text(text_cache, x0 + 18, y0 + 22, "SORTED BY", color,
+              28, True, True, "lm", alpha=opacity)
+    draw_logical_polyline(sort_chevron_points((x0, y0, x1, y1), sort_mode),
+                          (*color, alpha), 5)
+    mode_label = notice.removeprefix("SORTED BY ")
+    draw_text(text_cache, x0 + 18, y0 + 64, mode_label, color,
+              28, True, True, "lm", alpha=opacity)
 
 
 def draw_rc28_mode_osd(text_cache, mode, alpha):
@@ -14967,7 +15167,7 @@ def draw_desktop_1280_navigation(text_cache):
     if not DESKTOP_1280_MODE:
         return
     x0 = DESKTOP_1280_MAIN_W
-    draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
+    draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, APP_UI_STYLE.palette.sidebar)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
         pressed = ui_button_pressed((bx0, by0, bx1, by1))
@@ -15111,7 +15311,7 @@ def sync_constellation_geometry():
 
 def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     """Render the common Settings leaf rail without veiling live content."""
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, title)
     draw_text(
@@ -15376,7 +15576,7 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
     """Draw the dedicated font drawer over the complete Home rail."""
     boxes = compact_font_review_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_sidebar_header(text_cache, "FREQUENCY FONT")
     draw_text(text_cache, x1 - 16, 82, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
     draw_text(text_cache, (x0 + x1) / 2, 101, family.upper(), (170, 198, 202), 14, True, False, "cm", family="Liberation Sans")
@@ -15839,7 +16039,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     # This drawer is an independent operating surface. It must be fully
     # opaque so the inactive Home/mode controls beneath cannot be mistaken
     # for live controls or overlap the slider labels.
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
     draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
@@ -15864,14 +16064,15 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
 
 
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
-                        digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle"):
+                        digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle",
+                        active_decoders=(), running_decoder_count=0, decoder_counts=None):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
     rail_bottom = lcd_rail_bottom()
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
     # uninterrupted black panel from the VFO to the physical bottom edge.
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DIGI")
@@ -15887,10 +16088,20 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             continue
         nav_box = (bx0, by0, bx1, by1)
         subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
+        if items is MENU_ITEMS and kind == "digital" and running_decoder_count > 0:
+            subtitle = f"{running_decoder_count} {subtitle}"
         if subtitle:
             draw_styled_two_line_button(text_cache, nav_box, label, subtitle)
         else:
-            draw_styled_text_button(text_cache, nav_box, label)
+            count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
+            button_label = f"{count} {label}" if count > 0 else label
+            draw_styled_text_button(text_cache, nav_box, button_label)
+        if digital_open and kind in active_decoders:
+            center_x = (bx0 + bx1) / 2
+            draw_logical_circle(
+                center_x, by0 + 47, 3, APP_UI_STYLE.palette.ready,
+                segments=16,
+            )
 
 
 def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
@@ -15931,7 +16142,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # background peeking out around the rounded mode controls.
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    draw_logical_rect(x0, y0, x1, surface_bottom, (3, 6, 9, 232))
+    draw_logical_rect(x0, y0, x1, surface_bottom, APP_UI_STYLE.palette.sidebar)
 
     if show_compact_readouts:
         # Compact mode makes this the primary frequency readout. The SDR is
@@ -16274,7 +16485,7 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         return
     panel, entry, commands, keys = layout
     x0, y0, x1, y1 = panel
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(x0, y0, x0, y1, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, "SET FREQUENCY")
     ex0, ey0, ex1, ey1 = entry
@@ -16331,7 +16542,7 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     """Draw a single-purpose frequency rail for touch and encoder use."""
     boxes = frequency_drawer_boxes()
     x0, _y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, 0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, 0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_sidebar_header(text_cache, "FREQUENCY")
 
     rx0, ry0, rx1, ry1 = boxes["readout"]
@@ -16710,11 +16921,7 @@ def receiver_source_label(source):
 
 
 def draw_receiver_sidebar_header(text_cache, theme=RECEIVER_LIST_THEME):
-    draw_logical_rect(RECEIVER_PICKER_MAIN_W, 0, LOGICAL_W, 64, theme.sidebar_background)
-    draw_text(
-        text_cache, (RECEIVER_PICKER_MAIN_W + LOGICAL_W) / 2, 32, "RECEIVERS",
-        theme.primary_text, 16, True, False, "cm", family=theme.font_family,
-    )
+    draw_sidebar_header(text_cache, "RECEIVERS")
 
 
 def draw_receiver_globe_icon(text_cache, box, color):
@@ -16805,7 +17012,7 @@ def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
-    show_fmdx_notice=False, notice="",
+    show_fmdx_notice=False, notice="", notice_alpha=220,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -16900,15 +17107,7 @@ def draw_station_picker(
                 theme.label_size, False, False, "rm", family=theme.font_family,
             )
     if notice:
-        notice_box = receiver_list_notice_box()
-        visual = draw_styled_button_frame(notice_box, active=True)
-        draw_text(
-            text_cache,
-            (notice_box[0] + notice_box[2]) / 2,
-            (notice_box[1] + notice_box[3]) / 2,
-            notice, visual.text,
-            theme.label_size, True, False, "cm", family=theme.font_family,
-        )
+        draw_receiver_sort_notice(text_cache, notice, notice_alpha, sort_mode)
 
 
 def smeter_segment_position(dbm):
@@ -17435,7 +17634,7 @@ def lcd_nav_option_box(index, first_y):
 def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
     if LCD_800_MODE:
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 6, 9, 255))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
         draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
         draw_sidebar_header(text_cache, "VOSC")
         draw_text(text_cache, LCD_NAV_X0 + 14, 86,
@@ -17831,6 +18030,9 @@ def draw_ui(
     squelch_closed=False,
     settings_menu_open=False,
     digital_menu_open=False,
+    active_decoders=(),
+    running_decoder_count=0,
+    decoder_counts=None,
     instrument_layout="middle",
     compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
@@ -17945,6 +18147,9 @@ def draw_ui(
         muted=audio_muted,
         settings_open=settings_menu_open,
         digital_open=digital_menu_open,
+        active_decoders=active_decoders,
+        running_decoder_count=running_decoder_count,
+        decoder_counts=decoder_counts,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
@@ -22733,8 +22938,8 @@ def main():
     picker_map_yaw = math.radians(-18)
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
+    picker_map_view = GLOBE_DEFAULT_VIEW
     picker_map_garden_mode = True
-    picker_map_view = "satellite"
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -23337,6 +23542,8 @@ def main():
     frequency_drawer_pressed = None
     frequency_drawer_hold = FrequencyArrowHold()
     station_scroll = 0
+    receiver_list_focus_on_entry = False
+    receiver_list_sort_used = False
     saved_digital_mode = remembered_preferences.get("digital_mode")
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
@@ -24167,6 +24374,7 @@ def main():
     def sync_receiver_browser_to_active():
         """Select the live receiver's tab and centre its row in RECEIVERS."""
         nonlocal station_route_filter, station_query, stations, station_scroll
+        nonlocal receiver_list_focus_on_entry
         nonlocal fmdx_disclaimer_open, fmdx_disclaimer_shown
         nonlocal picker_map_selected_server
         active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
@@ -24185,36 +24393,21 @@ def main():
             station_route_filter, favorite_servers, station_health,
             receiver_home_profile,
         )
-        visible_stations = health_prioritized_stations(
-            stations, station_health, station_sort,
-        )
-        visible_stations = focused_receiver_rows_for_source(
-            visible_stations, active_server,
-            station_route_filter, station_route_filter,
-            int(fmdx_disclaimer_open),
-        )
         station_scroll = 0
+        receiver_list_focus_on_entry = not receiver_list_sort_used
         picker_map_selected_server = active_server
         return active_server
 
     def center_active_receiver_in_current_list():
-        """Keep the live row centred when the current source can contain it."""
+        """Preserve entry focus only until the user changes the list order."""
         nonlocal station_scroll
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
-        active_source = active_receiver_source(
-            all_stations, active_server, receiver_type,
-        )
-        visible_stations = health_prioritized_stations(
-            stations, station_health, station_sort,
-        )
-        visible_stations = focused_receiver_rows_for_source(
-            visible_stations, active_server,
-            station_route_filter, active_source,
-            int(fmdx_disclaimer_open),
-        )
-        station_scroll = 0
-        return active_server
+        if receiver_list_focus_on_entry:
+            station_scroll = 0
+        else:
+            station_scroll = clamp(
+                station_scroll, 0,
+                station_page_max(stations, int(fmdx_disclaimer_open)),
+            )
 
     def current_receiver_rows():
         """Return the complete directory in the same focused order for draw and taps."""
@@ -24226,10 +24419,10 @@ def main():
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
         )
-        return focused_receiver_rows_for_source(
+        return receiver_rows_for_display(
             visible_stations, active_server,
             station_route_filter, active_source,
-            int(fmdx_disclaimer_open),
+            receiver_list_focus_on_entry, int(fmdx_disclaimer_open),
         )
 
     def restore_navigation_parent(parent):
@@ -24260,6 +24453,8 @@ def main():
         nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
         nonlocal wspr_tile_band_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
+        nonlocal receiver_list_focus_on_entry
+        nonlocal receiver_list_sort_used
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
@@ -24311,6 +24506,8 @@ def main():
                 all_stations, station_query, station_sort, station_route_filter,
                 favorite_servers, station_health, receiver_home_profile,
             )
+            receiver_list_sort_used = False
+            receiver_list_focus_on_entry = True
             center_active_receiver_in_current_list()
             search_open = False
             picker_map_open = False
@@ -24325,6 +24522,7 @@ def main():
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
             station_sort = RECEIVER_SORT_MODES[0]
+            receiver_list_sort_used = False
             sync_receiver_browser_to_active()
             search_open = False
             picker_map_open = False
@@ -24994,8 +25192,10 @@ def main():
                         desktop_map_dragged = True
                     if desktop_map_dragged:
                         radius = max(1.0, radiogarden_radius(PICKER_MAP_BOX, picker_map_scale))
-                        picker_map_yaw = (picker_map_yaw - RADIOGARDEN_DRAG_GAIN * dx / radius + math.pi) % math.tau - math.pi
-                        picker_map_pitch = clamp(picker_map_pitch + RADIOGARDEN_DRAG_GAIN * dy / radius, math.radians(-82), math.radians(82))
+                        picker_map_yaw, picker_map_pitch = radiogarden_pan_angles(
+                            picker_map_yaw, picker_map_pitch, dx, dy,
+                            PICKER_MAP_BOX, picker_map_scale,
+                        )
                         current_motion = time.monotonic()
                         elapsed = max(0.001, current_motion - desktop_map_motion_at)
                         desktop_map_velocity = (-RADIOGARDEN_DRAG_GAIN * dx / radius / elapsed, RADIOGARDEN_DRAG_GAIN * dy / radius / elapsed)
@@ -25034,6 +25234,8 @@ def main():
                             RADIOGARDEN_ZOOM_MIN,
                             RADIOGARDEN_ZOOM_MAX,
                         )
+                        picker_map_notice = "GLOBE ZOOM"
+                        picker_map_notice_until = time.monotonic() + 1.2
                     elif picker_open and not search_open:
                         # Mouse-wheel paging makes the desktop receiver list
                         # as practical to explore as the Pi's finger drag.
@@ -25823,6 +26025,8 @@ def main():
                                         RADIOGARDEN_ZOOM_MIN,
                                         RADIOGARDEN_ZOOM_MAX,
                                     )
+                                    picker_map_notice = "GLOBE ZOOM"
+                                    picker_map_notice_until = time.monotonic() + 1.2
                                     picker_map_pinch_distance = max(1.0, distance)
                             else:
                                 picker_map_lock_target = None
@@ -25831,10 +26035,10 @@ def main():
                                 # Do not turn a two-finger pinch into a sudden
                                 # one-finger pan when the first finger lifts.
                                 if not picker_map_pinch_active:
-                                    target_yaw = (picker_map_start_yaw - (x - start_x) * 0.00075 + math.pi) % math.tau - math.pi
-                                    target_pitch = clamp(
-                                        picker_map_start_pitch + (y - start_y) * 0.0006,
-                                        math.radians(-80), math.radians(80),
+                                    target_yaw, target_pitch = radiogarden_pan_angles(
+                                        picker_map_start_yaw, picker_map_start_pitch,
+                                        x - start_x, y - start_y,
+                                        PICKER_MAP_BOX, picker_map_scale,
                                     )
                                     # Ease toward the finger target instead of
                                     # applying every noisy touchscreen sample as
@@ -27870,14 +28074,14 @@ def main():
                                         all_stations, station_query, station_sort, station_route_filter,
                                         favorite_servers, station_health, receiver_home_profile,
                                     )
+                                    receiver_list_focus_on_entry = False
                                     station_scroll = 0
                         elif touch_started and gesture == "picker_map_open":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 picker_map_open = True
                                 picker_map_garden_mode = True
-                                # Every entry returns to the resting satellite
-                                # view and selects the receiver feeding Home.
+                                # Every entry returns to the resting satellite view.
                                 picker_map_view = GLOBE_DEFAULT_VIEW
                                 focus_receiver_map_on_active()
                                 search_open = False
@@ -27928,7 +28132,7 @@ def main():
                                     RADIOGARDEN_ZOOM_MIN,
                                     RADIOGARDEN_ZOOM_MAX,
                                 )
-                                picker_map_notice = f"GLOBE {picker_map_zoom_target:.1f}x"
+                                picker_map_notice = "GLOBE ZOOM"
                                 picker_map_notice_until = time.monotonic() + 1.2
                             wake_controls()
                         elif touch_started and gesture == "picker_map_garden":
@@ -27986,9 +28190,11 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                center_active_receiver_in_current_list()
+                                receiver_list_focus_on_entry = False
+                                receiver_list_sort_used = True
+                                station_scroll = 0
                                 picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
-                                picker_list_notice_until = time.monotonic() + 1.8
+                                picker_list_notice_until = time.monotonic() + args.zoom_osd_seconds
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -28014,7 +28220,8 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                center_active_receiver_in_current_list()
+                                receiver_list_focus_on_entry = not receiver_list_sort_used
+                                station_scroll = 0
                                 # Moving to another source cancels any connection
                                 # a previous row tap started. The browser must
                                 # never dismiss itself to the main screen just
@@ -28799,7 +29006,8 @@ def main():
                 )
             if not local_iq_active:
                 overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
-            if waterfall_visible and not local_iq_active:
+            passband_stream_ready = not local_iq_active and state.rf_stream_ready_snapshot()
+            if waterfall_visible and passband_stream_ready:
                 draw_filter_overlay(
                     text_cache,
                     display_span,
@@ -28810,7 +29018,7 @@ def main():
                     0.82,
                     tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
                 )
-            scope_passband_visible = spectrum_enabled and spectrum_h > 0 and not local_iq_active
+            scope_passband_visible = spectrum_enabled and spectrum_h > 0 and passband_stream_ready
             scope_passband_under_top_band = (
                 scope_passband_visible and LCD_800_MODE
                 and instrument_layout in ("middle", "left")
@@ -28859,6 +29067,10 @@ def main():
             audio_jitter_history = state.audio_jitter_history_snapshot()
             live_audio_controls, _live_audio_generation = state.audio_controls_snapshot()
             squelch_closed = state.squelch_closed_snapshot()
+            decoder_counts = digital_decoder_session_counts(
+                wspr_tiles, sstv_manager.configs, hell_manager.configs,
+                qrss_manager.configs, cw_manager.configs,
+            )
             draw_ui(
                 text_cache,
                 display_freq,
@@ -28906,6 +29118,11 @@ def main():
                 squelch_closed=squelch_closed,
                 settings_menu_open=settings_menu_open,
                 digital_menu_open=digital_menu_open,
+                active_decoders=frozenset(
+                    kind for kind, count in decoder_counts.items() if count
+                ),
+                running_decoder_count=sum(decoder_counts.values()),
+                decoder_counts=decoder_counts,
                 instrument_layout=instrument_layout,
                 # Font Review is a live specimen: arrowing through candidates
                 # must visibly update the Home frequency readout. ``USE`` is
@@ -29055,6 +29272,9 @@ def main():
                         picker_map_garden_mode, picker_map_hover_server, picker_map_view,
                         (touch_started and gesture == "picker_map")
                         or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
+                        notice_alpha=green_osd_alpha(
+                            picker_map_notice_until - time.monotonic(), 1.2,
+                        ),
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
@@ -29065,6 +29285,10 @@ def main():
                         station_sort, station_health, station_pending_server, station_connection_status,
                         station_route_filter, receiver_home_profile, fmdx_disclaimer_open,
                         picker_list_notice if time.monotonic() < picker_list_notice_until else "",
+                        green_osd_alpha(
+                            picker_list_notice_until - time.monotonic(),
+                            args.zoom_osd_seconds,
+                        ),
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
@@ -29331,11 +29555,9 @@ def main():
                     frequency_identity_alpha,
                 )
             osd_remaining = zoom_osd_until - now
-            if osd_remaining > 0 and not dual_vfo_open:
-                alpha = 220
-                fade = min(0.45, args.zoom_osd_seconds * 0.33)
-                if osd_remaining < fade:
-                    alpha = int(220 * osd_remaining / fade)
+            if (osd_remaining > 0 and not dual_vfo_open
+                    and not (picker_open and not picker_map_open and now < picker_list_notice_until)):
+                alpha = green_osd_alpha(osd_remaining, args.zoom_osd_seconds)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
             rc28_osd_remaining = rc28_mode_osd_until - now
             if rc28_osd_remaining > 0 and not dual_vfo_open:

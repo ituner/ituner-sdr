@@ -146,6 +146,89 @@ class DrawerGeometryTests(unittest.TestCase):
                          {"wspr", "sstv", "hell", "qrss", "cw", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
+    def test_digi_rail_marks_only_decoders_with_enabled_sessions(self):
+        ui.configure_output(True)
+        groups = (
+            [{"paused": False}, {"paused": False}], [{"paused": True}],
+            [{"paused": False}], [], [{"paused": True}, {"paused": False}],
+        )
+        counts = ui.digital_decoder_session_counts(*groups)
+        self.assertEqual(counts, {"wspr": 2, "sstv": 0, "hell": 1,
+                                  "qrss": 0, "cw": 1})
+        active = ui.active_digital_decoder_kinds(*groups)
+        self.assertEqual(active, {"wspr", "hell", "cw"})
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_sidebar_header"), \
+             mock.patch.object(ui, "draw_radio_close_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as circles, \
+             mock.patch.object(ui, "draw_styled_text_button") as buttons:
+            ui.draw_lcd_navigation(
+                None, digital_open=True, active_decoders=active,
+                decoder_counts=counts,
+            )
+        self.assertEqual(
+            [call.args[2] for call in buttons.call_args_list],
+            ["2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE"],
+        )
+        dots = [call.args for call in circles.call_args_list]
+        self.assertEqual(len(dots), 3)
+        for kind in active:
+            index = next(i for i, item in enumerate(ui.DIGITAL_MENU_ITEMS)
+                         if item[0] == kind)
+            x0, y0, x1, _y1 = ui.lcd_nav_box(
+                index, len(ui.DIGITAL_MENU_ITEMS), True,
+            )
+            center_x = (x0 + x1) / 2
+            self.assertIn((center_x, y0 + 47, 3,
+                           ui.APP_UI_STYLE.palette.ready), dots)
+
+    def test_home_digi_button_counts_enabled_decoder_sessions(self):
+        ui.configure_output(True)
+        groups = (
+            [{"paused": False}, {"paused": False}],
+            [{"paused": True}], [{"paused": False}], [],
+            [{"paused": False}, {"paused": True}],
+        )
+        self.assertEqual(sum(ui.digital_decoder_session_counts(*groups).values()), 4)
+        self.assertEqual(sum(ui.digital_decoder_session_counts([], [], [], [], []).values()), 0)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=4)
+        digi_calls = [call.args for call in buttons.call_args_list
+                      if call.args[2] == "DIGI"]
+        self.assertEqual(len(digi_calls), 1)
+        self.assertEqual(digi_calls[0][3], "4 DECODERS")
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=0)
+        zero_digi_calls = [call.args for call in zero_buttons.call_args_list
+                           if call.args[2] == "DIGI"]
+        self.assertEqual(zero_digi_calls[0][3], "DECODERS")
+
+    def test_home_digi_100_count_fits_or_ellipsizes(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=100)
+        digi = next(call.args for call in buttons.call_args_list
+                    if call.args[2] == "DIGI")
+        self.assertEqual(digi[3], "100 DECODERS")
+        cache = ui.TextCache()
+        font = cache.font(ui.APP_UI_STYLE.button.label_size, bold=True,
+                          family=ui.APP_UI_STYLE.button.font_family)
+        label_cache = mock.Mock()
+        label_cache.texture.side_effect = lambda text, *_args, **_kwargs: (
+            None, font.size(text)[0], font.size(text)[1]
+        )
+        visible = ui.button_label_for_box(label_cache, digi[3], digi[1])
+        self.assertLessEqual(font.size(visible)[0], digi[1][2] - digi[1][0] - 8)
+        if visible != digi[3]:
+            self.assertTrue(visible.endswith("…"))
+
     def test_apps_no_longer_contains_dual_vfo_action(self):
         cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
         cy = (ui.TEST_DUAL_BOX[1] + ui.TEST_DUAL_BOX[3]) / 2
@@ -448,7 +531,7 @@ class DrawerGeometryTests(unittest.TestCase):
         ))
 
     def test_sidebar_headers_use_one_centered_compact_style(self):
-        with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line") as draw_line, mock.patch.object(ui, "draw_text") as draw_text:
+        with mock.patch.object(ui, "draw_logical_rect") as draw_rect, mock.patch.object(ui, "draw_logical_line") as draw_line, mock.patch.object(ui, "draw_text") as draw_text:
             ui.draw_sidebar_header(object(), "SETTINGS")
         args = draw_text.call_args.args
         self.assertEqual(args[1], (ui.LCD_NAV_X0 + ui.LOGICAL_W) / 2)
@@ -458,6 +541,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(draw_line.call_args.args[:4],
                          (ui.LCD_NAV_X0 + 10, ui.LCD_DRAWER_HEADER_H,
                           ui.LOGICAL_W - 10, ui.LCD_DRAWER_HEADER_H))
+        self.assertEqual(draw_rect.call_args.args[-1], (0, 0, 0, 255))
 
 
 class ParentNavigationTests(unittest.TestCase):
@@ -522,12 +606,18 @@ class ReceiverBrowserTests(unittest.TestCase):
         self.assertEqual([source for source, _box in segments],
                          ["local", "kiwi", "openwebrx", "fmdx", "all"])
         for box in (box for _source, box in segments):
-            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
-            self.assertLessEqual(box[2], ui.LOGICAL_W)
+            self.assertEqual((box[0], box[2]),
+                             (ui.PICKER_EXIT_BOX[0], ui.PICKER_EXIT_BOX[2]))
             self.assertGreater(box[2] - box[0], box[3] - box[1])
+            self.assertEqual(box[3] - box[1], 48)
         for index, (_name, a) in enumerate(segments):
             for _other, b in segments[index + 1:]:
                 self.assertFalse(ui.boxes_overlap(a, b))
+        self.assertEqual(segments[0][1][1], ui.LCD_DRAWER_HEADER_H + 16)
+        self.assertTrue(all(
+            segments[index + 1][1][1] - segments[index][1][3] == 14
+            for index in range(len(segments) - 1)
+        ))
         self.assertLess(segments[-1][1][3], ui.PICKER_MAP_MODE_BOX[1])
         self.assertEqual(ui.PICKER_HEADER_H, 0)
 
@@ -959,7 +1049,7 @@ class ReceiverListStyleTests(unittest.TestCase):
     def test_theme_uses_exact_receiver_palette_and_type_scale(self):
         theme = ui.RECEIVER_LIST_THEME
         self.assertEqual(theme.main_background, (18, 18, 18, 255))
-        self.assertEqual(theme.sidebar_background, (26, 26, 26, 255))
+        self.assertEqual(theme.sidebar_background, (0, 0, 0, 255))
         self.assertEqual(theme.primary_text, (255, 255, 255))
         self.assertEqual(theme.secondary_text, (160, 160, 160))
         self.assertEqual(theme.focus, (0, 229, 255, 255))
@@ -1012,12 +1102,58 @@ class ReceiverListStyleTests(unittest.TestCase):
         )
         self.assertEqual(text.call_args.args[4], ui.APP_UI_STYLE.palette.text)
 
-    def test_receiver_rows_show_five_complete_and_a_sixth_teaser(self):
+    def test_receiver_rows_are_six_complete_with_balanced_padding(self):
         boxes = [ui.station_tile(index, 0) for index in range(6)]
         self.assertTrue(all(box is not None for box in boxes))
         self.assertTrue(all(box[3] - box[1] == ui.RECEIVER_PICKER_ROW_HEIGHT for box in boxes))
-        self.assertLess(boxes[-1][1], ui.LOGICAL_H)
-        self.assertGreater(boxes[-1][3], ui.LOGICAL_H)
+        self.assertEqual(boxes[0][1] - ui.PICKER_HEADER_H, ui.RECEIVER_PICKER_ROW_INSET)
+        self.assertEqual(ui.LOGICAL_H - boxes[-1][3], ui.RECEIVER_PICKER_ROW_INSET)
+
+    def test_sorted_rows_keep_selected_receiver_in_natural_order(self):
+        stations = [
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        ]
+        focused = ui.receiver_rows_for_display(
+            stations, "http://rx9.test", "kiwi", "kiwi", True,
+        )
+        sorted_rows = ui.receiver_rows_for_display(
+            stations, "http://rx9.test", "kiwi", "kiwi", False,
+        )
+        self.assertEqual(focused[2][0], "Receiver 9")
+        self.assertEqual(sorted_rows, stations)
+
+    def test_sort_notice_uses_zoom_green_osd_typography(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "draw_text") as text, \
+                mock.patch.object(ui, "draw_logical_polyline") as chevron:
+            ui.draw_receiver_sort_notice(
+                self.Cache(), "SORTED BY FARTHEST FIRST", 220, "distance_far",
+            )
+        panel.assert_called_once_with(ui.receiver_list_notice_box(), 220)
+        labels = [call.args[3] for call in text.call_args_list]
+        self.assertEqual(labels, ["SORTED BY", "FARTHEST FIRST"])
+        x0, y0, x1, _y1 = ui.ZOOM_OSD_BOX
+        self.assertEqual(text.call_args_list[0].args[1:3], (x0 + 18, y0 + 22))
+        self.assertEqual(chevron.call_args.args[0],
+                         ui.sort_chevron_points(ui.ZOOM_OSD_BOX, "distance_far"))
+        self.assertEqual(chevron.call_args.args[1:], ((72, 255, 122, 220), 5))
+        for call in text.call_args_list:
+            self.assertEqual(call.args[4:9], ((72, 255, 122), 28, True, True, "lm"))
+            self.assertEqual(call.kwargs["alpha"], 220 / 255.0)
+
+    def test_sort_chevron_points_match_ascending_and_descending_modes(self):
+        box = ui.ZOOM_OSD_BOX
+        for mode in ("distance_near", "name_az"):
+            left, tip, right = ui.sort_chevron_points(box, mode)
+            self.assertLess(tip[1], left[1])
+            self.assertEqual(left[1], right[1])
+            self.assertEqual(right[0], box[2] - 21)
+        for mode in ("distance_far", "name_za"):
+            left, tip, right = ui.sort_chevron_points(box, mode)
+            self.assertGreater(tip[1], left[1])
+            self.assertEqual(left[1], right[1])
+            self.assertEqual(right[0], box[2] - 21)
 
     def test_active_receiver_selects_its_source_tab(self):
         stations = (
@@ -1115,19 +1251,11 @@ class ReceiverListStyleTests(unittest.TestCase):
             )
         self.assertEqual(texts, ["SORT"])
 
-    def test_sort_notice_is_centered_in_receiver_list_canvas(self):
+    def test_sort_notice_uses_exact_zoom_osd_box(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        notice = ui.receiver_list_notice_box()
-        self.assertEqual(
-            (notice[0] + notice[2]) / 2,
-            (ui.PICKER_BOX[0] + ui.PICKER_BOX[2]) / 2,
-        )
-        self.assertEqual(
-            (notice[1] + notice[3]) / 2,
-            (ui.PICKER_BOX[1] + ui.PICKER_BOX[3]) / 2,
-        )
-        self.assertLessEqual(notice[2], ui.PICKER_BOX[2])
+        self.assertEqual(ui.receiver_list_notice_box(), ui.ZOOM_OSD_BOX)
+        self.assertLessEqual(ui.ZOOM_OSD_BOX[2], ui.PICKER_BOX[2])
 
     def test_favorite_star_is_closed_and_mathematically_regular(self):
         points = ui.regular_star_points(0, 0, 23)

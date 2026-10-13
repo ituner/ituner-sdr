@@ -832,18 +832,11 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(state.spectrum_auto_snapshot())
         self.assertEqual(state.waterfall_snapshot(), waterfall_before)
 
-    def test_map_view_no_longer_offers_clean(self):
-        # CLEAN hid the geographic context and read as an empty globe; it is
-        # gone from the VIEW cycle entirely.
-        self.assertNotIn('clean', ui.MAP_VIEWS)
-        self.assertNotIn('CLEAN', ui.MAP_VIEW_LABELS.values())
-        views = set()
-        view = 'satellite_only'
-        for _ in range(len(ui.MAP_VIEWS)):
-            views.add(view)
-            view = ui.MAP_VIEWS[(ui.MAP_VIEWS.index(view) + 1) % len(ui.MAP_VIEWS)]
-        self.assertEqual(views, set(ui.MAP_VIEWS))
-        self.assertNotIn('clean', views)
+    def test_globe_view_selector_keeps_prior_choices_except_atlas(self):
+        self.assertEqual(ui.GLOBE_DEFAULT_VIEW, 'satellite')
+        self.assertEqual(ui.MAP_VIEWS, ('satellite_only', 'borders', 'satellite'))
+        self.assertNotIn('atlas', ui.MAP_VIEWS)
+        self.assertNotIn('ATLAS', ui.MAP_VIEW_LABELS.values())
 
     def test_navigation_tiles_match_home_button_spec(self):
         self.assertEqual((ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H), (114, 64))
@@ -860,32 +853,19 @@ class BoardLayoutTests(unittest.TestCase):
                 box = ui.lcd_nav_box(index, len(items), has_back)
                 self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
                 self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
-        # The Globe commands use the same compact button dimensions and hit boxes.
+        # The Globe retains its four compact rail commands and full-width Back.
         ui.configure_output(True)
         ui.configure_popup_layout()
         for box in (ui.RADIOGARDEN_LIST_BOX, ui.RADIOGARDEN_VIEW_BOX,
                     ui.RADIOGARDEN_ZOOM_IN_BOX, ui.RADIOGARDEN_ZOOM_OUT_BOX):
             self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
             self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
-        self.assertEqual(
-            (
-                ui.RADIOGARDEN_LIST_BOX, ui.RADIOGARDEN_VIEW_BOX,
-                ui.RADIOGARDEN_ZOOM_IN_BOX, ui.RADIOGARDEN_ZOOM_OUT_BOX,
-            ),
-            ui.receiver_picker_command_boxes(),
-        )
         self.assertIs(ui.RADIOGARDEN_LIST_BOX, ui.PICKER_MAP_MODE_BOX)
         self.assertIs(ui.RADIOGARDEN_VIEW_BOX, ui.PICKER_SEARCH_BOX)
         self.assertIs(ui.RADIOGARDEN_ZOOM_IN_BOX, ui.PICKER_SORT_BOX)
         self.assertIs(ui.RADIOGARDEN_ZOOM_OUT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX)
-        self.assertEqual(
-            min(ui.RADIOGARDEN_LIST_BOX[0], ui.RADIOGARDEN_VIEW_BOX[0]),
-            ui.RADIOGARDEN_EXIT_BOX[0],
-        )
-        self.assertEqual(
-            max(ui.RADIOGARDEN_LIST_BOX[2], ui.RADIOGARDEN_VIEW_BOX[2]),
-            ui.RADIOGARDEN_EXIT_BOX[2],
-        )
+        self.assertEqual(ui.RADIOGARDEN_LIST_BOX[0], ui.RADIOGARDEN_EXIT_BOX[0])
+        self.assertEqual(ui.RADIOGARDEN_VIEW_BOX[2], ui.RADIOGARDEN_EXIT_BOX[2])
         self.assertEqual(
             ui.RADIOGARDEN_EXIT_BOX[1] - max(
                 ui.RADIOGARDEN_ZOOM_IN_BOX[3], ui.RADIOGARDEN_ZOOM_OUT_BOX[3],
@@ -900,7 +880,8 @@ class BoardLayoutTests(unittest.TestCase):
         ui.configure_popup_layout()
         zoom_in, zoom_out = ui.receiver_map_zoom_boxes()
         rail_boxes = [zoom_in, zoom_out, ui.RADIOGARDEN_LIST_BOX,
-                      ui.RADIOGARDEN_VIEW_BOX, ui.RADIOGARDEN_EXIT_BOX]
+                      ui.RADIOGARDEN_VIEW_BOX,
+                      ui.RADIOGARDEN_EXIT_BOX]
         for box in rail_boxes:
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
@@ -947,8 +928,11 @@ class BoardLayoutTests(unittest.TestCase):
                     ui.PICKER_SORT_BOX, ui.PICKER_ROUTE_FAVORITES_BOX]
         back = ui.PICKER_EXIT_BOX
         self.assertEqual(commands, list(ui.receiver_picker_command_boxes()))
-        self.assertTrue(all(box[2] - box[0] == ui.LCD_NAV_TILE_W for box in tabs))
-        self.assertTrue(all(box[3] - box[1] == ui.LCD_NAV_TILE_H for box in tabs))
+        self.assertTrue(all(box[3] - box[1] == 48 for box in tabs))
+        self.assertTrue(all((box[0], box[2]) == (back[0], back[2]) for box in tabs))
+        self.assertEqual(tabs[0][1], ui.LCD_DRAWER_HEADER_H + 16)
+        self.assertTrue(all(tabs[index + 1][1] - tabs[index][3] == 14
+                            for index in range(len(tabs) - 1)))
         self.assertLess(tabs[-1][3], min(box[1] for box in commands))
         self.assertLess(max(box[3] for box in commands), back[1])
         boxes = tabs + commands + [back]
@@ -1240,6 +1224,20 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
         state.set_radio_mode('AM')
         self.assertFalse(state.kiwi_landing_ready())
 
+    def test_passband_waits_for_receiver_data_and_hides_on_pause_or_switch(self):
+        state = ui.SharedState('http://kiwi.test', 7075, 8, -95, 142, 245, 3, 'lsb', True)
+        self.assertFalse(state.rf_stream_ready_snapshot())
+        generation = state.snapshot()[-1]
+        state.connection_ready(generation, 'waterfall')
+        self.assertTrue(state.rf_stream_ready_snapshot())
+        state.set_stream_paused(True)
+        self.assertFalse(state.rf_stream_ready_snapshot())
+        state.set_server('http://next.test')
+        self.assertFalse(state.rf_stream_ready_snapshot())
+        generation = state.snapshot()[-1]
+        state.connection_ready(generation, 'audio')
+        self.assertTrue(state.rf_stream_ready_snapshot())
+
 class CapabilityControlTests(unittest.TestCase):
     def state(self, server='http://kiwi.test', freq=7075):
         return ui.SharedState(server, freq, 8, -95, 142, 245, 3, 'lsb', True)
@@ -1325,19 +1323,102 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
     def test_legend_uses_the_shared_gray_active_and_pressed_style(self):
         visual = ui.receiver_map_legend_visual('openwebrx', True)
-        self.assertEqual(visual.fill, ui.APP_UI_STYLE.palette.active_surface)
-        self.assertEqual(visual.border, ui.APP_UI_STYLE.palette.active_border)
-        self.assertEqual(visual.text, ui.APP_UI_STYLE.palette.text)
-        self.assertEqual(visual.border_width, 2)
-        self.assertNotEqual(visual.fill, visual.border)
+        self.assertEqual(visual, ui.APP_UI_STYLE.button.resolve(active=True))
         self.assertEqual(visual, ui.receiver_map_legend_visual('kiwi', True))
         inactive = ui.receiver_map_legend_visual('openwebrx', False)
-        self.assertEqual(inactive.border, ui.APP_UI_STYLE.palette.border)
-        self.assertEqual(inactive.text, ui.APP_UI_STYLE.palette.secondary_text)
+        self.assertEqual(inactive, ui.APP_UI_STYLE.button.resolve())
         pressed = ui.receiver_map_legend_visual('openwebrx', False, pressed=True)
-        self.assertEqual(pressed.fill, visual.fill)
-        self.assertEqual(pressed.border, visual.border)
-        self.assertEqual(pressed.text, visual.text)
+        self.assertEqual(pressed, ui.APP_UI_STYLE.button.resolve(pressed=True))
+
+    def test_legend_underline_follows_receiver_dot_visibility(self):
+        for group in ('kiwi', 'openwebrx', 'fmdx'):
+            self.assertEqual(ui.receiver_map_legend_line_color(group, True),
+                             ui.RECEIVER_MAP_GROUP_COLORS[group])
+            self.assertEqual(ui.receiver_map_legend_line_color(group, False),
+                             ui.APP_UI_STYLE.palette.secondary_text)
+
+    def test_legend_draws_two_pixel_lines_across_full_button_width(self):
+        receivers = self.receivers()
+        ui.receiver_map_toggle_group('fmdx')
+        with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
+             patch.object(ui, 'draw_logical_rect') as rectangles, \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rounded_rect'), \
+             patch.object(ui, 'draw_logical_polyline'), \
+             patch.object(ui, 'draw_logical_circle'), \
+             patch.object(ui, 'draw_logical_points'), \
+             patch.object(ui, 'draw_text'), \
+             patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
+             patch.object(ui, 'draw_sidebar_header'), \
+             patch.object(ui, 'draw_picker_two_line_button'), \
+             patch.object(ui, 'draw_radio_close_button'):
+            ui.draw_receiver_map(None, receivers, 0.0, 0.0, 1.0,
+                                 '', None, 'idle', {}, map_view='satellite_only')
+        calls = [call.args for call in rectangles.call_args_list]
+        for group, (x0, _y0, x1, y1) in ui.receiver_map_legend_boxes(receivers):
+            color = (ui.APP_UI_STYLE.palette.secondary_text if group == 'fmdx'
+                     else ui.RECEIVER_MAP_GROUP_COLORS[group])
+            self.assertIn((x0 + 16, y1 - 12, x1 - 16, y1 - 10, color), calls)
+
+    def test_globe_zoom_reaches_1200x_and_uses_home_osd_panel(self):
+        self.assertEqual(ui.RADIOGARDEN_ZOOM_MAX, 1200.0)
+        scale = ui.GLOBE_DEFAULT_SCALE
+        for _ in range(6):
+            scale = ui.clamp(scale * ui.RADIOGARDEN_ZOOM_TAP_FACTOR,
+                             ui.RADIOGARDEN_ZOOM_MIN, ui.RADIOGARDEN_ZOOM_MAX)
+        self.assertEqual(scale, 1200.0)
+        with patch.object(ui, 'draw_green_osd_panel') as panel, \
+             patch.object(ui, 'draw_text') as text, \
+             patch.object(ui, 'draw_logical_line'), \
+             patch.object(ui, 'draw_logical_rect'):
+            ui.draw_globe_zoom_osd(None, 1200.0)
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
+        labels = [call.args[3] for call in text.call_args_list]
+        self.assertIn('GLOBE ZOOM', labels)
+        self.assertIn('1200x', labels)
+
+    def test_globe_zoom_changes_map_projection_by_the_displayed_factor(self):
+        box = (0, 0, 1024, 800)
+        receiver = {'lat': 0.0, 'lon': 0.005}
+        centre_x = (box[0] + box[2]) / 2
+        half_zoom = ui.radiogarden_project(receiver, 0.0, 0.0, box, 600.0)
+        full_zoom = ui.radiogarden_project(receiver, 0.0, 0.0, box, 1200.0)
+        self.assertAlmostEqual(
+            full_zoom[0] - centre_x, 2 * (half_zoom[0] - centre_x),
+        )
+        self.assertAlmostEqual(
+            ui.radiogarden_radius(box, 1200.0),
+            1200 * ui.radiogarden_radius(box, 1.0),
+        )
+        self.assertGreater(full_zoom[0] - centre_x, 50)
+
+    def test_globe_pan_stays_screen_proportional_at_1200x(self):
+        box = (0, 0, 1024, 800)
+        receiver = {'lat': 0.0, 'lon': 0.0}
+        yaw, pitch = ui.radiogarden_pan_angles(
+            0.0, 0.0, 100.0, 0.0, box, 1200.0,
+        )
+        point = ui.radiogarden_project(receiver, yaw, pitch, box, 1200.0)
+        self.assertAlmostEqual(point[0], 612.0, delta=1.0)
+
+    def test_cm5_satellite_keeps_base_image_while_tiles_load(self):
+        box = (0, 0, 1024, 800)
+        with patch.object(ui, 'satellite_map_texture', return_value=1), \
+             patch.object(ui, 'draw_receiver_map_satellite_tiles') as tiles, \
+             patch.object(ui, 'GL'), \
+             patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '1'}):
+            self.assertTrue(ui.draw_receiver_map_satellite(
+                None, 0.0, 0.0, box, 1200.0, interactive=True,
+            ))
+            tiles.assert_called_once()
+        with patch.object(ui, 'satellite_map_texture', return_value=1), \
+             patch.object(ui, 'draw_receiver_map_satellite_tiles') as tiles, \
+             patch.object(ui, 'GL'), \
+             patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '0'}):
+            self.assertTrue(ui.draw_receiver_map_satellite(
+                None, 0.0, 0.0, box, 1200.0, interactive=True,
+            ))
+            tiles.assert_not_called()
 
     def test_legend_label_names_the_action(self):
         # A lit chip offers to hide its group; a hidden chip offers to show it.
@@ -1469,7 +1550,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ui.GLOBE_DOT_GROW_START_PIXELS,
         )
         self.assertGreater(
-            ui.receiver_map_dot_pixels(68.8),
+            ui.receiver_map_dot_pixels(20.5 * ui.GLOBE_DOT_SCALE_STEP * 1.01),
             ui.receiver_map_dot_pixels(20.5),
         )
         self.assertEqual(ui.receiver_map_dot_pixels(999999), ui.GLOBE_DOT_MAX_PIXELS)
@@ -1511,11 +1592,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
     def test_no_view_draws_the_removed_clean_coastline_layer(self):
         # The CLEAN coastline layer is gone from every presentation.
-        for view in ('borders', 'atlas', 'satellite_only', 'satellite'):
+        for view in ('borders', 'satellite_only', 'satellite'):
             self.assertNotIn(self.COASTLINE_COLOR, self._polyline_colors(view), view)
 
     def test_outline_views_still_draw_country_borders(self):
-        for view in ('borders', 'atlas', 'satellite'):
+        for view in ('borders', 'satellite'):
             colors = self._polyline_colors(view)
             self.assertTrue(
                 any(color in ((177, 203, 201, 196), (207, 222, 211, 150)) for color in colors),
@@ -1538,8 +1619,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
-            self.assertEqual(box[3] - box[1], ui.RECEIVER_RAIL_TAB_HEIGHT)
+            self.assertEqual(box[2] - box[0], 236)
+            self.assertEqual(box[3] - box[1], ui.RECEIVER_PICKER_CATEGORY_HEIGHT)
+            self.assertEqual(box[1], ui.RECEIVER_MAP_LEGEND_RAIL_TOP +
+                             list(ui.RECEIVER_MAP_GROUP_ORDER).index(group) *
+                             (ui.RECEIVER_PICKER_CATEGORY_HEIGHT + ui.RECEIVER_PICKER_CATEGORY_GAP))
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.receiver_map_legend_at(*center, receivers), group)
         for index, (_group, first) in enumerate(boxes):
@@ -1630,7 +1714,6 @@ class GlobeDefaultViewTests(unittest.TestCase):
     def test_resting_view_is_satellite_with_borders(self):
         self.assertEqual(ui.GLOBE_DEFAULT_VIEW, 'satellite')
         self.assertIn(ui.GLOBE_DEFAULT_VIEW, ui.MAP_VIEWS)
-        self.assertEqual(ui.MAP_VIEW_LABELS[ui.GLOBE_DEFAULT_VIEW], 'SAT')
 
     def test_resting_scale_is_a_regional_close_up(self):
         self.assertEqual(ui.GLOBE_DEFAULT_SCALE, 2.2)
