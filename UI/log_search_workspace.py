@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import textwrap
 from sstv_workspace import SSTVWorkspace
+from ui_style import APP_UI_STYLE
 
 
 class SearchView(SSTVWorkspace):
@@ -24,19 +25,22 @@ class SearchView(SSTVWorkspace):
             self.future=None
         self.actions=[];self.ui.draw_logical_rect(0,0,1280,800,(7,18,25,255))
         self.text(cache,20,34,'SEARCH SAVED LOGS',27,(104,234,194))
-        self.button(cache,(1100,10,1260,66),'BACK',('back',None))
+        self.button(cache,(1034,728,1270,792),'BACK',('back',None))
         if self.picture:
             self.manager.gallery=self.service.galleries()[self.picture['mode']]
-            self.image(self.picture['image_id'],(20,90,1260,780));return
-        self.button(cache,(20,82,720,143),'Callsign: '+(self.query or 'all saved results'),('keyboard',None))
-        self.button(cache,(736,82,1010,143),self.mode.upper()+' · change',('mode',None))
-        self.button(cache,(1026,82,1260,143),'SEARCH',('search',None))
+            self.image(self.picture['image_id'],(20,90,1020,780));return
+        self.button(cache,(20,82,256,146),'CALLSIGN',('keyboard',None),
+                    self.query or 'ALL SAVED RESULTS')
+        self.button(cache,(264,82,500,146),'MODE',('mode',None),self.mode)
+        self.button(cache,(508,82,744,146),'SEARCH',('search',None))
         if self.keyboard:
             for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/ ')):
                 for x,char in enumerate(row):
-                    self.button(cache,(24+x*96,205+y*90,112+x*96,285+y*90),char if char!=' ' else 'SPACE',('key',char))
+                    left,top=24+x*122,205+y*72
+                    self.button(cache,(left,top,left+114,top+64),char if char!=' ' else 'SPACE',('key',char))
             for i,(label,kind) in enumerate((('DELETE','erase'),('CLEAR','clear'),('SEARCH','done'))):
-                self.button(cache,(1000,205+i*112,1258,295+i*112),label,(kind,None))
+                left=24+i*122
+                self.button(cache,(left,501,left+114,565),label,(kind,None))
             self.text(cache,24,640,'Use a full or partial callsign. Matching ignores upper / lower case.',20);return
         for i,row in enumerate(self.result['results']):
             y=168+i*175;self.ui.draw_logical_rect(20,y,1260,y+159,(17,38,48,255))
@@ -46,13 +50,13 @@ class SearchView(SSTVWorkspace):
             match=snippet.upper().find(self.query.strip().upper()) if self.query.strip() else 0
             if match>110:snippet='…'+snippet[max(0,match-80):]
             for n,line in enumerate(textwrap.wrap(snippet,95)[:3]):self.text(cache,32,y+84+n*24,line,20,width=1040)
-            if row.get('image_url'):self.button(cache,(1090,y+15,1245,y+72),'IMAGE',('image',row))
+            if row.get('image_url'):self.button(cache,(1010,y+15,1246,y+79),'IMAGE',('image',row))
         total=self.result['total']
         if not total:self.text(cache,30,250,'No matching saved results. Try part of the callsign.',24,width=1200)
-        self.button(cache,(20,704,180,766),'PREVIOUS',('page',-1))
-        self.button(cache,(194,704,354,766),'NEXT',('page',1))
-        self.text(cache,380,725,f'{total} results · page {self.offset//3+1}',20)
-        self.text(cache,380,758,self.message or 'OCR and Morse text are tentative. Tap a mode to search across all decoders.',16,width=860)
+        self.button(cache,(20,728,134,792),'PREVIOUS',('page',-1))
+        self.button(cache,(142,728,256,792),'NEXT',('page',1))
+        self.text(cache,280,749,f'{total} results · page {self.offset//3+1}',18)
+        self.text(cache,280,779,self.message or 'OCR and Morse text are tentative. Tap a mode to search across all decoders.',15,width=736)
 
     def tap(self,x,y,*unused):
         a=next((a for box,a in self.actions if self.ui.contains(box,x,y)),None)
@@ -82,8 +86,7 @@ def install_search(workspace, mode, service):
     """Decorate only workspace entry points; no app input or audio changes."""
     view=SearchView(workspace.ui,service)
     original_draw,original_tap,original_close=workspace.draw,workspace.tap,workspace.close
-    widths={'sstv':120,'hell':154,'qrss':100,'cw':275,'wspr':260}
-    box=(8,10,8+widths[mode],60)
+    box=(424,8,538,72) if mode in ('sstv','hell') else (1034,656,1270,720)
     visible=False
     def draw(cache,*args):
         nonlocal visible
@@ -92,8 +95,18 @@ def install_search(workspace, mode, service):
         visible=not any(getattr(workspace,key,None) for key in ('add_open','enlarged','reporting','settings'))
         if mode!='wspr' and getattr(workspace,'field',None):visible=False
         if visible:
-            workspace.ui.draw_logical_rect(*box,(21,46,56,255))
-            workspace.ui.draw_text(cache,(box[0]+box[2])/2,35,mode.upper()+' FIND',(126,255,212),17,True,False,'cm',family='Liberation Sans')
+            label=mode.upper()+' FIND'
+            if hasattr(workspace,'button'):
+                workspace.button(cache,box,label,('search',None))
+            else:
+                visual=APP_UI_STYLE.button.resolve()
+                rounded=getattr(workspace.ui,'draw_logical_rounded_rect',None)
+                if callable(rounded):
+                    rounded(*box,APP_UI_STYLE.button.radius,visual.fill,visual.border,visual.border_width)
+                else:workspace.ui.draw_logical_rect(*box,visual.fill)
+                workspace.ui.draw_text(cache,(box[0]+box[2])/2,(box[1]+box[3])/2,label,
+                                       visual.text,APP_UI_STYLE.button.label_size,True,False,'cm',
+                                       family=APP_UI_STYLE.button.font_family)
     def tap(x,y,*args):
         if view.open:return view.tap(x,y)
         if visible and workspace.ui.contains(box,x,y):

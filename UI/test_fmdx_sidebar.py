@@ -16,9 +16,20 @@ class FmdxSidebarTests(unittest.TestCase):
 
     def test_fm_steps_match_touch_targets(self):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1
-        for step, box in ui.radio_step_options('fmdx'):
-            self.assertIn(step, (50000, 100000, 200000))
-            self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2, receiver_type='fmdx'), ('step', step))
+        steps = list(ui.radio_step_options('fmdx'))
+        self.assertEqual([step for step, _box in steps], list(ui.FMDX_TUNE_STEPS_HZ))
+        self.assertEqual(len({box[1] for _step, box in steps}), 1)
+        for step, box in steps:
+            self.assertEqual((box[2] - box[0], box[3] - box[1]), (55, 31))
+            center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            self.assertEqual(ui.radio_option_at(*center, receiver_type='fmdx'),
+                             ('step', step))
+            self.assertIsNone(ui.radio_option_at(
+                *center, receiver_type='fmdx', fmdx_shared_control=False,
+            ))
+        self.assertEqual([ui.next_radio_tune_step(step, 'fmdx')
+                          for step in (50000, 100000, 200000)],
+                         [100000, 200000, 50000])
 
     def test_fm_step_does_not_depend_on_audio_waterfall_zoom(self):
         for zoom in (0, 8, 16):
@@ -39,17 +50,17 @@ class FmdxRailRegressionTests(unittest.TestCase):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         self.addCleanup(setattr, ui, "LCD_RADIO_DRAWER_PROGRESS", self.previous_progress)
 
-    def test_selected_fmdx_server_lights_only_fmdx(self):
+    def test_selected_fmdx_server_lights_only_fm(self):
         state = ui.SharedState("http://kiwi.test", 7075, 8, -95, -125, -15, 3, "am", True)
         state.set_server("https://fm.example/radio", receiver_type="fmdx")
         mode = ui.effective_receiver_mode(state.receiver_type_snapshot(), state.radio_snapshot()[0])
         labels = [label for label, _box in ui.lcd_home_mode_boxes(False, mode)]
         active = [label for label in labels if ui.mode_annunciator_active(label, mode, "IQ")]
-        self.assertEqual(active, ["FMDX"])
+        self.assertEqual(active, ["FM"])
         for mode in ("AM", "USB", "NBFM", ui.fmdx.MODE_LABEL):
-            self.assertIn("FMDX", ui.home_mode_labels(mode))
+            self.assertIn("FM", ui.home_mode_labels(mode))
             self.assertNotIn("NFM", ui.home_mode_labels(mode))
-        self.assertTrue(ui.mode_annunciator_active("FMDX", "NBFM", "DIG"))
+        self.assertTrue(ui.mode_annunciator_active("FM", "NBFM", "DIG"))
 
     def test_zoom_buttons_match_home_action_spacing_and_stay_left_aligned(self):
         favorite = ui.favorite_waterfall_box()
@@ -71,7 +82,8 @@ class FmdxRailRegressionTests(unittest.TestCase):
                  patch.object(ui, "draw_radio_close_button"), \
                  patch.object(ui, "draw_sidebar_header"), \
                  patch.object(ui, "fit_station_text", side_effect=lambda _c, label, *_a, **_kw: label), \
-                 patch.object(ui, "draw_lcd_audio_tile") as tile:
+                 patch.object(ui, "draw_lcd_audio_tile") as tile, \
+                 patch.object(ui, "draw_picker_button") as step_button:
                 ui.draw_radio_setup_panel(None, "AM", "DIG", 100000,
                     receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared)
                 calls = tile.call_args_list
@@ -81,7 +93,10 @@ class FmdxRailRegressionTests(unittest.TestCase):
                     self.assertEqual(ui.radio_option_at((box[0]+box[2])/2, (box[1]+box[3])/2,
                         receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared),
                         ("fmdx_action", action))
-                steps = [call for call in calls if call.args[2] == "TUNING STEP"]
+                steps = step_button.call_args_list
                 self.assertEqual(len(steps), 3 if shared else 0)
                 if shared:
-                    self.assertEqual([call.args[4] for call in steps], [False, True, False])
+                    self.assertEqual([call.args[2] for call in steps],
+                                     ["50K", "100K", "200K"])
+                    self.assertEqual([call.args[4] for call in steps],
+                                     [False, True, False])

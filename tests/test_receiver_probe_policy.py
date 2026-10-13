@@ -59,6 +59,8 @@ class ReceiverProbePolicyTests(unittest.TestCase):
             for node in ast.walk(tree):
                 # Exclude docstrings/comments; prohibit endpoint string literals.
                 if isinstance(node, ast.Constant) and isinstance(node.value,str):
+                    if node.value.startswith('/proc/'):
+                        continue  # Linux process metadata is a file path, not an HTTP endpoint.
                     self.assertNotEqual(node.value, '/status', str(path))
                     self.assertFalse(node.value.endswith('/status'), str(path))
 

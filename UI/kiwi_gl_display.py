@@ -12,6 +12,7 @@ import json
 import lzma
 import math
 import os
+import resource
 import queue
 import select
 import signal
@@ -26,11 +27,13 @@ import time
 import traceback
 import re
 import html
+import io
 import wave
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 import ipaddress
 from urllib.request import Request, urlopen
+import globe_tiles
 
 
 NETWORK_MANAGER_HELPER = "/usr/local/sbin/ituner-network"
@@ -250,15 +253,15 @@ DESKTOP_1280_TOP_H = 96
 # bounds of the two-column navigation rail beneath it. It is one touch target.
 DESKTOP_1280_ANNUNCIATOR_BOX = (1031, 0, 1273, 96)
 # FMDX is the shared mode-button label; Kiwi's wire-mode remains NBFM.
-DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "FMDX", "IQ")
+DESKTOP_1280_MODE_ANNUNCIATORS = ("AM", "SAM", "DRM", "LSB", "USB", "CW", "FM", "IQ")
 
 
 def mode_annunciator_active(label, active_mode, digital):
     """Map compact panel labels onto Kiwi's internal demodulator names."""
     return (
         label == active_mode
-        or (label == "FMDX" and active_mode == "NBFM")
-        or (label == "FMDX" and active_mode == fmdx.MODE_LABEL)
+        or (label == "FM" and active_mode == "NBFM")
+        or (label == "FM" and active_mode == fmdx.MODE_LABEL)
         or (label == "IQ" and active_mode != fmdx.MODE_LABEL and str(digital).upper() == "IQ")
     )
 
@@ -320,6 +323,9 @@ def load_broadcast_identification_policy():
 
 BROADCAST_IDENTIFICATION_POLICY = load_broadcast_identification_policy()
 _satellite_map_surfaces = {}
+_globe_tile_fetcher = None
+_globe_tile_gpu_lru = OrderedDict()
+_globe_tile_decode_failed = set()
 
 
 def _vendor_roots():
@@ -409,13 +415,16 @@ def menu_icon_filename(kind, muted=False):
 RECEIVER_GLOBE_ICON = "globe-network.png"
 GLOBE_LIST_ICON_KIND = "list"
 SPECTRUM_H = 70
-LCD_SPECTRUM_H = 240
+# Preserve the original scope/waterfall boundary at y=280 while allowing the
+# scope itself to begin at the top edge of the RF canvas.
+LCD_SPECTRUM_H = 280
 # 109 px is a 22.1% reduction from the original 140 px wide scope, returning
 # the recovered vertical space directly to the live waterfall.
 SPECTRUM_WIDE_H = 109
-SCOPE_HEIGHT_MIN = 70
-SCOPE_HEIGHT_MAX = 350
+SCOPE_HEIGHT_MIN = 0
+SCOPE_HEIGHT_MAX = LOGICAL_H
 SCOPE_ADJUST_VISIBLE_SECONDS = 6.0
+SCOPE_DRAG_HOLD_SECONDS = 0.45
 SPECTRUM_WIDE_RAISE_Y = 10
 SPECTRUM_RAISE_Y = 12
 # In the wide display's Waterfall-only view, let live RF content occupy the
@@ -424,7 +433,7 @@ WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
 RADIOGARDEN_DRAG_GAIN = 1.0
 RADIOGARDEN_ZOOM_MIN = 0.55
-RADIOGARDEN_ZOOM_MAX = 768.0
+RADIOGARDEN_ZOOM_MAX = 1200.0
 # Six taps traverse the complete map scale from the global overview to the
 # regional maximum. A geometric step makes each tap feel consistent.
 RADIOGARDEN_ZOOM_TAP_FACTOR = (RADIOGARDEN_ZOOM_MAX / RADIOGARDEN_ZOOM_MIN) ** (1.0 / 6.0)
@@ -556,9 +565,10 @@ SMETER_CEILING_DBM = -33
 SMETER_S1_TO_S9_SEGMENTS = 22
 SMETER_S9_TO_PLUS20_SEGMENTS = 6
 SMETER_PLUS20_TO_PLUS40_SEGMENTS = 8
+SMETER_TRACE_WIDTH = 293
 SMETER_COMPACT_BAR_HALF_HEIGHT = 17.5
 SMETER_HOME_RAIL_BAR_HALF_HEIGHT = 14.0
-# One Display Reset restores this known-good waterfall rendering baseline.
+# Default waterfall levels for new sessions and the Kiwi theme.
 WATERFALL_DEFAULT_FLOOR = 142
 WATERFALL_DEFAULT_CEIL = 245
 WATERFALL_DEFAULT_SPEED = 4
@@ -566,8 +576,15 @@ WATERFALL_DEFAULT_SPEED = 4
 # to work on permissive receivers but cause others to keep the paired socket
 # open without emitting any waterfall frames.
 WATERFALL_MAX_SPEED = 4
-# New installs and Reset Display use the Kiwi palette. Saved choices remain valid.
+# New installs use the Kiwi palette. Saved choices remain valid.
 WATERFALL_DEFAULT_PALETTE = "kiwi"
+# A palette selection also restores its contrast range. Kiwi retains the
+# existing default levels; Classic and GQRX use their own signal ranges.
+WATERFALL_PALETTE_PRESETS = {
+    "classic": (160, 220),
+    "kiwi": (WATERFALL_DEFAULT_FLOOR, WATERFALL_DEFAULT_CEIL),
+    "gqrx": (118, 230),
+}
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
@@ -585,7 +602,7 @@ BOTTOM_RULER_H = 0
 SPECTRUM_RULER_H = 60
 BOTTOM_STATUS_H = 88
 ASR_CAPTION_HEIGHT = 140
-CALLSIGN_CAPTION_HEIGHT = 68
+CALLSIGN_CAPTION_HEIGHT = ASR_CAPTION_HEIGHT
 CALLSIGN_CONTEXT_MAX_AGE = 4.5
 # Three deliberate overlay lanes make the live ASR and ham readouts easy to
 # arrange by touch without covering each other.
@@ -594,7 +611,7 @@ CALLSIGN_TOGGLE_BOX = (684, LOGICAL_H - BOTTOM_STATUS_H, 838, LOGICAL_H)
 ASR_TOGGLE_BOX = (846, LOGICAL_H - BOTTOM_STATUS_H, LOGICAL_W, LOGICAL_H)
 # The system readout is deliberately a real control, not merely decoration:
 # its compact status text opens the per-core performance view.
-CPU_ANNUNCIATOR_BOX = (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+CPU_ANNUNCIATOR_BOX = (800, LOGICAL_H - BOTTOM_STATUS_H, DESKTOP_1280_MAIN_W, LOGICAL_H)
 # This replaces the old one-bit Vosk switch with deliberate, readable
 # choices. It is transient and leaves the radio view visible beneath it.
 ASR_PANEL_BOX = (244, 186, 716, 244)
@@ -923,11 +940,12 @@ WIDE_VIEW_GROUP_BOX = (782, 338, 986, 412)
 LCD_CONTROL_GAP = 10
 HOME_BOX = (30, 13, 102, 71)
 TIME_SOURCE_LABEL = "UTC"
-# The top instruments share one right alignment. Home is intentionally the
-# single left-anchored control.
+# The top instruments share one right alignment in MIDDLE. LEFT keeps its
+# frequency and S-meter together at the canvas edge.
 # The S legend sits left of the LED bars. Align to that true visual edge,
 # leaving a 28 px quiet gap before the meter typography rather than its bars.
 FREQUENCY_RIGHT_X = 545
+LEFT_FREQUENCY_X = 10
 RADIO_SETUP_WIDTH = 74
 RADIO_SETUP_GAP = 10
 RADIO_SETUP_BOX = (260, 10, 334, 54)
@@ -1125,22 +1143,14 @@ def radio_popup_box(box):
 FMDX_TUNE_STEPS_HZ = (50_000, 100_000, 200_000)
 
 
-def radio_step_options(receiver_type="kiwi"):
+def radio_step_options(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
+    if LCD_800_MODE:
+        yield from lcd_radio_step_boxes(receiver_type, mode_family_count)
+        return
     if receiver_type == "fmdx":
         for index, step in enumerate(FMDX_TUNE_STEPS_HZ):
-            y = 364 + index * 74
-            yield step, (LCD_NAV_X0 + 10, y, LOGICAL_W - 10, y + 62)
-        return
-    if LCD_800_MODE:
-        x0, _y0, x1, _y1 = radio_panel_box()
-        gap = 7
-        step_y0, step_h = lcd_radio_step_y0(), 52
-        button_w = (x1 - x0 - 20 - gap) / 2
-        for index, (step_hz, _box) in enumerate(RADIO_STEP_OPTIONS):
-            col, row = index % 2, index // 2
-            left = x0 + 10 + col * (button_w + gap)
-            top = step_y0 + row * (step_h + gap)
-            yield step_hz, (left, top, left + button_w, top + step_h)
+            y = 364 + index * 72
+            yield step, (LCD_NAV_X0 + 10, y, LOGICAL_W - 10, y + 64)
         return
     for step_hz, box in RADIO_STEP_OPTIONS:
         yield step_hz, radio_popup_box(box)
@@ -1155,17 +1165,43 @@ def radio_panel_box():
 
 
 def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
-    """Top-justified LCD tuning-step control pair, below mode families."""
+    """Top of the tuning-step heading, below the mode family grid."""
     rows = max(1, math.ceil(int(mode_family_count) / 2))
-    grid_height = rows * 62 + (rows - 1) * 7
-    return lcd_radio_mode_grid_y0() + grid_height + 30
+    grid_height = rows * APP_UI_STYLE.button.height + (rows - 1) * APP_UI_STYLE.button.gap
+    return lcd_radio_mode_grid_y0() + grid_height + APP_UI_STYLE.button.gap
+
+
+def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
+    """Use the Frequency rail's small-button geometry for the Modes steps."""
+    steps = FMDX_TUNE_STEPS_HZ if receiver_worker_protocol(receiver_type) == "fmdx" else tuple(
+        step_hz for step_hz, _box in RADIO_STEP_OPTIONS
+    )
+    width = FREQUENCY_SMALL_BUTTON_W
+    gap = FREQUENCY_SMALL_BUTTON_GAP
+    left = (LCD_NAV_X0 + LOGICAL_W - (len(steps) * width + (len(steps) - 1) * gap)) / 2
+    top = lcd_radio_step_y0(mode_family_count) + 32
+    return tuple(
+        (step_hz, (left + index * (width + gap), top,
+                   left + index * (width + gap) + width, top + FREQUENCY_SMALL_BUTTON_H))
+        for index, step_hz in enumerate(steps)
+    )
+
+
+def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
+    options = FMDX_TUNE_STEPS_HZ if receiver_worker_protocol(receiver_type) == "fmdx" else tuple(
+        step for step, _box in RADIO_STEP_OPTIONS
+    )
+    try:
+        return options[(options.index(int(current_step_hz)) + 1) % len(options)]
+    except (ValueError, TypeError):
+        return options[0]
 
 
 def lcd_radio_mode_grid_y0():
     """Top of the top-justified 2×4 LCD mode-family matrix."""
     # Keep all mode instruments together at the top; the lower area remains
     # intentionally quiet until the separate Back control at the bottom.
-    return 88
+    return 80
 
 
 def radio_family_button_width():
@@ -1207,16 +1243,16 @@ DISPLAY_FLOOR_PLUS_BOX = (330, 130, 402, 180)
 DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
-DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
-DISPLAY_SCOPE_BOX = (0, 0, 0, 0)
+DISPLAY_LAYOUT_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
     (4, (374, 220, 486, 270), "FAST"),
 )
 DISPLAY_PALETTE_BOXES = (
-    ("classic", (650, 220, 772, 270), "CLASSIC"),
-    ("kiwi", (784, 220, 906, 270), "KIWI"),
+    ("classic", (650, 220, 730, 270), "CLASSIC"),
+    ("kiwi", (738, 220, 818, 270), "KIWI"),
+    ("gqrx", (826, 220, 906, 270), "GQRX"),
 )
 # Filter editing is intentionally a large, temporary workspace. Its slider
 # and bottom controls have independent touch zones to avoid accidental edits.
@@ -1478,10 +1514,10 @@ WSPR_AUDIO_GAP_RGBA = (224, 46, 58, 238)
 WSPR_CAPACITY_REFRESH_SECONDS = 20.0
 MAIN_RECEIVER_CAPACITY_REFRESH_SECONDS = 20.0
 WSPR_CAPACITY_TIMEOUT_SECONDS = 4.0
-WSPR_DECODE_BOX = (574, 6, 748, 70)
+WSPR_DECODE_BOX = (904, 6, 1018, 70)
 WSPR_CPU_BOX = (760, 12, 936, 62)
-WSPR_ADD_BOX = (948, 6, 1116, 70)
-WSPR_HOME_BOX = (1128, 6, 1262, 70)
+WSPR_ADD_BOX = (1026, 6, 1140, 70)
+WSPR_HOME_BOX = (1148, 6, 1262, 70)
 WSPR_CPU_DETAIL_BOX = (280, 114, 1000, 698)
 WSPR_TILE_SETTINGS_BOX = (100, 70, 1180, 748)
 WSPR_DECODER_SETTINGS_BOX = (132, 104, 1148, 700)
@@ -1701,8 +1737,7 @@ POPUP_LAYOUT_BASE = {
     "display": (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
                 DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
                 DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
-                DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES,
-                DISPLAY_INSTRUMENTS_BOX),
+                DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES),
     "filter": (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
                FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX),
     "audio": (AUDIO_PANEL_BOX, AUDIO_VOLUME_BOX, AUDIO_MUTE_BOX, AUDIO_VOICE_CLEAN_BOX, AUDIO_HF_ENHANCE_BOX,
@@ -1732,7 +1767,7 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
-    global DISPLAY_RESET_BOX, DISPLAY_INSTRUMENTS_BOX, DISPLAY_SCOPE_BOX
+    global DISPLAY_RESET_BOX, DISPLAY_LAYOUT_BOXES
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1761,7 +1796,7 @@ def configure_popup_layout():
     (DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX,
      DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX,
      DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX,
-     base_rates, base_palettes, _base_instruments) = POPUP_LAYOUT_BASE["display"]
+     base_rates, base_palettes) = POPUP_LAYOUT_BASE["display"]
     DISPLAY_PANEL_BOX = popup_shift_box(DISPLAY_PANEL_BOX, dy)
     DISPLAY_SPECTRUM_BOX = popup_shift_box(DISPLAY_SPECTRUM_BOX, dy)
     DISPLAY_AUTO_BOX = popup_shift_box(DISPLAY_AUTO_BOX, dy)
@@ -1770,36 +1805,32 @@ def configure_popup_layout():
     DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
-    DISPLAY_INSTRUMENTS_BOX = (0, 0, 0, 0)
-    DISPLAY_SCOPE_BOX = (0, 0, 0, 0)
+    DISPLAY_LAYOUT_BOXES = ()
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
-        # Display is a true right-hand drawer, matching Mode and Audio. Keep
-        # all controls in a bottom-anchored stack so the open upper rail stays
-        # calm and leaves the waterfall entirely visible and interactive.
+        # Display is a true right-hand drawer, matching Mode and Audio. Start
+        # the control stack 16 px below the title divider.
         display_x0, display_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
         display_y0, display_y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
         DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
-        inner_x0, inner_x1 = display_x0 + 10, display_x1 - 10
-        # A compact, evenly spaced stack: shorter tiles and tighter gaps keep
-        # every option inside the 256 px rail with readable labels.
-        DISPLAY_RESET_BOX = (inner_x0, 84, inner_x1, 142)
-        column_gap, tile_h, adjust_h = 7, 64, 56
-        # Every LCD drawer is top-justified: instruments begin together
-        # beneath the header and leave a quiet lane to the bottom Back button.
-        toggle_y0 = 158
+        back_box = lcd_drawer_back_box()
+        inner_x0, inner_x1 = back_box[0], back_box[2]
+        column_gap, section_gap, tile_h, adjust_h, small_h = 8, 16, 64, 56, 31
+        # Every titled section spans the same 236 px as BACK. Sections have
+        # 16 px breathing room; RESET follows the final section.
+        toggle_y0 = LCD_DRAWER_HEADER_H + 16
         toggle_y1 = toggle_y0 + tile_h
-        floor_y0 = toggle_y1 + 14
+        floor_y0 = toggle_y1 + section_gap
         floor_y1 = floor_y0 + adjust_h
-        ceiling_y0 = floor_y1 + 14
+        ceiling_y0 = floor_y1 + section_gap
         ceiling_y1 = ceiling_y0 + adjust_h
-        rate_y0 = ceiling_y1 + 14
-        rate_y1 = rate_y0 + tile_h
-        palette_y0 = rate_y1 + 14
-        palette_y1 = palette_y0 + tile_h
-        instruments_y0 = palette_y1 + 14
-        instruments_y1 = instruments_y0 + tile_h
+        palette_y0 = ceiling_y1 + section_gap + 24
+        palette_y1 = palette_y0 + small_h
+        rate_y0 = palette_y1 + section_gap + 24
+        layout_y0 = rate_y0 + small_h + section_gap + 24
+        reset_y0 = layout_y0 + small_h + section_gap
+        DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y0 + tile_h)
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
         DISPLAY_AUTO_BOX = (inner_x0 + half_w + column_gap, toggle_y0, inner_x1, toggle_y1)
@@ -1810,22 +1841,32 @@ def configure_popup_layout():
         DISPLAY_FLOOR_PLUS_BOX = (0, 0, 0, 0)
         DISPLAY_CEIL_MINUS_BOX = (inner_x0, ceiling_y0, inner_x1, ceiling_y1)
         DISPLAY_CEIL_PLUS_BOX = (0, 0, 0, 0)
-        rate_w = (inner_x1 - inner_x0 - 2 * column_gap) / 3
+        rate_w, rate_h = (inner_x1 - inner_x0 - 2 * column_gap) // 3, small_h
+        rate_starts = (inner_x0, inner_x0 + rate_w + column_gap,
+                       inner_x1 - rate_w)
+        rate_widths = (rate_w, inner_x1 - inner_x0 - 2 * column_gap - 2 * rate_w,
+                       rate_w)
         DISPLAY_RATE_BOXES = tuple(
-            (rate, (inner_x0 + index * (rate_w + column_gap), rate_y0,
-                    inner_x0 + index * (rate_w + column_gap) + rate_w, rate_y1), label)
+            (rate, (rate_starts[index], rate_y0,
+                    rate_starts[index] + rate_widths[index], rate_y0 + rate_h), label)
             for index, (rate, _box, label) in enumerate(base_rates)
         )
-        palette_w = (inner_x1 - inner_x0 - column_gap) / 2
+        palette_w = (inner_x1 - inner_x0 - 2 * column_gap) // 3
+        palette_starts = (inner_x0, inner_x0 + palette_w + column_gap,
+                          inner_x1 - palette_w)
+        palette_widths = (palette_w,
+                          inner_x1 - inner_x0 - 2 * column_gap - 2 * palette_w,
+                          palette_w)
         DISPLAY_PALETTE_BOXES = tuple(
-            (name, (inner_x0 + index * (palette_w + column_gap), palette_y0,
-                    inner_x0 + index * (palette_w + column_gap) + palette_w, palette_y1), label)
+            (name, (palette_starts[index], palette_y0,
+                    palette_starts[index] + palette_widths[index], palette_y1), label)
             for index, (name, _box, label) in enumerate(base_palettes)
         )
-        # The Instruments toggle shares its row with a SCOPE drag launcher that
-        # used to live on the waterfall's removed DISPLAY button.
-        DISPLAY_INSTRUMENTS_BOX = (inner_x0, instruments_y0, inner_x0 + half_w, instruments_y1)
-        DISPLAY_SCOPE_BOX = (inner_x0 + half_w + column_gap, instruments_y0, inner_x1, instruments_y1)
+        DISPLAY_LAYOUT_BOXES = tuple(
+            (position, (rate_starts[index], layout_y0,
+                        rate_starts[index] + rate_widths[index], layout_y0 + small_h))
+            for index, position in enumerate(("left", "middle", "right"))
+        )
 
     dy = offset("filter")
     (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
@@ -1843,27 +1884,25 @@ def configure_popup_layout():
     if LCD_800_MODE:
         # Audio follows the same 256 px right-rail drawer language as the
         # mode controls. The running waterfall remains visible at all times.
-        audio_x0, audio_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
+        audio_x0, audio_x1 = LCD_NAV_X0, LOGICAL_W
         audio_y0 = LCD_DRAWER_HEADER_H
         audio_y1 = lcd_rail_bottom()
         AUDIO_PANEL_BOX = (audio_x0, audio_y0, audio_x1, audio_y1)
-        # Keep all audio instruments together under the header; Back has its
-        # own broad, isolated target at the bottom of the rail.
-        slider_x0, slider_x1 = LCD_NAV_X0, LOGICAL_W
-        left_x0, left_x1 = audio_x0 + 10, audio_x0 + 117
-        right_x0, right_x1 = audio_x0 + 124, audio_x1 - 10
-        AUDIO_MUTE_BOX = (audio_x0 + 10, 80, audio_x1 - 10, 142)
-        # Five compact rows leave space for the listening EQ without making
-        # the Audio drawer scroll. Each target remains comfortably touchable.
-        tile_h, tile_gap = 60, 8
-        volume_y0, volume_y1 = 160, 222
-        squelch_y0, squelch_y1 = 230, 294
-        denoise_y0, denoise_y1 = 302, 366
-        rows_y0 = 382
+        # Every audio section shares BACK's 236 px rail edges. The three
+        # sliders lead, followed by processing controls, OUTPUT, then the
+        # final RESET/MUTE row with breathing room above BACK.
+        slider_x0, slider_x1 = audio_x0 + 10, audio_x1 - 10
+        left_x0, left_x1 = slider_x0, slider_x0 + 114
+        right_x0, right_x1 = slider_x0 + 122, slider_x1
+        tile_h, tile_gap = 64, 8
+        volume_y0, volume_y1 = 80, 140
+        squelch_y0, squelch_y1 = 148, 208
+        denoise_y0, denoise_y1 = 216, 276
+        rows_y0 = 284
         AUDIO_VOLUME_BOX = (slider_x0, volume_y0, slider_x1, volume_y1)
         AUDIO_SQUELCH_BOX = (slider_x0, squelch_y0, slider_x1, squelch_y1)
         AUDIO_DENOISE_BOX = (slider_x0, denoise_y0, slider_x1, denoise_y1)
-        rows = tuple(rows_y0 + index * (tile_h + tile_gap) for index in range(5))
+        rows = tuple(rows_y0 + index * (tile_h + tile_gap) for index in range(6))
         AUDIO_VOICE_CLEAN_BOX = (left_x0, rows[0], left_x1, rows[0] + tile_h)
         AUDIO_HF_ENHANCE_BOX = (right_x0, rows[0], right_x1, rows[0] + tile_h)
         AUDIO_AGC_BOX = (left_x0, rows[1], left_x1, rows[1] + tile_h)
@@ -1872,9 +1911,10 @@ def configure_popup_layout():
         AUDIO_DEEMP_BOX = (right_x0, rows[2], right_x1, rows[2] + tile_h)
         AUDIO_TONE_BOX = (left_x0, rows[3], left_x1, rows[3] + tile_h)
         AUDIO_FILTER_BOX = (right_x0, rows[3], right_x1, rows[3] + tile_h)
-        last_row_y0, last_row_y1 = rows[4], rows[4] + tile_h
+        AUDIO_BACKEND_BOX = (slider_x0, rows[4], slider_x1, rows[4] + tile_h)
+        last_row_y0, last_row_y1 = rows[5], rows[5] + tile_h
         AUDIO_RESET_BOX = (left_x0, last_row_y0, left_x1, last_row_y1)
-        AUDIO_BACKEND_BOX = (right_x0, last_row_y0, right_x1, last_row_y1)
+        AUDIO_MUTE_BOX = (right_x0, last_row_y0, right_x1, last_row_y1)
 
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_GLOBE_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
@@ -1885,18 +1925,18 @@ def configure_popup_layout():
     TEST_BACK_BOX = (0, 0, 0, 0)
     if LCD_800_MODE:
         TEST_PANEL_BOX = (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H)
-        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 121
-        right_x0, right_x1 = LCD_NAV_X0 + 135, LOGICAL_W - 10
-        row_h, row_gap = 104, 12
-        rows = tuple(112 + index * (row_h + row_gap) for index in range(4))
+        left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 124
+        right_x0, right_x1 = LCD_NAV_X0 + 132, LOGICAL_W - 10
+        row_h, row_gap = 64, 8
+        rows = tuple(440 + index * (row_h + row_gap) for index in range(4))
         TEST_GLOBE_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
         TEST_DJ_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
         TEST_RTL_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
         TEST_PATTERN_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
         TEST_FONT_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
         TEST_OPENWEBRX_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
-        TEST_RUN_BOX = (left_x0, rows[3], left_x1, rows[3] + 78)
-        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + 78)
+        TEST_RUN_BOX = (left_x0, rows[3], left_x1, rows[3] + row_h)
+        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + row_h)
         TEST_BACK_BOX = lcd_drawer_back_box()
         FONT_LAB_BACK_BOX = lcd_drawer_back_box()
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
@@ -1932,7 +1972,10 @@ def configure_popup_layout():
     # Reserve explicit, non-overlapping right-side status lanes. Keeping the
     # boxes in this one layout function also makes the Pi and desktop views
     # agree on their hit targets.
-    CPU_ANNUNCIATOR_BOX = (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+    CPU_ANNUNCIATOR_BOX = (
+        (800, LOGICAL_H - BOTTOM_STATUS_H, radio_canvas_w, LOGICAL_H)
+        if LCD_800_MODE else (542, LOGICAL_H - BOTTOM_STATUS_H, 688, LOGICAL_H)
+    )
     CALLSIGN_TOGGLE_BOX = (700, LOGICAL_H - BOTTOM_STATUS_H, 838, LOGICAL_H)
     ASR_TOGGLE_BOX = (846, LOGICAL_H - BOTTOM_STATUS_H, radio_canvas_w, LOGICAL_H)
     asr_x0 = (radio_canvas_w - ASR_PANEL_WIDTH) // 2
@@ -1958,16 +2001,14 @@ def configure_popup_layout():
         # permanent 256 px rail used by Home; two narrow station columns made
         # names and locations needlessly difficult to scan on the LCD.
         PICKER_BOX = (0, 0, RECEIVER_PICKER_MAIN_W, LOGICAL_H)
-        # The source selectors now use the previously empty upper rail. The
-        # receiver list can reclaim the full content height for station rows.
+        # Source categories live in the rail; the list uses the full height.
         PICKER_COLS, PICKER_ROWS, PICKER_HEADER_H = 1, 6, 0
         # RadioGarden gets the same dedicated 256 px right rail as Home.
         # Keeping map gestures in the 1024 px radio canvas prevents an
         # accidental globe rotation while reaching for a navigation command.
         PICKER_MAP_BOX = (0, 0, DESKTOP_1280_MAIN_W, LOGICAL_H)
-        # Source selectors lead the rail as full-width horizontal tabs. The
-        # four secondary commands retain their original square 2-column grid
-        # directly above the bottom-anchored Back button.
+        # Source selectors start below the rail title. Four rail commands
+        # stay directly above the bottom-anchored Back button.
         (PICKER_MAP_MODE_BOX, PICKER_SEARCH_BOX,
          PICKER_SORT_BOX, PICKER_ROUTE_FAVORITES_BOX) = receiver_picker_command_boxes()
         PICKER_ROUTE_ALL_BOX = (0, 0, 0, 0)
@@ -2007,19 +2048,29 @@ MENU_BOX = (12, 72, 948, LOGICAL_H)
 # Home remains visible above the overlay and is the single, unambiguous way
 # to close this temporary workspace.
 MENU_CLOSE_BOX = (0, 0, 0, 0)
-MENU_COLS = 5
-MENU_ROWS = 2
+MENU_COLS = 2
+MENU_ROWS = 4
 # The permanent Home rail is deliberately limited to live operating tools.
 # Secondary configuration pages live one tap deeper under Settings so the
 # 800x1280 control rail does not read as an eight-button wall.
 MENU_ITEMS = (
-    ("local_rx", "LAN"),
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
     ("digital", "DIGI"),
-    ("favorite", "FAVORITES"),
+    ("vosc", "VOSC"),
+    ("display", "DISPLAY"),
+    ("dual", "DUAL"),
     ("settings", "SETTINGS"),
 )
+HOME_MENU_SUBTITLES = {
+    "rx": "BROWSE",
+    "audio": "OUTPUT",
+    "digital": "DECODERS",
+    "vosc": "CAPTIONS",
+    "display": "WATERFALL",
+    "dual": "2 VFO",
+    "settings": "PREFERENCES",
+}
 
 
 def dual_vfo_layout():
@@ -2031,6 +2082,13 @@ def dual_vfo_layout():
     header_h = 46
     split_y0 = 398
     split_y1 = 414
+    zoom_height = ZOOM_MINUS_BOX[3] - ZOOM_MINUS_BOX[1]
+    zoom_a_bottom = split_y0 - 12
+    zoom_b_bottom = LOGICAL_H - 14
+
+    def zoom_box(home_box, bottom):
+        return home_box[0], bottom - zoom_height, home_box[2], bottom
+
     return {
         "rf_w": rf_w,
         "a_header": (0, top_h, rf_w, top_h + header_h),
@@ -2040,14 +2098,12 @@ def dual_vfo_layout():
         "b_waterfall": (0, split_y1 + header_h, rf_w, LOGICAL_H),
         "rail": (rf_w, 0, LOGICAL_W, LOGICAL_H),
         "home": lcd_drawer_back_box(),
-        # Per-VFO zoom stays over the matching waterfall, using the same
-        # quiet glass control language as the primary receiver.
-        "zoom_a_group": (16, 324, 248, 386),
-        "zoom_a_minus": (24, 327, 88, 383),
-        "zoom_a_plus": (176, 327, 240, 383),
-        "zoom_b_group": (16, 724, 248, 786),
-        "zoom_b_minus": (24, 727, 88, 783),
-        "zoom_b_plus": (176, 727, 240, 783),
+        # Reuse Home's standalone Zoom button widths, height, and spacing
+        # inside each receiver's waterfall pane.
+        "zoom_a_minus": zoom_box(ZOOM_MINUS_BOX, zoom_a_bottom),
+        "zoom_a_plus": zoom_box(ZOOM_PLUS_BOX, zoom_a_bottom),
+        "zoom_b_minus": zoom_box(ZOOM_MINUS_BOX, zoom_b_bottom),
+        "zoom_b_plus": zoom_box(ZOOM_PLUS_BOX, zoom_b_bottom),
         # Receiver selection is part of the VFO header, where its context is
         # immediately obvious. The rail repeats the live instrument stack.
         "rx_a": (126, top_h + 6, 570, top_h + 40),
@@ -2057,20 +2113,60 @@ def dual_vfo_layout():
         # Leave a deliberate quiet gap below Home before the live VFO A
         # instrument stack begins.
         "freq_a": (1031, 80, 1273, 136),
-        "mode_a": (1042, 144, 1262, 182),
-        "smeter_a": (1042, 192, 1262, 268),
+        "mode_a": (1034, 144, 1270, 210),
+        "smeter_a": (1034, 218, 1270, 298),
         # Start B's tools immediately below its header, visually tied to the
         # top edge of the B waterfall rather than crowded against Clone.
         "freq_b": (1031, 494, 1273, 550),
-        "mode_b": (1042, 558, 1262, 596),
-        "smeter_b": (1042, 606, 1262, 682),
-        # One shared left/right audio blend lives in the calm center of the
-        # tool rail, rather than competing with either VFO header.
-        "mix_track": (1042, 371, 1262, 435),
+        "mode_b": (1034, 558, 1270, 624),
+        "smeter_b": (1034, 632, 1270, 712),
+        # Keep the shared audio blend lower in the center gap, with breathing
+        # room below Clone and above VFO B's frequency.
+        "mix_track": (1042, 410, 1262, 474),
         # Cloning is an occasional setup action, so keep it out of the
         # mixer flow, above its controls and clear of the bottom Back button.
-        "clone": (1042, 292, 1262, 340),
+        "clone": (1034, 306, 1270, 370),
     }
+
+
+def dual_vfo_mode_boxes(vfo):
+    """Place the exact Home mode grid in either Dual rail half."""
+    mode_box = dual_vfo_layout()[f"mode_{vfo.lower()}"]
+    home_modes = tuple(lcd_home_mode_boxes(True))
+    home_top = min(box[1] for _label, box in home_modes)
+    offset_y = mode_box[1] - home_top
+    return tuple(
+        (label, (box[0], box[1] + offset_y, box[2], box[3] + offset_y))
+        for label, box in home_modes
+    )
+
+
+def set_dual_vfo_mode(primary_state, secondary_state, profiles, vfo, mode):
+    """Tune only the chosen VFO and retain its matching filter defaults."""
+    target_state = primary_state if vfo == "A" else secondary_state
+    selected_mode, low_cut, high_cut, _generation = target_state.set_radio_mode(mode)
+    profile = dict(profiles.get(vfo, {}))
+    profile.update({
+        "mode": selected_mode if vfo == "A" else selected_mode.upper(),
+        "low_cut": low_cut,
+        "high_cut": high_cut,
+    })
+    profiles[vfo] = profile
+    return selected_mode
+
+
+def select_dual_vfo_receiver(primary_state, secondary_state, sources, profiles, vfo, station):
+    """Apply a receiver-list selection only to the VFO that opened it."""
+    name, location, server, _used, _total = station_fields(station)
+    target_state = primary_state if vfo == "A" else secondary_state
+    _server, freq_khz, zoom, _generation, _server_generation = target_state.set_server(
+        server, receiver_type=station_receiver_type(station),
+    )
+    sources[vfo] = {"server": server, "name": name, "location": location}
+    profile = dict(profiles.get(vfo, {}))
+    profile.update({"freq_khz": freq_khz, "zoom": zoom})
+    profiles[vfo] = profile
+    return server, freq_khz, zoom
 
 
 def dual_vfo_action_at(x, y):
@@ -2082,10 +2178,10 @@ def dual_vfo_action_at(x, y):
         return "rx_A"
     if contains(boxes["rx_b"], x, y):
         return "rx_B"
-    if contains(boxes["mode_a"], x, y):
-        return "mode_A"
-    if contains(boxes["mode_b"], x, y):
-        return "mode_B"
+    for vfo in ("A", "B"):
+        for label, box in dual_vfo_mode_boxes(vfo):
+            if contains(box, x, y):
+                return f"mode_{vfo}_{label}"
     for vfo, sign, key in (
         ("A", -1, "zoom_a_minus"), ("A", 1, "zoom_a_plus"),
         ("B", -1, "zoom_b_minus"), ("B", 1, "zoom_b_plus"),
@@ -2160,41 +2256,16 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
     draw_text(text_cache, x1 - 18, (y0 + y1) / 2 + 1, detail, detail_color, detail_size, True, False, "rm", family="Liberation Sans")
 
 
-def draw_dual_vfo_mode_annunciator(text_cache, box, vfo, mode, active=False):
-    """Draw one Home-style mode control in the matching VFO tool stack."""
-    x0, y0, x1, y1 = box
-    accent = (90, 222, 245) if vfo == "A" else (242, 181, 92)
-    # This remains a generous invisible touch target, but reads as a quiet
-    # status annunciator rather than another boxed tool in the dense rail.
-    draw_text(text_cache, x0 + 14, (y0 + y1) / 2, "MODE", (156, 189, 195), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 28, (y0 + y1) / 2, str(mode).upper(), (*accent, 255) if active else (218, 235, 237), 21, True, False, "rm", family="Liberation Sans")
-    chevron_x, chevron_y = x1 - 13, (y0 + y1) / 2
-    draw_logical_line(chevron_x - 4, chevron_y - 3, chevron_x, chevron_y + 2, (*accent, 244), 1.5)
-    draw_logical_line(chevron_x, chevron_y + 2, chevron_x + 4, chevron_y - 3, (*accent, 244), 1.5)
+def draw_dual_vfo_mode_annunciator(text_cache, vfo, mode):
+    """Use Home's eight small mode buttons for this receiver."""
+    draw_home_mode_buttons(text_cache, dual_vfo_mode_boxes(vfo), mode,
+                           "IQ" if str(mode).upper() == "IQ" else "DIG")
 
 
-def draw_dual_vfo_zoom_controls(text_cache, group, minus, plus):
-    """A compact, translucent Zoom control over one VFO's own waterfall."""
-    separator_left = minus[2] - group[0] + 8
-    separator_right = plus[0] - group[0] - 8
-    draw_control_group_background(
-        text_cache, group, "dual_vfo_zoom_glass_v1", (separator_left, separator_right), 0.82, separator_bottom=11
-    )
-    draw_zoom_button(text_cache, minus, "-", 0.86)
-    draw_zoom_button(text_cache, plus, "+", 0.86)
-    draw_text(
-        text_cache,
-        (minus[2] + plus[0]) / 2,
-        (group[1] + group[3]) / 2,
-        "ZOOM",
-        (211, 227, 231),
-        16,
-        True,
-        False,
-        "cm",
-        0.86,
-        family="Liberation Sans",
-    )
+def draw_dual_vfo_zoom_controls(text_cache, minus, plus):
+    """Draw the same standalone rounded Zoom buttons used on HOME."""
+    draw_zoom_button(text_cache, minus, "-")
+    draw_zoom_button(text_cache, plus, "+")
 
 
 def dual_vfo_squelch_level_at_x(x, box, maximum):
@@ -2205,33 +2276,9 @@ def dual_vfo_squelch_level_at_x(x, box, maximum):
     return int(round(fraction * max(0, int(maximum))))
 
 
-def draw_dual_vfo_smeter(text_cache, box, smeter_dbm, accent=None, staged=False):
-    """The Home rail S-meter, reused without a Dual-specific variant."""
-    x0, y0, x1, y1 = box
-    dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
-    live_segments = smeter_segment_position(dbm)
-    draw_logical_rect(x0, y0, x1, y1, (9, 17, 23, 228))
-    draw_logical_line(x0, y0, x1, y0, (97, 125, 136, 116), 1)
-    draw_logical_line(x0, y1, x1, y1, (23, 40, 49, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 13, "S-METER", (170, 201, 207), 14, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), (226, 244, 247), 17, True, False, "rt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", (142, 181, 191), 14, True, False, "rt", family="Liberation Sans")
-    track_x0, track_x1 = x0 + 12, x1 - 12
-    track_y = y0 + 47
-    segment_w = (track_x1 - track_x0) / 36.0
-    for index in range(36):
-        sx0 = track_x0 + index * segment_w + 1
-        sx1 = track_x0 + (index + 1) * segment_w - 1
-        active = index + 0.5 <= live_segments
-        red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
-        if active:
-            color = (243, 105, 111, 242) if red else (83, 216, 248, 244)
-        else:
-            color = (75, 43, 48, 142) if red else (31, 62, 75, 160)
-        draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
-    for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
-        lx = track_x0 + (track_x1 - track_x0) * position / 36.0
-        draw_text(text_cache, lx, y1 - 10, label, (138, 166, 176), 10, True, False, "cm", family="Liberation Sans")
+def draw_dual_vfo_smeter(text_cache, box, smeter_dbm):
+    """Draw the same 236 px meter used on HOME, at this VFO's level."""
+    draw_lcd_compact_smeter(text_cache, box, smeter_dbm)
 
 
 def draw_dual_vfo_audio_mixer(text_cache, box, mix):
@@ -2280,16 +2327,16 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
     # identify the two receivers without carving a border across the RF view.
 
     rx0, ry0, rx1, ry1 = boxes["rail"]
-    draw_logical_rect(rx0, ry0, rx1, ry1, (5, 12, 18, 255))
+    draw_logical_rect(rx0, ry0, rx1, ry1, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(rx0, ry0, rx0, ry1, (105, 139, 150, 175), 1)
     draw_sidebar_header(text_cache, "DUAL VFO")
     draw_radio_close_button(text_cache, boxes["home"])
 
     draw_dual_vfo_zoom_controls(
-        text_cache, boxes["zoom_a_group"], boxes["zoom_a_minus"], boxes["zoom_a_plus"]
+        text_cache, boxes["zoom_a_minus"], boxes["zoom_a_plus"]
     )
     draw_dual_vfo_zoom_controls(
-        text_cache, boxes["zoom_b_group"], boxes["zoom_b_minus"], boxes["zoom_b_plus"]
+        text_cache, boxes["zoom_b_minus"], boxes["zoom_b_plus"]
     )
 
     # Each VFO keeps the same compact Home instrument order: frequency, mode,
@@ -2326,41 +2373,34 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
         )
         draw_text(text_cache, fx1 - unit_right_margin, (fy0 + fy1) / 2 + 7, unit, (183, 194, 200), unit_size, True, False, "rm", family="Liberation Sans")
 
-        draw_dual_vfo_mode_annunciator(
-            text_cache,
-            boxes[f"mode_{suffix}"],
-            vfo,
-            profile.get("mode", mode),
-            active_vfo == vfo,
-        )
+        draw_dual_vfo_mode_annunciator(text_cache, vfo, profile.get("mode", mode))
 
-        draw_dual_vfo_smeter(text_cache, boxes[f"smeter_{suffix}"], smeters.get(vfo, SMETER_FLOOR_DBM), (90, 222, 245))
+        draw_dual_vfo_smeter(text_cache, boxes[f"smeter_{suffix}"], smeters.get(vfo, SMETER_FLOOR_DBM))
 
     draw_dual_vfo_audio_mixer(text_cache, boxes["mix_track"], mix)
     for key, label, active in (("clone", "CLONE VFO A", False),):
-        x0, y0, x1, y1 = boxes[key]
-        draw_logical_rect(x0, y0, x1, y1, (19, 54, 61, 235) if active else (14, 28, 36, 232))
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (221, 240, 241), 16, True, False, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, boxes[key], label, active=active)
 
 
 def dual_vfo_mode_picker_boxes():
     """Large direct mode choices: predictable and comfortably touch-sized."""
     panel = (96, 176, 928, 620)
     x0, y0, x1, y1 = panel
-    cols = 4
-    gap = 12
-    button_w = (x1 - x0 - 48 - gap * (cols - 1)) / cols
-    button_h = 92
+    cols = 2
+    gap = APP_UI_STYLE.button.gap
+    button_w = APP_UI_STYLE.button.width
+    button_h = APP_UI_STYLE.button.height
+    grid_left = (x0 + x1 - (cols * button_w + gap)) / 2
     buttons = []
     for index, (family, modes) in enumerate(KIWI_MODE_FAMILIES):
         col = index % cols
         row = index // cols
-        bx0 = x0 + 24 + col * (button_w + gap)
-        by0 = y0 + 128 + row * (button_h + 16)
+        bx0 = grid_left + col * (button_w + gap)
+        by0 = y0 + 128 + row * (button_h + gap)
         buttons.append((family, modes[0], (bx0, by0, bx0 + button_w, by0 + button_h)))
     return {
         "panel": panel,
-        "close": (x1 - 132, y0 + 20, x1 - 24, y0 + 62),
+        "close": (x1 - 260, y0 + 20, x1 - 24, y0 + 84),
         "buttons": tuple(buttons),
     }
 
@@ -2386,22 +2426,13 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
     draw_text(text_cache, x0 + 26, y0 + 35, f"VFO {target_vfo}  MODE", (231, 246, 247), 24, True, False, "lm", family="Liberation Sans")
     state_label = "APPLIES LIVE" if target_vfo == "A" else "STAGES VFO B"
     draw_text(text_cache, x0 + 26, y0 + 66, state_label, accent, 13, True, False, "lm", family="Liberation Sans")
-    cx0, cy0, cx1, cy1 = boxes["close"]
-    draw_logical_rect(cx0, cy0, cx1, cy1, (20, 43, 53, 240))
-    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (220, 239, 241), 13, True, False, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
     current_family = KIWI_MODE_FAMILY.get(str(active_mode).upper(), str(active_mode).upper())
     for family, selected_mode, box in boxes["buttons"]:
-        bx0, by0, bx1, by1 = box
         active = family == current_family
-        fill = (*accent, 72) if active else (18, 35, 44, 222)
-        edge = (*accent, 230) if active else (95, 126, 136, 130)
-        draw_logical_rect(bx0, by0, bx1, by1, fill)
-        draw_logical_line(bx0, by0, bx1, by0, edge, 2 if active else 1)
-        draw_logical_line(bx0, by1, bx1, by1, edge, 1)
         label = "FM" if family == "FM" else family
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2 - 10, label, (240, 253, 252) if active else (202, 221, 224), 21, True, False, "cm", family="Liberation Sans")
         detail = KIWI_MODE_LABELS.get(selected_mode, selected_mode)
-        draw_text(text_cache, (bx0 + bx1) / 2, by1 - 17, detail, accent if active else (136, 169, 176), 12, True, False, "cm", family="Liberation Sans")
+        draw_styled_two_line_button(text_cache, box, label, detail, active=active)
 
 
 def dual_vfo_receiver_picker_boxes():
@@ -2410,9 +2441,9 @@ def dual_vfo_receiver_picker_boxes():
     x0, y0, x1, y1 = panel
     return {
         "panel": panel,
-        "close": (x1 - 144, y0 + 16, x1 - 20, y0 + 62),
-        "previous": (x0 + 20, y1 - 66, x0 + 172, y1 - 16),
-        "next": (x1 - 172, y1 - 66, x1 - 20, y1 - 16),
+        "close": (x1 - 256, y0 + 16, x1 - 20, y0 + 80),
+        "previous": (x0 + 20, y1 - 80, x0 + 134, y1 - 16),
+        "next": (x1 - 134, y1 - 80, x1 - 20, y1 - 16),
         "rows": tuple((x0 + 20, y0 + 104 + index * 98, x1 - 20, y0 + 188 + index * 98) for index in range(5)),
     }
 
@@ -2425,9 +2456,7 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
     draw_logical_line(x0, y0, x1, y0, (111, 214, 210, 220), 2)
     draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", (230, 245, 246), 22, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 24, y0 + 56, "VFO A changes the live receiver. VFO B is staged for the second client.", (144, 181, 187), 14, False, False, "lm", family="Liberation Sans")
-    cx0, cy0, cx1, cy1 = boxes["close"]
-    draw_logical_rect(cx0, cy0, cx1, cy1, (28, 52, 61, 245))
-    draw_text(text_cache, (cx0 + cx1) / 2, (cy0 + cy1) / 2, "CLOSE", (230, 244, 245), 14, True, False, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, boxes["close"], "CLOSE")
     start = max(0, int(page)) * len(boxes["rows"])
     for row_index, box in enumerate(boxes["rows"]):
         index = start + row_index
@@ -2442,9 +2471,7 @@ def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
         detail = bottom_station_title(name, location) if location else server
         draw_text(text_cache, bx0 + 18, by1 - 20, fit_station_text(text_cache, detail, bx1 - bx0 - 36, 14, False, False, family="Liberation Sans"), (138, 181, 187), 14, False, False, "lm", family="Liberation Sans")
     for key, label in (("previous", "PREV"), ("next", "NEXT")):
-        bx0, by0, bx1, by1 = boxes[key]
-        draw_logical_rect(bx0, by0, bx1, by1, (22, 45, 55, 240))
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, (220, 240, 241), 14, True, False, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, boxes[key], label)
     page_count = max(1, math.ceil(len(stations) / len(boxes["rows"])))
     draw_text(text_cache, (x0 + x1) / 2, y1 - 40, f"PAGE {page + 1} / {page_count}", (147, 188, 194), 13, True, False, "cm", family="Liberation Sans")
 
@@ -2464,7 +2491,6 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
-    ("display", "DISPLAY"),
     ("network", "NETWORK"),
     ("stats", "STATS"),
     ("tests", "APPS"),
@@ -2479,6 +2505,30 @@ DIGITAL_MENU_ITEMS = (
     ("cw", "CW MORSE"),
     ("digital_back", "BACK"),
 )
+
+
+def digital_decoder_session_counts(wspr_tiles, sstv_configs, hell_configs,
+                                   qrss_configs, cw_configs):
+    """Count enabled receive sessions separately for each decoder category."""
+    groups = (
+        ("wspr", wspr_tiles), ("sstv", sstv_configs),
+        ("hell", hell_configs), ("qrss", qrss_configs), ("cw", cw_configs),
+    )
+    return {
+        kind: sum(not config.get("paused", False) for config in configs)
+        for kind, configs in groups
+    }
+
+
+def active_digital_decoder_kinds(wspr_tiles, sstv_configs, hell_configs,
+                                 qrss_configs, cw_configs):
+    """Mark decoder types with at least one enabled receive session."""
+    counts = digital_decoder_session_counts(
+        wspr_tiles, sstv_configs, hell_configs, qrss_configs, cw_configs,
+    )
+    return frozenset(kind for kind, count in counts.items() if count)
+
+
 WATERFALL_TUNE_X0 = 88
 WATERFALL_TUNE_X1 = kiwi.WATERFALL_TUNE_X1
 @dataclass(frozen=True)
@@ -2510,20 +2560,20 @@ class ReceiverBrowserState:
         )
 
 
-# Source tabs are ordered LAN, KIWI, OPENWEBRX, FM-DX, ALL. Their wide,
-# single-column treatment makes selection obvious and uses the rail from the
-# top instead of shrinking the station list with a content header.
+# Receiver categories and Globe legend filters stack in the 236 px rail.
 RECEIVER_RAIL_TAB_TOP_GAP = 12
-RECEIVER_RAIL_TAB_HEIGHT = 52
+RECEIVER_RAIL_TAB_HEIGHT = 64
 RECEIVER_RAIL_TAB_GAP = 8
+RECEIVER_PICKER_CATEGORY_HEIGHT = 48
+RECEIVER_PICKER_CATEGORY_GAP = 14
 RECEIVER_PICKER_MAIN_W = DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_SIDEBAR_W = BASE_LOGICAL_W - DESKTOP_1280_MAIN_W
 RECEIVER_PICKER_MARGIN = 10
-# Two larger square actions plus their compact gutter span the same 236 px as
-# BACK. These dimensions match every other square launcher in the app.
+# Two standard actions plus their gutter span the same 236 px as BACK.
 RECEIVER_PICKER_ACTION_GAP = 8
 RECEIVER_PICKER_ACTION_SIZE = 114
-RECEIVER_PICKER_ACTION_TOP = 478
+RECEIVER_PICKER_ACTION_HEIGHT = 64
+RECEIVER_PICKER_ACTION_TOP = 584
 # Shared action-icon metrics. Code-drawn icons and raster assets use this same
 # canvas and stroke so switching screens never changes their visual weight.
 APP_ACTION_ICON_SIZE = 46
@@ -2533,64 +2583,52 @@ RECEIVER_ACTION_ICON_SIZE = APP_ACTION_ICON_SIZE
 # line icons while remaining comfortably inside the shared 114 px tile.
 RECEIVER_GLOBE_ICON_SIZE = 58
 RECEIVER_ACTION_ICON_CENTER_Y = 42
-RECEIVER_PICKER_ROW_HEIGHT = 138
+RECEIVER_PICKER_ROW_HEIGHT = 124
 RECEIVER_PICKER_ROW_GAP = 8
-RECEIVER_PICKER_ROW_INSET = 6
+RECEIVER_PICKER_ROW_INSET = 8
 RECEIVER_PICKER_BACK_BOX = (
     RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN,
-    722,
+    728,
     RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_SIDEBAR_W - RECEIVER_PICKER_MARGIN,
-    790,
+    792,
 )
 
 
 def receiver_source_segments():
-    """Return full-width source tabs in priority order down the LCD rail."""
+    """Return the five source categories just below the rail title line."""
     names = receiver_catalog.SOURCE_FILTERS
-    # This helper also seeds module-level placeholder geometry before the LCD
-    # constants later in this file are declared. The fallbacks are the native
-    # 1280x800 values; configure_output() recomputes the authoritative boxes.
-    rail_x0 = RECEIVER_PICKER_MAIN_W
-    logical_w = globals().get("LOGICAL_W", 1280)
-    header_h = globals().get("LCD_DRAWER_HEADER_H", 64)
-    x0, x1 = rail_x0 + 10, logical_w - 10
-    top = header_h + RECEIVER_RAIL_TAB_TOP_GAP
+    # This also seeds module-level geometry before configure_output() runs.
+    x0 = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
+    x1 = x0 + RECEIVER_PICKER_SIDEBAR_W - 2 * RECEIVER_PICKER_MARGIN
+    top = globals().get("LCD_DRAWER_HEADER_H", 64) + 16
     return tuple(
-        (
-            name,
-            (
-                x0,
-                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP),
-                x1,
-                top + index * (RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP)
-                + RECEIVER_RAIL_TAB_HEIGHT,
-            ),
-        )
+        (name, (
+            x0, top + index * (RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP),
+            x1, top + index * (RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP)
+            + RECEIVER_PICKER_CATEGORY_HEIGHT,
+        ))
         for index, name in enumerate(names)
     )
 
 
 def receiver_picker_command_boxes():
-    """Return the receiver browser's square 2x2 action grid."""
+    """Return the receiver browser's standard 2x2 action grid."""
     grid_width = 2 * RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP
     left = RECEIVER_PICKER_MAIN_W + (RECEIVER_PICKER_SIDEBAR_W - grid_width) / 2
     return tuple(
         (
             left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
-            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP),
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_HEIGHT + RECEIVER_PICKER_ACTION_GAP),
             left + (index % 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
-            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_SIZE + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_SIZE,
+            RECEIVER_PICKER_ACTION_TOP + (index // 2) * (RECEIVER_PICKER_ACTION_HEIGHT + RECEIVER_PICKER_ACTION_GAP) + RECEIVER_PICKER_ACTION_HEIGHT,
         )
         for index in range(4)
     )
 
 
 def receiver_list_notice_box():
-    """Centered transient notice within the Receiver list canvas."""
-    x0, y0, x1, y1 = PICKER_BOX
-    center_x = (x0 + x1) / 2
-    center_y = (y0 + y1) / 2
-    return center_x - 190, center_y - 25, center_x + 190, center_y + 25
+    """Sort uses the exact same placement and size as the Zoom OSD."""
+    return ZOOM_OSD_BOX
 
 
 def boxes_overlap(a, b):
@@ -2713,6 +2751,19 @@ def focused_receiver_rows_for_source(
     active_row = max(0, int(center_row) - max(0, int(leading_rows)))
     start = (selected_index - min(active_row, len(rows) - 1)) % len(rows)
     return rows[start:] + rows[:start]
+
+
+def receiver_rows_for_display(
+    stations, active_server, selected_source, active_source,
+    focus_on_entry=False, leading_rows=0,
+):
+    """Focus only on arrival; subsequent sorts keep their complete order."""
+    rows = list(stations or ())
+    if focus_on_entry:
+        return focused_receiver_rows_for_source(
+            rows, active_server, selected_source, active_source, leading_rows,
+        )
+    return rows
 
 
 def active_receiver_scroll_for_source(
@@ -4226,28 +4277,33 @@ def frequency_entry_action_at(x, y):
     return None
 
 
-FREQUENCY_STEP_GAP = 8
-FREQUENCY_STEP_H = 52
+FREQUENCY_SMALL_BUTTON_W = 55
+FREQUENCY_SMALL_BUTTON_H = 31
+FREQUENCY_SMALL_BUTTON_GAP = 4
+FREQUENCY_KEY_LABELS = (
+    ("1", "2", "3", "DEL"),
+    ("4", "5", "6", "CLR"),
+    ("7", "8", "9", "."),
+    ("0", "00", "000", "OK"),
+)
 
 
 def frequency_drawer_boxes():
     """Touch-first tuning controls in the otherwise empty LCD rail."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
     left, right = x0 + 10, x1 - 10
-    # The two tuning arrows are square targets: their height follows the
-    # two-column width instead of stretching into a tall rectangle, so the
-    # chevrons sit in the centre of an evenly weighted pair.
-    arrow_gap = 10
-    arrow = (right - left - arrow_gap) / 2
-    arrow_top = 184
-    arrow_bottom = arrow_top + arrow
+    arrow = APP_UI_STYLE.button.width
+    readout_bottom = 160
+    arrow_top = readout_bottom + 16
+    arrow_bottom = arrow_top + APP_UI_STYLE.button.height
+    keypad_bottom = arrow_bottom + 16 + (len(FREQUENCY_KEY_LABELS) - 1) * 39 + FREQUENCY_SMALL_BUTTON_H
+    step_heading_top = keypad_bottom + 32
     return {
         "panel": (x0, 0, x1, lcd_rail_bottom()),
-        "readout": (left, 76, right, 160),
+        "readout": (left, 76, right, readout_bottom),
         "down": (left, arrow_top, left + arrow, arrow_bottom),
         "up": (right - arrow, arrow_top, right, arrow_bottom),
-        "manual": (left, 352, right, 424),
-        "step_heading": (left, 434, right, 458),
+        "step_heading": (left, step_heading_top, right, step_heading_top + 32),
         "close": lcd_drawer_back_box(),
     }
 
@@ -4260,29 +4316,88 @@ def frequency_tune_steps(receiver_type="kiwi"):
 
 
 def frequency_drawer_step_boxes(receiver_type="kiwi"):
-    """Inline tune-step choices inside the frequency rail, not another screen."""
+    """Four Home-mode-sized tune choices on one row of the frequency rail."""
     steps = frequency_tune_steps(receiver_type)
-    left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    width = (right - left - FREQUENCY_STEP_GAP) / 2
-    y0 = frequency_drawer_boxes()["step_heading"][3] + 6
+    width = FREQUENCY_SMALL_BUTTON_W
+    gap = FREQUENCY_SMALL_BUTTON_GAP
+    left = (LCD_NAV_X0 + LOGICAL_W - (len(steps) * width + (len(steps) - 1) * gap)) / 2
+    y0 = frequency_drawer_boxes()["step_heading"][3] + 8
     boxes = []
     for index, step_hz in enumerate(steps):
-        col, row = index % 2, index // 2
-        x = left + col * (width + FREQUENCY_STEP_GAP)
-        top = y0 + row * (FREQUENCY_STEP_H + FREQUENCY_STEP_GAP)
-        boxes.append((step_hz, (x, top, x + width, top + FREQUENCY_STEP_H)))
+        x = left + index * (width + gap)
+        boxes.append((step_hz, (x, y0, x + width, y0 + FREQUENCY_SMALL_BUTTON_H)))
     return tuple(boxes)
+
+
+def frequency_drawer_key_boxes():
+    """Four 55×31 px keys per row, matching the Home mode controls."""
+    group_width = 4 * FREQUENCY_SMALL_BUTTON_W + 3 * FREQUENCY_SMALL_BUTTON_GAP
+    left = (LCD_NAV_X0 + LOGICAL_W - group_width) / 2
+    first_row_top = frequency_drawer_boxes()["down"][3] + 16
+    return tuple(
+        (label, (left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP),
+                 first_row_top + row * 39,
+                 left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP) + FREQUENCY_SMALL_BUTTON_W,
+                 first_row_top + row * 39 + FREQUENCY_SMALL_BUTTON_H))
+        for row, labels in enumerate(FREQUENCY_KEY_LABELS)
+        for column, label in enumerate(labels)
+    )
 
 
 def frequency_drawer_action_at(x, y, receiver_type="kiwi"):
     boxes = frequency_drawer_boxes()
-    for action in ("down", "up", "manual", "close"):
+    for action in ("down", "up", "close"):
         if contains(boxes[action], x, y):
             return action
+    for label, box in frequency_drawer_key_boxes():
+        if contains(box, x, y):
+            return f"key_{label}"
     for step_hz, box in frequency_drawer_step_boxes(receiver_type):
         if contains(box, x, y):
             return f"step_{int(step_hz)}"
     return None
+
+
+def frequency_drawer_tuning_allowed(receiver_type, server, policy=None):
+    """FM-DX's shared tuner requires the existing session acknowledgement."""
+    return receiver_worker_protocol(receiver_type) != "fmdx" or (
+        policy or FMDX_SHARED_CONTROL
+    ).can_tune(server)
+
+
+def edit_frequency_entry(value, key, replace_on_digit=False):
+    """Apply one inline keypad key and return the new text and replace state."""
+    value = str(value or "")
+    if key == "DEL":
+        return value[:-1], False
+    if key == "CLR":
+        return "", False
+    if key not in (".", "00", "000", *"0123456789"):
+        return value, replace_on_digit
+    if replace_on_digit:
+        value = ""
+    if key == ".":
+        if "." in value:
+            return value, False
+        dotted = (value or "0") + "."
+        return (dotted if len(dotted) <= 12 else value), False
+    if value in ("", "0"):
+        return key.lstrip("0") or "0", False
+    if len(value) + len(key) > 12:
+        return value, False
+    return value + key, False
+
+
+def frequency_entry_preview_khz(value, tuned_khz, replace_on_digit,
+                                max_frequency_khz=TUNING_MAX_KHZ):
+    """Show the keypad's pending value in the large readout before OK tunes."""
+    if replace_on_digit:
+        return tuned_khz
+    try:
+        numeric = float(str(value or "0"))
+    except ValueError:
+        return 0.0
+    return numeric * 1000.0 if numeric <= max_frequency_khz / 1000.0 else numeric
 
 
 def format_frequency_digits(freq_khz):
@@ -4300,6 +4415,12 @@ def format_tune_step(step_hz):
     return f"{step_hz} Hz"
 
 
+def format_small_tune_step(step_hz):
+    """Use a short unambiguous label on the 55 px frequency-step keys."""
+    step_hz = int(step_hz)
+    return f"{step_hz // 1000}K" if step_hz >= 10_000 and step_hz % 1000 == 0 else format_tune_step(step_hz)
+
+
 def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
     """Move to the adjacent configured tuning-grid point."""
     step_hz = max(1, int(step_hz))
@@ -4310,6 +4431,57 @@ def frequency_step_target(freq_khz, direction, step_hz, low_khz, high_khz):
     else:
         target_hz = (math.ceil(quotient - 1e-9) - 1) * step_hz
     return clamp(target_hz / 1000.0, float(low_khz), float(high_khz))
+
+
+FREQUENCY_ARROW_HOLD_DELAY_S = 0.50
+
+
+def frequency_arrow_repeat_interval_s(held_seconds):
+    """Repeat faster as an arrow stays held, with a bounded tuning rate."""
+    accelerating_seconds = max(0.0, held_seconds - FREQUENCY_ARROW_HOLD_DELAY_S)
+    return max(0.08, 0.26 * math.exp(-0.40 * accelerating_seconds))
+
+
+@dataclass
+class FrequencyArrowHold:
+    action: str = None
+    receiver_identity: tuple = None
+    started_at: float = 0.0
+    next_at: float = 0.0
+    repeated: bool = False
+
+    def begin(self, action, now, receiver_identity):
+        self.action = action
+        self.receiver_identity = receiver_identity
+        self.started_at = now
+        self.next_at = now + FREQUENCY_ARROW_HOLD_DELAY_S
+        self.repeated = False
+
+    def cancel(self):
+        self.action = None
+        self.receiver_identity = None
+        self.repeated = False
+
+    def tick(self, now, pointed_action, receiver_identity):
+        if self.action is None:
+            return None
+        if pointed_action != self.action or receiver_identity != self.receiver_identity:
+            self.cancel()
+            return None
+        if now < self.next_at:
+            return None
+        self.repeated = True
+        self.next_at = now + frequency_arrow_repeat_interval_s(now - self.started_at)
+        return self.action
+
+    def release(self, pointed_action, receiver_identity):
+        tap = (
+            self.action is not None and not self.repeated
+            and pointed_action == self.action
+            and receiver_identity == self.receiver_identity
+        )
+        self.cancel()
+        return tap
 
 
 def configured_tune_step_hz(receiver_type, kiwi_step_hz, fmdx_step_hz):
@@ -4330,6 +4502,7 @@ def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
     return frequency_khz if 0.0 <= frequency_khz <= max_frequency_khz else None
 
 
+ZOOM_OSD_BOX = (240, 63, 720, 161)
 ZOOM_OSD_SECONDS = 1.4
 CONTROL_QUIET_SECONDS = 5.0
 CONTROL_FADE_SECONDS = 0.65
@@ -4376,9 +4549,8 @@ def configure_output(desktop=False):
     # 480-pixel prototype coordinate.
     content_bottom = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
     zoom_bottom = content_bottom - LCD_CONTROL_GAP
-    # The wide LCD keeps Zoom anchored to the canvas's left edge and a single
-    # Scope control right-aligned. Passband editing now lives in the Home
-    # drawer, so it no longer competes with live waterfall space.
+    # The wide LCD keeps Zoom anchored to the canvas's left edge. Passband
+    # editing lives in the Home drawer, outside the live RF surface.
     # Do not inherit the old 960 px coordinate positions here: the live radio
     # canvas is 1024 px wide, ending immediately before the permanent drawer.
     edge_margin = 16
@@ -4438,6 +4610,12 @@ def waterfall_view_center_khz(tuned_khz, span_khz):
     """
     half_span = min(max(0.0, float(span_khz)) / 2.0, TUNING_MAX_KHZ / 2.0)
     return clamp(float(tuned_khz), half_span, TUNING_MAX_KHZ - half_span)
+
+
+def waterfall_tap_frequency_khz(x, view_center_khz, span_khz, canvas_width=None):
+    """Read the RF frequency under a waterfall tap without recentering it."""
+    width = max(1.0, rf_canvas_width() if canvas_width is None else float(canvas_width))
+    return float(view_center_khz) + (clamp(float(x), 0.0, width) / width - 0.5) * float(span_khz)
 
 
 def receiver_retry_delay(failure_count, outage_started_at, now=None):
@@ -4536,16 +4714,22 @@ def monitoring_graph_box(waterfall_y0, waterfall_y1, anchor):
 
 def waterfall_touch_bounds():
     """Live waterfall touch area, derived from the active LCD height."""
-    y0 = WATERFALL_Y0
+    # The adjustable scope can collapse to zero, leaving live waterfall rows
+    # at the very top of the LCD rather than below the old 40 px header.
+    y0 = 0 if LCD_800_MODE else WATERFALL_Y0
     y1 = (
         LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
         if LCD_800_MODE
         else WATERFALL_Y1
     )
-    return WATERFALL_TUNE_X0, y0, WATERFALL_TUNE_X1, y1
+    return (0 if LCD_800_MODE else WATERFALL_TUNE_X0), y0, (
+        rf_canvas_width() if LCD_800_MODE else WATERFALL_TUNE_X1
+    ), y1
 
 
-def is_waterfall_tune_touch(x, y):
+def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None):
+    if LCD_800_MODE and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
+        return False
     if DESKTOP_1280_MODE:
         # The wider development display has enough room for its controls to
         # coexist with direct tuning. Any pixel of the radio canvas may begin
@@ -4741,19 +4925,44 @@ def waterfall_mapper(palette):
             b_lut.append(int(46 + 209 * t))
         return r_lut, g_lut, b_lut
 
-    # Original iTuner artwork: a quiet navy noise floor, electric-blue and
-    # cyan activity, then restrained warm colours only at the strongest end.
-    stops = (
-        (0, (1, 4, 14)),
-        (42, (0, 13, 58)),
-        (84, (0, 48, 155)),
-        (126, (0, 132, 222)),
-        (160, (0, 226, 235)),
-        (188, (30, 250, 190)),
-        (210, (236, 246, 55)),
-        (232, (255, 126, 22)),
-        (255, (245, 44, 36)),
-    )
+    if palette == "gqrx":
+        # Match Gqrx's "gqrx" colormap in src/qtgui/plotter.cpp exactly.
+        for value in range(256):
+            if value < 20:
+                red, green, blue = 0, 0, 0
+            elif value < 70:
+                red, green, blue = 0, 0, 140 * (value - 20) // 50
+            elif value < 100:
+                red = 60 * (value - 70) // 30
+                green = 125 * (value - 70) // 30
+                blue = 115 * (value - 70) // 30 + 140
+            elif value < 150:
+                red = 195 * (value - 100) // 50 + 60
+                green = 130 * (value - 100) // 50 + 125
+                blue = 255 - 255 * (value - 100) // 50
+            elif value < 250:
+                red, green, blue = 255, 255 - 255 * (value - 150) // 100, 0
+            else:
+                red = 255
+                green = blue = 255 * (value - 250) // 5
+            r_lut.append(red)
+            g_lut.append(green)
+            b_lut.append(blue)
+        return r_lut, g_lut, b_lut
+    else:
+        # Original iTuner artwork: a quiet navy noise floor, electric-blue
+        # and cyan activity, with warm colours at the strongest end.
+        stops = (
+            (0, (1, 4, 14)),
+            (42, (0, 13, 58)),
+            (84, (0, 48, 155)),
+            (126, (0, 132, 222)),
+            (160, (0, 226, 235)),
+            (188, (30, 250, 190)),
+            (210, (236, 246, 55)),
+            (232, (255, 126, 22)),
+            (255, (245, 44, 36)),
+        )
     stop_index = 0
     for value in range(256):
         while stop_index < len(stops) - 2 and value > stops[stop_index + 1][0]:
@@ -4902,6 +5111,9 @@ class SharedState:
         self.wf_auto = True
         self.wf_palette = WATERFALL_DEFAULT_PALETTE
         self.wf_generation = 0
+        # A waterfall tap tunes within the current RF window. Keep that
+        # window fixed until another tuning or zoom action recenters it.
+        self.wf_view_center_khz = None
         self.radio_mode = radio_mode
         self.low_cut, self.high_cut = kiwi_mode_filter(radio_mode)
         self.radio_generation = 0
@@ -4969,6 +5181,7 @@ class SharedState:
         self.callsign_status = "STARTING"
         self.callsign_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
+        self.spectrum_auto = True
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
         self.spectrum_peak_history = deque()
@@ -5083,7 +5296,7 @@ class SharedState:
                 return None
             return self.kiwi_session_timestamp
 
-    def set_view(self, freq_khz=None, zoom=None):
+    def set_view(self, freq_khz=None, zoom=None, waterfall_center_khz=None):
         with self.lock:
             self.kiwi_landing.update(active=False, status="cancelled")
             if freq_khz is not None:
@@ -5093,10 +5306,17 @@ class SharedState:
                 )
             if zoom is not None:
                 self.zoom = clamp(int(zoom), 0, kiwi.DISPLAY_MAX_ZOOM)
+            self.wf_view_center_khz = (
+                None if waterfall_center_khz is None else float(waterfall_center_khz)
+            )
             self.spectrum_peak_values = ()
             self.spectrum_peak_history.clear()
             self.view_generation += 1
             return self.freq_khz, self.zoom, self.view_generation
+
+    def waterfall_view_center_snapshot(self):
+        with self.lock:
+            return self.wf_view_center_khz
 
     def tune_rate_snapshot(self):
         with self.lock:
@@ -5129,6 +5349,7 @@ class SharedState:
                 fmdx.ensure_receiver(server, "fmdx")
             self.server = server
             self.receiver_type = selected_type
+            self.wf_view_center_khz = None
             canonical_fmdx_server = fmdx.normalize_server_url(server)
             self.fmdx_status = {}
             self.fmdx_stations = tuple(
@@ -5282,6 +5503,14 @@ class SharedState:
                 and bool(self.connection_streams.get("audio"))
             )
 
+    def rf_stream_ready_snapshot(self):
+        """A current receiver has supplied audio or waterfall data."""
+        with self.lock:
+            return (
+                not self.stream_paused
+                and any(self.connection_streams.values())
+            )
+
     def connection_failed(self, generation, stream):
         with self.lock:
             if not self.connection_announce or generation != self.server_generation:
@@ -5388,7 +5617,7 @@ class SharedState:
             if auto is not None:
                 self.wf_auto = bool(auto)
             if palette is not None:
-                self.wf_palette = palette if palette in ("classic", "kiwi", "ice") else WATERFALL_DEFAULT_PALETTE
+                self.wf_palette = palette if palette in ("classic", "kiwi", "gqrx", "ice") else WATERFALL_DEFAULT_PALETTE
             self.wf_generation += 1
             return self.wf_floor, self.wf_ceil, self.wf_speed, self.wf_auto, self.wf_palette, self.wf_generation
 
@@ -5879,9 +6108,29 @@ class SharedState:
             self.spectrum_enabled = bool(enabled)
             return self.spectrum_enabled
 
+    def spectrum_auto_snapshot(self):
+        with self.lock:
+            return self.spectrum_auto
+
+    def set_spectrum_auto(self, enabled):
+        with self.lock:
+            self.spectrum_auto = bool(enabled)
+            return self.spectrum_auto
+
     def update_spectrum(self, samples, floor, ceiling):
         if not samples:
             return
+        with self.lock:
+            spectrum_auto = self.spectrum_auto
+            manual_floor, manual_ceiling = self.wf_floor, self.wf_ceil
+        if spectrum_auto:
+            ordered = sorted(samples)
+            median = ordered[len(ordered) // 2]
+            p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
+            floor = clamp(median - 8, 40, 230)
+            ceiling = clamp(max(p98 + 72, floor + 95), floor + 55, 255)
+        else:
+            floor, ceiling = manual_floor, manual_ceiling
         scale = 1.0 / max(1.0, ceiling - floor)
         values = []
         for index in range(SPECTRUM_BINS):
@@ -6046,6 +6295,13 @@ class TextCache:
         GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
         cached = tex, width, height
         return self._store_texture(cache_key, cached)
+
+    def discard_texture(self, key):
+        """Release a bounded Globe tile without disturbing font cache entries."""
+        cached = self.cache.pop(key, None)
+        self._texture_lru.pop(key, None)
+        if cached is not None:
+            GL.glDeleteTextures([cached[0]])
 
 
 def setup_gl(desktop=False):
@@ -7956,9 +8212,9 @@ class SpectrumLayerCache:
 # immediate, high-contrast press feedback.  It is session-only display state;
 # actions still commit on release through the existing gesture handlers.
 UI_PRESS_POINT = None
-UI_PRESSED_FILL = APP_UI_STYLE.palette.focus
-UI_PRESSED_TEXT = APP_UI_STYLE.palette.focus_text
-UI_PRESSED_EDGE = APP_UI_STYLE.palette.focus
+UI_PRESSED_FILL = APP_UI_STYLE.palette.active_surface
+UI_PRESSED_TEXT = APP_UI_STYLE.palette.text
+UI_PRESSED_EDGE = APP_UI_STYLE.palette.active_border
 
 
 def set_ui_press_point(x=None, y=None):
@@ -7981,15 +8237,47 @@ def draw_styled_button_frame(box, *, active=False, pressed=None, danger=False,
     return visual
 
 
+def button_label_for_box(text_cache, label, box, style=APP_UI_STYLE.button):
+    """Keep 13 px button text inside its touch target without changing its size."""
+    label = str(label).upper()
+    if not callable(getattr(text_cache, "texture", None)):
+        return label
+    return fit_station_text(
+        text_cache, label, box[2] - box[0] - 8, style.label_size,
+        bold=True, family=style.font_family,
+    )
+
+
 def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
                             danger=False, bold=True, style=APP_UI_STYLE.button):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-        label, visual.text, size or style.label_size, bold, False, "cm",
+        button_label_for_box(text_cache, label, box, style), visual.text,
+        style.label_size, True, False, "cm",
         family=style.font_family,
     )
+    return visual
+
+
+def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
+                                style=APP_UI_STYLE.button):
+    """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
+    x0, y0, x1, y1 = box
+    visual = draw_styled_button_frame(box, active=active, style=style)
+    center_x = (x0 + x1) / 2
+    if subtitle:
+        draw_text(text_cache, center_x, y0 + 23,
+                  button_label_for_box(text_cache, title, box, style),
+                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
+        draw_text(text_cache, center_x, y0 + 46,
+                  button_label_for_box(text_cache, subtitle, box, style),
+                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
+    else:
+        draw_text(text_cache, center_x, (y0 + y1) / 2,
+                  button_label_for_box(text_cache, title, box, style),
+                  visual.text, style.label_size, True, False, "cm", family=style.font_family)
     return visual
 
 
@@ -8126,16 +8414,16 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
 
 
 def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, pressed=None):
-    """Draw the controls that must remain above movable text overlays."""
+    """Draw controls before the live overlays so covered controls stay behind."""
     # Zoom is two standalone bordered + / - tiles; the shared pill background
     # and its centre "ZOOM" label were removed. ``pressed`` names the zoom
     # gesture in progress so a knob or finger press lights the tile.
     draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus")
     draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus")
     if LCD_800_MODE:
-        # The waterfall no longer carries a DISPLAY button. Its only action
-        # (reveal the scope drag rail) and the spectrum on/off both live in the
-        # Settings DISPLAY drawer now.
+        # The waterfall no longer carries a DISPLAY button. Spectrum on/off
+        # lives in the DISPLAY drawer; held vertical resizing works directly
+        # on the RF canvas without a separate control.
         return
     view_separator = (FILTER_TOGGLE_BOX[2] + SPECTRUM_TOGGLE_BOX[0]) / 2 - VIEW_GROUP_BOX[0]
     draw_control_group_background(text_cache, VIEW_GROUP_BOX, "view_group_pill_v4", (view_separator,), alpha)
@@ -8146,6 +8434,29 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, p
 def scope_height_grip_box(scope_bottom_y):
     """A generous invisible drag target centred on the scope boundary."""
     return 72, scope_bottom_y - 24, rf_canvas_width() - 18, scope_bottom_y + 24
+
+
+def scope_hold_drag_ready(held_seconds, dx, dy, tap_px):
+    """Recognize a held vertical gesture without stealing taps or horizontal tuning."""
+    return (
+        held_seconds >= SCOPE_DRAG_HOLD_SECONDS
+        and abs(dy) >= max(12, tap_px)
+        and abs(dy) > abs(dx) * 1.2
+    )
+
+
+def scope_height_from_drag(start_height, start_y, y, max_height):
+    """Resize relative to the held point, even when it is far from the divider."""
+    return clamp(start_height + y - start_y, SCOPE_HEIGHT_MIN, max_height)
+
+
+def scope_waterfall_y_bounds(scope_height, spectrum_enabled):
+    """Keep the RF boundary continuous from full waterfall to full scope."""
+    spectrum_h = int(round(clamp(scope_height, SCOPE_HEIGHT_MIN, SCOPE_HEIGHT_MAX))) if spectrum_enabled else 0
+    spectrum_y0 = 0 if LCD_800_MODE else (40 if spectrum_enabled else sdr_ui.TOP_H)
+    spectrum_y1 = spectrum_y0 + spectrum_h
+    waterfall_y0 = spectrum_y1 if (spectrum_enabled or LCD_800_MODE) else sdr_ui.TOP_H
+    return spectrum_y0, spectrum_y1, waterfall_y0
 
 
 def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
@@ -8193,7 +8504,7 @@ def draw_muted_waterfall_badge(text_cache):
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
-    """Large transparent play/pause control for the retained receiver."""
+    """Compact play/pause glyph inside the retained touch target."""
     x0, y0, x1, y1 = stream_waterfall_box()
     paused = bool(stream_paused)
     pressed = ui_button_pressed((x0, y0, x1, y1))
@@ -8201,16 +8512,16 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     icon_color = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     if paused:
-        draw_logical_line(cx - 12, cy - 20, cx - 12, cy + 20, icon_color, 4)
-        draw_logical_line(cx - 12, cy - 20, cx + 20, cy, icon_color, 4)
-        draw_logical_line(cx + 20, cy, cx - 12, cy + 20, icon_color, 4)
+        draw_logical_line(cx - 11, cy - 15, cx - 11, cy + 15, icon_color, 2)
+        draw_logical_line(cx - 11, cy - 15, cx + 15, cy, icon_color, 2)
+        draw_logical_line(cx + 15, cy, cx - 11, cy + 15, icon_color, 2)
     else:
-        draw_logical_rect(cx - 17, cy - 20, cx - 7, cy + 20, icon_color)
-        draw_logical_rect(cx + 7, cy - 20, cx + 17, cy + 20, icon_color)
+        draw_logical_line(cx - 10, cy - 15, cx - 10, cy + 15, icon_color, 4)
+        draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
 
 
 def draw_favorite_waterfall_button(favorited):
-    """Draw the Home favorite with the shared cyan active/pressed styling."""
+    """Draw a fine-lined favorite star inside the shared touch target."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -8218,13 +8529,13 @@ def draw_favorite_waterfall_button(favorited):
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    draw_logical_polyline(regular_star_points(cx, cy, 23), edge, 3)
+    draw_logical_polyline(regular_star_points(cx, cy, 17), edge, 2)
 
 
 def draw_audio_transport_graph(text_cache, history, box):
     """Live view of Kiwi timing, PCM reserve, and real output starvation."""
     x0, y0, x1, y1 = box
-    header_h = 34
+    header_h = 44
     plot_y0, plot_y1 = y0 + header_h, y1 - 22
     span_seconds = 30.0
     now = time.monotonic()
@@ -8239,13 +8550,17 @@ def draw_audio_transport_graph(text_cache, history, box):
     latest_depth = latest[2] if latest else 0
     latest_target = latest[1] if latest else SDR_AUDIO_JITTER_TARGET_PACKETS
     draw_text(text_cache, x0 + 14, y0 + 17, "LIVE PCM TRANSPORT", (161, 235, 246), 18, True, True, "lm")
+    close_x0, close_y0, close_x1, close_y1 = audio_transport_graph_close_box(box)
+    draw_styled_text_button(
+        text_cache, (close_x0, close_y0, close_x1, close_y1), "CLOSE", size=12,
+    )
     summary = (
         f"QUEUE {latest_depth}/{latest_target}  ·  GAP {latest_gap_ms if latest_gap_ms is not None else '?'}ms"
         if output_gaps == 0 and clock_lates == 0 else
         (f"OUTPUT GAPS: {output_gaps}" if output_gaps else f"CLOCK LATE: {clock_lates}")
     )
     summary_color = (170, 193, 199) if output_gaps == 0 and clock_lates == 0 else ((255, 120, 104) if output_gaps else (255, 192, 76))
-    draw_text(text_cache, x1 - 14, y0 + 17, summary, summary_color, 13, True, True, "rm")
+    draw_text(text_cache, close_x0 - 12, y0 + 17, summary, summary_color, 13, True, True, "rm")
     for fraction in (0.25, 0.5, 0.75):
         y = plot_y0 + (plot_y1 - plot_y0) * fraction
         draw_logical_line(x0 + 42, y, x1 - 10, y, (89, 134, 147, 58), 1)
@@ -8285,8 +8600,18 @@ def draw_audio_transport_graph(text_cache, history, box):
             draw_logical_line(x, plot_y0, x, plot_y1, (255, 185, 62, 235), 1)
 
 
+def audio_transport_graph_close_box(box):
+    """Match the STATS graph's explicit close target."""
+    return compact_header_close_box(box)
+
+
 def cpu_utilization_graph_close_box(box):
     """Large explicit close target in the CPU graph header."""
+    return compact_header_close_box(box)
+
+
+def compact_header_close_box(box):
+    """Shared small CLOSE target for floating instrument panels."""
     x0, y0, x1, _y1 = box
     return max(x0 + 260, x1 - 112), y0 + 7, x1 - 10, y0 + 37
 
@@ -8434,10 +8759,28 @@ def frequency_right_x():
     return FREQUENCY_RIGHT_X + (50 if DESKTOP_1280_MODE else 0)
 
 
-def frequency_display_box(text_cache, freq_khz, font_family=None):
-    font_family = font_family or VFO_FONT_FAMILY
+def normalize_frequency_position(value):
+    """Preserve saved COMPACT/EXPANDED choices under the visible position names."""
+    position = str(value or "").lower()
+    position = {"compact": "right", "expanded": "middle"}.get(position, position)
+    return position if position in ("left", "middle", "right") else "right"
+
+
+def big_frequency_rendered_width(text_cache, freq_khz, font_family):
+    """Match LEFT/MIDDLE frequency hit targets to the 330 px readout."""
+    font = text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=font_family)
     frequency_text = sdr_ui.format_freq(freq_khz)
-    width = text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=font_family).size(frequency_text)[0]
+    text_width = font.size(frequency_text)[0]
+    return min(text_width, 330.0)
+
+
+def frequency_display_box(text_cache, freq_khz, font_family=None, position="middle"):
+    if position == "right":
+        return compact_frequency_touch_box()
+    font_family = font_family or VFO_FONT_FAMILY
+    width = big_frequency_rendered_width(text_cache, freq_khz, font_family)
+    if position == "left":
+        return LEFT_FREQUENCY_X - 8, 4, LEFT_FREQUENCY_X + width + 8, 70
     return frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70
 
 
@@ -8445,7 +8788,7 @@ def top_instrument_layout(text_cache, freq_khz, font_family=None):
     """Return a right-aligned mode/frequency cluster next to the S-meter."""
     font_family = font_family or VFO_FONT_FAMILY
     frequency_text = sdr_ui.format_freq(freq_khz)
-    frequency_width = text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=font_family).size(frequency_text)[0]
+    frequency_width = big_frequency_rendered_width(text_cache, freq_khz, font_family)
     frequency_left = frequency_right_x() - frequency_width
     radio_x1 = frequency_left - RADIO_SETUP_GAP
     radio_box = (radio_x1 - RADIO_SETUP_WIDTH, 10, radio_x1, 54)
@@ -8492,11 +8835,12 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         return
     x0, y0, x1, y1 = DESKTOP_1280_ANNUNCIATOR_BOX
     pressed = ui_button_pressed(DESKTOP_1280_ANNUNCIATOR_BOX)
-    draw_native_rect(x0, y0, x1, y1, UI_PRESSED_FILL if pressed else (15, 31, 39, 244))
-    draw_native_line(x0, y0, x1, y0, (125, 147, 158, 168), 1)
-    draw_native_line(x0, y0, x0, y1, (93, 120, 132, 155), 1)
-    draw_native_line(x1, y0, x1, y1, (32, 50, 61, 215), 1)
-    draw_native_line(x0, y1, x1, y1, (53, 88, 98, 210), 1)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
+    draw_native_rect(x0, y0, x1, y1, visual.fill)
+    draw_native_line(x0, y0, x1, y0, visual.border, visual.border_width)
+    draw_native_line(x0, y0, x0, y1, visual.border, visual.border_width)
+    draw_native_line(x1, y0, x1, y1, visual.border, visual.border_width)
+    draw_native_line(x0, y1, x1, y1, visual.border, visual.border_width)
     exact_mode = mode.upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     context_label = KIWI_MODE_CONTEXT.get(exact_mode, exact_mode)
@@ -8505,7 +8849,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         (x0 + x1) / 2,
         y0 + 13,
         context_label,
-        UI_PRESSED_TEXT if pressed else (214, 238, 233),
+        visual.text,
         11 if len(context_label) > 20 else 12,
         True,
         False,
@@ -8556,11 +8900,11 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
         panel_x0, _panel_y0, panel_x1, _panel_y1 = radio_panel_box()
         grid_x0, grid_x1 = panel_x0 + 10, panel_x1 - 10
         grid_y0 = lcd_radio_mode_grid_y0()
-        gap = 7
-        button_h = 62
-        available = grid_x1 - grid_x0
+        gap = APP_UI_STYLE.button.gap
+        button_h = APP_UI_STYLE.button.height
         cols = 2
-        button_w = (available - gap * (cols - 1)) / cols
+        button_w = APP_UI_STYLE.button.width
+        grid_x0 = (panel_x0 + panel_x1 - (cols * button_w + gap)) / 2
         for index, (family, modes) in enumerate(mode_families):
             col = index % cols
             row = index // cols
@@ -8582,23 +8926,20 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
 
 def radio_wspr_box():
     """Dedicated WSPR workspace launcher below the Kiwi mode controls."""
-    return LCD_NAV_X0 + 10, 522, (LCD_NAV_X0 + LOGICAL_W) / 2 - 4, 584
+    return LCD_NAV_X0 + 10, 512, LCD_NAV_X0 + 124, 576
 
 def radio_sstv_box():
     """SSTV alongside WSPR in PR12's Modes drawer."""
-    return (LCD_NAV_X0 + LOGICAL_W) / 2 + 4, 522, LOGICAL_W - 10, 584
+    return LCD_NAV_X0 + 132, 512, LOGICAL_W - 10, 576
 
 def radio_hell_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 10, 596, LCD_NAV_X0 + 10 + width, 658
+    return LCD_NAV_X0 + 10, 584, LCD_NAV_X0 + 124, 648
 
 def radio_qrss_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 14 + width, 596, LCD_NAV_X0 + 14 + 2*width, 658
+    return LCD_NAV_X0 + 132, 584, LOGICAL_W - 10, 648
 
 def radio_cw_box():
-    width = (LOGICAL_W - LCD_NAV_X0 - 28) / 3
-    return LCD_NAV_X0 + 18 + 2*width, 596, LOGICAL_W - 10, 658
+    return LCD_NAV_X0 + 10, 656, LCD_NAV_X0 + 124, 720
 
 
 def radio_decoder_boxes():
@@ -8803,7 +9144,7 @@ def radio_option_at(
     # A read-only shared FM-DX tuner has no tuning step: the frequency is not
     # ours to change until shared control is acknowledged.
     if not (receiver_worker_protocol(receiver_type) == "fmdx" and not fmdx_shared_control):
-        for step_hz, box in radio_step_options(receiver_type):
+        for step_hz, box in radio_step_options(receiver_type, len(mode_families)):
             if contains(box, x, y):
                 return "step", step_hz
     return None
@@ -8819,11 +9160,10 @@ def next_radio_mode_variant(current_mode, modes):
 
 
 def draw_radio_option(text_cache, box, label, active):
-    font_size = 12 if len(label) > 10 else (13 if len(label) > 8 else 15)
-    draw_styled_text_button(text_cache, box, label, size=font_size, active=active)
+    draw_styled_text_button(text_cache, box, label, active=active)
 
 
-BACK_BUTTON_FONT_SIZE = 14
+BACK_BUTTON_FONT_SIZE = 13
 
 
 def draw_shared_back_button(text_cache, box, size=BACK_BUTTON_FONT_SIZE):
@@ -8838,58 +9178,15 @@ def draw_radio_close_button(text_cache, box):
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     """Draw a large mode-family button without cramming its variants inside."""
-    x0, y0, x1, y1 = box
     active = active_mode in modes
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    compact_lcd_drawer = LCD_800_MODE and (x1 - x0) < 140
-    draw_text(
-        text_cache,
-        (x0 + x1) / 2,
-        (y0 + y1) / 2 - (3 if compact_lcd_drawer else 4),
-        family,
-        visual.text,
-        (15 if len(family) <= 6 else 12) if compact_lcd_drawer else (21 if len(family) <= 6 else 19),
-        True,
-        False,
-        "cm",
-        family="Liberation Sans",
-    )
-    if active:
-        active_label = KIWI_MODE_LABELS.get(active_mode, active_mode)
-        active_size = 13 if len(active_label) <= 11 else 12
-        draw_text(
-            text_cache,
-            (x0 + x1) / 2,
-            y1 - (13 if compact_lcd_drawer else 16),
-            active_label,
-            visual.text,
-            active_size if compact_lcd_drawer else 14,
-            True,
-            False,
-            "cm",
-            family="Liberation Sans",
-        )
+    detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
+    draw_styled_two_line_button(text_cache, box, family, detail, active=active)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
     """Render one readable option in the compact second-level popover."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
     label = KIWI_MODE_LABELS.get(mode, mode)
-    draw_text(
-        text_cache,
-        (x0 + x1) / 2,
-        (y0 + y1) / 2,
-        label,
-        visual.text,
-        17 if len(label) <= 11 else 15,
-        True,
-        False,
-        "cm",
-        family="Liberation Sans",
-    )
+    draw_styled_text_button(text_cache, box, label, active=active)
 
 
 def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
@@ -8919,11 +9216,13 @@ def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
         if reveal_y >= box[3]:
             draw_lcd_audio_tile(text_cache, box, *labels[action])
     if shared_control:
-        if reveal_y >= 349:
-            draw_lcd_drawer_heading(text_cache, left + 10, 349, "TUNING STEP")
-        for option, box in radio_step_options("fmdx"):
-            if reveal_y >= box[3]:
-                draw_lcd_audio_tile(text_cache, box, "TUNING STEP", f"{option // 1000} kHz", option == step_hz)
+        step_boxes = tuple(radio_step_options("fmdx"))
+        if reveal_y >= step_boxes[0][1][1]:
+            draw_lcd_drawer_heading(text_cache, left + 4, lcd_radio_step_y0() + 12, "TUNE STEP")
+        for option_hz, option_box in step_boxes:
+            if reveal_y >= option_box[3]:
+                draw_picker_button(text_cache, option_box, format_small_tune_step(option_hz), 15,
+                                   option_hz == step_hz)
 
 
 def draw_radio_setup_panel(
@@ -8941,7 +9240,7 @@ def draw_radio_setup_panel(
         # Cover the old Home tiles as the drawer grows, but intentionally do
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, (6, 13, 19, 255))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, APP_UI_STYLE.palette.sidebar)
         draw_sidebar_header(text_cache, "MODES")
         if reveal_y < y0 + 44:
             return
@@ -8960,13 +9259,15 @@ def draw_radio_setup_panel(
         for family, modes, box in radio_mode_layout(mode_families):
             if reveal_y >= box[3]:
                 draw_radio_family_option(text_cache, box, family, modes, active_mode)
-        step_y0 = lcd_radio_step_y0(len(mode_families))
-        if reveal_y >= step_y0:
-            draw_text(text_cache, x0 + 12, step_y0 - 15, "TUNING STEP", (145, 183, 190), 11, True, False, "lm", family="Liberation Sans")
-        for option, box in radio_step_options(receiver_type):
-            if reveal_y >= box[3]:
-                label = f"{option // 1000} kHz" if option >= 1000 else f"{option} Hz"
-                draw_radio_option(text_cache, box, label, option == step_hz)
+        step_boxes = tuple(radio_step_options(receiver_type, len(mode_families)))
+        if reveal_y >= step_boxes[0][1][1]:
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14,
+                                    lcd_radio_step_y0(len(mode_families)) + 12,
+                                    "TUNE STEP")
+        for option_hz, option_box in step_boxes:
+            if reveal_y >= option_box[3]:
+                draw_picker_button(text_cache, option_box, format_small_tune_step(option_hz), 15,
+                                   option_hz == step_hz)
         if receiver_worker_protocol(receiver_type) == "kiwi":
             labels = {"wspr": "WSPR", "sstv": "SSTV", "hell": "HELL RX", "qrss": "QRSS", "cw": "CW"}
             for workspace, box in radio_decoder_boxes():
@@ -9005,10 +9306,10 @@ def display_option_at(x, y):
         return "close", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
-    if LCD_800_MODE and contains(DISPLAY_INSTRUMENTS_BOX, x, y):
-        return "instruments", None
-    if LCD_800_MODE and contains(DISPLAY_SCOPE_BOX, x, y):
-        return "scope", None
+    if LCD_800_MODE:
+        for layout, box in DISPLAY_LAYOUT_BOXES:
+            if contains(box, x, y):
+                return "layout", layout
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -9031,22 +9332,61 @@ def display_option_at(x, y):
     return None
 
 
+def apply_waterfall_palette_preset(state, palette):
+    floor, ceiling = WATERFALL_PALETTE_PRESETS[palette]
+    return state.set_waterfall(floor=floor, ceil=ceiling, auto=False, palette=palette)
+
+
+def reset_display_view(state):
+    """Restore Display defaults while retaining the waterfall image."""
+    waterfall = state.set_waterfall(
+        floor=WATERFALL_DEFAULT_FLOOR,
+        ceil=WATERFALL_DEFAULT_CEIL,
+        speed=WATERFALL_DEFAULT_SPEED,
+        auto=False,
+        palette=WATERFALL_DEFAULT_PALETTE,
+    )
+    state.set_spectrum_enabled(True)
+    state.set_spectrum_auto(True)
+    return waterfall
+
+
+def toggle_display_spectrum_control(state, kind):
+    """The two scope controls must leave waterfall rows and palette untouched."""
+    if kind == "spectrum":
+        state.set_spectrum_enabled(not state.spectrum_enabled_snapshot())
+    elif kind == "auto":
+        state.set_spectrum_auto(not state.spectrum_auto_snapshot())
+    else:
+        raise ValueError(f"unsupported spectrum control: {kind}")
+    return state.waterfall_snapshot()
+
+
 def lcd_display_drawer_close_box():
     return lcd_drawer_back_box()
 
 
 def draw_display_control(text_cache, box, label, active=False):
+    draw_styled_text_button(text_cache, box, label, active=active)
+
+
+def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active):
+    """Full-width Display instrument with the same visible 236 px bounds as BACK."""
     x0, y0, x1, y1 = box
-    fill = (86, 91, 95, 214) if active else (18, 29, 38, 152)
-    line = (213, 218, 221, 194) if active else (118, 143, 151, 78)
-    color = (236, 239, 241) if active else (177, 199, 204)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    size = 42 if label in ("-", "+") else 15
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, size, True, True, "cm")
+    palette = APP_UI_STYLE.palette
+    draw_logical_rect(x0, y0, x1, y1, palette.section_surface)
+    draw_text(text_cache, x0 + 4, y0 + 14, title, palette.section_heading,
+              13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+    draw_text(text_cache, x1 - 4, y0 + 14, detail,
+              palette.ready[:3] if active else palette.secondary_text,
+              13, True, False, "rm", family=APP_UI_STYLE.button.font_family)
+    fraction = clamp(value / max(1, maximum), 0.0, 1.0)
+    track_x0, track_x1, track_y = x0 + 4, x1 - 4, y1 - 13
+    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (27, 45, 52, 255))
+    current_x = track_x0 + (track_x1 - track_x0) * fraction
+    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, (80, 226, 164, 235))
+    draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9,
+                      (229, 246, 246, 250))
 
 
 def volume_at_x(x, box):
@@ -9084,7 +9424,7 @@ def audio_squelch_at_x(x, maximum=99):
 def waterfall_slider_fraction(x, box):
     """Map a touch to the visible portion of an LCD waterfall slider."""
     x0, _y0, x1, _y1 = box
-    return clamp((x - (x0 + 10)) / max(1, (x1 - 10) - (x0 + 10)), 0.0, 1.0)
+    return clamp((x - (x0 + 4)) / max(1, (x1 - 4) - (x0 + 4)), 0.0, 1.0)
 
 
 def waterfall_floor_at_x(x, ceiling):
@@ -9100,7 +9440,7 @@ def waterfall_ceiling_at_x(x, floor):
 def audio_denoise_level_at_x(x):
     """Snap a finger position to the evenly spaced Denoise detents."""
     x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
-    fraction = clamp((x - (x0 + 14)) / max(1, (x1 - 14) - (x0 + 14)), 0.0, 1.0)
+    fraction = clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
     return min(
         range(len(DENOISE_SLIDER_POSITIONS)),
         key=lambda index: abs(DENOISE_SLIDER_POSITIONS[index] - fraction),
@@ -10611,28 +10951,22 @@ def lcd_audio_drawer_close_box():
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
                         title_size=None, detail_size=None):
-    """Compact two-line control tile for the LCD audio drawer."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    title_size = title_size or (15 if len(title) <= 8 else 13)
-    detail_size = detail_size or (13 if len(detail) <= 10 else 11)
-    draw_text(text_cache, (x0 + x1) / 2, y0 + 23, title, visual.text, title_size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, (x0 + x1) / 2, y1 - 13, detail, visual.text if active or pressed else APP_UI_STYLE.palette.secondary_text, detail_size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    """Compact two-line control tile with the shared theme typography."""
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_sidebar_header(text_cache, title):
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, (6, 13, 19, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar)
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, (215, 235, 239),
               15, True, False, "cm", family="Liberation Sans")
-    draw_logical_line(LCD_NAV_X0 + 17, LCD_DRAWER_HEADER_H,
-                      LOGICAL_W - 17, LCD_DRAWER_HEADER_H, (72, 101, 112, 160), 1)
+    draw_logical_line(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H,
+                      LOGICAL_W - 10, LCD_DRAWER_HEADER_H, (72, 101, 112, 160), 1)
 
 
 def draw_lcd_drawer_heading(text_cache, x, y, title):
     """Shared quiet heading treatment for LCD right-rail drawers."""
     draw_text(text_cache, x, y, title, LCD_DRAWER_HEADING_COLOR, LCD_DRAWER_HEADING_SIZE,
-              True, False, "lm", family="Liberation Sans")
+              True, False, "lm", family=APP_UI_STYLE.button.font_family)
 
 
 def receiver_home_drawer_boxes():
@@ -10652,7 +10986,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     """Show the saved reference point used by the receiver directory."""
     boxes = receiver_home_drawer_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
@@ -10683,7 +11017,7 @@ def fan_curve_drawer_boxes():
 def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     boxes = fan_curve_drawer_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     live = f"CPU {temp_c:.0f} C" if isinstance(temp_c, (int, float)) else "CPU WAITING"
     draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
@@ -10698,7 +11032,8 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     draw_sidebar_header(text_cache, "FAN CURVE")
 
 
-def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, active=False, steps=None):
+def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, active=False, steps=None,
+                               full_width=False):
     """Large-label audio tile with a finger-addressable horizontal slider."""
     x0, y0, x1, y1 = box
     # Sliders are instruments, not buttons: leave the drawer's calm black
@@ -10706,7 +11041,7 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     draw_text(text_cache, x0 + 10, y0 + 20, title, (230, 246, 247), 14 if len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, y0 + 20, detail, (112, 223, 169) if active else (153, 185, 191), 13, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
-    track_x0, track_x1 = x0 + 10, x1 - 10
+    track_x0, track_x1 = (x0, x1) if full_width else (x0 + 10, x1 - 10)
     track_y = y1 - 15
     draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (27, 45, 52, 255))
     current_x = track_x0 + (track_x1 - track_x0) * fraction
@@ -10715,13 +11050,14 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
         for index in range(steps):
             marker_x = track_x0 + (track_x1 - track_x0) * index / max(1, steps - 1)
             draw_logical_line(marker_x, track_y - 5, marker_x, track_y + 5, (112, 238, 177, 190) if index <= value else (107, 139, 147, 128), 1)
-    draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9, (229, 246, 246, 250))
+    thumb_x = clamp(current_x, x0 + 5, x1 - 5) if full_width else current_x
+    draw_logical_rect(thumb_x - 5, track_y - 9, thumb_x + 5, track_y + 9, (229, 246, 246, 250))
 
 
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
     """Right-rail audio drawer; it never obscures the waterfall workspace."""
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, lcd_audio_drawer_close_box())
 
     vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
@@ -10729,10 +11065,11 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_text(text_cache, vx0 + 10, vy0 + 11, "VOLUME", (164, 193, 198), 14, True, False, "lt", family="Liberation Sans")
     draw_text(text_cache, vx1 - 10, vy0 + 11, main_volume_label(level), MUTE_ACCENT if level <= MAIN_VOLUME_MUTE_THRESHOLD else (232, 246, 248), 18, True, False, "rt", family="Liberation Sans")
     track_y = vy1 - 16
-    track_x0, track_x1 = vx0 + 10, vx1 - 10
+    track_x0, track_x1 = vx0, vx1
     draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, (22, 35, 43, 230))
     draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * level, track_y + 3, (68, 209, 151, 226))
     knob_x = track_x0 + (track_x1 - track_x0) * level
+    knob_x = clamp(knob_x, vx0 + 6, vx1 - 6)
     draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, (226, 246, 246, 255))
 
     muted = controls["mute"]
@@ -10747,12 +11084,12 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     denoise_level = int(controls["denoise_level"])
     denoise_detail = "BYPASS" if voice_level or hf_active else kiwi.DENOISE_PRESETS[denoise_level][0]
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
-    draw_lcd_audio_tile(text_cache, AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
     draw_lcd_audio_tile(text_cache, AUDIO_VOICE_CLEAN_BOX, "VOICE", VOICE_CLEAN_PRESETS[voice_level], voice_level > 0, (123, 193, 250, 230))
     draw_lcd_audio_tile(text_cache, AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active, (93, 226, 170, 230))
     draw_lcd_audio_slider_tile(
         text_cache, AUDIO_SQUELCH_BOX, "SQUELCH", sq, sq_maximum,
         "OFF" if sq <= 0 else (str(sq) if sq_maximum == 99 else f"{sq} dB"), sq > 0,
+        full_width=True,
     )
     draw_lcd_audio_tile(text_cache, AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"]))
     draw_lcd_audio_tile(text_cache, AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
@@ -10761,17 +11098,19 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
         len(DENOISE_SLIDER_POSITIONS) - 1, denoise_detail,
         denoise_level > 0 and not (voice_level or hf_active),
         steps=len(DENOISE_SLIDER_POSITIONS),
+        full_width=True,
     )
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     draw_lcd_audio_tile(text_cache, AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0)
     draw_lcd_audio_tile(text_cache, AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0, (102, 194, 239, 230))
     draw_lcd_audio_tile(text_cache, AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut))
-    draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
     direct = audio_backend == "alsa"
     draw_lcd_audio_tile(
         text_cache, AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if direct else "PIPEWIRE",
         direct, (255, 184, 83, 230), title_size=12, detail_size=11,
     )
+    draw_lcd_audio_tile(text_cache, AUDIO_RESET_BOX, "RESET", "DEFAULTS")
+    draw_lcd_audio_tile(text_cache, AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
     draw_sidebar_header(text_cache, "AUDIO")
 
 
@@ -10913,8 +11252,6 @@ def tests_option_at(x, y):
         return "openwebrx"
     if contains(TEST_RUN_BOX, x, y):
         return "run"
-    if contains(TEST_DUAL_BOX, x, y):
-        return "dual"
     return None
 
 
@@ -10958,12 +11295,7 @@ def rtl_lab_option_at(x, y):
 
 
 def draw_tests_button(text_cache, box, title, detail, active=False):
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 - 10, title, visual.text, 18, True, True, "lm", family=APP_UI_STYLE.button.font_family)
-    detail_color = visual.text if active or pressed else APP_UI_STYLE.palette.secondary_text
-    draw_text(text_cache, x0 + 22, (y0 + y1) / 2 + 16, detail, detail_color, 14, False, True, "lm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
@@ -10981,7 +11313,6 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             (TEST_FONT_BOX, "FONT LAB", "TYPE", False),
             (TEST_OPENWEBRX_BOX, "RETURN KIWI" if openwebrx_active else "OPENWEBRX", "PUBLIC RX", openwebrx_active),
             (TEST_RUN_BOX, "STOP" if sweep is not None else "RUN TEST", "RETUNE PATTERN", sweep is not None),
-            (TEST_DUAL_BOX, "DUAL", "TWO VFO", False),
         ):
             draw_lcd_audio_tile(
                 text_cache, box, title, detail, active,
@@ -11015,7 +11346,6 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
             f"{sweep.name}  {sweep.index}/{sweep.command_count}",
             active=True,
         )
-    draw_tests_button(text_cache, TEST_DUAL_BOX, "DUAL", "TWO RECEIVERS  /  TWO VFO")
 
 
 def draw_font_lab(text_cache, page):
@@ -11035,14 +11365,8 @@ def draw_font_lab(text_cache, page):
         True, False, "lm", family="Liberation Sans",
     )
     draw_settings_leaf_sidebar(text_cache, "FONT LAB", "FONT PAGES")
-    for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT"), (FONT_LAB_BACK_BOX, "BACK")):
-        if label == "BACK":
-            continue
-        x0, y0, x1, y1 = box
-        draw_logical_rect(x0, y0, x1, y1, (17, 35, 43, 246))
-        for line in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-            draw_logical_line(*line, (112, 181, 187, 178), 1)
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, (231, 243, 244), 16, True, False, "cm", family="Liberation Sans")
+    for box, label in ((FONT_LAB_PREV_BOX, "PREV"), (FONT_LAB_NEXT_BOX, "NEXT")):
+        draw_styled_text_button(text_cache, box, label)
 
     for column in range(5):
         column_x0 = column * FONT_LAB_COLUMN_WIDTH
@@ -11152,14 +11476,7 @@ def wspr_option_at(x, y, page):
 
 
 def draw_wspr_button(text_cache, box, title, detail="", active=False, selected=False):
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active or selected, pressed=pressed)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - (7 if detail else 0), title,
-              visual.text, 17, True, True, "cm", family=APP_UI_STYLE.button.font_family)
-    if detail:
-        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 13, detail,
-                  visual.text if active or selected or pressed else APP_UI_STYLE.palette.secondary_text, 12, True, True, "cm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active or selected)
 
 
 def draw_wspr_mrtg_graph(text_cache, history, window_s, selected_band):
@@ -12097,21 +12414,20 @@ def draw_wspr_cycle_timer(cx, cy, radius=11):
 
 
 def wspr_card_settings_box(box):
-    """Large visual settings target; the rest of a card is its view switch."""
+    """Standard settings target; the rest of a card is its view switch."""
     _x0, _y0, x1, y1 = box
-    return x1 - 104, y1 - 43, x1 - 12, y1 - 10
+    return x1 - 126, y1 - 76, x1 - 12, y1 - 12
 
 
 def wspr_card_settings_hit_box(box):
-    """Forgiving touch halo around the deliberately compact settings icon."""
-    x0, y0, x1, y1 = wspr_card_settings_box(box)
-    return x0 - 18, y0 - 14, x1 + 8, y1 + 8
+    """The visible settings button is already large enough for touch."""
+    return wspr_card_settings_box(box)
 
 
 def wspr_card_log_expand_box(box):
     """Dedicated full-log target, separate from the card view-cycle tap."""
     _x0, _y0, x1, y1 = box
-    return x1 - 204, y1 - 43, x1 - 112, y1 - 10
+    return x1 - 248, y1 - 76, x1 - 134, y1 - 12
 
 
 def wspr_card_waterfall_expand_box(box):
@@ -12120,8 +12436,7 @@ def wspr_card_waterfall_expand_box(box):
 
 
 def wspr_card_waterfall_expand_hit_box(box):
-    x0, y0, x1, y1 = wspr_card_waterfall_expand_box(box)
-    return x0 - 12, y0 - 10, x1 + 8, y1 + 10
+    return wspr_card_waterfall_expand_box(box)
 
 
 def wspr_card_distance_expand_box(box):
@@ -12129,26 +12444,11 @@ def wspr_card_distance_expand_box(box):
 
 
 def wspr_card_distance_expand_hit_box(box):
-    x0, y0, x1, y1 = wspr_card_distance_expand_box(box)
-    return x0 - 12, y0 - 10, x1 + 8, y1 + 10
+    return wspr_card_distance_expand_box(box)
 
 
 def draw_wspr_settings_button(text_cache, box):
-    """A clear cog affordance instead of a tiny text-only settings target."""
-    x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    visual = draw_styled_button_frame(box, pressed=pressed)
-    for index in range(8):
-        angle = math.tau * index / 8
-        inner, outer = 7, 12
-        draw_logical_line(
-            cx + inner * math.cos(angle), cy + inner * math.sin(angle),
-            cx + outer * math.cos(angle), cy + outer * math.sin(angle),
-            visual.text, 2,
-        )
-    draw_logical_circle(cx, cy, 7, visual.text, segments=20, outline=True)
-    draw_logical_circle(cx, cy, 2.5, visual.text, segments=14, outline=True)
+    draw_styled_text_button(text_cache, box, "SETTINGS")
 
 
 def draw_wspr_log_expand_button(text_cache, box):
@@ -12382,10 +12682,11 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
 
 
 def wspr_distance_range_boxes():
-    x0, x1 = 28, 1074
-    gap = 12
-    width = (x1 - x0 - gap * (len(WSPR_DISTANCE_WINDOWS) - 1)) / len(WSPR_DISTANCE_WINDOWS)
-    return tuple((x0 + index * (width + gap), 84, x0 + index * (width + gap) + width, 132) for index in range(len(WSPR_DISTANCE_WINDOWS)))
+    width = APP_UI_STYLE.button.width
+    gap = APP_UI_STYLE.button.gap
+    return tuple((28 + index * (width + gap), 76,
+                  28 + index * (width + gap) + width, 140)
+                 for index in range(len(WSPR_DISTANCE_WINDOWS)))
 
 
 def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_index):
@@ -12503,9 +12804,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", (139, 205, 201), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
-        draw_logical_rect(*box, (23, 82, 69, 234) if active else (10, 39, 45, 222))
-        draw_logical_line(box[0], box[1], box[2], box[1], (105, 246, 186, 240) if active else (91, 168, 166, 156), 1)
-        draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, WSPR_DISTANCE_WINDOW_LABELS[index], (232, 250, 245) if active else (163, 210, 208), 17, True, True, "cm", family="Liberation Sans")
+        draw_styled_text_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active=active)
     start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
     visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
     for index, box in enumerate(boxes):
@@ -12651,9 +12950,10 @@ def draw_wspr_add_card(text_cache, box):
 
 def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False):
     x0, y0, x1, y1 = WSPR_TILE_SETTINGS_BOX
-    hf_x0, hf_x1 = x0 + 32, x1 - 32
-    hf_top, hf_gap, hf_cols, hf_h = y0 + 250, 10, 5, 66
-    hf_w = (hf_x1 - hf_x0 - hf_gap * (hf_cols - 1)) / hf_cols
+    hf_gap, hf_cols, hf_h = 8, 5, 64
+    hf_w = APP_UI_STYLE.button.width
+    hf_x0 = (x0 + x1 - (hf_cols * hf_w + (hf_cols - 1) * hf_gap)) / 2
+    hf_top = y0 + 250
     direct_hf_band_boxes = []
     for index, (label, frequency) in enumerate(WSPR_HF_BANDS):
         col, row = index % hf_cols, index // hf_cols
@@ -12664,17 +12964,17 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
         "panel": WSPR_TILE_SETTINGS_BOX,
         "receiver": (x0 + 32, y0 + 94, x1 - 32, y0 + 178),
         "hf_band_boxes": tuple(direct_hf_band_boxes),
-        "toggle": (x0 + 32, y1 - 86, x0 + 282, y1 - 28),
-        "delete": (x0 + 300, y1 - 86, x0 + 594, y1 - 28),
-        "close": (x0 + 612, y1 - 86, x1 - 32, y1 - 28),
+        "toggle": (278, y1 - 84, 514, y1 - 20),
+        "delete": (522, y1 - 84, 758, y1 - 20),
+        "close": (766, y1 - 84, 1002, y1 - 20),
     }
     if receiver_picker_open:
         rows = []
         for index in range(3):
             rows.append((x0 + 32, y0 + 92 + index * 66, x1 - 32, y0 + 148 + index * 66))
-        band_x0, band_x1 = x0 + 32, x1 - 32
-        band_top, band_gap, band_cols, band_h = y0 + 324, 10, 5, 66
-        band_w = (band_x1 - band_x0 - band_gap * (band_cols - 1)) / band_cols
+        band_top, band_gap, band_cols, band_h = y0 + 324, 8, 5, 64
+        band_w = APP_UI_STYLE.button.width
+        band_x0 = (x0 + x1 - (band_cols * band_w + (band_cols - 1) * band_gap)) / 2
         hf_band_boxes = []
         for index, (label, frequency) in enumerate(WSPR_HF_BANDS):
             col, row = index % band_cols, index // band_cols
@@ -12684,16 +12984,15 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
         layout.update({
             "receiver_rows": tuple(rows),
             "hf_band_boxes": tuple(hf_band_boxes),
-            "prev": (x0 + 32, y1 - 76, x0 + 202, y1 - 26),
-            "cancel": ((x0 + x1) / 2 - 90, y1 - 76, (x0 + x1) / 2 + 90, y1 - 26),
-            "next": (x1 - 202, y1 - 76, x1 - 32, y1 - 26),
+            "prev": (278, y1 - 84, 514, y1 - 20),
+            "cancel": (522, y1 - 84, 758, y1 - 20),
+            "next": (766, y1 - 84, 1002, y1 - 20),
         })
     elif band_picker_open:
-        inner_x0, inner_x1 = x0 + 32, x1 - 32
-        top, bottom, cols, gap = y0 + 96, y1 - 106, 4, 10
-        rows = math.ceil(len(WSPR_BANDS) / cols)
-        cell_w = (inner_x1 - inner_x0 - gap * (cols - 1)) / cols
-        cell_h = (bottom - top - gap * (rows - 1)) / rows
+        cols, gap = 4, 8
+        cell_w, cell_h = APP_UI_STYLE.button.width, APP_UI_STYLE.button.height
+        inner_x0 = (x0 + x1 - (cols * cell_w + (cols - 1) * gap)) / 2
+        top = y0 + 96
         band_boxes = []
         for index, (label, frequency) in enumerate(WSPR_BANDS):
             col, row = index % cols, index // cols
@@ -12702,7 +13001,7 @@ def wspr_tile_settings_layout(receiver_picker_open=False, band_picker_open=False
             band_boxes.append((label, frequency, (bx0, by0, bx0 + cell_w, by0 + cell_h)))
         layout.update({
             "band_boxes": tuple(band_boxes),
-            "cancel": ((x0 + x1) / 2 - 112, y1 - 76, (x0 + x1) / 2 + 112, y1 - 26),
+            "cancel": (522, y1 - 84, 758, y1 - 20),
         })
     return layout
 
@@ -12765,7 +13064,9 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
         draw_wspr_button(text_cache, boxes["prev"], "< PREV")
         draw_wspr_button(text_cache, boxes["cancel"], "DONE", active=True)
         draw_wspr_button(text_cache, boxes["next"], "NEXT >")
-        draw_text(text_cache, (boxes["prev"][2] + boxes["next"][0]) / 2, (boxes["prev"][1] + boxes["prev"][3]) / 2, f"{receiver_page + 1}/{pages}", (179, 206, 209), 16, True, True, "cm", family="Liberation Sans")
+        draw_text(text_cache, (x0 + x1) / 2, boxes["prev"][1] - 14,
+                  f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+                  True, True, "cm", family="Liberation Sans")
         return
     receiver_box = boxes["receiver"]
     draw_logical_rect(*receiver_box, (14, 37, 44, 235))
@@ -12836,21 +13137,22 @@ def draw_wspr_cpu_debug_backdrop(text_cache):
 
 def wspr_decoder_settings_layout():
     x0, y0, x1, y1 = WSPR_DECODER_SETTINGS_BOX
-    gap = 18
-    width = (x1 - x0 - 56 - gap) / 2
+    gap = APP_UI_STYLE.button.gap
+    width = APP_UI_STYLE.button.width
+    group_x0 = (x0 + x1 - (2 * width + gap)) / 2
     profile_boxes = []
     for index, profile in enumerate(WSPR_DECODER_PROFILES):
         col, row = index % 2, index // 2
-        bx0 = x0 + 28 + col * (width + gap)
-        by0 = y0 + 112 + row * 120
-        profile_boxes.append((profile, (bx0, by0, bx0 + width, by0 + 102)))
+        bx0 = group_x0 + col * (width + gap)
+        by0 = y0 + 112 + row * (APP_UI_STYLE.button.height + gap)
+        profile_boxes.append((profile, (bx0, by0, bx0 + width, by0 + APP_UI_STYLE.button.height)))
     return {
         "panel": WSPR_DECODER_SETTINGS_BOX,
         "profiles": tuple(profile_boxes),
-        "osd_down": (x0 + 28, y0 + 390, x0 + 242, y0 + 482),
-        "osd_value": (x0 + 260, y0 + 390, x1 - 260, y0 + 482),
-        "osd_up": (x1 - 242, y0 + 390, x1 - 28, y0 + 482),
-        "close": ((x0 + x1) / 2 - 160, y1 - 80, (x0 + x1) / 2 + 160, y1 - 24),
+        "osd_down": (400, y0 + 390, 514, y0 + 454),
+        "osd_value": (522, y0 + 390, 758, y0 + 454),
+        "osd_up": (766, y0 + 390, 880, y0 + 454),
+        "close": (522, y1 - 84, 758, y1 - 20),
     }
 
 
@@ -12876,12 +13178,12 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
             text_cache, box, WSPR_DECODER_PROFILE_LABELS[candidate],
             details[candidate], active=active, selected=active,
         )
-    draw_text(text_cache, x0 + 28, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", (156, 203, 208), 16, True, True, "lm", family="Liberation Sans")
-    draw_wspr_button(text_cache, boxes["osd_down"], "−", "LESS")
+    draw_text(text_cache, (x0 + x1) / 2, y0 + 356, "OPTIONAL OSD SEARCH DEPTH", (156, 203, 208), 16, True, True, "cm", family="Liberation Sans")
+    draw_wspr_button(text_cache, boxes["osd_down"], "LESS", "OSD")
     osd_label = "OFF" if not osd_depth else f"LEVEL {osd_depth}"
     osd_detail = "NO EXTRA SEARCH" if not osd_depth else "MORE WEAK-SIGNAL SEARCH"
     draw_wspr_button(text_cache, boxes["osd_value"], f"OSD {osd_label}", osd_detail, active=bool(osd_depth), selected=bool(osd_depth))
-    draw_wspr_button(text_cache, boxes["osd_up"], "+", "MORE")
+    draw_wspr_button(text_cache, boxes["osd_up"], "MORE", "OSD")
     draw_wspr_button(text_cache, boxes["close"], "DONE", active=True)
 
 
@@ -12929,54 +13231,46 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     )
     draw_text(text_cache, 22, 53, f"{live_count}/{WSPR_MONITOR_MAX_LIVE} LIVE MONITORS  ·  TWO-MINUTE CYCLES", (102, 214, 177), 14, True, True, "lm", family="Liberation Sans")
     decoder_profile, decoder_osd_depth = monitor_manager.decoder_settings.snapshot()
-    decode_x0, decode_y0, decode_x1, decode_y1 = WSPR_DECODE_BOX
     decode_active = decoder_profile != "normal" or bool(decoder_osd_depth)
-    draw_logical_rect(decode_x0, decode_y0, decode_x1, decode_y1, (17, 55, 51, 224) if decode_active else (11, 37, 43, 212))
-    draw_logical_line(decode_x0, decode_y0, decode_x1, decode_y0, (96, 232, 175, 202) if decode_active else (87, 211, 190, 156), 1)
-    draw_text(text_cache, (decode_x0 + decode_x1) / 2, 25, "DECODE", (218, 244, 238), 14, True, True, "cm", family="Liberation Sans")
     decode_detail = WSPR_DECODER_PROFILE_LABELS[decoder_profile]
     if decoder_osd_depth:
         decode_detail += f" · OSD {decoder_osd_depth}"
-    draw_text(text_cache, (decode_x0 + decode_x1) / 2, 49, decode_detail, (117, 238, 180) if decode_active else (155, 204, 204), 14, True, True, "cm", family="Liberation Sans")
+    draw_styled_two_line_button(text_cache, WSPR_DECODE_BOX, "DECODE", decode_detail,
+                                active=decode_active)
     cpu_x0, cpu_y0, cpu_x1, cpu_y1 = WSPR_CPU_BOX
     draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, (11, 37, 43, 212))
     draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, (87, 211, 190, 156), 1)
     cpu_label = "CPU --" if cpu_percent is None else f"CPU {cpu_percent:.0f}%"
     draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, (163, 238, 226), 17, True, True, "cm", family="Liberation Sans")
-    add_x0, add_y0, add_x1, add_y1 = WSPR_ADD_BOX
-    draw_logical_rect(add_x0, add_y0, add_x1, add_y1, (13, 48, 43, 210))
-    draw_logical_line(add_x0, add_y0, add_x1, add_y0, (104, 232, 178, 196), 1)
-    add_cy = (add_y0 + add_y1) / 2
-    draw_logical_line(add_x0 + 21, add_cy, add_x0 + 35, add_cy, (117, 244, 185, 255), 2)
-    draw_logical_line(add_x0 + 28, add_cy - 7, add_x0 + 28, add_cy + 7, (117, 244, 185, 255), 2)
-    draw_text(text_cache, add_x0 + 48, add_cy, "WSPR", (232, 249, 245), 18, True, True, "lm", family="Liberation Sans")
-    home_x0, home_y0, home_x1, home_y1 = WSPR_HOME_BOX
-    draw_logical_rect(home_x0, home_y0, home_x1, home_y1, (10, 30, 36, 162))
-    draw_logical_line(home_x0, home_y0, home_x1, home_y0, (111, 187, 180, 138), 1)
-    draw_text(text_cache, (home_x0 + home_x1) / 2, (home_y0 + home_y1) / 2, "HOME", (232, 245, 246), 18, True, True, "cm", family="Liberation Sans")
+    draw_styled_text_button(text_cache, WSPR_ADD_BOX, "ADD WSPR")
+    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "HOME")
 
 
 def wspr_add_layout():
-    panel = (18, 24, LOGICAL_W - 18, LOGICAL_H - 18)
+    panel = (18, 24, LOGICAL_W - 18, LOGICAL_H)
     # Choose the receiver first, then a HF band directly below it. This reads
     # in the same order as the operator's task and makes every control usable
     # without leaving the one large Add WSPR workspace.
     receivers = (42, 116, LOGICAL_W - 42, 370)
-    bands = (42, 446, LOGICAL_W - 42, 580)
-    cancel = (42, 684, 268, 756)
-    create = (LOGICAL_W - 268, 684, LOGICAL_W - 42, 756)
-    prev = (42, 602, 244, 660)
-    next_box = (LOGICAL_W - 244, 602, LOGICAL_W - 42, 660)
+    bands = (42, 446, LOGICAL_W - 42, 582)
+    cancel = (394, 728, 630, 792)
+    create = (638, 728, 874, 792)
+    prev = (522, 632, 636, 696)
+    next_box = (644, 632, 758, 696)
     return panel, bands, receivers, cancel, create, prev, next_box
 
 
 def wspr_add_band_boxes():
     _panel, box, _receivers, _cancel, _create, _prev, _next = wspr_add_layout()
     x0, y0, x1, y1 = box
-    cols, rows, gap = 5, 2, 12
-    width = (x1 - x0 - gap * (cols - 1)) / cols
-    height = (y1 - y0 - gap * (rows - 1)) / rows
-    return tuple((band, (x0 + (index % cols) * (width + gap), y0 + (index // cols) * (height + gap), x0 + (index % cols) * (width + gap) + width, y0 + (index // cols) * (height + gap) + height)) for index, band in enumerate(WSPR_HF_BANDS))
+    cols, gap = 5, APP_UI_STYLE.button.gap
+    width, height = APP_UI_STYLE.button.width, APP_UI_STYLE.button.height
+    grid_x0 = (x0 + x1 - (cols * width + (cols - 1) * gap)) / 2
+    return tuple((band, (grid_x0 + (index % cols) * (width + gap),
+                         y0 + (index // cols) * (height + gap),
+                         grid_x0 + (index % cols) * (width + gap) + width,
+                         y0 + (index // cols) * (height + gap) + height))
+                 for index, band in enumerate(WSPR_HF_BANDS))
 
 
 def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page, selected_server):
@@ -13012,7 +13306,9 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
     for box, label, active in ((cancel, "CANCEL", False), (create, "CREATE", True), (prev, "< PREV", False), (next_box, "NEXT >", False)):
         draw_wspr_button(text_cache, box, label, active=active)
     pages = max(1, math.ceil(len(receiver_rows) / 3))
-    draw_text(text_cache, (prev[2] + next_box[0]) / 2, (prev[1] + prev[3]) / 2, f"{receiver_page + 1}/{pages}", (179, 206, 209), 16, True, True, "cm", family="Liberation Sans")
+    draw_text(text_cache, (x0 + x1) / 2, prev[1] - 16,
+              f"{receiver_page + 1}/{pages}", (179, 206, 209), 13,
+              True, True, "cm", family="Liberation Sans")
 
 
 def wspr_workspace_action_at(x, y, tiles, scroll_y):
@@ -13105,15 +13401,20 @@ def draw_flat_coastlines(center_lon, center_lat, box, scale):
 
 
 def radiogarden_radius(box, scale):
-    """The globe starts near edge-to-edge, then makes a real regional zoom."""
+    """Scale the map by the zoom shown to the operator, without a hidden cap."""
     base = min(box[2] - box[0], box[3] - box[1]) * 0.92
-    # A logarithmic radius made a 36x -> 96x change look almost identical.
-    # This gentle power curve preserves a controllable world view while giving
-    # regional closeups enough magnification to read country geography.
-    # Dense urban receiver clusters need a closer view than the original map
-    # ceiling allowed. Keep the gentle curve at ordinary scales, but permit a
-    # true street/regional close-up when the operator keeps zooming.
-    return base * clamp((max(0.55, scale) / 0.62) ** 0.36, 0.72, 24.0)
+    return base * max(RADIOGARDEN_ZOOM_MIN, float(scale))
+
+
+def radiogarden_pan_angles(yaw, pitch, dx, dy, box, scale):
+    """Keep a one-pixel drag close to one map pixel at every zoom level."""
+    radius = max(1.0, radiogarden_radius(box, scale))
+    yaw = (yaw - RADIOGARDEN_DRAG_GAIN * dx / radius + math.pi) % math.tau - math.pi
+    pitch = clamp(
+        pitch + RADIOGARDEN_DRAG_GAIN * dy / radius,
+        math.radians(-82), math.radians(82),
+    )
+    return yaw, pitch
 
 
 def radiogarden_project(receiver, center_lon, center_lat, box, scale):
@@ -13226,10 +13527,9 @@ RECEIVER_MAP_GROUP_COLORS = {
 }
 # Session-only visibility; groups the operator has switched off in the legend.
 RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters follow the full-width horizontal source-tab language from
-# Receivers. Their coloured circles remain the source key while the neutral
-# label and cyan active outline retain the Globe's visibility-filter state.
-RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + RECEIVER_RAIL_TAB_TOP_GAP
+# Legend filters match the Receivers category rows. Their full-width line
+# carries the dot colour when visible and turns gray when hidden.
+RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + 16
 RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
     "kiwi": ("KIWI",),
@@ -13277,31 +13577,29 @@ def receiver_map_legend_entries(receivers):
 
 
 def receiver_map_legend_visual(group, active, pressed=False):
-    """Use neutral legend labels; only the circle carries source identity."""
-    base = APP_UI_STYLE.button.resolve()
-    if active or pressed:
-        return ButtonVisualState(
-            base.fill, APP_UI_STYLE.palette.focus,
-            APP_UI_STYLE.palette.secondary_text, 2,
-        )
-    return ButtonVisualState(
-        base.fill, base.border, APP_UI_STYLE.palette.secondary_text, base.border_width,
-    )
+    """Match the shared big-button active and pressed states."""
+    return APP_UI_STYLE.button.resolve(active=active, pressed=pressed)
+
+
+def receiver_map_legend_line_color(group, active):
+    """Use the receiver dot colour only while its group is visible."""
+    return (RECEIVER_MAP_GROUP_COLORS[group] if active
+            else APP_UI_STYLE.palette.secondary_text)
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Full-width horizontal legend filters matching Receivers source tabs."""
+    """Full-width legend filters matching Receivers source buttons."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
     x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
-    x1 = LOGICAL_W - RECEIVER_PICKER_MARGIN
+    width = LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
-            RECEIVER_RAIL_TAB_HEIGHT + RECEIVER_RAIL_TAB_GAP
+            RECEIVER_PICKER_CATEGORY_HEIGHT + RECEIVER_PICKER_CATEGORY_GAP
         )
-        boxes.append((group, (x0, y, x1, y + RECEIVER_RAIL_TAB_HEIGHT)))
+        boxes.append((group, (x0, y, x0 + width, y + RECEIVER_PICKER_CATEGORY_HEIGHT)))
     return tuple(boxes)
 
 
@@ -13318,47 +13616,14 @@ def receiver_map_legend_at(x, y, receivers, box=None):
     return None
 
 
-# The CLEAN (borderless) presentation was removed: it hid the receiver
-# constellation's geographic context and read as an empty globe.
-MAP_VIEWS = ("satellite_only", "borders", "atlas", "satellite")
-# Satellite imagery with country borders is the receiver browser's entry view.
+# Globe view choices keep the earlier satellite and border presentations.
+MAP_VIEWS = ("satellite_only", "borders", "satellite")
 GLOBE_DEFAULT_VIEW = "satellite"
 MAP_VIEW_LABELS = {
     "satellite_only": "SAT ONLY",
     "borders": "BORDERS",
-    "atlas": "ATLAS",
     "satellite": "SAT",
 }
-
-
-def draw_receiver_map_graticule(center_lon, center_lat, box, scale):
-    """Subtle latitude/longitude grid for the high-context atlas view."""
-    # Keep a stable, readable grid rather than adding more geometry as the
-    # user approaches a region. Country boundaries remain the detail layer.
-    for latitude in range(-60, 61, 30):
-        segment = []
-        for longitude in range(-180, 181, 5):
-            point = radiogarden_project(
-                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
-            )
-            if point is None:
-                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-                segment = []
-            else:
-                segment.append((point[0], point[1]))
-        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-    for longitude in range(-180, 181, 30):
-        segment = []
-        for latitude in range(-85, 86, 5):
-            point = radiogarden_project(
-                {"lat": latitude, "lon": longitude}, center_lon, center_lat, box, scale,
-            )
-            if point is None:
-                draw_logical_polyline(segment, (96, 146, 158, 72), 1)
-                segment = []
-            else:
-                segment.append((point[0], point[1]))
-        draw_logical_polyline(segment, (96, 146, 158, 72), 1)
 
 
 def satellite_map_texture(text_cache):
@@ -13455,7 +13720,125 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
                 GL.glTexCoord2f(u, v)
                 GL.glVertex2f(*logical_to_native(point[0], point[1]))
     GL.glEnd()
+    if globe_hd_tiles_enabled() and scale >= 1.5:
+        draw_receiver_map_satellite_tiles(
+            text_cache, center_lon, center_lat, box, scale, interactive,
+            sun_lon, sun_lat,
+        )
     return True
+
+
+def globe_hd_tiles_enabled():
+    """Prioritize CM5; allow an explicit desktop opt-in for tile debugging."""
+    override = os.environ.get("ITUNER_GLOBE_HD_TILES")
+    return override == "1" if override is not None else not DESKTOP_MODE
+
+
+def _globe_tile_texture(text_cache, key, payload, upload_budget):
+    texture_key = ("gibs-blue-marble", key.level, key.row, key.col)
+    cache_key = ("surface", texture_key)
+    cached = text_cache._cached_texture(cache_key)
+    if cached is None:
+        if upload_budget <= 0 or payload is None or key in _globe_tile_decode_failed:
+            return None, upload_budget
+        try:
+            surface = pygame.image.load(io.BytesIO(payload), "tile.jpeg")
+            cached = text_cache.surface_texture(texture_key, surface)
+        except (OSError, ValueError, pygame.error):
+            _globe_tile_decode_failed.add(key)
+            return None, upload_budget
+        upload_budget -= 1
+    _globe_tile_gpu_lru[texture_key] = None
+    _globe_tile_gpu_lru.move_to_end(texture_key)
+    return cached[0], upload_budget
+
+
+def _draw_globe_tile_mesh(texture, key, center_lon, center_lat, box, scale,
+                          sun_lon, sun_lat, interactive):
+    west, south, east, north = key.bounds
+    segments = 6 if interactive else 8
+    points = []
+    for row in range(segments + 1):
+        latitude = north + (south - north) * row / segments
+        points.append(tuple(
+            radiogarden_project(
+                {"lat": latitude, "lon": west + (east - west) * col / segments},
+                center_lon, center_lat, box, scale,
+            )
+            for col in range(segments + 1)
+        ))
+    GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+    GL.glBegin(GL.GL_QUADS)
+    for row in range(segments):
+        lat_top = north + (south - north) * row / segments
+        lat_bottom = north + (south - north) * (row + 1) / segments
+        for col in range(segments):
+            corners = (points[row][col], points[row][col + 1],
+                       points[row + 1][col + 1], points[row + 1][col])
+            if any(point is None for point in corners):
+                continue
+            if (max(point[0] for point in corners) < box[0]
+                    or min(point[0] for point in corners) > box[2]
+                    or max(point[1] for point in corners) < box[1]
+                    or min(point[1] for point in corners) > box[3]):
+                continue
+            lon_left = west + (east - west) * col / segments
+            lon_right = west + (east - west) * (col + 1) / segments
+            for point, longitude, latitude, u, v in (
+                (corners[0], lon_left, lat_top, col / segments, row / segments),
+                (corners[1], lon_right, lat_top, (col + 1) / segments, row / segments),
+                (corners[2], lon_right, lat_bottom, (col + 1) / segments, (row + 1) / segments),
+                (corners[3], lon_left, lat_bottom, col / segments, (row + 1) / segments),
+            ):
+                GL.glColor4f(*satellite_light_color(latitude, longitude, sun_lon, sun_lat), 1.0)
+                GL.glTexCoord2f(u, v)
+                GL.glVertex2f(*logical_to_native(point[0], point[1]))
+    GL.glEnd()
+
+
+def draw_receiver_map_satellite_tiles(text_cache, center_lon, center_lat, box, scale,
+                                      interactive, sun_lon, sun_lat):
+    """Overlay ready high-resolution tiles; never wait for the network."""
+    global _globe_tile_fetcher
+    if _globe_tile_fetcher is None:
+        _globe_tile_fetcher = globe_tiles.GlobeTileFetcher(
+            cache_dir=globe_tiles.default_cache_dir(),
+        )
+    keys = globe_tiles.visible_tiles(
+        center_lon, center_lat, box, radiogarden_radius(box, scale),
+    )
+    missing = [
+        key for key in keys
+        if ("surface", ("gibs-blue-marble", key.level, key.row, key.col)) not in text_cache.cache
+    ]
+    _globe_tile_fetcher.prefetch(missing)
+    if not keys:
+        return
+    native = tuple(logical_to_native(x, y) for x, y in (
+        (box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]),
+    ))
+    left = int(min(point[0] for point in native))
+    right = int(max(point[0] for point in native))
+    top = int(min(point[1] for point in native))
+    bottom = int(max(point[1] for point in native))
+    GL.glEnable(GL.GL_SCISSOR_TEST)
+    GL.glScissor(left, NATIVE_H - bottom, right - left, bottom - top)
+    try:
+        upload_budget = 1
+        for key in keys:
+            texture, upload_budget = _globe_tile_texture(
+                text_cache, key, _globe_tile_fetcher.ready(key), upload_budget,
+            )
+            if texture is not None:
+                _draw_globe_tile_mesh(
+                    texture, key, center_lon, center_lat, box, scale,
+                    sun_lon, sun_lat, interactive,
+                )
+    finally:
+        GL.glDisable(GL.GL_SCISSOR_TEST)
+    while len(_globe_tile_gpu_lru) > 24:
+        old_key, _unused = _globe_tile_gpu_lru.popitem(last=False)
+        text_cache.discard_texture(("surface", old_key))
 
 
 # Globe server dots stay compact throughout the overview and regional views.
@@ -13488,7 +13871,7 @@ def receiver_map_dot_pixels(scale):
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False,
+    map_view="borders", interactive=False, notice_alpha=220,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -13512,8 +13895,6 @@ def draw_receiver_map(
     if not satellite_drawn:
         draw_logical_circle(cx, cy, radius, (14, 40, 48, 255), 96)
     draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
-    if map_view == "atlas":
-        draw_receiver_map_graticule(center_lon, center_lat, box, scale)
     # The old CLEAN coastline layer is gone from every presentation: it read as
     # a second, conflicting set of borders over the political outlines. Country
     # boundaries are now the only geographic layer.
@@ -13661,7 +14042,9 @@ def draw_receiver_map(
             draw_logical_line(label_x0, label_y - 27, label_x0 + 360, label_y - 27, (102, 243, 198, 190), 1)
             draw_text(text_cache, label_x0 + 14, label_y - 10, "TAP TO LISTEN", (117, 255, 197), 20, True, False, "lm", family="Cantarell")
             draw_text(text_cache, label_x0 + 14, label_y + 16, fit_station_text(text_cache, hover_detail, 330, 22, True, False, family="Cantarell"), (232, 248, 248), 22, True, False, "lm", family="Cantarell")
-    if notice:
+    if notice == "GLOBE ZOOM":
+        draw_globe_zoom_osd(text_cache, scale, notice_alpha)
+    elif notice:
         notice_x0 = max(box[0] + 18, (box[0] + box[2]) / 2 - 286)
         notice_x1 = min(box[2] - 18, (box[0] + box[2]) / 2 + 286)
         notice_y1 = box[3] - 36
@@ -13669,15 +14052,12 @@ def draw_receiver_map(
         draw_logical_rect(notice_x0, notice_y0, notice_x1, notice_y1, (5, 30, 28, 228))
         draw_logical_line(notice_x0, notice_y0, notice_x1, notice_y0, (101, 255, 191, 220), 2)
         draw_text(text_cache, (notice_x0 + notice_x1) / 2, (notice_y0 + notice_y1) / 2, fit_station_text(text_cache, notice, notice_x1 - notice_x0 - 24, 20, True, False, family="Cantarell"), (226, 255, 244), 20, True, False, "cm", family="Cantarell")
-    # Every Globe command lives in the right rail, using the same square
-    # launcher language as Home: LIST, VIEW, ZOOM +, ZOOM −, BACK. Nothing
-    # floats over the map any more, so the whole canvas stays a drag surface.
+    # Globe controls stay in the rail, leaving the map as a drag surface.
     draw_sidebar_header(text_cache, "RECEIVERS / GLOBE")
 
-    # The horizontal legend doubles as the visibility filter. Its dot retains
-    # the source colour while the neutral label and cyan outline carry state.
+    # The legend doubles as the visibility filter. Its underline matches the
+    # source dots when visible, and turns gray when the source is hidden.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
-        legend_color = RECEIVER_MAP_GROUP_COLORS[legend_group]
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
         visual = receiver_map_legend_visual(
@@ -13687,50 +14067,25 @@ def draw_receiver_map(
             lx0, ly0, lx1, ly1, APP_UI_STYLE.button.radius,
             visual.fill, visual.border, visual.border_width,
         )
-        swatch_x, swatch_y = lx0 + 24, (ly0 + ly1) / 2
-        draw_logical_circle(swatch_x, swatch_y, 9, legend_color, 18)
         draw_text(
-            text_cache, swatch_x + 22, swatch_y,
+            text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2,
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
-            RECEIVER_MAP_LEGEND_FONT_SIZE, True, False, "lm", family="Liberation Sans",
+            APP_UI_STYLE.button.label_size, True, False, "cm", family=APP_UI_STYLE.button.font_family,
+        )
+        draw_logical_rect(
+            lx0 + 16, ly1 - 12, lx1 - 16, ly1 - 10,
+            receiver_map_legend_line_color(legend_group, legend_active),
         )
 
-    def draw_globe_tile_border(command_box):
-        pressed = ui_button_pressed(command_box)
-        return draw_styled_button_frame(command_box, pressed=pressed)
-
-    def draw_globe_icon_tile(command_box, icon, label):
-        bx0, by0, bx1, by1 = command_box
-        pressed = ui_button_pressed(command_box)
-        draw_globe_tile_border(command_box)
-        tile, _tile_w, _tile_h = menu_icon_texture(
-            text_cache, icon, label, int(bx1 - bx0 - 8), int(by1 - by0 - 8),
-            pressed=pressed,
-        )
-        draw_textured_quad(tile, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.98)
-
-    def draw_globe_zoom_tile(command_box, glyph):
-        bx0, by0, bx1, by1 = command_box
-        pressed = ui_button_pressed(command_box)
-        visual = draw_globe_tile_border(command_box)
-        draw_text(
-            text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, glyph,
-            visual.text,
-            46, True, False, "cm", family="Liberation Sans",
-        )
-
-    draw_globe_icon_tile(RADIOGARDEN_LIST_BOX, GLOBE_LIST_ICON_KIND, "LIST")
+    draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
     draw_picker_two_line_button(
-        text_cache,
-        RADIOGARDEN_VIEW_BOX,
-        "VIEW",
-        MAP_VIEW_LABELS.get(map_view, "BORDERS"),
-        18,
+        text_cache, RADIOGARDEN_VIEW_BOX, "VIEW",
+        MAP_VIEW_LABELS.get(map_view, "SAT"), 18,
     )
-    draw_globe_zoom_tile(RADIOGARDEN_ZOOM_IN_BOX, "+")
-    draw_globe_zoom_tile(RADIOGARDEN_ZOOM_OUT_BOX, "−")
+    draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_IN_BOX, "ZOOM IN")
+    draw_styled_text_button(text_cache, RADIOGARDEN_ZOOM_OUT_BOX, "ZOOM OUT")
     draw_radio_close_button(text_cache, RADIOGARDEN_EXIT_BOX)
-    draw_text(text_cache, box[2] - 18, box[3] - 16, f"GLOBE {scale:.1f}x   DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
+    draw_text(text_cache, box[2] - 18, box[3] - 16, "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm", family="Cantarell")
 
 
 def scout_rf_strength(smeter_dbm):
@@ -13987,16 +14342,7 @@ def draw_globe_panel(text_cache, receivers, yaw, pitch, scale, listeners, listen
 
 
 def draw_dj_control(text_cache, box, title, detail, active=False):
-    x0, y0, x1, y1 = box
-    fill = (27, 76, 70, 210) if active else (18, 29, 38, 210)
-    line = (94, 230, 178, 210) if active else (115, 140, 151, 78)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 - 9, title, (232, 247, 247), 16, True, True, "cm")
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2 + 14, detail, (126, 225, 183), 13, False, True, "cm")
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active)
 
 
 def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, link_rate_hz):
@@ -14029,58 +14375,47 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
 
 def draw_filter_width_control(text_cache, box, label):
     """Large neutral controls that stay legible over the cool waterfall."""
-    x0, y0, x1, y1 = box
-    fill = (54, 57, 60, 96)
-    line = (183, 188, 192, 156)
-    color = (236, 239, 241)
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    draw_logical_line(x0, y0, x1, y0, line, 1)
-    draw_logical_line(x0, y1, x1, y1, line, 1)
-    draw_logical_line(x0, y0, x0, y1, line, 1)
-    draw_logical_line(x1, y0, x1, y1, line, 1)
-    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2, label, color, 42, True, True, "cm")
+    draw_styled_text_button(text_cache, box, label)
 
 
-def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, spectrum_enabled,
-                             instrument_layout="expanded"):
+def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, palette, spectrum_enabled,
+                             instrument_layout="middle"):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
-        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, (6, 13, 19, 255))
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
-        draw_lcd_audio_tile(
-            text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS", False,
-            title_size=20, detail_size=16,
-        )
-        # Short labels so a 50%-width tile stays legible: INSTRUMENTS -> LAYOUT.
-        draw_lcd_audio_tile(
-            text_cache, DISPLAY_INSTRUMENTS_BOX, "LAYOUT",
-            str(instrument_layout).upper(), instrument_layout == "expanded",
-        )
-        # The waterfall's old DISPLAY button only revealed the scope drag rail;
-        # that property now lives in this drawer as its own launcher.
-        draw_lcd_audio_tile(text_cache, DISPLAY_SCOPE_BOX, "SCOPE", "DRAG", False)
+        draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
+        draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
+                                DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
+                                "FREQUENCY POSITION")
+        for layout, box in DISPLAY_LAYOUT_BOXES:
+            draw_display_control(text_cache, box, layout.upper(), layout == instrument_layout)
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
         )
         draw_lcd_audio_tile(
             text_cache, DISPLAY_AUTO_BOX, "AUTO",
-            "ON" if auto else "OFF", auto,
+            "ON" if spectrum_auto else "OFF", spectrum_auto,
         )
 
         floor_maximum = min(220.0, ceiling - 30.0)
         ceiling_minimum = floor + 30.0
-        draw_lcd_audio_slider_tile(
+        draw_display_slider_section(
             text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
-            floor - 40.0, floor_maximum - 40.0, f"{floor:.0f}", not auto,
+            floor - 40.0, floor_maximum - 40.0, f"{floor:.0f}", True,
         )
-        draw_lcd_audio_slider_tile(
+        draw_display_slider_section(
             text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
             ceiling - ceiling_minimum, 255.0 - ceiling_minimum,
-            f"{ceiling:.0f}", not auto,
+            f"{ceiling:.0f}", True,
         )
+        draw_lcd_drawer_heading(text_cache, DISPLAY_PALETTE_BOXES[0][1][0] + 4,
+                                DISPLAY_PALETTE_BOXES[0][1][1] - 16, "WATERFALL THEME")
         for rate, box, label in DISPLAY_RATE_BOXES:
             draw_display_control(text_cache, box, label, rate == speed)
+        draw_lcd_drawer_heading(text_cache, DISPLAY_RATE_BOXES[0][1][0] + 4,
+                                DISPLAY_RATE_BOXES[0][1][1] - 16, "WATERFALL SPEED")
         for option, box, label in DISPLAY_PALETTE_BOXES:
             draw_display_control(text_cache, box, label, option == palette)
         draw_sidebar_header(text_cache, "DISPLAY")
@@ -14091,7 +14426,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, auto, palette, s
     draw_logical_line(x0, y1, x1, y1, (163, 190, 196, 96), 1)
     draw_text(text_cache, 36, y0 + 29, "WATERFALL", (229, 243, 246), 18, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM", spectrum_enabled)
-    draw_display_control(text_cache, DISPLAY_AUTO_BOX, "AUTO SCALE", auto)
+    draw_display_control(text_cache, DISPLAY_AUTO_BOX, "SPECTRUM AUTO", spectrum_auto)
     draw_logical_line(32, y0 + 48, 928, y0 + 48, (149, 171, 177, 56), 1)
     draw_text(text_cache, 36, y0 + 83, "FLOOR", (139, 180, 187), 14, True, True, "lm")
     draw_display_control(text_cache, DISPLAY_FLOOR_MINUS_BOX, "-", False)
@@ -14161,7 +14496,8 @@ def filter_edit_limit(low_cut, high_cut):
     return int(clamp(math.ceil(outer_cut * 1.25 / 500) * 500, 1500, FILTER_LIMIT_HZ))
 
 
-def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1, alpha=1.0, tuned_offset_hz=0.0):
+def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
+                        alpha=1.0, tuned_offset_hz=0.0, show_markers=True):
     if alpha <= 0.01:
         return
     canvas_w = rf_canvas_width()
@@ -14175,46 +14511,45 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1, alpha=1
     right = clamp(raw_right, 0.0, float(canvas_w))
     if right <= left:
         return
-    # Cool cyan keeps the passband distinct without warming the waterfall.
-    # The earlier grey one-pixel edges became indistinguishable from strong
-    # waterfall detail, especially at high zoom where one or both bounds can
-    # be outside the visible RF slice.
-    fill = (100, 204, 215, int(34 * alpha))
-    edge = (134, 238, 244, int(226 * alpha))
-    # Amber is deliberately reserved for the tuned RF center: it remains
-    # legible over blue/cyan waterfall energy without resembling a signal.
+    # Passband colors live in the shared palette so future app themes can
+    # change them without replacing this RF geometry.
+    palette = APP_UI_STYLE.palette
+    fill = (*palette.passband_fill[:3], int(palette.passband_fill[3] * alpha))
+    edge = (*palette.passband_border[:3], int(palette.passband_border[3] * alpha))
     center_shadow = (2, 7, 11, int(128 * alpha))
-    center = (255, 192, 68, int(222 * alpha))
+    center = (*palette.passband_center[:3], int(palette.passband_center[3] * alpha))
     if raw_right - raw_left < 10:
         # At wide waterfall spans the real filter can be sub-pixel narrow.
         # Show a compact bracket instead of visually falsifying its width.
         bracket_x = clamp((low_x + high_x) / 2, 6.0, canvas_w - 6.0)
         for edge_x in (bracket_x - 4, bracket_x + 4):
             draw_logical_line(edge_x, y0, edge_x, y1, edge, 1)
-            draw_logical_line(edge_x, y0 + 5, bracket_x, y0 + 5, edge, 1)
+            if show_markers:
+                draw_logical_line(edge_x, y0 + 5, bracket_x, y0 + 5, edge, 1)
     else:
         draw_logical_rect(left, y0, right, y1, fill)
         for edge_x, cap_direction in ((low_x, 1), (high_x, -1)):
             clipped_edge_x = clamp(edge_x, 0.0, float(canvas_w))
             draw_logical_line(clipped_edge_x, y0, clipped_edge_x, y1, edge, 2)
-            draw_logical_line(
-                clipped_edge_x,
-                y0 + 5,
-                clipped_edge_x + cap_direction * 5,
-                y0 + 5,
-                edge,
-                2,
-            )
+            if show_markers:
+                draw_logical_line(
+                    clipped_edge_x,
+                    y0 + 5,
+                    clipped_edge_x + cap_direction * 5,
+                    y0 + 5,
+                    edge,
+                    2,
+                )
     # At high zoom the whole visible slice may be inside a much wider filter.
     # Rails at the display bounds explicitly communicate that state, rather
     # than making the rectangle look static or missing because its true edges
     # are beyond the current magnified view.
     clipped = raw_left < 0.0 or raw_right > canvas_w
-    if raw_left < 0.0:
+    if show_markers and raw_left < 0.0:
         draw_logical_line(1, y0 + 9, 1, y1 - 9, edge, 2)
-    if raw_right > canvas_w:
+    if show_markers and raw_right > canvas_w:
         draw_logical_line(canvas_w - 1, y0 + 9, canvas_w - 1, y1 - 9, edge, 2)
-    if clipped:
+    if clipped and show_markers:
         width_hz = abs(high_cut - low_cut)
         label = f"BW {width_hz / 1000:.2f} kHz"
         label_font = text_cache.font(13, bold=True, family="Cantarell")
@@ -14223,7 +14558,7 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1, alpha=1
         label_x0 = label_x1 - label_w - 14
         draw_logical_rect(label_x0, y0 + 7, label_x1, y0 + 27, (4, 15, 20, int(172 * alpha)))
         draw_text(text_cache, label_x1 - 7, y0 + 17, label, edge[:3], 13, True, False, "rm", alpha, family="Cantarell")
-    if 0 <= center_x <= canvas_w:
+    if show_markers and 0 <= center_x <= canvas_w:
         # A continuous marker masks a weak, perfectly tuned carrier. Use a
         # fine dashed guide instead, with a clear top reference tick.
         draw_logical_line(center_x - 6, y0 + 2, center_x + 6, y0 + 2, center, 1)
@@ -14301,14 +14636,11 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     alpha = clamp(int(alpha), 0, 255)
     if alpha <= 0:
         return
-    x0, y0, x1, y1 = 240, 63, 720, 161
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
     green = (72, 255, 122, alpha)
     dim = (72, 255, 122, int(alpha * 0.18))
     soft = (72, 255, 122, int(alpha * 0.35))
-    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
-    for offset, line_alpha in ((32, 0.20), (64, 0.12)):
-        y = y0 + offset
-        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
     digital_factor = kiwi.DIGITAL_ZOOM_FACTORS.get(int(zoom))
     zoom_label = f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM"
     draw_text(text_cache, x0 + 18, y0 + 22, zoom_label, green[:3], 28, True, True, "lm")
@@ -14326,17 +14658,101 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
 
 
-def draw_rc28_mode_osd(text_cache, mode, alpha):
-    """Brief hardware-mode acknowledgement for the Icom RC-28 dial."""
+def draw_globe_zoom_osd(text_cache, scale, alpha=220):
+    """Show Globe magnification in Home Zoom's green panel and bar style."""
     alpha = clamp(int(alpha), 0, 255)
     if alpha <= 0:
         return
-    x0, y0, x1, y1 = 330, 72, 630, 130
+    scale = clamp(float(scale), RADIOGARDEN_ZOOM_MIN, RADIOGARDEN_ZOOM_MAX)
+    x0, y0, x1, _y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
     green = (72, 255, 122, alpha)
-    draw_logical_rect(x0, y0, x1, y1, (0, 9, 5, int(alpha * 0.58)))
-    draw_logical_line(x0 + 10, y1 - 8, x1 - 10, y1 - 8, (72, 255, 122, int(alpha * 0.42)), 1)
-    draw_text(text_cache, x0 + 16, (y0 + y1) / 2, "RC-28", green[:3], 22, True, True, "lm")
-    draw_text(text_cache, x1 - 16, (y0 + y1) / 2, mode, green[:3], 30, True, True, "rm")
+    dim = (72, 255, 122, int(alpha * 0.18))
+    soft = (72, 255, 122, int(alpha * 0.35))
+    value = f"{scale:.0f}x" if scale >= 10 else f"{scale:.1f}x"
+    draw_text(text_cache, x0 + 18, y0 + 22, "GLOBE ZOOM", green[:3], 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, value, green[:3], 28, True, True, "rm")
+    track_x0, track_x1 = x0 + 24, x1 - 24
+    base_y = y0 + 81
+    draw_logical_line(track_x0, base_y, track_x1, base_y, soft, 3)
+    level_count = 16
+    active_level = round(math.log(scale / RADIOGARDEN_ZOOM_MIN) /
+                         math.log(RADIOGARDEN_ZOOM_MAX / RADIOGARDEN_ZOOM_MIN) * level_count)
+    for level in range(level_count + 1):
+        x = int(round(track_x0 + (track_x1 - track_x0) * level / level_count))
+        height = 36 if level == active_level else 24
+        draw_logical_rect(x - 8.5, base_y - height, x + 8.5, base_y - 1,
+                          green if level <= active_level else dim)
+
+
+def green_osd_alpha(remaining, duration):
+    """Use the Zoom popup's hold and fade timing for other green notices."""
+    if remaining <= 0:
+        return 0
+    fade = min(0.45, duration * 0.33)
+    return int(220 * remaining / fade) if remaining < fade else 220
+
+
+def draw_vosc_error_osd(text_cache, message, alpha):
+    """Show speech/key errors with the Zoom notice's position and typography."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or not message:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    color = (72, 255, 122)
+    detail = fit_station_text(text_cache, str(message).upper(), x1 - x0 - 150,
+                              28, True, True)
+    draw_text(text_cache, x0 + 18, y0 + 22, "ERROR", color, 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, detail, color, 28, True, True, "rm")
+
+
+def draw_green_osd_panel(box, alpha):
+    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+    x0, y0, x1, y1 = box
+    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
+    for offset, line_alpha in ((32, 0.20), (64, 0.12)):
+        y = y0 + offset
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (72, 255, 122, int(alpha * line_alpha)), 1)
+
+
+def sort_chevron_points(box, sort_mode):
+    """A font-independent up/down chevron in the Zoom value position."""
+    _x0, y0, x1, _y1 = box
+    cx, cy = x1 - 32, y0 + 22
+    direction = 1 if normalize_receiver_sort_mode(sort_mode) in ("distance_far", "name_za") else -1
+    return ((cx - 11, cy - direction * 8), (cx, cy + direction * 8),
+            (cx + 11, cy - direction * 8))
+
+
+def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_near"):
+    """Sort acknowledgement at Zoom's position, with a drawn direction cue."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or not notice:
+        return
+    x0, y0, x1, y1 = receiver_list_notice_box()
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    color = (72, 255, 122)
+    opacity = alpha / 255.0
+    draw_text(text_cache, x0 + 18, y0 + 22, "SORTED BY", color,
+              28, True, True, "lm", alpha=opacity)
+    draw_logical_polyline(sort_chevron_points((x0, y0, x1, y1), sort_mode),
+                          (*color, alpha), 5)
+    mode_label = notice.removeprefix("SORTED BY ")
+    draw_text(text_cache, x0 + 18, y0 + 64, mode_label, color,
+              28, True, True, "lm", alpha=opacity)
+
+
+def draw_rc28_mode_osd(text_cache, mode, alpha):
+    """Acknowledge RC-28 dial mode in the same green panel as Zoom."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    green = (72, 255, 122)
+    draw_text(text_cache, x0 + 18, y0 + 22, "RC-28", green, 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, mode, green, 28, True, True, "rm")
 
 
 def frequency_identity_osd_bounds(candidates):
@@ -14521,16 +14937,19 @@ def menu_max_scroll():
 
 
 def menu_item_box(index, scroll):
-    x0, y0, _x1, _y1, pad, gap, item_w, item_h = menu_metrics()
+    x0, _y0, x1, y1 = MENU_BOX
     col = index % MENU_COLS
     row = index // MENU_COLS
     if row >= MENU_ROWS:
         return None
-    # The second row remains left-justified, like the first, so operators can
-    # scan a stable grid without a competing close target.
-    left = x0 + pad + col * (item_w + gap)
-    top = y0 + pad + row * (item_h + gap)
-    return left, top, left + item_w, top + item_h
+    width = APP_UI_STYLE.button.width
+    height = APP_UI_STYLE.button.height
+    gap = APP_UI_STYLE.button.gap
+    group_width = 2 * width + gap
+    group_height = MENU_ROWS * height + (MENU_ROWS - 1) * gap
+    left = (x0 + x1 - group_width) / 2 + col * (width + gap)
+    top = y1 - 8 - group_height + row * (height + gap)
+    return left, top, left + width, top + height
 
 
 def menu_at(x, y, scroll):
@@ -14705,38 +15124,27 @@ def draw_menu_icon(surface, kind, cx, cy, color, dim):
 
 
 def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=False, pressed=False):
-    """Build a menu tile at its eventual raster size to avoid texture blur."""
+    """Build the legacy native rail's rounded, text-only button texture."""
     key = f"menu_asset_{kind}_{label}_{width}x{height}_{'muted' if muted else 'live'}_{'pressed' if pressed else 'normal'}"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
-    try:
-        if kind in ("sstv", "hell", "qrss", "cw", "network", "list", "favorite"):
-            draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12),
-                           (232, 248, 250, 232), (82, 235, 231, 150))
-        else:
-            asset_path = MENU_ICON_ASSET_DIR / menu_icon_filename(kind, muted)
-            icon = pygame.image.load(str(asset_path)).convert_alpha()
-            # All main navigation assets share the same icon canvas as the
-            # code-drawn action glyphs.
-            icon_size = APP_ACTION_ICON_SIZE
-            icon = pygame.transform.smoothscale(icon, (icon_size, icon_size))
-            icon_y = max(0, (height - 26 - icon_size) // 2)
-            surface.blit(icon, ((width - icon.get_width()) // 2, icon_y))
-    except (pygame.error, OSError):
-        # Keep development builds usable if the optional icon package is absent.
-        color = (232, 248, 250, 232)
-        dim = (82, 235, 231, 150)
-        draw_menu_icon(surface, kind, width // 2, max(24, height // 2 - 12), color, dim)
-    label_surface = text_cache.font(15, bold=True, family="Liberation Sans").render(
-        label, True, UI_PRESSED_TEXT if pressed else (207, 221, 224)
-    )
-    surface.blit(label_surface, ((width - label_surface.get_width()) // 2, height - 26))
-    if pressed:
-        # Preserve the asset alpha while turning every visible icon pixel into
-        # the same dark ink used by pressed text on the cyan button surface.
-        surface.fill((*UI_PRESSED_TEXT, 255), special_flags=pygame.BLEND_RGBA_MULT)
+    style = APP_UI_STYLE.button
+    visual = style.resolve(pressed=pressed)
+    rect = pygame.Rect(0, 0, width, height)
+    pygame.draw.rect(surface, visual.fill, rect, border_radius=style.radius)
+    pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
+                     border_radius=style.radius)
+    subtitle = HOME_MENU_SUBTITLES.get(kind, "")
+    font = text_cache.font(style.label_size, bold=True, family=style.font_family)
+    for caption, center_y, color in (
+        (label, 23 if subtitle else height / 2, visual.text),
+        (subtitle, 46, style.subtitle_color),
+    ):
+        if caption:
+            rendered = font.render(str(caption).upper(), True, color[:3])
+            surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
 
@@ -14752,46 +15160,32 @@ def draw_main_menu(text_cache, scroll):
         bx0, by0, bx1, by1 = box
         if bx1 < x0 or bx0 > x1:
             continue
-        target_w = min(132, bx1 - bx0 - 12)
-        target_h = min(92, by1 - by0 - 4)
-        target_x = bx0 + ((bx1 - bx0) - target_w) / 2
-        target_y = by0 + ((by1 - by0) - target_h) / 2
-        pressed = ui_button_pressed(box)
-        draw_styled_button_frame(box, pressed=pressed)
-        tex, tex_w, tex_h = menu_icon_texture(
-            text_cache, kind, label, int(target_w), int(target_h), pressed=pressed
+        draw_styled_two_line_button(
+            text_cache, box, label, HOME_MENU_SUBTITLES.get(kind, ""),
         )
-        draw_textured_quad(tex, target_x, target_y, target_x + target_w, target_y + target_h, 0, 0, 1, 1)
 
 
 def desktop_1280_nav_box(index):
     """Persistent 2-column Home navigation rail for the 1280x480 desktop test."""
     col = index % 2
     row = index // 2
-    x0 = DESKTOP_1280_MAIN_W + 7 + col * 125
-    y0 = DESKTOP_1280_TOP_H + 8 + row * 96
-    return x0, y0, x0 + 117, y0 + 88
+    x0 = DESKTOP_1280_MAIN_W + 10 + col * 122
+    y0 = NATIVE_H - 8 - (4 * 64 + 3 * 8) + row * 72
+    return x0, y0, x0 + 114, y0 + 64
 
 
 def draw_desktop_1280_navigation(text_cache):
     if not DESKTOP_1280_MODE:
         return
     x0 = DESKTOP_1280_MAIN_W
-    draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, (6, 13, 19, 246))
+    draw_native_rect(x0, DESKTOP_1280_TOP_H, NATIVE_W, NATIVE_H, APP_UI_STYLE.palette.sidebar)
     for index, (kind, label) in enumerate(MENU_ITEMS):
         bx0, by0, bx1, by1 = desktop_1280_nav_box(index)
         pressed = ui_button_pressed((bx0, by0, bx1, by1))
-        draw_native_rect(bx0, by0, bx1, by1, UI_PRESSED_FILL if pressed else (17, 29, 38, 218))
-        draw_native_line(bx0, by0, bx1, by0, (125, 147, 158, 118), 1)
-        draw_native_line(bx0, by1, bx1, by1, (32, 50, 61, 170), 1)
-        draw_native_line(bx0, by0, bx0, by1, (66, 85, 96, 140), 1)
-        draw_native_line(bx1, by0, bx1, by1, (32, 50, 61, 170), 1)
-        tile_w = bx1 - bx0 - 8
-        tile_h = by1 - by0 - 8
         tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, tile_w, tile_h, pressed=pressed
+            text_cache, kind, label, bx1 - bx0, by1 - by0, pressed=pressed
         )
-        draw_native_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, alpha=0.96)
+        draw_native_textured_quad(tex, bx0, by0, bx1, by1, alpha=1.0)
 
 
 LCD_NAV_X0 = 1024
@@ -14799,21 +15193,24 @@ LCD_NAV_TOP_MIN = 88
 # Every two-column square row shares the full-width BACK button's left and
 # right edges: 114 + 8 + 114 = 236 px inside the rail's 10 px margins.
 LCD_NAV_TILE_W = 114
-LCD_NAV_TILE_H = 114
+LCD_NAV_TILE_H = 64
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
-LCD_DRAWER_HEADING_COLOR = (151, 169, 174)
+LCD_DRAWER_HEADING_COLOR = APP_UI_STYLE.palette.section_heading
 LCD_DRAWER_HEADING_SIZE = 13
 VFO_FONT_FAMILY = "Oxanium"
 # One face across the radio avoids a visual hand-off between the Home rail,
 # large VFO readout and Dual VFO. Oxanium remains clear at the small rail size.
 COMPACT_FREQUENCY_FONT_FAMILY = "Oxanium"
 VFO_NEON_COLOR = (115, 255, 177)
-# One size and one colour for the large VFO readout no matter where it is
-# drawn: the top instrument strip, the compact Home rail and the FREQUENCY
-# drawer are the same instrument and must not read as three different ones.
+# The LEFT/MIDDLE top readout and FREQUENCY drawer use the original large
+# digits. The narrow RIGHT Home rail has its own compact size.
 BIG_FREQUENCY_SIZE = 58
+COMPACT_FREQUENCY_SIZE = 36
 BIG_FREQUENCY_COLOR = VFO_NEON_COLOR
+LCD_TOP_INSTRUMENT_BAND_H = 88
+LCD_LEFT_INSTRUMENT_BAND_H = LCD_TOP_INSTRUMENT_BAND_H
+LCD_TOP_INSTRUMENT_CENTER_Y = 39
 # Shared active-line half-height for every continuous control.
 SLIDER_STEM_HALF_HEIGHT = 3
 # Keep enough vertical space for a readable passband scale and silhouette.
@@ -14821,14 +15218,14 @@ LCD_HOME_PASSBAND_HEIGHT = 89
 # Compact Home must fit VFO, S-meter, modes, passband and the complete Volume
 # control before the navigation grid. These constants keep that stack explicit
 # instead of allowing the final block to be silently squeezed.
-LCD_COMPACT_SMETER_TOP = 108
-LCD_COMPACT_SMETER_HEIGHT = 52
-LCD_COMPACT_MODE_GRID_TOP = 166
-LCD_COMPACT_INSTRUMENT_PAD = 10
+LCD_COMPACT_SMETER_TOP = 104
+LCD_COMPACT_SMETER_HEIGHT = 80
+LCD_COMPACT_MODE_GRID_TOP = 203
+LCD_COMPACT_INSTRUMENT_PAD = 20
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
-LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 266)
+LCD_ANNUNCIATOR_BOX = (1031, 0, 1273, 280)
 # This is updated by the render loop. Keeping the progress here lets drawing
 # and hit-testing share the same top-to-bottom drawer reveal.
 LCD_RADIO_DRAWER_PROGRESS = 0.0
@@ -14853,9 +15250,9 @@ def lcd_drawer_back_box():
     """Shared bottom return target for every right-rail drawer."""
     return (
         LCD_NAV_X0 + 10,
-        lcd_rail_bottom() - 78,
+        lcd_rail_bottom() - 72,
         LOGICAL_W - 10,
-        lcd_rail_bottom() - 10,
+        lcd_rail_bottom() - 8,
     )
 
 
@@ -14865,27 +15262,25 @@ def settings_center_workspace_box():
 
 
 def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
-                       family=COMPACT_FREQUENCY_FONT_FAMILY, fit_text=None):
-    """Draw the large VFO readout with one shared face, size and colour.
+                       family=COMPACT_FREQUENCY_FONT_FAMILY, fit_text=None,
+                       size=BIG_FREQUENCY_SIZE, anchor="rm", display_text=None):
+    """Draw a frequency readout with fixed geometry for its instrument lane.
 
-    The readout appears in the top instrument strip, the compact Home rail and
-    the FREQUENCY drawer. Routing every one of them through this helper keeps
-    them visually identical; only the horizontal squeeze changes so the digits
-    still fit their lane. ``fit_text`` fixes the squeeze against a worst-case
-    value so the digits never change size as the frequency moves.
+    ``fit_text`` fixes horizontal squeeze against a worst-case value so the
+    digits do not change size as the frequency moves.
     """
-    frequency_text = sdr_ui.format_freq(freq_khz)
+    frequency_text = display_text if display_text is not None else sdr_ui.format_freq(freq_khz)
     measured = [frequency_text]
     if fit_text:
         measured.append(fit_text)
     source_width = max(
-        text_cache.font(BIG_FREQUENCY_SIZE, bold=True, family=family).size(text)[0]
+        text_cache.font(size, bold=True, family=family).size(text)[0]
         for text in measured
     )
     x_scale = min(1.0, max_width / max(1, source_width))
     draw_text_scaled_x(
         text_cache, right_x, center_y, frequency_text, BIG_FREQUENCY_COLOR,
-        BIG_FREQUENCY_SIZE, x_scale, bold=True, anchor="rm", family=family,
+        size, x_scale, bold=True, anchor=anchor, family=family,
     )
 
 
@@ -14927,7 +15322,7 @@ def sync_constellation_geometry():
 
 def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     """Render the common Settings leaf rail without veiling live content."""
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, (3, 7, 11, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, title)
     draw_text(
@@ -14956,7 +15351,7 @@ def lcd_nav_top(item_count=None, has_back=False):
     # the square grid, so the five-button group reads as one unit.
     bottom = (
         lcd_drawer_back_box()[1] - LCD_NAV_GAP
-        if has_back else lcd_rail_bottom() - LCD_CONTROL_GAP
+        if has_back else lcd_rail_bottom() - 8
     )
     return max(LCD_NAV_TOP_MIN, bottom - tiles_h)
 
@@ -14985,9 +15380,9 @@ def home_mode_labels(mode=None):
 def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-    grid_w = (x1 - x0 - 12) * 0.85
+    grid_w = 4 * 55 + 3 * gap
     grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
-    cell_w = (grid_w - 3 * gap) / 4
+    cell_w = 55
     for index, label in enumerate(home_mode_labels(mode)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
         top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
@@ -15000,7 +15395,7 @@ def engage_home_mode(state, x, y, compact=True, local_receiver=None):
         return None
     for label, box in lcd_home_mode_boxes(compact):
         if contains(box, x, y):
-            mode = "NBFM" if label == "FMDX" else label
+            mode = "NBFM" if label == "FM" else label
             if local_receiver is not None:
                 if not local_receiver.set_home_mode(mode):
                     return None
@@ -15038,14 +15433,14 @@ def lcd_annunciator_surface_bottom(show_compact_readouts=True):
 def compact_frequency_touch_box():
     """The open compact frequency digits, distinct from the mode matrix."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
-    return x0 + 4, y0 + 12, x1 - 4, y0 + 83
+    return x0 + 4, y0 + 12, x1 - 4, y0 + 61
 
 
-def is_frequency_readout_touch(x, y, measured_box, compact=False):
+def is_frequency_readout_touch(x, y, measured_box, compact=False, home_available=True):
     """Treat every visible compact-frequency pixel as the tuning target."""
-    return contains(measured_box, x, y) or (
+    return bool(home_available) and (contains(measured_box, x, y) or (
         compact and contains(compact_frequency_touch_box(), x, y)
-    )
+    ))
 
 
 def frequency_band_context(freq_khz, mode=""):
@@ -15074,15 +15469,21 @@ def frequency_band_context(freq_khz, mode=""):
 def compact_band_context_touch_box():
     """A real touch target for the persistent compact band indicator."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
-    return x0 + 4, y0 + 78, x1 - 4, y0 + 105
+    return x0 + 4, y0 + 62, x1 - 4, y0 + 90
 
 
-def main_band_context_box(text_cache, freq_khz, font_family=VFO_FONT_FAMILY):
-    """Place the large-layout band tag beside, never over, the VFO digits."""
-    freq_box = frequency_display_box(text_cache, freq_khz, font_family)
+def main_band_context_box(text_cache, freq_khz, font_family=VFO_FONT_FAMILY, position="middle"):
+    """Keep each band label on the frequency and S-meter center line."""
+    freq_box = frequency_display_box(text_cache, freq_khz, font_family, position)
+    if position == "left":
+        meter_box = left_smeter_box(text_cache, freq_khz, font_family)
+        x0 = meter_box[2] + 8
+        return x0, 24, min(rf_canvas_width() - 12, x0 + 176), 53
     x1 = freq_box[0] - 12
     x0 = max(HOME_BOX[2] + 14, x1 - 142)
-    return x0, 13, x1, 43
+    # draw_band_context_chip adds a 0.5 px text offset; this centers the
+    # MIDDLE label on the large frequency's 39 px line.
+    return x0, 24, x1, 53
 
 
 def draw_band_context_chip(text_cache, box, freq_khz, mode, compact=False):
@@ -15119,7 +15520,7 @@ def band_navigation_layout():
         cells.append((preset, (left, top, left + cell_w, top + cell_h)))
     return {
         "panel": (x0, y0, x1, y1),
-        "close": (x1 - 66, y0 + 8, x1 - 12, y0 + header_h - 7),
+        "close": compact_header_close_box((x0, y0, x1, y1)),
         "cells": cells,
     }
 
@@ -15143,13 +15544,7 @@ def draw_band_navigation(text_cache, freq_khz, mode):
     draw_text(text_cache, x0 + 18, y0 + 24, "BAND NAVIGATION", (226, 242, 244), 20, True, False, "lm", family="Liberation Sans")
     context, _kind = frequency_band_context(freq_khz, mode)
     draw_text(text_cache, x0 + 232, y0 + 24, context, (126, 187, 196), 15, True, False, "lm", family="Liberation Sans")
-    close = boxes["close"]
-    close_pressed = ui_button_pressed(close)
-    close_visual = draw_styled_button_frame(close, pressed=close_pressed)
-    close_icon = close_visual.text
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[2] - 17, (close[1] + close[3]) / 2, close_icon, 2)
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[1] + 13, close_icon, 2)
-    draw_logical_line(close[0] + 19, (close[1] + close[3]) / 2, close[0] + 30, close[3] - 13, close_icon, 2)
+    draw_styled_text_button(text_cache, boxes["close"], "CLOSE", size=12)
     active_context, _active_kind = frequency_band_context(freq_khz, mode)
     for preset, box in boxes["cells"]:
         label, _target_khz, kind = preset
@@ -15192,7 +15587,7 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
     """Draw the dedicated font drawer over the complete Home rail."""
     boxes = compact_font_review_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_sidebar_header(text_cache, "FREQUENCY FONT")
     draw_text(text_cache, x1 - 16, 82, f"{index + 1}/{len(families)}", (127, 169, 175), 14, True, False, "rm", family="Liberation Sans")
     draw_text(text_cache, (x0 + x1) / 2, 101, family.upper(), (170, 198, 202), 14, True, False, "cm", family="Liberation Sans")
@@ -15237,7 +15632,7 @@ def lcd_home_volume_box(show_compact_readouts=True):
     """Persistent Home volume instrument in the calm upper right-rail gap."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
-    y0 = pass_y1 + 10
+    y0 = pass_y1 + 16
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 18, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 
@@ -15283,7 +15678,21 @@ def lcd_compact_smeter_box():
     """Short S-meter strip that leaves room for the full Home Volume block."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     top = y0 + LCD_COMPACT_SMETER_TOP
-    return x0 + 6, top, x1 - 6, top + LCD_COMPACT_SMETER_HEIGHT
+    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_COMPACT_SMETER_HEIGHT
+
+
+def left_smeter_trace_x(text_cache, freq_khz, font_family=None):
+    """Start the MIDDLE-style meter beside the LEFT frequency readout."""
+    frequency_right = frequency_display_box(
+        text_cache, freq_khz, font_family, position="left",
+    )[2]
+    return max(320, frequency_right + 121)
+
+
+def left_smeter_box(text_cache, freq_khz, font_family=None):
+    """Protect the horizontal LEFT meter from waterfall tuning taps."""
+    trace_x = left_smeter_trace_x(text_cache, freq_khz, font_family)
+    return trace_x - 105, 0, trace_x + SMETER_TRACE_WIDTH + 24, 80
 
 
 def lcd_nav_box(index, item_count=None, has_back=False):
@@ -15359,8 +15768,8 @@ def lcd_nav_item_at(x, y, items=MENU_ITEMS):
 
 
 def lcd_nav_tile_background(text_cache):
-    """Return the lightly rounded shared Home-tile background texture."""
-    key = "lcd_nav_tile_background_v3_compact"
+    """Return the shared black Home-tile background texture."""
+    key = "lcd_nav_tile_background_v4_black"
     cached = text_cache.cache.get(("surface", key))
     if cached is not None:
         return cached
@@ -15369,12 +15778,8 @@ def lcd_nav_tile_background(text_cache):
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
     rect = pygame.Rect(0, 0, width, height)
     radius = 10 * scale
-    pygame.draw.rect(surface, (17, 29, 38, 218), rect, border_radius=radius)
-    # One restrained outline preserves the instrument-panel treatment while
-    # rounding the formerly abrupt corners just enough for a touch UI.
-    pygame.draw.rect(surface, (86, 111, 122, 182), rect, width=scale, border_radius=radius)
-    pygame.draw.line(surface, (142, 164, 173, 116), (radius, 1), (width - radius, 1), scale)
-    pygame.draw.line(surface, (30, 49, 59, 188), (radius, height - 1), (width - radius, height - 1), scale)
+    pygame.draw.rect(surface, APP_UI_STYLE.palette.surface, rect, border_radius=radius)
+    pygame.draw.rect(surface, APP_UI_STYLE.palette.border, rect, width=scale, border_radius=radius)
     return text_cache.surface_texture(key, surface)
 
 
@@ -15385,19 +15790,14 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box(show_compact_readouts)
     status = "MUTE" if muted else main_volume_label(level)
     status_color = MUTE_ACCENT if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else (239, 247, 248)
-    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 228))
-    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 125), 1)
-    draw_logical_line(x0, y1, x1, y1, (25, 42, 51, 210), 1)
-    draw_text(text_cache, x0 + 12, y0 + 9, "VOLUME", (170, 201, 207), 15, True, False, "lt", family="Liberation Sans")
-    draw_text(text_cache, x1 - 12, y0 + 13, status, status_color, 18, True, False, "rt", family="Liberation Sans")
-    button_fill = (76, 23, 32, 238) if muted else (18, 38, 49, 238)
-    button_edge = MUTE_ACCENT_ALPHA if muted else (91, 186, 204, 188)
-    icon_color = (*MUTE_ACCENT, 255) if muted else (145, 231, 242, 255)
-    draw_logical_rect(mute_x0, mute_y0, mute_x1, mute_y1, button_fill)
-    draw_logical_line(mute_x0, mute_y0, mute_x1, mute_y0, button_edge, 1)
-    draw_logical_line(mute_x0, mute_y1, mute_x1, mute_y1, button_edge, 1)
-    draw_logical_line(mute_x0, mute_y0, mute_x0, mute_y1, button_edge, 1)
-    draw_logical_line(mute_x1, mute_y0, mute_x1, mute_y1, button_edge, 1)
+    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
+    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
+    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
+    mute_visual = draw_styled_button_frame(
+        (mute_x0, mute_y0, mute_x1, mute_y1), active=muted,
+    )
+    icon_color = (*mute_visual.text[:3], 255)
     cx, cy = (mute_x0 + mute_x1) / 2, (mute_y0 + mute_y1) / 2
     draw_logical_rect(cx - 13, cy - 5, cx - 6, cy + 5, icon_color)
     draw_logical_polyline(((cx - 6, cy - 5), (cx + 5, cy - 13), (cx + 5, cy + 13), (cx - 6, cy + 5)), icon_color, 2.5)
@@ -15471,12 +15871,11 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     fill = (42, 154, 176, 88)
     edge = (113, 234, 240, 238)
     grid = (87, 125, 138, 132)
-    quiet = (153, 186, 195)
-    draw_logical_rect(x0, y0, x1, y1, (7, 15, 21, 236))
-    draw_logical_line(x0, y0, x1, y0, (82, 127, 141, 154), 1)
-    draw_logical_line(x0, y1, x1, y1, (24, 46, 55, 220), 1)
-    draw_text(text_cache, x0 + 11, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 11, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
+    quiet = (174, 203, 208)
+    draw_logical_rect(x0, y0, x1, y1, (11, 20, 27, 255))
+    draw_logical_line(x0, y0, x1, y0, (112, 136, 146, 255), 1)
+    draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", (180, 214, 220), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
     # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
     for index in range(-5, 6):
@@ -15526,7 +15925,7 @@ def lcd_filter_drawer_boxes():
     inner_x0, inner_x1 = x0 + 10, x1 - 10
     # Keep choice buttons bottom-aligned immediately above Back. That gives
     # the two continuous instruments generous, finger-friendly travel.
-    preset_top, preset_h, preset_gap = 493, 50, 8
+    preset_top, preset_h, preset_gap = 493, APP_UI_STYLE.button.height, APP_UI_STYLE.button.gap
     preset_w = (inner_x1 - inner_x0 - 8) / 2
     preset_boxes = []
     for index, (name, width_hz) in enumerate(FILTER_WIDTH_PRESETS):
@@ -15538,8 +15937,8 @@ def lcd_filter_drawer_boxes():
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
         "close": lcd_drawer_back_box(),
         "visual": (inner_x0, 108, inner_x1, 211),
-        "shift": (inner_x0, 217, inner_x1, 329),
-        "width": (inner_x0, 341, inner_x1, 441),
+        "width": (inner_x0, 217, inner_x1, 329),
+        "shift": (inner_x0, 341, inner_x1, 441),
         "presets": tuple(preset_boxes),
     }
 
@@ -15549,10 +15948,10 @@ def lcd_filter_drawer_action_at(x, y):
     boxes = lcd_filter_drawer_boxes()
     if not contains(boxes["panel"], x, y):
         return None
-    if contains(boxes["shift"], x, y):
-        return "shift"
     if contains(boxes["width"], x, y):
         return "width"
+    if contains(boxes["shift"], x, y):
+        return "shift"
     return "drawer"
 
 
@@ -15651,11 +16050,11 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     # This drawer is an independent operating surface. It must be fully
     # opaque so the inactive Home/mode controls beneath cannot be mistaken
     # for live controls or overlap the slider labels.
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
-    draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
+    draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", (169, 203, 208), 13, True, False, "lm", family="Liberation Sans")
     current_preset = filter_preset_index(width_hz)
     for index, (name, preset_width_hz, box) in enumerate(boxes["presets"]):
@@ -15676,14 +16075,15 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
 
 
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
-                        digital_open=False, low_cut=None, high_cut=None, instrument_layout="expanded"):
+                        digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle",
+                        active_decoders=(), running_decoder_count=0, decoder_counts=None):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
     if not LCD_800_MODE:
         return
     rail_bottom = lcd_rail_bottom()
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
     # uninterrupted black panel from the VFO to the physical bottom edge.
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, (3, 6, 9, 255))
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DIGI")
@@ -15698,14 +16098,61 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        pressed = ui_button_pressed(nav_box)
-        draw_styled_button_frame(nav_box, pressed=pressed)
-        tex, _tex_w, _tex_h = menu_icon_texture(
-            text_cache, kind, label, LCD_NAV_TILE_W - 8, LCD_NAV_TILE_H - 8,
-            muted=muted and kind == "audio",
-            pressed=pressed,
+        subtitle = HOME_MENU_SUBTITLES.get(kind, "") if items is MENU_ITEMS else ""
+        if items is MENU_ITEMS and kind == "digital" and running_decoder_count > 0:
+            subtitle = f"{running_decoder_count} {subtitle}"
+        if subtitle:
+            draw_styled_two_line_button(text_cache, nav_box, label, subtitle)
+        else:
+            count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
+            button_label = f"{count} {label}" if count > 0 else label
+            draw_styled_text_button(text_cache, nav_box, button_label)
+        if digital_open and kind in active_decoders:
+            center_x = (bx0 + bx1) / 2
+            draw_logical_circle(
+                center_x, by0 + 47, 3, APP_UI_STYLE.palette.ready,
+                segments=16,
+            )
+
+
+def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
+    """Draw the compact calibrated LED meter in the right rail."""
+    meter_x0, meter_y0, meter_x1, meter_y1 = box
+    meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+    meter_level = smeter_segment_position(meter_value)
+    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (11, 20, 27, 255))
+    draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (112, 136, 146, 255), 1)
+    draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", (190, 218, 223), 13, True, False, "rm", family="Liberation Sans")
+    meter_track_x0 = meter_x0 + ((meter_x1 - meter_x0) - (35 * 4.65 + 34 * 2)) / 2
+    meter_track_y = meter_y0 + 25
+    for index in range(35):
+        sx0 = meter_track_x0 + index * (4.65 + 2)
+        sx1 = sx0 + 4.65
+        active = index + 0.5 <= meter_level
+        color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
+        draw_logical_rect(
+            sx0, meter_track_y, sx1, meter_track_y + 26,
+            color if active else (31, 52, 61, 208),
         )
-        draw_textured_quad(tex, bx0 + 4, by0 + 4, bx1 - 4, by1 - 4, 0, 0, 1, 1, 0.96)
+    for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
+        lx = max(meter_x0 + 14, meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0)
+        color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
+        draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
+
+
+def draw_home_mode_buttons(text_cache, buttons, mode, digital):
+    """Keep HOME and each Dual VFO's mode buttons visually identical."""
+    exact_mode = str(mode).upper()
+    active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
+    for label, box in buttons:
+        active = mode_annunciator_active(label, active_mode, digital)
+        pressed = ui_button_pressed(box)
+        visual = draw_styled_button_frame(box, active=active, pressed=pressed)
+        bx0, by0, bx1, by1 = box
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
+                  visual.text, 13, True, False, "cm",
+                  family=APP_UI_STYLE.button.font_family)
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
@@ -15716,63 +16163,19 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # The expanded surface stops just under the mode buttons instead of
     # filling the whole reserved block, so the rail has no empty panel.
     surface_bottom = lcd_annunciator_surface_bottom(show_compact_readouts)
-    # The main frequency display remains untouched. This smaller right-rail
-    # readout stays visually open: it is a live value, not a second button.
-    exact_mode = mode.upper()
-    active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
-    layout_key = "compact" if show_compact_readouts else "expanded"
-    cache_key = ("surface", f"lcd_annunciator_radio_v9_compact_{layout_key}_{active_mode}_{digital.upper()}")
-    cached = text_cache.cache.get(cache_key)
-    if cached is None:
-        width, height, scale = int(x1 - x0), int(round(surface_bottom - y0)), 2
-        surface = pygame.Surface((width * scale, height * scale), pygame.SRCALPHA)
-
-        def pixel(value):
-            return int(round(value * scale))
-
-        def rounded(left, top, right, bottom, fill, edge=None, radius=5):
-            rect = pygame.Rect(pixel(left), pixel(top), pixel(right - left), pixel(bottom - top))
-            pygame.draw.rect(surface, fill, rect, border_radius=pixel(radius))
-            if edge is not None:
-                pygame.draw.rect(surface, edge, rect, width=pixel(1), border_radius=pixel(radius))
-
-        surface.fill((3, 6, 9, 232))
-        grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-        grid_w = (width - 12) * 0.85
-        grid_x0 = (width - grid_w) / 2
-        cell_w = (grid_w - 3 * gap) / 4
-        for index, label in enumerate(home_mode_labels(mode)):
-            col, row = index % 4, index // 4
-            left = grid_x0 + col * (cell_w + gap)
-            top = grid_y0 + row * (cell_h + gap)
-            # Keep the grid cells neutral. The active state is drawn later as
-            # a compact pill tight to the mode label, not a full blue tile.
-            rounded(
-                left,
-                top,
-                left + cell_w,
-                top + cell_h,
-                (7, 10, 13, 238),
-                (62, 67, 73, 228),
-                5,
-            )
-        surface = pygame.transform.smoothscale(surface, (width, height))
-        cached = text_cache.surface_texture(cache_key[1], surface)
-    texture, texture_w, texture_h = cached
-    draw_textured_quad(texture, x0, y0, x0 + texture_w, y0 + texture_h, 0, 0, 1, 1)
+    # Keep the frequency and mode cluster open, with no obsolete square-cell
+    # background peeking out around the rounded mode controls.
+    draw_logical_rect(x0, y0, x1, surface_bottom, APP_UI_STYLE.palette.sidebar)
 
     if show_compact_readouts:
         # Compact mode makes this the primary frequency readout. The SDR is
         # frequency-centric, so do not waste this narrow rail on a repeated
         # MHz unit: give the digits the entire available width instead.
-        # The compact rail is the primary readout in this layout, so it uses
-        # the exact same big-frequency face/size/colour as the top instrument
-        # strip. The digits stay a fixed size as the frequency changes.
-        frequency_right_margin = 8
+        # Keep the narrow Home rail at 36 px; LEFT/MIDDLE retain 58 px.
         draw_big_frequency(
-            text_cache, freq_khz, x1 - frequency_right_margin, y0 + 53,
-            (x1 - frequency_right_margin) - (x0 + 8),
-            family=compact_frequency_font_family, fit_text="30.000.000",
+            text_cache, freq_khz, (LCD_NAV_X0 + LOGICAL_W) / 2, y0 + 41,
+            236, family=compact_frequency_font_family, fit_text="30.000.000",
+            size=COMPACT_FREQUENCY_SIZE, anchor="cm",
         )
         # This narrow, persistent context line answers the basic operating
         # question at a glance and doubles as the entry point to the large
@@ -15785,41 +16188,9 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # rather than a thin status decoration beside the VFO.
         # Reserve quiet air around the meter so it reads as its own small
         # instrument rather than touching either the band tag or mode grid.
-        meter_x0, meter_y0, meter_x1, meter_y1 = lcd_compact_smeter_box()
-        meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
-        meter_level = smeter_segment_position(meter_value)
-        draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, (7, 15, 21, 218))
-        draw_logical_line(meter_x0, meter_y0, meter_x1, meter_y0, (72, 101, 112, 142), 1)
-        draw_text(text_cache, meter_x0 + 9, meter_y0 + 12, "S-METER", (165, 199, 207), 13, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, meter_x1 - 9, meter_y0 + 14, f"{meter_value:.0f} dBm", (190, 218, 223), 17, True, False, "rm", family="Liberation Sans")
-        meter_track_x0, meter_track_x1 = meter_x0 + 8, meter_x1 - 8
-        meter_track_y = meter_y0 + 31
-        segment_w = (meter_track_x1 - meter_track_x0) / 36
-        for index in range(36):
-            sx0 = meter_track_x0 + index * segment_w + 1
-            sx1 = meter_track_x0 + (index + 1) * segment_w - 1
-            active = index + 0.5 <= meter_level
-            color = (92, 221, 231, 238) if index < 28 else (244, 104, 90, 238)
-            draw_logical_rect(
-                sx0,
-                meter_track_y - 6,
-                sx1,
-                meter_track_y + 6,
-                color if active else (31, 52, 61, 208),
-            )
-        for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
-            lx = meter_track_x0 + (meter_track_x1 - meter_track_x0) * position / 36.0
-            color = (236, 105, 109) if label in ("S9", "+20") else (151, 183, 191)
-            draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
+        draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm)
 
-    for label, (bx0, by0, bx1, by1) in lcd_home_mode_boxes(show_compact_readouts, mode):
-        active = mode_annunciator_active(label, active_mode, digital)
-        box = (bx0, by0, bx1, by1)
-        pressed = ui_button_pressed(box)
-        visual = draw_styled_button_frame(box, active=active, pressed=pressed)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  visual.text, 14, True, False, "cm",
-                  family=APP_UI_STYLE.button.font_family)
+    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital)
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -15828,13 +16199,7 @@ def draw_picker_button(text_cache, box, label, size=16, selected=False):
 
 def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=16, selected=False):
     """Draw a picker command with a stable action name and changing value."""
-    x0, y0, x1, y1 = box
-    draw_picker_button(text_cache, box, "", size, selected)
-    visual = APP_UI_STYLE.button.resolve(active=selected, pressed=ui_button_pressed(box))
-    center_x = (x0 + x1) / 2
-    center_y = (y0 + y1) / 2
-    draw_text(text_cache, center_x, center_y - 12, first_line, visual.text, size, True, False, "cm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, center_x, center_y + 13, second_line, visual.text, max(11, size - 3), True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    draw_styled_two_line_button(text_cache, box, first_line, second_line, active=selected)
 
 
 def deepgram_keyboard_rows(mode):
@@ -15843,6 +16208,40 @@ def deepgram_keyboard_rows(mode):
     if mode == "lower":
         return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in DEEPGRAM_KEY_ROWS)
     return DEEPGRAM_KEY_ROWS
+
+
+def deepgram_sidebar_boxes(mode):
+    """Fit the existing key-entry modes entirely inside the 236 px VOSC rail."""
+    left = LCD_NAV_X0 + 10
+    action_names = ("MODE", "CLEAR", "BACK", "SAVE")
+    actions = {
+        name: (left + index * 60, 176, left + index * 60 + 55, 207)
+        for index, name in enumerate(action_names)
+    }
+    keys = "".join(row for row, _x, _y, _width in deepgram_keyboard_rows(mode))
+    # Two useful key characters fill the last alphabet row so every row spans
+    # the same four-column width as the frequency keypad.
+    if len(keys) % 4:
+        keys += "@/"[:4 - len(keys) % 4]
+    key_boxes = tuple(
+        (
+            "BACK" if key == "<" else key,
+            (left + index % 4 * 60, 223 + index // 4 * 39,
+             left + index % 4 * 60 + 55, 254 + index // 4 * 39),
+        )
+        for index, key in enumerate(keys)
+    )
+    return {
+        "panel": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
+        "field": (left, 112, LOGICAL_W - 10, 160),
+        "actions": actions,
+        "keys": key_boxes,
+        "close": lcd_drawer_back_box(),
+    }
+
+
+def deepgram_setup_surface_box():
+    return (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H) if LCD_800_MODE else DEEPGRAM_SETUP_BOX
 
 
 def keyboard_modal_back_box():
@@ -15867,6 +16266,11 @@ def draw_keyboard_modal_sidebar(text_cache, title, detail):
 
 
 def deepgram_key_at(x, y, mode):
+    if LCD_800_MODE:
+        for action, box in deepgram_sidebar_boxes(mode)["keys"]:
+            if contains(box, x, y):
+                return action
+        return None
     for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
         if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
             key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
@@ -15875,8 +16279,16 @@ def deepgram_key_at(x, y, mode):
 
 
 def deepgram_setup_action_at(x, y, mode):
-    if LCD_800_MODE and contains(keyboard_modal_back_box(), x, y):
-        return "CANCEL"
+    if LCD_800_MODE:
+        boxes = deepgram_sidebar_boxes(mode)
+        if contains(boxes["close"], x, y):
+            return "CANCEL"
+        if DESKTOP_MODE and contains(boxes["field"], x, y):
+            return "PASTE"
+        for action, box in boxes["actions"].items():
+            if contains(box, x, y):
+                return action
+        return deepgram_key_at(x, y, mode)
     if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
         return "PASTE"
     if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
@@ -15891,7 +16303,41 @@ def deepgram_setup_action_at(x, y, mode):
 
 
 def draw_deepgram_setup(text_cache, value, mode, error=""):
-    """A full-size, touch-safe secret-entry sheet above the live waterfall."""
+    """Draw key entry in the VOSC rail on the 1280x800 screen."""
+    if LCD_800_MODE:
+        boxes = deepgram_sidebar_boxes(mode)
+        draw_logical_rect(*boxes["panel"], APP_UI_STYLE.palette.sidebar)
+        draw_sidebar_header(text_cache, "VOSC")
+        draw_lcd_drawer_heading(text_cache, boxes["field"][0] + 4, 88, "DEEPGRAM API KEY")
+        field = boxes["field"]
+        draw_logical_rect(*field, (11, 20, 27, 255) if not error else (72, 36, 32, 255))
+        draw_logical_line(field[0], field[1], field[2], field[1], (112, 136, 146, 255), 1)
+        masked = "*" * min(len(value), 22) + ("..." if len(value) > 22 else "")
+        field_text = masked or ("TAP TO PASTE OR TYPE" if DESKTOP_MODE else "ENTER KEY BELOW")
+        draw_text(text_cache, field[0] + 8, (field[1] + field[3]) / 2,
+                  field_text, (229, 241, 243) if value else (145, 171, 174),
+                  13, bool(value), False, "lm", family=APP_UI_STYLE.button.font_family)
+        mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
+        for action, box in boxes["actions"].items():
+            label = {"MODE": mode_label, "CLEAR": "CLR", "BACK": "DEL", "SAVE": "OK"}[action]
+            draw_styled_text_button(text_cache, box, label, active=action == "MODE" and mode != "lower")
+        for key, box in boxes["keys"]:
+            draw_styled_text_button(text_cache, box, "DEL" if key == "BACK" else key)
+        if error:
+            draw_text(text_cache, field[0] + 4, 562, "ERROR",
+                      (72, 255, 122), 13, True, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+            draw_text(text_cache, field[0] + 4, 586,
+                      fit_station_text(text_cache, error.upper(), 228, 13, False, False,
+                                       family=APP_UI_STYLE.button.font_family),
+                      (72, 255, 122), 13, False, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+        else:
+            draw_text(text_cache, field[0] + 4, 562, "SAVED LOCALLY ON THIS DEVICE",
+                      (174, 203, 208), 13, False, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+        draw_radio_close_button(text_cache, boxes["close"])
+        return
     x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
@@ -16136,7 +16582,7 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         return
     panel, entry, commands, keys = layout
     x0, y0, x1, y1 = panel
-    draw_logical_rect(x0, y0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(x0, y0, x0, y1, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, "SET FREQUENCY")
     ex0, ey0, ex1, ey1 = entry
@@ -16158,8 +16604,6 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
         "lm",
         family="Liberation Sans",
     )
-    draw_text(text_cache, ex1 - 10, (ey0 + ey1) / 2, "MHz", (132, 151, 155), 13, True, False, "rm", family="Liberation Sans")
-
     def draw_key(box, label, size, active=False):
         draw_styled_text_button(text_cache, box, label, size=size, active=active)
 
@@ -16189,39 +16633,37 @@ def frequency_chevron_texture(text_cache, direction, pressed=False):
 
 
 def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=None,
-                          receiver_type="kiwi"):
+                          receiver_type="kiwi", entry_value="", entry_invalid=False,
+                          tuning_allowed=True, entry_replace_on_digit=True,
+                          max_frequency_khz=TUNING_MAX_KHZ):
     """Draw a single-purpose frequency rail for touch and encoder use."""
     boxes = frequency_drawer_boxes()
     x0, _y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(x0, 0, x1, y1, (6, 13, 19, 255))
+    draw_logical_rect(x0, 0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_sidebar_header(text_cache, "FREQUENCY")
 
     rx0, ry0, rx1, ry1 = boxes["readout"]
-    draw_logical_rect(rx0, ry0, rx1, ry1, (3, 10, 15, 255))
-    draw_logical_line(rx0, ry1, rx1, ry1, (74, 222, 225, 170), 2)
+    draw_logical_rect(
+        rx0, ry0, rx1, ry1,
+        (35, 13, 16, 255) if entry_invalid else (3, 10, 15, 255),
+    )
     # The rail readout uses the same big-frequency face/size/colour as the top
     # instrument strip, so the instrument looks identical wherever it appears.
+    readout_khz = frequency_entry_preview_khz(
+        entry_value, freq_khz, entry_replace_on_digit, max_frequency_khz,
+    )
     draw_big_frequency(
-        text_cache, freq_khz, rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
+        text_cache, readout_khz,
+        rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
         family=font_family,
+        display_text=(entry_value or "0") if not entry_replace_on_digit else None,
     )
 
-    def draw_arrow_button(box, direction, action):
-        bx0, by0, bx1, by1 = box
-        active = pressed == action
-        draw_styled_button_frame(box, active=active, pressed=active)
-        tex, tex_w, tex_h = frequency_chevron_texture(text_cache, direction, active)
-        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
-        # The chevron is the whole control; the old UP/DOWN caption under it
-        # only crowded the icon with text the arrow already implies.
-        draw_textured_quad(
-            tex, cx - tex_w / 2, cy - tex_h / 2, cx + tex_w / 2, cy + tex_h / 2,
-            0, 0, 1, 1,
-        )
-
-    draw_arrow_button(boxes["down"], -1, "down")
-    draw_arrow_button(boxes["up"], 1, "up")
-    draw_picker_button(text_cache, boxes["manual"], "ENTER FREQUENCY", 15, pressed == "manual")
+    draw_styled_text_button(text_cache, boxes["down"], "DOWN", active=pressed == "down")
+    draw_styled_text_button(text_cache, boxes["up"], "UP", active=pressed == "up")
+    for label, key_box in frequency_drawer_key_boxes():
+        draw_styled_text_button(text_cache, key_box, label,
+                                active=pressed == f"key_{label}")
     # The tune steps are listed here and selected in place. They no longer
     # link away to the Radio drawer's separate step screen.
     heading = boxes["step_heading"]
@@ -16232,9 +16674,13 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     for option_hz, option_box in frequency_drawer_step_boxes(receiver_type):
         active = int(option_hz) == int(step_hz)
         draw_picker_button(
-            text_cache, option_box, format_tune_step(option_hz), 15,
+            text_cache, option_box, format_small_tune_step(option_hz), 15,
             active or pressed == f"step_{int(option_hz)}",
         )
+    if not tuning_allowed:
+        draw_text(text_cache, (x0 + x1) / 2, 618,
+                  "ENABLE CONTROL IN MODES", APP_UI_STYLE.button.subtitle_color,
+                  13, True, False, "cm", family=APP_UI_STYLE.button.font_family)
     draw_radio_close_button(text_cache, boxes["close"])
 
 
@@ -16441,11 +16887,13 @@ def advance_kiwi_landing_connection(
     )
     return (0.0 if result is not None else connected_at), result
 
-def receiver_waterfall_center(tuned_khz, span_khz, receiver_type):
+def receiver_waterfall_center(tuned_khz, span_khz, receiver_type, pinned_center_khz=None):
     """FM-DX audio rows are centered on their FM carrier, outside Kiwi HF."""
     if receiver_type == "fmdx":
         return float(tuned_khz)
-    return waterfall_view_center_khz(tuned_khz, span_khz)
+    return waterfall_view_center_khz(
+        tuned_khz if pinned_center_khz is None else pinned_center_khz, span_khz
+    )
 
 
 def receiver_display_span(zoom, receiver_type):
@@ -16463,7 +16911,7 @@ class ReceiverListTheme:
     main_background: tuple = APP_UI_STYLE.palette.background
     sidebar_background: tuple = APP_UI_STYLE.palette.sidebar
     row_background: tuple = APP_UI_STYLE.palette.background
-    selected_background: tuple = APP_UI_STYLE.palette.selected_surface
+    selected_background: tuple = APP_UI_STYLE.palette.active_surface
     primary_text: tuple = APP_UI_STYLE.palette.text
     secondary_text: tuple = APP_UI_STYLE.palette.secondary_text
     focus: tuple = APP_UI_STYLE.palette.focus
@@ -16570,11 +17018,7 @@ def receiver_source_label(source):
 
 
 def draw_receiver_sidebar_header(text_cache, theme=RECEIVER_LIST_THEME):
-    draw_logical_rect(RECEIVER_PICKER_MAIN_W, 0, LOGICAL_W, 64, theme.sidebar_background)
-    draw_text(
-        text_cache, (RECEIVER_PICKER_MAIN_W + LOGICAL_W) / 2, 32, "RECEIVERS",
-        theme.primary_text, 16, True, False, "cm", family=theme.font_family,
-    )
+    draw_sidebar_header(text_cache, "RECEIVERS")
 
 
 def draw_receiver_globe_icon(text_cache, box, color):
@@ -16649,20 +17093,7 @@ def draw_receiver_action_icon(text_cache, box, kind, color):
 
 def draw_receiver_action_button(text_cache, box, label, kind, selected=False,
                                 theme=RECEIVER_LIST_THEME, detail=""):
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=selected, pressed=pressed)
-    ink = visual.text
-    draw_receiver_action_icon(text_cache, box, kind, ink)
-    label_y = box[3] - (29 if detail else 18)
-    draw_text(
-        text_cache, (box[0] + box[2]) / 2, label_y, label, ink,
-        theme.label_size, True, False, "cm", family=theme.font_family,
-    )
-    if detail:
-        draw_text(
-            text_cache, (box[0] + box[2]) / 2, box[3] - 12, detail, ink,
-            11, True, False, "cm", family=theme.font_family,
-        )
+    draw_styled_two_line_button(text_cache, box, label, detail, active=selected)
 
 
 def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
@@ -16678,7 +17109,7 @@ def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
-    show_fmdx_notice=False, notice="",
+    show_fmdx_notice=False, notice="", notice_alpha=220,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -16727,13 +17158,13 @@ def draw_station_picker(
         receiver_type = station_receiver_type(station)
         pressed = ui_button_pressed(box)
         focused = selected or pending
-        fill = theme.focus if pressed else (theme.selected_background if focused else theme.row_background)
-        outline = theme.focus if focused or pressed else theme.row_outline
+        fill = APP_UI_STYLE.palette.active_surface if pressed else (theme.selected_background if focused else theme.row_background)
+        outline = APP_UI_STYLE.palette.active_border if focused or pressed else theme.row_outline
         if focused and not pressed:
-            draw_logical_rounded_rect(*box, 8, fill, (0, 229, 255, 80), 5)
+            draw_logical_rounded_rect(*box, 8, fill, (*APP_UI_STYLE.palette.active_border[:3], 80), 5)
         draw_station_list_frame(box, fill, outline, 2 if focused or pressed else 1)
-        text_color = (18, 18, 18) if pressed else theme.primary_text
-        secondary_color = (18, 18, 18) if pressed else theme.secondary_text
+        text_color = theme.primary_text
+        secondary_color = theme.secondary_text
         capacity = (
             f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
             if listener_used is not None and listener_total is not None else "FREE ?"
@@ -16773,15 +17204,7 @@ def draw_station_picker(
                 theme.label_size, False, False, "rm", family=theme.font_family,
             )
     if notice:
-        notice_box = receiver_list_notice_box()
-        visual = draw_styled_button_frame(notice_box, active=True)
-        draw_text(
-            text_cache,
-            (notice_box[0] + notice_box[2]) / 2,
-            (notice_box[1] + notice_box[3]) / 2,
-            notice, visual.text,
-            theme.label_size, True, False, "cm", family=theme.font_family,
-        )
+        draw_receiver_sort_notice(text_cache, notice, notice_alpha, sort_mode)
 
 
 def smeter_segment_position(dbm):
@@ -16812,16 +17235,15 @@ def smeter_dbm_at_segment(position):
     return SMETER_PLUS20_DBM + (position - SMETER_S1_TO_S9_SEGMENTS - SMETER_S9_TO_PLUS20_SEGMENTS) / SMETER_PLUS20_TO_PLUS40_SEGMENTS * (SMETER_CEILING_DBM - SMETER_PLUS20_DBM)
 
 
-def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
+def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None, meter_x0=None):
     # The 1024 px desktop canvas has a dedicated right-side instrument lane.
     # Shift the complete calibrated assembly into it without changing the
     # production 960 px layout.
     smeter_x_offset = 50 if DESKTOP_1280_MODE else 0
-    # The 800x1280 platform has enough top-bar width for a 30% larger
-    # calibrated VU/S-meter assembly. Keep the left readout just clear of the
-    # main frequency while using the otherwise empty meter lane.
-    meter_x0 = 675 + smeter_x_offset
-    meter_x1 = 968 + smeter_x_offset
+    # LEFT and MIDDLE share this complete calibrated assembly. Only its
+    # horizontal starting point changes beside the selected VFO position.
+    meter_x0 = 675 + smeter_x_offset if meter_x0 is None else meter_x0
+    meter_x1 = meter_x0 + SMETER_TRACE_WIDTH
     green = (222, 255, 228, 255)
     red = (230, 20, 42, 255)
     rail = (160, 178, 182, 155)
@@ -16833,6 +17255,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     # The taller desktop scope gives this assembly a little more room below
     # the frequency readout. Keep the entire calibrated instrument together.
     smeter_y_offset = 6 if DESKTOP_1280_MODE else 0
+    label_y_offset = 5 if LCD_800_MODE else smeter_y_offset
     trace_y = 39 + smeter_y_offset
 
     def dbx(dbm):
@@ -16850,8 +17273,9 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
     if live_x > red_start_x:
         draw_logical_line(red_start_x, trace_y, live_x, trace_y, red, 5)
 
+    scale_label_x = dbx(SMETER_FLOOR_DBM) - 42
     labels = (
-        ("S", dbx(-121) - 42, green[:3], 18),
+        ("S", scale_label_x, green[:3], 18),
         ("1", dbx(-121), green[:3], 18),
         ("3", dbx(-109), green[:3], 18),
         ("5", dbx(-97), green[:3], 18),
@@ -16861,7 +17285,7 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         ("+40", dbx(-33), red[:3], 18),
     )
     for text, x, color, size in labels:
-        draw_text(text_cache, x, 12 + smeter_y_offset, text, color, size, False, True, "cm")
+        draw_text(text_cache, x, 12 + label_y_offset, text, color, size, False, True, "cm")
 
     # Major calibration lines reach equally above and below the trace. The
     # short midpoint ticks use the same symmetric treatment, so the dBm row
@@ -16892,11 +17316,11 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None):
         peak_x = clamp(dbx(peak_dbm), meter_x0, meter_x1)
         draw_logical_line(peak_x, trace_y - 10, peak_x, trace_y + 10, (182, 197, 200, 178), 2)
 
-    # A simple 20 dB cadence follows the reference instrument style. The
-    # labels are calibrated through the same nonlinear S-unit mapping above.
-    for dbm in (-120, -100, -80, -60, -40):
-        draw_text(text_cache, dbx(dbm), 62 + smeter_y_offset, f"{dbm}", dbm_color[:3], 17, True, True, "cm")
-    draw_text(text_cache, meter_x1 + 16, 62 + smeter_y_offset, "dBm", dbm_color[:3], 17, True, True, "lm")
+    # Put each lower dBm value directly under its calibrated major bar.
+    # The tighter type keeps all seven values readable in the 293 px scale.
+    for dbm, _color in major_ticks:
+        draw_text(text_cache, dbx(dbm), 62 + label_y_offset, f"{dbm}", dbm_color[:3], 14, True, True, "cm")
+    draw_text(text_cache, scale_label_x, 62 + label_y_offset, "dBm", dbm_color[:3], 13, True, True, "cm")
 
 
 def read_cpu_temp_c():
@@ -16905,6 +17329,21 @@ def read_cpu_temp_c():
         return float(raw) / 1000.0
     except Exception:
         return None
+
+
+def read_process_ram_mb():
+    """Report the radio process's resident memory where the host exposes it."""
+    try:
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/self/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+        # macOS reports ru_maxrss in bytes; it is the best portable fallback.
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 
 
 def read_input_power_ok():
@@ -17015,6 +17454,37 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
                       alpha=1.0):
     if alpha <= 0.01:
         return
+    if LCD_800_MODE:
+        status_x1 = DESKTOP_1280_MAIN_W
+        draw_logical_rect(0, y0, status_x1, y1, (4, 8, 12, int(208 * alpha)))
+        size = 13
+        first_y = y0 + 27
+        second_y = y0 + 59
+        server = fit_station_text(
+            text_cache, station_name or "NO RECEIVER", status_x1 - 300,
+            size, True, False, family="Liberation Sans",
+        )
+        draw_text(text_cache, 18, first_y, server, (162, 175, 179), size,
+                  True, False, "lm", alpha, family="Liberation Sans")
+        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
+        draw_text(text_cache, 18, second_y, buffer_label, (120, 255, 179), size,
+                  False, False, "lm", alpha, family="Liberation Sans")
+        buffer_width = text_cache.font(size, family="Liberation Sans").size(buffer_label)[0]
+        clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
+        draw_text(text_cache, 18 + buffer_width + 16, second_y, clock_label,
+                  (120, 255, 179), size, False, False, "lm", alpha,
+                  family="Liberation Sans")
+        ram_mb = read_process_ram_mb()
+        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
+        ram_label = f"RAM {ram_mb:.0f} MB" if ram_mb is not None else "RAM --"
+        temp_label = f"TEMP {temp_c:.0f} C" if temp_c is not None else "TEMP --"
+        draw_text(text_cache, status_x1 - 18, first_y, f"{cpu_label}   {ram_label}",
+                  (162, 175, 179), size, True, False, "rm", alpha,
+                  family="Liberation Sans")
+        draw_text(text_cache, status_x1 - 18, second_y, temp_label,
+                  (162, 175, 179), size, True, False, "rm", alpha,
+                  family="Liberation Sans")
+        return
     height = y1 - y0
     compact = height < 28
     two_row = height >= 68
@@ -17095,7 +17565,26 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
 def caption_translation_toggle_box(box):
     """Small, right-aligned live-caption mode control within its own banner."""
     x0, y0, x1, _y1 = box
-    return (max(x0 + 220, x1 - 252), y0 + 7, x1 - 9, y0 + 41)
+    return (max(x0 + 220, x1 - 362), y0 + 7, x1 - 119, y0 + 41)
+
+
+def vosc_popup_action_at(x, y, caption_box, callsign_box, caption_enabled,
+                         callsign_enabled, translation_box=None, waterfall_visible=True):
+    """Route a visible VOSC popup before controls covered by that popup."""
+    if not waterfall_visible:
+        return None
+    # Callsigns are painted after captions, so their overlapping touch area
+    # owns the foreground just as it does visually.
+    if callsign_enabled and callsign_box and contains(callsign_box, x, y):
+        return ("callsign_close" if contains(compact_header_close_box(callsign_box), x, y)
+                else "callsign_caption")
+    if caption_enabled and caption_box and contains(caption_box, x, y):
+        if contains(compact_header_close_box(caption_box), x, y):
+            return "caption_close"
+        if translation_box and contains(translation_box, x, y):
+            return "caption_translation_toggle"
+        return "caption_readonly"
+    return None
 
 
 def whisper_caption_toggle_label(caption_mode):
@@ -17109,16 +17598,29 @@ def whisper_caption_toggle_label(caption_mode):
     return f"ORIGINAL · {source}"
 
 
+def draw_vosc_live_popup_frame(text_cache, box):
+    """The common waterfall panel and Close control for VOSC live output."""
+    draw_logical_rect(*box, (3, 8, 12, 190))
+    draw_styled_text_button(text_cache, compact_header_close_box(box), "CLOSE", size=12)
+
+
+def draw_vosc_live_popup_error(text_cache, box, message):
+    """Leave a live-engine error visible after its brief Zoom-style notice."""
+    x0, y0, _x1, y1 = box
+    draw_text(text_cache, x0 + 20, (y0 + y1) / 2, str(message).upper(),
+              (100, 135, 145), 24, True, False, "lm", family=caption_font_family())
+
+
 def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
                        engine="off"):
     """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
-    draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
+    draw_vosc_live_popup_frame(text_cache, (x0, y0, x1, y1))
     caption_mode = str(caption_mode).lower()
     phoneme_mode = asr_engine_family(engine) == "phoneme"
     whisper_mode_control = asr_engine_family(engine) == "whisper"
-    content_x1 = x1 - 274 if whisper_mode_control else x1 - 40
+    content_x1 = x1 - 384 if whisper_mode_control else x1 - 124
     content_y0 = y0
     if phoneme_mode:
         # Explicitly identify this as acoustic-phone evidence. It must never
@@ -17138,6 +17640,9 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
                   whisper_caption_toggle_label(caption_mode),
                   (189, 249, 219) if caption_mode == "english" else (176, 211, 224),
                   14, True, False, "cm", family=family)
+    if "ERROR" in str(status).upper():
+        draw_vosc_live_popup_error(text_cache, (x0, y0, x1, y1), status)
+        return
     if caption_mode == "both":
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
@@ -17181,37 +17686,38 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
     if not enabled or box is None:
         return
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 16, 14, 202))
-    draw_logical_rect(x0, y0, x0 + 5, y1, (77, 220, 151, 235))
+    draw_vosc_live_popup_frame(text_cache, box)
+    family = caption_font_family()
+    close_box = compact_header_close_box(box)
+    draw_text(text_cache, x0 + 20, y0 + 17, "CALL SIGN", (112, 221, 181),
+              14, True, False, "lm", family=family)
+    if status == "ERROR":
+        draw_vosc_live_popup_error(text_cache, box, "VOSK ERROR")
+        return
     history = tuple(history) if history else (() if not callsign else (callsign,))
     if not history:
-        source = "LISTENING..." if status != "ERROR" else "VOSK ERROR"
-        draw_text(text_cache, x0 + 18, (y0 + y1) / 2, "HAM", (105, 238, 169), 15, True, False, "lm", family="Cantarell")
-        draw_text(text_cache, x0 + 76, (y0 + y1) / 2, source, (158, 203, 191), 21, True, False, "lm", family="Cantarell")
+        draw_text(text_cache, x0 + 20, (y0 + y1) / 2,
+                  "LISTENING..." if status == "LISTENING" else status,
+                  (133, 180, 190), 24, False, False, "lm", family=family)
         return
-    # Callsigns are the only high-confidence entity this lane promises. The
-    # broad ASR phrase remains available in the normal caption pane, but is
-    # deliberately not repeated here as noisy pseudo-traffic.
-    draw_text(text_cache, x0 + 18, y0 + 13, "CALLS", (105, 238, 169), 13, True, False, "lm", family="Cantarell")
-    field_x0 = x0 + 74
-    line_h = (y1 - y0 - 10) / max(1, len(history))
+    # Keep the strict callsign evidence, but use the same typography and row
+    # rhythm as live transcription instead of a second green-chip design.
+    first_y = (y0 + y1) / 2 - (len(history) - 1) * 15
     for index, value in enumerate(history):
-        row_y0 = y0 + 5 + index * line_h
-        row_y1 = row_y0 + line_h - 3
-        call_width = text_cache.font(24 if index == 0 else 19, bold=True, family="Cantarell").size(value)[0]
-        field_x1 = min(x1 - 12, field_x0 + max(116, call_width + 28))
-        if index == 0:
-            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (18, 111, 77, 220))
-            draw_logical_rect(field_x0, row_y0, field_x0 + 4, row_y1, (109, 255, 183, 255))
-            color, size = (230, 255, 243), 24
-        else:
-            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (9, 53, 40, 174))
-            color, size = (151, 205, 184), 19
-        label = fit_station_text(text_cache, value, field_x1 - field_x0 - 20, size, True, False, family="Cantarell")
-        draw_text(text_cache, field_x0 + 13, (row_y0 + row_y1) / 2, label, color, size, True, False, "lm", family="Cantarell")
+        label = fit_station_text(text_cache, value, close_box[0] - x0 - 32,
+                                 26, True, False, family=family)
+        draw_text(text_cache, x0 + 20, first_y + index * 30, label,
+                  (230, 241, 244), 26, True, False, "lm", family=family)
 
 
 def asr_option_at(x, y, moon_language_menu=False):
+    if LCD_800_MODE:
+        if contains(lcd_drawer_back_box(), x, y):
+            return "back", None
+        for kind, value, box in vosc_sidebar_options(moon_language_menu):
+            if contains(box, x, y):
+                return kind, value
+        return None
     box = ASR_MOON_LANGUAGE_PANEL_BOX if moon_language_menu else ASR_PANEL_BOX
     x0, y0, x1, y1 = box
     if not contains(box, x, y):
@@ -17230,8 +17736,63 @@ def asr_option_at(x, y, moon_language_menu=False):
     return "caption_mode", CAPTION_MODES[index]
 
 
-def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
+def vosc_sidebar_options(moon_language_menu=False):
+    """The right-rail geometry is shared by VOSC drawing and touch handling."""
+    if moon_language_menu:
+        choices = (("engine", f"moonshine:{language}") for language, _label in MOONSHINE_LANGUAGE_OPTIONS)
+        first_y = 128
+    else:
+        choices = (("engine", value) for value in ASR_ENGINES)
+        first_y = 112
+    for index, (kind, value) in enumerate(choices):
+        yield kind, value, lcd_nav_option_box(index, first_y)
+    if not moon_language_menu:
+        for index, value in enumerate(CAPTION_MODES):
+            yield "caption_mode", value, lcd_nav_option_box(index, 504)
+        yield "callsign", None, (LCD_NAV_X0 + 10, 656, LOGICAL_W - 10, 720)
+
+
+def lcd_nav_option_box(index, first_y):
+    x0 = LCD_NAV_X0 + 10 + (index % 2) * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+    y0 = first_y + (index // 2) * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+    return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
+
+
+def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False,
+                   callsign_enabled=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
+    if LCD_800_MODE:
+        draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
+        draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+        draw_sidebar_header(text_cache, "VOSC")
+        draw_text(text_cache, LCD_NAV_X0 + 14, 86,
+                  "LANGUAGE" if moon_language_menu else "ENGINE",
+                  (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+        if not moon_language_menu:
+            draw_text(text_cache, LCD_NAV_X0 + 14, 478, "CAPTIONS",
+                      (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
+        for kind, value, box in vosc_sidebar_options(moon_language_menu):
+            if kind == "callsign":
+                draw_styled_two_line_button(
+                    text_cache, box, "CALLSIGN", "ON" if callsign_enabled else "OFF",
+                    active=callsign_enabled,
+                )
+                continue
+            if moon_language_menu:
+                title = next(label for language, label in MOONSHINE_LANGUAGE_OPTIONS
+                             if value == f"moonshine:{language}")
+                active = value == engine
+            elif kind == "engine":
+                title = ASR_ENGINE_LABELS[value]
+                active = value == asr_engine_family(engine)
+            else:
+                title = CAPTION_MODE_LABELS[value]
+                active = value == caption_mode
+            visual = draw_styled_button_frame(box, active=active)
+            draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+                      title, visual.text, 13, True, False, "cm", family="Liberation Sans")
+        draw_radio_close_button(text_cache, lcd_drawer_back_box())
+        return
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
         draw_logical_rect(x0, y0, x1, y1, (5, 13, 18, 232))
@@ -17417,21 +17978,36 @@ def draw_spectrum(
     canvas_w = rf_canvas_width()
     draw_logical_rect(0, y0, canvas_w, y1, (2, 7, 12, field_alpha))
     show_dbm_scale = (y1 - y0) >= 120
+    ruler_visible = show_dbm_scale and text_cache is not None
+    if ruler_visible:
+        # Keep the upper label 16 px inside the field even when the scope
+        # reaches the top of the screen. Use its actual rendered height so
+        # font changes cannot make it clip again.
+        label_height = text_cache.texture(
+            "-40 dBm", 13, (180, 207, 211), bold=True, mono=True,
+        )[2]
+        plot_top = y0 + 18 + label_height / 2
+        plot_bottom = y1 - 2 - label_height / 2
+    else:
+        plot_top = y0 + 3
+        plot_bottom = y1 - 3
+    grid_top = plot_top if ruler_visible else y0
+    grid_bottom = plot_bottom if ruler_visible else y1
     scale_fractions = (0.0, 0.25, 0.50, 0.75, 1.0) if show_dbm_scale else (0.25, 0.50, 0.75)
     for fraction in scale_fractions:
-        y = y0 + (y1 - y0) * fraction
+        y = grid_top + (grid_bottom - grid_top) * fraction
         draw_logical_line(0, y, canvas_w, y, (89, 139, 155, 48 if show_dbm_scale else 34), 1)
-    if show_dbm_scale and text_cache is not None:
+    if ruler_visible:
         # This is a visual reference scale for the normalized Kiwi spectrum,
         # not a calibrated RF-power meter. Keep it as a compact left-edge
         # instrument ruler, separated from the live trace by its own gutter.
         axis_x = 8
         label_x = 30
         draw_logical_rect(0, y0, 68, y1, (3, 11, 17, 102))
-        draw_logical_line(axis_x, y0 + 4, axis_x, y1 - 4, (125, 169, 181, 118), 1)
+        draw_logical_line(axis_x, plot_top, axis_x, plot_bottom, (125, 169, 181, 118), 1)
         for index in range(17):
             fraction = index / 16
-            y = y0 + (y1 - y0) * fraction
+            y = plot_top + (plot_bottom - plot_top) * fraction
             major = index % 4 == 0
             tick_length = 14 if major else 6
             tick_color = (163, 203, 211, 172) if major else (100, 151, 165, 106)
@@ -17442,8 +18018,6 @@ def draw_spectrum(
                     label += " dBm"
                 # Font ascenders/figures look fractionally low when centered
                 # on a 1 px rule, so lift the label optically, not the tick.
-                # Let end labels overhang the field slightly rather than
-                # distorting their value-to-tick alignment with a clamp.
                 label_y = y - 2
                 draw_text(text_cache, label_x, label_y, label, (180, 207, 211), 13, True, True, "lm")
     if source_span_khz is not None and visible_span_khz is not None:
@@ -17451,20 +18025,22 @@ def draw_spectrum(
         peak_values = zoomed_spectrum_values(peak_values, source_span_khz, visible_span_khz)
     if not values:
         return
-    top = y0 + 3
-    bottom = y1 - 3
+    top = plot_top
+    bottom = plot_bottom
     if len(peak_values) == len(values):
         peak_points = [
             (index * (canvas_w - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
             for index, value in enumerate(peak_values)
         ]
-        draw_logical_area(peak_points, bottom, (145, 159, 168, 76))
+        draw_logical_area(peak_points, y1, (145, 159, 168, 76))
         draw_logical_polyline(peak_points, (174, 187, 194, 142), 1.0)
     points = [
         (index * (canvas_w - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
         for index, value in enumerate(values)
     ]
-    draw_logical_area(points, bottom, (161, 184, 196, 154))
+    # Keep dBm labels inset, but fill the remaining pixels right to the
+    # waterfall boundary so that inset cannot look like a blank divider.
+    draw_logical_area(points, y1, (161, 184, 196, 154))
     draw_logical_polyline(points, (204, 219, 224, 208), 1.25)
 
 
@@ -17588,7 +18164,10 @@ def draw_ui(
     squelch_closed=False,
     settings_menu_open=False,
     digital_menu_open=False,
-    instrument_layout="expanded",
+    active_decoders=(),
+    running_decoder_count=0,
+    decoder_counts=None,
+    instrument_layout="middle",
     compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
     status_y0=None,
     ruler_center_khz=None,
@@ -17601,14 +18180,12 @@ def draw_ui(
         # The wide unit has one uninterrupted instrument strip spanning the
         # receiver canvas and the navigation rail.
         draw_native_rect(0, 0, NATIVE_W, DESKTOP_1280_TOP_H, (0, 0, 0, 255))
-    # The RF scope begins at y=0 and remains visible, attenuated, behind the
-    # top instruments. A black translucent wash preserves readout contrast
-    # without reserving an opaque header band.
-    # Leave the 68 px spectrum-axis gutter completely uncovered. Its dBm
-    # graduations remain readable even where the scope passes under the top
-    # instrument strip.
-    draw_logical_rect(68, 0, rf_canvas_width(), sdr_ui.TOP_H, (0, 0, 0, 144))
-    show_large_instruments = instrument_layout != "compact"
+    show_large_instruments = instrument_layout != "right"
+    if show_large_instruments:
+        # The scope stays visible through one continuous top band. RIGHT has
+        # its readout in the rail and needs no wash over the RF canvas.
+        band_height = LCD_TOP_INSTRUMENT_BAND_H if LCD_800_MODE else sdr_ui.TOP_H
+        draw_logical_rect(0, 0, rf_canvas_width(), band_height, (0, 0, 0, 144))
     _frequency_text, radio_box = top_instrument_layout(
         text_cache, freq_khz, compact_frequency_font_family
     )
@@ -17617,15 +18194,27 @@ def draw_ui(
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
     if show_large_instruments:
+        left_instruments = LCD_800_MODE and instrument_layout == "left"
         if LCD_800_MODE:
             draw_band_context_chip(
-                text_cache, main_band_context_box(text_cache, freq_khz, compact_frequency_font_family), freq_khz, mode
+                text_cache, main_band_context_box(
+                    text_cache, freq_khz, compact_frequency_font_family, instrument_layout,
+                ), freq_khz, mode, compact=left_instruments,
             )
         draw_big_frequency(
-            text_cache, freq_khz, frequency_right_x(), 39, 330.0,
-            family=compact_frequency_font_family,
+            text_cache, freq_khz,
+            LEFT_FREQUENCY_X if instrument_layout == "left" else frequency_right_x(),
+            LCD_TOP_INSTRUMENT_CENTER_Y if LCD_800_MODE else 39,
+            330.0, family=compact_frequency_font_family,
+            anchor="lm" if instrument_layout == "left" else "rm",
         )
-        draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
+        if left_instruments:
+            draw_smeter(
+                text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                meter_x0=left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family),
+            )
+        else:
+            draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm)
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
         text_cache,
@@ -17692,12 +18281,15 @@ def draw_ui(
         muted=audio_muted,
         settings_open=settings_menu_open,
         digital_open=digital_menu_open,
+        active_decoders=active_decoders,
+        running_decoder_count=running_decoder_count,
+        decoder_counts=decoder_counts,
     )
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
     if LCD_800_MODE and not (sidebar_open or settings_menu_open or digital_menu_open):
-        show_compact_readouts = instrument_layout == "compact"
+        show_compact_readouts = instrument_layout == "right"
         draw_lcd_mode_annunciators(
             text_cache, mode, digital, freq_khz, smeter_dbm,
             show_compact_readouts=show_compact_readouts,
@@ -17765,6 +18357,11 @@ class WaterfallPresenter:
         if rows and self.started:
             self.next_row_at += len(rows) / source_fps
         return tuple(rows)
+
+
+def waterfall_stream_key(server_generation, view_generation, receiver_type, external):
+    """Only a new RF view restarts the row reserve; display colors do not."""
+    return server_generation, view_generation, receiver_type, bool(external)
 
 
 def waterfall_presentation_fps(receiver_type, speed, row_pixels=1):
@@ -18654,6 +19251,7 @@ class RTLSDRLab:
     def _waterfall_worker(self, lut):
         """Keep expensive FFT and texture preparation off the PCM capture thread."""
         levels = [None, None]
+        seen_palette = "kiwi"
         while not self.stop_event.is_set():
             try:
                 item = self.waterfall_queue.get(timeout=0.10)
@@ -18662,6 +19260,10 @@ class RTLSDRLab:
             if item is None:
                 break
             samples, center_khz = item
+            palette = self.state.waterfall_snapshot()[4]
+            if palette != seen_palette:
+                lut = tuple(np.asarray(channel, dtype=np.uint8) for channel in waterfall_mapper(palette))
+                seen_palette = palette
             self._publish_waterfall(samples, center_khz, lut, levels)
 
     def _queue_waterfall(self, samples, center_khz):
@@ -19213,6 +19815,7 @@ TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "fan_minimum_slider",
     "lcd_filter_shift",
     "lcd_filter_width",
+    "scope_hold_drag",
     # Dual owns a mixture of buttons and continuous tuning instruments. Its
     # confirmation language can be designed separately from the Home rail.
     "dual_vfo",
@@ -20856,6 +21459,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
     player = session = None
     generation = None
     leveler = mapper = None
+    seen_wf_generation = None
     waterfall_rows = 0
     try:
         while not stop_event.is_set():
@@ -20933,9 +21537,9 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
             elif event.kind == "waterfall" and event.waterfall and line_queue is not None:
                 state.connection_ready(server_generation, "waterfall")
                 samples = bytes(clamp(int(round(value + 160.0)), 0, 255) for value in event.waterfall)
-                if leveler is None:
-                    wf_floor, wf_ceil, _speed, wf_auto, palette, _wf_generation = state.waterfall_snapshot()
-                    if wf_auto:
+                wf_floor, wf_ceil, _speed, wf_auto, palette, wf_generation = state.waterfall_snapshot()
+                if leveler is None or wf_generation != seen_wf_generation:
+                    if leveler is None and wf_auto:
                         # OpenWebRX sends FFT dB values while Kiwi's saved
                         # display range is calibrated to its unsigned W/F
                         # bytes. Seed auto-level from the first actual row so
@@ -20945,8 +21549,12 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                         p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
                         wf_floor = clamp(median - 8, 40, 230)
                         wf_ceil = clamp(max(p98 + 72, wf_floor + 95), wf_floor + 55, 255)
-                    leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
+                    if leveler is None:
+                        leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
+                    else:
+                        leveler.floor, leveler.ceiling, leveler.auto = wf_floor, wf_ceil, wf_auto
                     mapper = waterfall_mapper(palette)
+                    seen_wf_generation = wf_generation
                 floor, ceiling = leveler.levels_for(samples)
                 update_openwebrx_scope(state, samples, floor, ceiling)
                 line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
@@ -21928,8 +22536,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                 ws = None
                 continue
             kiwi.send_kiwi_setup(ws, "kiwi", listener_name or args.user)
-            sent_freq_khz = waterfall_view_center_khz(
-                freq_khz, kiwi.zoom_source_span_khz(zoom)
+            sent_freq_khz = receiver_waterfall_center(
+                freq_khz, kiwi.zoom_source_span_khz(zoom), "kiwi",
+                state.waterfall_view_center_snapshot(),
             )
             sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
             authenticated = False
@@ -21957,8 +22566,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     # Display zooms 15/16 are local crops of Kiwi zoom-14
                     # data, so moving among them must not flush/restart the
                     # live waterfall. A real RF move still goes to Kiwi.
-                    waterfall_center_khz = waterfall_view_center_khz(
-                        freq_khz, kiwi.zoom_source_span_khz(zoom)
+                    waterfall_center_khz = receiver_waterfall_center(
+                        freq_khz, kiwi.zoom_source_span_khz(zoom), "kiwi",
+                        state.waterfall_view_center_snapshot(),
                     )
                     if waterfall_center_khz != sent_freq_khz or next_kiwi_zoom != sent_kiwi_zoom:
                         drain_queue(line_queue)
@@ -21968,12 +22578,14 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                         next_view_send_at = now_monotonic + live_tune_interval
                 if configured and wf_generation != seen_wf_generation:
                     seen_wf_generation = wf_generation
+                    previous_speed = wf_speed
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
                     leveler.floor = wf_floor
                     leveler.ceiling = wf_ceil
                     leveler.auto = wf_auto
                     mapper = waterfall_mapper(wf_palette)
-                    ws.send_text(f"SET wf_speed={wf_speed}")
+                    if wf_speed != previous_speed:
+                        ws.send_text(f"SET wf_speed={wf_speed}")
                     print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
 
                 if time.monotonic() - last_frame_at > WATERFALL_STARTUP_TIMEOUT_SECONDS:
@@ -21997,8 +22609,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                             raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
                         authenticated = True
                     if authenticated and not configured:
-                        waterfall_center_khz = waterfall_view_center_khz(
-                            freq_khz, kiwi.zoom_source_span_khz(zoom)
+                        waterfall_center_khz = receiver_waterfall_center(
+                            freq_khz, kiwi.zoom_source_span_khz(zoom), "kiwi",
+                            state.waterfall_view_center_snapshot(),
                         )
                         kiwi.send_wf_setup(ws, waterfall_center_khz, zoom, wf_speed)
                         configured = True
@@ -22025,7 +22638,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     if state.spectrum_enabled_snapshot():
                         state.update_spectrum(samples, floor, ceiling)
                     row_span = kiwi.zoom_source_span_khz(zoom)
-                    row_center_khz = waterfall_view_center_khz(freq_khz, row_span)
+                    row_center_khz = sent_freq_khz
                     row_item = (line, row_center_khz, row_span)
                     for _ in range(args.wf_row_pixels):
                         try:
@@ -22267,6 +22880,8 @@ def main():
             )
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
+        if isinstance(remembered_preferences.get("spectrum_auto"), bool):
+            state.set_spectrum_auto(remembered_preferences["spectrum_auto"])
         saved_asr_engine = remembered_preferences.get("asr_engine")
         if valid_asr_engine(saved_asr_engine):
             state.set_asr_engine(saved_asr_engine)
@@ -22309,9 +22924,9 @@ def main():
             elif profile != 2 and restored_audio.get("voice_clean_level", 0):
                 restored_audio["voice_clean_level"] = 1
             state.set_audio_controls(**restored_audio)
-    instrument_layout = remembered_preferences.get("instrument_layout", "expanded")
-    if instrument_layout not in ("compact", "expanded"):
-        instrument_layout = "expanded"
+    instrument_layout = normalize_frequency_position(
+        remembered_preferences.get("instrument_layout", "right")
+    )
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
@@ -22386,9 +23001,8 @@ def main():
     frames = 0
     display_freq = args.freq_khz
     display_span = receiver_display_span(args.zoom, state.receiver_type_snapshot())
-    # Scope sizing is an experimental live layout control. It begins at the
-    # established wide-layout height and changes only while its grab rail is
-    # visible, so ordinary waterfall gestures remain untouched.
+    # Scope sizing begins at the established height. A held vertical drag on
+    # the live RF canvas can change it from full waterfall to full scope.
     scope_height = float(LCD_SPECTRUM_H if LCD_800_MODE else (SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H))
     scope_adjust_until = 0.0
     scope_adjust_box = None
@@ -22399,6 +23013,9 @@ def main():
     anim_start = 0.0
     anim_duration = 0.20
     zoom_osd_until = 0.0
+    vosc_error_osd_until = 0.0
+    vosc_error_osd_message = ""
+    last_vosc_error_key = ()
     rc28_mode_osd_until = 0.0
     frequency_identity_result_queue = queue.Queue(maxsize=1)
     frequency_identity_pending_key = None
@@ -22458,8 +23075,8 @@ def main():
     picker_map_yaw = math.radians(-18)
     picker_map_pitch = math.radians(18)
     picker_map_scale = 0.62
+    picker_map_view = GLOBE_DEFAULT_VIEW
     picker_map_garden_mode = True
-    picker_map_view = "satellite"
     picker_map_selected_server = None
     picker_map_hover_server = None
     picker_map_notice = ""
@@ -22535,6 +23152,7 @@ def main():
     caption_box = VOSK_CAPTION_BOX
     caption_translation_toggle_box_live = None
     callsign_box = VOSK_CAPTION_BOX
+    waterfall_visible = False
     buffer_graph_box = None
     cpu_graph_box = None
     audio_volume = audio_output_volume(args)
@@ -22577,7 +23195,7 @@ def main():
     # makes it independent from the one live KiWi client until the second
     # transport/audio path is implemented deliberately.
     dual_vfo_open = bool(args.dual_vfo_preview)
-    dual_vfo_parent = "apps" if dual_vfo_open else "home"
+    dual_vfo_parent = "home"
     # Home closes B's transport to release the Kiwi slot, but it does not end
     # the operator's Dual session. Keep B's receiver/tuning profile in RAM so
     # re-entering Dual feels like returning to an instrument, not starting it.
@@ -22682,6 +23300,7 @@ def main():
     dual_vfo_picker_open = False
     dual_vfo_picker_target = "A"
     dual_vfo_picker_page = 0
+    dual_vfo_receiver_list_target = None
     dual_vfo_mode_open = False
     dual_vfo_mode_target = "A"
     dual_vfo_gesture_vfo = None
@@ -23053,11 +23672,17 @@ def main():
     # pressed tile lit briefly, while a held press stays lit for the gesture.
     zoom_flash_gesture = None
     zoom_flash_until = 0.0
-    frequency_entry_value = f"{args.freq_khz / 1000.0:.6f}" if frequency_entry_open else ""
+    frequency_entry_value = (
+        f"{args.freq_khz / 1000.0:.6f}"
+        if frequency_entry_open or frequency_drawer_open else ""
+    )
     frequency_entry_invalid = False
-    frequency_entry_replace_on_digit = False
+    frequency_entry_replace_on_digit = bool(frequency_drawer_open)
     frequency_drawer_pressed = None
+    frequency_drawer_hold = FrequencyArrowHold()
     station_scroll = 0
+    receiver_list_focus_on_entry = False
+    receiver_list_sort_used = False
     saved_digital_mode = remembered_preferences.get("digital_mode")
     digital_mode = saved_digital_mode if saved_digital_mode in ("DIG", "IQ") else "DIG"
     saved_tune_step_hz = remembered_preferences.get("tune_step_hz")
@@ -23095,8 +23720,10 @@ def main():
     touch_started = False
     gesture = None
     swipe_started = False
-    start_x = start_freq = None
+    start_x = start_freq = start_view_center_khz = None
     start_y = 0
+    scope_drag_eligible = False
+    scope_drag_start_height = 0.0
     start_scroll = 0
     picker_dragged = False
     start_menu_scroll = 0.0
@@ -23192,6 +23819,7 @@ def main():
                 "grid_source": wspr_identity_grid_source,
             },
             "spectrum_enabled": bool(spectrum_enabled),
+            "spectrum_auto": state.spectrum_auto_snapshot(),
             "instrument_layout": instrument_layout,
             "compact_font_likes": sorted(compact_font_review_liked),
             "compact_frequency_font_family": compact_frequency_font_family,
@@ -23490,6 +24118,35 @@ def main():
             state.receiver_type_snapshot(server_generation) or "kiwi",
         )
 
+    def frequency_drawer_receiver_identity():
+        server, _freq, _zoom, _smeter, _generation, server_generation = state.snapshot()
+        return server, server_generation, state.receiver_type_snapshot(server_generation)
+
+    def step_frequency_in_drawer(action):
+        nonlocal display_freq, candidate_freq, inertia_velocity_khz_s, anim_start
+        nonlocal frequency_entry_value, frequency_entry_replace_on_digit, frequency_entry_invalid
+        server, current_khz, _zoom, _smeter, _generation, _server_generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot()
+        if action not in ("down", "up") or not frequency_drawer_tuning_allowed(receiver_type, server):
+            return False
+        step_hz = configured_tune_step_hz(receiver_type, tune_step_hz, fmdx_tune_step_hz)
+        low_khz, high_khz = active_tuning_bounds()
+        target_khz = frequency_step_target(
+            current_khz, 1 if action == "up" else -1, step_hz, low_khz, high_khz,
+        )
+        if target_khz != current_khz:
+            state.set_view(freq_khz=target_khz)
+            display_freq = candidate_freq = target_khz
+            inertia_velocity_khz_s = 0.0
+            anim_start = 0.0
+            apply_band_default(target_khz)
+            remember_current_view()
+        frequency_entry_value = f"{target_khz / 1000.0:.6f}"
+        frequency_entry_replace_on_digit = True
+        frequency_entry_invalid = False
+        wake_controls()
+        return True
+
     def clamp_active_frequency(value):
         low, high = active_tuning_bounds()
         return clamp(float(value), low, high)
@@ -23497,7 +24154,10 @@ def main():
     def active_waterfall_center(tuned_khz, span_khz):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
             return float(tuned_khz)
-        return receiver_waterfall_center(tuned_khz, span_khz, state.receiver_type_snapshot())
+        return receiver_waterfall_center(
+            tuned_khz, span_khz, state.receiver_type_snapshot(),
+            state.waterfall_view_center_snapshot(),
+        )
 
     def active_source_span_khz(zoom_level):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
@@ -23539,7 +24199,7 @@ def main():
                 else:
                     continue
                 rc28_zoom_detents = 0
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 print(f"gl RC-28 dial mode {rc28_dial_mode}", flush=True)
                 continue
@@ -23564,7 +24224,7 @@ def main():
                 # tiny, fussy turns for normal listening adjustments.
                 current_volume = audio_volume if audio_volume is not None else 0.5
                 apply_main_volume(clamp(current_volume + int(value) * 0.02, 0.0, 1.0))
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 continue
 
@@ -23596,7 +24256,7 @@ def main():
                         FILTER_LIMIT_HZ - half_width,
                     )
                     state.set_filter(low_cut=center - half_width, high_cut=center + half_width)
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 continue
 
@@ -23722,6 +24382,27 @@ def main():
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
         nonlocal picker_map_selected_server
+        if dual_vfo_receiver_list_target in ("A", "B"):
+            target_vfo = dual_vfo_receiver_list_target
+            if target_vfo == "A":
+                FMDX_SHARED_CONTROL.revoke()
+            server, frequency, zoom = select_dual_vfo_receiver(
+                state, dual_b_state, dual_vfo_sources, dual_vfo_profiles,
+                target_vfo, station,
+            )
+            if target_vfo == "A":
+                drain_queue(line_queue)
+                wf_texture.clear()
+                animate_to(frequency, receiver_display_span(zoom, station_receiver_type(station)), 0.20)
+                write_remembered_view(save_current_frequency=True, force=True)
+            else:
+                drain_queue(dual_b_line_queue)
+                dual_b_wf_texture.clear()
+                write_remembered_view(force=True)
+            picker_map_selected_server = server
+            return_to_dual_vfo()
+            print(f"gl dual VFO {target_vfo} station {server}", flush=True)
+            return
         # Switching receivers always returns FM-DX to read-only; the shared
         # tuner acknowledgement is never carried across a receiver change.
         FMDX_SHARED_CONTROL.revoke()
@@ -23853,13 +24534,16 @@ def main():
     def sync_receiver_browser_to_active():
         """Select the live receiver's tab and centre its row in RECEIVERS."""
         nonlocal station_route_filter, station_query, stations, station_scroll
+        nonlocal receiver_list_focus_on_entry
         nonlocal fmdx_disclaimer_open, fmdx_disclaimer_shown
         nonlocal picker_map_selected_server
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_state = receiver_list_active_state()
+        active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
+        receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
         station_query = ""
-        station_route_filter = active_receiver_source(
-            all_stations, active_server, receiver_type,
+        station_route_filter = (
+            "all" if dual_vfo_receiver_list_target else
+            active_receiver_source(all_stations, active_server, receiver_type)
         )
         fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
             station_route_filter,
@@ -23871,51 +24555,87 @@ def main():
             station_route_filter, favorite_servers, station_health,
             receiver_home_profile,
         )
-        visible_stations = health_prioritized_stations(
-            stations, station_health, station_sort,
-        )
-        visible_stations = focused_receiver_rows_for_source(
-            visible_stations, active_server,
-            station_route_filter, station_route_filter,
-            int(fmdx_disclaimer_open),
-        )
         station_scroll = 0
+        receiver_list_focus_on_entry = not receiver_list_sort_used
         picker_map_selected_server = active_server
         return active_server
 
     def center_active_receiver_in_current_list():
-        """Keep the live row centred when the current source can contain it."""
+        """Preserve entry focus only until the user changes the list order."""
         nonlocal station_scroll
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
-        active_source = active_receiver_source(
-            all_stations, active_server, receiver_type,
-        )
-        visible_stations = health_prioritized_stations(
-            stations, station_health, station_sort,
-        )
-        visible_stations = focused_receiver_rows_for_source(
-            visible_stations, active_server,
-            station_route_filter, active_source,
-            int(fmdx_disclaimer_open),
+        if receiver_list_focus_on_entry:
+            station_scroll = 0
+        else:
+            station_scroll = clamp(
+                station_scroll, 0,
+                station_page_max(stations, int(fmdx_disclaimer_open)),
+            )
+
+    def receiver_list_active_state():
+        """Highlight the VFO that opened RECEIVERS, including VFO B."""
+        return dual_b_state if dual_vfo_receiver_list_target == "B" else state
+
+    def open_dual_receiver_list(vfo):
+        """Open the regular RECEIVERS / ALL list from a DUAL CHANGE button."""
+        nonlocal dual_vfo_receiver_list_target, dual_vfo_open, dual_vfo_picker_open
+        nonlocal picker_open, picker_map_open, picker_map_garden_mode, picker_parent
+        nonlocal station_route_filter, station_query, station_sort, stations, station_scroll
+        nonlocal receiver_list_focus_on_entry, receiver_list_sort_used, search_open
+        nonlocal station_pending_server, station_connected_at, fmdx_disclaimer_open
+        nonlocal picker_map_selected_server
+        stop_dual_vfo_clients()
+        dual_vfo_open = False
+        dual_vfo_picker_open = False
+        dual_vfo_receiver_list_target = vfo
+        picker_parent = "home"
+        picker_open = True
+        picker_map_open = False
+        picker_map_garden_mode = True
+        station_route_filter = "all"
+        station_query = ""
+        station_sort = RECEIVER_SORT_MODES[0]
+        stations = filtered_stations(
+            all_stations, station_query, station_sort, station_route_filter,
+            favorite_servers, station_health, receiver_home_profile,
         )
         station_scroll = 0
-        return active_server
+        receiver_list_sort_used = False
+        receiver_list_focus_on_entry = True
+        search_open = False
+        fmdx_disclaimer_open = False
+        station_pending_server = None
+        station_connected_at = 0.0
+        picker_map_selected_server = receiver_list_active_state().snapshot()[0]
+
+    def return_to_dual_vfo():
+        """Restore the two receiver panes after a list choice or BACK."""
+        nonlocal dual_vfo_receiver_list_target, picker_open, picker_map_open, search_open
+        nonlocal station_pending_server, station_connected_at, fmdx_disclaimer_open
+        dual_vfo_receiver_list_target = None
+        picker_open = False
+        picker_map_open = False
+        search_open = False
+        station_pending_server = None
+        station_connected_at = 0.0
+        fmdx_disclaimer_open = False
+        dual_index = next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "dual")
+        activate_navigation_item(dual_index)
 
     def current_receiver_rows():
         """Return the complete directory in the same focused order for draw and taps."""
-        active_server, _frequency, _zoom, _smeter, _view, generation = state.snapshot()
-        receiver_type = state.receiver_type_snapshot(generation) or "kiwi"
+        active_state = receiver_list_active_state()
+        active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
+        receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
         active_source = active_receiver_source(
             all_stations, active_server, receiver_type,
         )
         visible_stations = health_prioritized_stations(
             stations, station_health, station_sort,
         )
-        return focused_receiver_rows_for_source(
+        return receiver_rows_for_display(
             visible_stations, active_server,
             station_route_filter, active_source,
-            int(fmdx_disclaimer_open),
+            receiver_list_focus_on_entry, int(fmdx_disclaimer_open),
         )
 
     def restore_navigation_parent(parent):
@@ -23940,15 +24660,19 @@ def main():
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
-        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
+        nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
         nonlocal wspr_expanded_graph_open, wspr_expanded_graph_id, wspr_expanded_graph_page
         nonlocal wspr_tile_band_open
         nonlocal filter_panel_open, station_scroll, station_query, station_sort, station_route_filter, favorite_servers
+        nonlocal receiver_list_focus_on_entry
+        nonlocal receiver_list_sort_used
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
+        if kind != "dual":
+            dual_vfo_receiver_list_target = None
         sstv_workspace.open = False
         hell_workspace.open = False
         qrss_workspace.open = False
@@ -23997,6 +24721,8 @@ def main():
                 all_stations, station_query, station_sort, station_route_filter,
                 favorite_servers, station_health, receiver_home_profile,
             )
+            receiver_list_sort_used = False
+            receiver_list_focus_on_entry = True
             center_active_receiver_in_current_list()
             search_open = False
             picker_map_open = False
@@ -24011,6 +24737,7 @@ def main():
             radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
             station_sort = RECEIVER_SORT_MODES[0]
+            receiver_list_sort_used = False
             sync_receiver_browser_to_active()
             search_open = False
             picker_map_open = False
@@ -24101,6 +24828,13 @@ def main():
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "vosc":
+            settings_menu_open = False
+            digital_menu_open = False
+            asr_panel_open = True
+            asr_moon_language_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "tests":
             tests_parent = parent
             settings_menu_open = False
@@ -24109,6 +24843,7 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             dj_tune_open = filter_panel_open = False
         elif kind == "dual":
+            dual_vfo_receiver_list_target = None
             dual_vfo_parent = parent
             settings_menu_open = False
             digital_menu_open = False
@@ -24495,6 +25230,12 @@ def main():
             picker_map_notice = "DRAG A REGION UNDER CENTER, THEN TAP THE RETICLE"
             picker_map_notice_until = time.monotonic() + 3.0
             return False
+        if dual_vfo_receiver_list_target in ("A", "B"):
+            connect_to_station((
+                selected["name"], selected["location"], selected["server"],
+                None, None, None, None, selected.get("receiver_type", "kiwi"),
+            ))
+            return True
         picker_map_selected_server = selected["server"]
         picker_map_hover_server = selected["server"]
         picker_map_lock_target = (math.radians(selected["lon"]), math.radians(selected["lat"]))
@@ -24571,9 +25312,9 @@ def main():
         return True
 
     def focus_receiver_map_on_active():
-        """Select, reveal, and centre the receiver currently feeding Home."""
+        """Centre the receiver whose list is open, including DUAL VFO B."""
         nonlocal picker_map_selected_server, picker_map_hover_server
-        active_server, _frequency, _zoom, _smeter, _view, _generation = state.snapshot()
+        active_server, _frequency, _zoom, _smeter, _view, _generation = receiver_list_active_state().snapshot()
         picker_map_selected_server = active_server
         picker_map_hover_server = active_server
         receiver = next(
@@ -24610,6 +25351,8 @@ def main():
                     deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
                         deepgram_key_value
                     )
+                    if deepgram_key_error:
+                        last_vosc_error_key = ()
                     wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
@@ -24673,8 +25416,10 @@ def main():
                         desktop_map_dragged = True
                     if desktop_map_dragged:
                         radius = max(1.0, radiogarden_radius(PICKER_MAP_BOX, picker_map_scale))
-                        picker_map_yaw = (picker_map_yaw - RADIOGARDEN_DRAG_GAIN * dx / radius + math.pi) % math.tau - math.pi
-                        picker_map_pitch = clamp(picker_map_pitch + RADIOGARDEN_DRAG_GAIN * dy / radius, math.radians(-82), math.radians(82))
+                        picker_map_yaw, picker_map_pitch = radiogarden_pan_angles(
+                            picker_map_yaw, picker_map_pitch, dx, dy,
+                            PICKER_MAP_BOX, picker_map_scale,
+                        )
                         current_motion = time.monotonic()
                         elapsed = max(0.001, current_motion - desktop_map_motion_at)
                         desktop_map_velocity = (-RADIOGARDEN_DRAG_GAIN * dx / radius / elapsed, RADIOGARDEN_DRAG_GAIN * dy / radius / elapsed)
@@ -24713,6 +25458,8 @@ def main():
                             RADIOGARDEN_ZOOM_MIN,
                             RADIOGARDEN_ZOOM_MAX,
                         )
+                        picker_map_notice = "GLOBE ZOOM"
+                        picker_map_notice_until = time.monotonic() + 1.2
                     elif picker_open and not search_open:
                         # Mouse-wheel paging makes the desktop receiver list
                         # as practical to explore as the Pi's finger drag.
@@ -24806,6 +25553,33 @@ def main():
                             anim_start = 0.0
                             start_x = x
                             start_y = y
+                            # Every live RF view accepts the held resize,
+                            # including when a right-rail drawer is open.
+                            # Full-screen workspaces covering the RF canvas
+                            # keep their own gestures.
+                            scope_drag_eligible = (
+                                LCD_800_MODE
+                                and 0 <= x < rf_canvas_width()
+                                and len(points) == 1
+                                and not (
+                                    picker_open or font_lab_open or network_password_open
+                                    or dual_vfo_open or dual_vfo_mode_open
+                                    or dual_vfo_picker_open or wspr_panel_open or wspr_add_open
+                                    or wspr_identity_open or globe_open
+                                    or cw_workspace.open or qrss_workspace.open
+                                    or hell_workspace.open or sstv_workspace.open
+                                )
+                                and not (asr_panel_open and contains(ASR_PANEL_BOX, x, y))
+                                and not (deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y))
+                                and not (band_navigation_open and contains(band_navigation_panel_box(), x, y))
+                                and not (filter_panel_open and contains(FILTER_PANEL_BOX, x, y))
+                                and not (dj_tune_open and contains(DJ_PANEL_BOX, x, y))
+                                and not (rtl_lab_open and contains(RTL_LAB_PANEL_BOX, x, y))
+                                and not (menu_open and contains(MENU_BOX, x, y))
+                            )
+                            scope_drag_start_height = (
+                                scope_height if state.spectrum_snapshot()[0] else 0.0
+                            )
                             start_scroll = station_scroll
                             wspr_workspace_scroll_start = wspr_workspace_scroll
                             wspr_workspace_dragged = False
@@ -24852,6 +25626,7 @@ def main():
                                 )
                             ) else freq_khz
                             start_span = display_span
+                            start_view_center_khz = active_waterfall_center(display_freq, display_span)
                             candidate_freq = start_freq
                             # The waterfall's control fade must never swallow
                             # the first drag after entering either globe view.
@@ -24951,15 +25726,16 @@ def main():
                                 frequency_drawer_pressed = frequency_drawer_action_at(
                                     x, y, state.receiver_type_snapshot()
                                 )
-                            elif deepgram_setup_open and (
-                                contains(DEEPGRAM_SETUP_BOX, x, y)
-                                or (
-                                    LCD_800_MODE
-                                    and contains(keyboard_modal_back_box(), x, y)
-                                )
-                            ):
+                                frequency_drawer_hold.cancel()
+                                if frequency_drawer_pressed in ("down", "up"):
+                                    identity = frequency_drawer_receiver_identity()
+                                    if frequency_drawer_tuning_allowed(identity[2], identity[0]):
+                                        frequency_drawer_hold.begin(
+                                            frequency_drawer_pressed, start_time, identity,
+                                        )
+                            elif deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y):
                                 gesture = "deepgram_setup"
-                            elif deepgram_setup_open:
+                            elif deepgram_setup_open and not LCD_800_MODE:
                                 gesture = "deepgram_setup_outside"
                             elif rtl_lab_open:
                                 # The local-source sheet is a full modal
@@ -24978,7 +25754,9 @@ def main():
                                 gesture = "network_panel"
                             elif asr_panel_open and asr_option_at(x, y, asr_moon_language_open) is not None:
                                 gesture = "asr_select"
-                            elif asr_panel_open:
+                            elif asr_panel_open and (not LCD_800_MODE or x >= LCD_NAV_X0):
+                                # VOSC owns its right rail until BACK. The
+                                # waterfall to its left remains interactive.
                                 gesture = "asr_outside"
                             elif band_navigation_open:
                                 # The band sheet is intentionally modal while
@@ -25045,25 +25823,33 @@ def main():
                             elif (
                                 LCD_800_MODE
                                 and (
-                                    (instrument_layout == "compact" and contains(compact_band_context_touch_box(), x, y))
+                                    (instrument_layout == "right" and contains(compact_band_context_touch_box(), x, y))
                                     or (
-                                        instrument_layout != "compact"
-                                        and contains(main_band_context_box(text_cache, display_freq), x, y)
+                                        instrument_layout != "right"
+                                        and contains(main_band_context_box(
+                                            text_cache, display_freq,
+                                            compact_frequency_font_family, instrument_layout,
+                                        ), x, y)
                                     )
                                 )
                             ):
                                 gesture = "band_navigation_toggle"
-                            # Operating controls always win over movable live
-                            # captions, even when an ASR/HAM lane crosses the
-                            # bottom of the waterfall.
+                            elif (vosc_popup_action := vosc_popup_action_at(
+                                x, y, caption_box, callsign_box,
+                                state.transcription_snapshot()[0], state.callsign_snapshot()[0],
+                                caption_translation_toggle_box_live, waterfall_visible,
+                            )) is not None:
+                                gesture = vosc_popup_action
+                            # A bottom VOSC popup covers Zoom until the user
+                            # taps that popup again to move it to another lane.
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
                                 gesture = "zoom_minus"
-                            # The scope-height rail is deliberately a wide,
-                            # transparent target. Claim it before the
-                            # waterfall so resizing never becomes a tune.
-                            elif not picker_open and scope_adjust_box and contains(scope_adjust_box, x, y):
+                            # The legacy desktop scope seam remains a direct
+                            # target; LCD resizing uses a held gesture from
+                            # anywhere on the visible RF canvas.
+                            elif not picker_open and not LCD_800_MODE and scope_adjust_box and contains(scope_adjust_box, x, y):
                                 gesture = "scope_height_adjust"
                             elif not picker_open and not LCD_800_MODE and contains(SPECTRUM_TOGGLE_BOX, x, y):
                                 gesture = "spectrum_toggle"
@@ -25087,6 +25873,11 @@ def main():
                                 gesture = "favorite_toggle"
                             elif contains(stream_waterfall_box(), x, y):
                                 gesture = "stream_toggle"
+                            elif (
+                                audio_transport_graph_open and buffer_graph_box
+                                and contains(audio_transport_graph_close_box(buffer_graph_box), x, y)
+                            ):
+                                gesture = "audio_transport_close"
                             elif audio_transport_graph_open and buffer_graph_box and contains(buffer_graph_box, x, y):
                                 gesture = "buffer_graph_move"
                             elif (
@@ -25099,20 +25890,10 @@ def main():
                             elif drawer_waterfall_touch:
                                 # Rail drawers are intentionally non-modal.
                                 # Their controls own only x=1024..1280; the
-                                # complete live waterfall must remain a
-                                # tuning surface even when a movable ASR/HAM
-                                # caption happens to cross it. Zoom/Filter/
-                                # Scope were claimed above, so they remain
-                                # immediately tappable as well.
+                                # exposed waterfall remains a tuning surface.
+                                # Visible VOSC popups and controls were claimed
+                                # above, so a covered control cannot fire.
                                 gesture = "waterfall"
-                            elif caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
-                                gesture = "caption_translation_toggle"
-                            elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
-                                gesture = "callsign_caption"
-                            elif state.transcription_snapshot()[0] and contains(caption_box, x, y):
-                                # Protect readable text from accidental tuning,
-                                # but do not move the fixed caption window.
-                                gesture = "caption_readonly"
                             elif (
                                 LCD_800_MODE
                                 and (
@@ -25120,9 +25901,14 @@ def main():
                                         x,
                                         y,
                                         frequency_display_box(
-                                            text_cache, display_freq, compact_frequency_font_family
+                                            text_cache, display_freq,
+                                            compact_frequency_font_family, instrument_layout,
                                         ),
-                                        instrument_layout == "compact",
+                                        instrument_layout == "right",
+                                        home_rail_controls_available(
+                                            picker_open, settings_menu_open,
+                                            digital_menu_open, home_sidebar_open,
+                                        ),
                                     )
                                 )
                             ):
@@ -25183,15 +25969,15 @@ def main():
                                 else:
                                     gesture = "lcd_filter_drawer"
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_bandwidth_box(instrument_layout == "compact"), x, y
+                                lcd_home_bandwidth_box(instrument_layout == "right"), x, y
                             ):
                                 gesture = "home_passband"
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_mute_box(instrument_layout == "compact"), x, y
+                                lcd_home_volume_mute_box(instrument_layout == "right"), x, y
                             ):
                                 gesture = "home_volume_mute"
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_box(instrument_layout == "compact"), x, y
+                                lcd_home_volume_box(instrument_layout == "right"), x, y
                             ):
                                 gesture = "home_volume"
                             # Settings and MODES are full right-rail pages whose
@@ -25317,9 +26103,9 @@ def main():
                                     gesture = "network_launch"
                                 else:
                                     gesture = "lcd_nav"
-                            elif not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
+                            elif not LCD_800_MODE and not picker_open and contains(CALLSIGN_TOGGLE_BOX, x, y):
                                 gesture = "callsign_toggle"
-                            elif not picker_open and contains(ASR_TOGGLE_BOX, x, y):
+                            elif not LCD_800_MODE and not picker_open and contains(ASR_TOGGLE_BOX, x, y):
                                 gesture = "asr_toggle"
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
@@ -25329,10 +26115,32 @@ def main():
                                 gesture = "spectrum_toggle"
                             elif not picker_open and contains(FILTER_TOGGLE_BOX, x, y):
                                 gesture = "filter_toggle"
-                            elif not picker_open and is_waterfall_tune_touch(x, y):
+                            elif not picker_open and is_waterfall_tune_touch(
+                                x, y, instrument_layout,
+                                left_smeter_box(text_cache, display_freq, compact_frequency_font_family)
+                                if LCD_800_MODE and instrument_layout == "left" else None,
+                            ):
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                        elif scope_drag_eligible and (
+                            gesture == "scope_hold_drag"
+                            or (
+                                len(points) == 1
+                                and scope_hold_drag_ready(
+                                    time.monotonic() - start_time,
+                                    x - start_x, y - start_y, args.tap_px,
+                                )
+                            )
+                        ):
+                            gesture = "scope_hold_drag"
+                            if not state.spectrum_snapshot()[0]:
+                                state.set_spectrum_enabled(True)
+                            scope_height = scope_height_from_drag(
+                                scope_drag_start_height, start_y, y, SCOPE_HEIGHT_MAX,
+                            )
+                            scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
+                            wake_controls()
                         elif gesture in ("sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
                             {"sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
@@ -25373,7 +26181,7 @@ def main():
                             desired_volume = volume_at_x(
                                 x,
                                 AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box(
-                                    instrument_layout == "compact"
+                                    instrument_layout == "right"
                                 ),
                             )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
@@ -25432,6 +26240,8 @@ def main():
                                         RADIOGARDEN_ZOOM_MIN,
                                         RADIOGARDEN_ZOOM_MAX,
                                     )
+                                    picker_map_notice = "GLOBE ZOOM"
+                                    picker_map_notice_until = time.monotonic() + 1.2
                                     picker_map_pinch_distance = max(1.0, distance)
                             else:
                                 picker_map_lock_target = None
@@ -25440,10 +26250,10 @@ def main():
                                 # Do not turn a two-finger pinch into a sudden
                                 # one-finger pan when the first finger lifts.
                                 if not picker_map_pinch_active:
-                                    target_yaw = (picker_map_start_yaw - (x - start_x) * 0.00075 + math.pi) % math.tau - math.pi
-                                    target_pitch = clamp(
-                                        picker_map_start_pitch + (y - start_y) * 0.0006,
-                                        math.radians(-80), math.radians(80),
+                                    target_yaw, target_pitch = radiogarden_pan_angles(
+                                        picker_map_start_yaw, picker_map_start_pitch,
+                                        x - start_x, y - start_y,
+                                        PICKER_MAP_BOX, picker_map_scale,
                                     )
                                     # Ease toward the finger target instead of
                                     # applying every noisy touchscreen sample as
@@ -25577,14 +26387,10 @@ def main():
                             # the next frame, so the response feels like one
                             # live surface rather than a separate settings
                             # dialog.
-                            max_scope_height = min(
-                                SCOPE_HEIGHT_MAX,
-                                LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H - spectrum_y0 - 96,
-                            )
                             scope_height = clamp(
                                 float(y - spectrum_y0),
                                 SCOPE_HEIGHT_MIN,
-                                max_scope_height,
+                                SCOPE_HEIGHT_MAX,
                             )
                             scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                             wake_controls()
@@ -25684,7 +26490,7 @@ def main():
                                 if action == "home":
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
-                                    tests_panel_open = dual_vfo_parent == "apps"
+                                    tests_panel_open = False
                                 elif action in ("A", "B"):
                                     # A spectrum tap is an operator's source
                                     # selection, not merely a cosmetic focus.
@@ -25703,12 +26509,20 @@ def main():
                                     )
                                     dual_audio_mixer.set_mix(dual_vfo_mix)
                                 elif action in ("rx_A", "rx_B"):
-                                    dual_vfo_picker_target = action[-1]
-                                    dual_vfo_picker_page = 0
-                                    dual_vfo_picker_open = True
-                                elif action in ("mode_A", "mode_B"):
-                                    dual_vfo_mode_target = action[-1]
-                                    dual_vfo_mode_open = True
+                                    open_dual_receiver_list(action[-1])
+                                elif action and action.startswith("mode_"):
+                                    _prefix, target_vfo, label = action.split("_", 2)
+                                    selected_mode = "NBFM" if label == "FM" else label
+                                    next_mode = set_dual_vfo_mode(
+                                        state, dual_b_state, dual_vfo_profiles,
+                                        target_vfo, selected_mode,
+                                    )
+                                    if target_vfo == "A":
+                                        radio_mode = next_mode
+                                        manual_radio_mode = True
+                                        filter_custom_width = False
+                                        digital_mode = "IQ" if next_mode.upper() == "IQ" else "DIG"
+                                    remember_current_view()
                                 elif action and action.startswith("zoom_"):
                                     _prefix, target_vfo, direction = action.split("_", 2)
                                     delta = -1 if direction == "-1" else 1
@@ -25817,28 +26631,44 @@ def main():
                                 )
                                 if action != frequency_drawer_pressed:
                                     action = None
-                                if action in ("down", "up"):
-                                    _server, current_khz, current_zoom, _smeter, _gen, _server_gen = state.snapshot()
-                                    current_step_hz = configured_tune_step_hz(
-                                        state.receiver_type_snapshot(), tune_step_hz, fmdx_tune_step_hz
-                                    )
-                                    low_khz, high_khz = active_tuning_bounds()
-                                    target_khz = frequency_step_target(
-                                        current_khz, 1 if action == "up" else -1,
-                                        current_step_hz, low_khz, high_khz,
-                                    )
-                                    state.set_view(freq_khz=target_khz)
-                                    display_freq = target_khz
-                                    candidate_freq = target_khz
-                                    inertia_velocity_khz_s = 0.0
-                                    animate_to(target_khz, display_span, 0.12)
-                                    apply_band_default(target_khz)
-                                    remember_current_view()
-                                elif action == "manual":
-                                    frequency_entry_value = f"{display_freq / 1000.0:.6f}"
-                                    frequency_entry_invalid = False
-                                    frequency_entry_replace_on_digit = True
-                                    frequency_entry_open = True
+                                arrow_tap = frequency_drawer_hold.release(
+                                    action, frequency_drawer_receiver_identity(),
+                                )
+                                receiver_server = state.snapshot()[0]
+                                can_tune_frequency = frequency_drawer_tuning_allowed(
+                                    state.receiver_type_snapshot(), receiver_server,
+                                )
+                                if action in ("down", "up") and arrow_tap:
+                                    step_frequency_in_drawer(action)
+                                elif isinstance(action, str) and action.startswith("key_"):
+                                    key = action[4:]
+                                    if key == "OK":
+                                        if not can_tune_frequency:
+                                            frequency_entry_invalid = True
+                                        else:
+                                            minimum_khz, maximum_khz = active_tuning_bounds()
+                                            entered_khz = parse_frequency_entry_mhz(
+                                                frequency_entry_value, maximum_khz
+                                            )
+                                            if entered_khz is None or entered_khz < minimum_khz:
+                                                frequency_entry_invalid = True
+                                            else:
+                                                state.set_view(freq_khz=entered_khz)
+                                                display_freq = entered_khz
+                                                candidate_freq = entered_khz
+                                                inertia_velocity_khz_s = 0.0
+                                                animate_to(entered_khz, display_span, 0.16)
+                                                apply_band_default(entered_khz)
+                                                remember_current_view()
+                                                frequency_entry_value = f"{entered_khz / 1000.0:.6f}"
+                                                frequency_entry_replace_on_digit = True
+                                                frequency_entry_invalid = False
+                                    else:
+                                        frequency_entry_value, frequency_entry_replace_on_digit = edit_frequency_entry(
+                                            frequency_entry_value, key,
+                                            frequency_entry_replace_on_digit,
+                                        )
+                                        frequency_entry_invalid = False
                                 elif isinstance(action, str) and action.startswith("step_"):
                                     # The step is selected right here in the
                                     # frequency rail instead of navigating to
@@ -25859,6 +26689,9 @@ def main():
                                 frequency_drawer_open = True
                                 frequency_entry_open = False
                                 frequency_drawer_pressed = None
+                                frequency_entry_value = f"{display_freq / 1000.0:.6f}"
+                                frequency_entry_replace_on_digit = True
+                                frequency_entry_invalid = False
                                 rc28_dial_mode = "TUNE"
                                 band_navigation_open = False
                                 menu_open = picker_open = radio_setup_open = display_setup_open = False
@@ -25937,7 +26770,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 wake_controls()
-                                compact_layout = instrument_layout == "compact"
+                                compact_layout = instrument_layout == "right"
                                 # The annunciator block is taller than the mode
                                 # grid. Its empty space is not a control, so a
                                 # blank tap must not open the MODES drawer.
@@ -25975,7 +26808,7 @@ def main():
                             apply_main_volume(audio_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume":
-                            apply_main_volume(home_volume_at_x(x, instrument_layout == "compact"))
+                            apply_main_volume(home_volume_at_x(x, instrument_layout == "right"))
                             wake_controls()
                         elif touch_started and gesture == "home_volume_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -26049,7 +26882,10 @@ def main():
                                     state.set_audio_controls(deemphasis=(int(controls["deemphasis"]) + 1) % 3)
                                 elif choice == "filter":
                                     audio_panel_open = False
-                                    filter_panel_open = True
+                                    if LCD_800_MODE:
+                                        open_lcd_filter_drawer()
+                                    else:
+                                        filter_panel_open = True
                                 elif choice == "backend":
                                     previous_volume = audio_volume if audio_volume is not None else 0.5
                                     args.audio_backend = (
@@ -26696,10 +27532,6 @@ def main():
                                 elif choice == "openwebrx":
                                     toggle_openwebrx_test()
                                     tests_panel_open = False
-                                elif choice == "dual":
-                                    tests_panel_open = False
-                                    activate_navigation_item(0, (("dual", "DUAL"),))
-                                    dual_vfo_parent = "apps"
                                 elif choice == "pattern" and retune_sweep is None:
                                     retune_pattern_index = (retune_pattern_index + 1) % len(RETUNE_TEST_PATTERNS)
                                 elif choice == "run":
@@ -26972,28 +27804,23 @@ def main():
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
                                         if kind == "reset":
-                                            floor = WATERFALL_DEFAULT_FLOOR
-                                            ceiling = WATERFALL_DEFAULT_CEIL
-                                            speed = WATERFALL_DEFAULT_SPEED
-                                            auto = False
-                                            palette = WATERFALL_DEFAULT_PALETTE
-                                            state.set_spectrum_enabled(True)
-                                        elif kind == "instruments":
-                                            instrument_layout = (
-                                                "compact" if instrument_layout == "expanded" else "expanded"
+                                            floor, ceiling, speed, auto, palette, _generation = reset_display_view(state)
+                                            scope_height = float(
+                                                LCD_SPECTRUM_H if LCD_800_MODE else (
+                                                    SPECTRUM_WIDE_H if DESKTOP_1280_MODE else SPECTRUM_H
+                                                )
                                             )
-                                            preferences_dirty = True
-                                            write_remembered_view(force=True)
-                                            print(f"gl instruments {instrument_layout}", flush=True)
-                                        elif kind == "scope":
-                                            if not state.spectrum_snapshot()[0]:
-                                                state.set_spectrum_enabled(True)
-                                            scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
-                                            print("gl display scope drag", flush=True)
+                                            instrument_layout = "right"
+                                        elif kind == "layout":
+                                            if instrument_layout != value:
+                                                instrument_layout = value
+                                                preferences_dirty = True
+                                                write_remembered_view(force=True)
+                                                print(f"gl instruments {instrument_layout}", flush=True)
                                         elif kind == "spectrum":
-                                            state.set_spectrum_enabled(not state.spectrum_snapshot()[0])
+                                            toggle_display_spectrum_control(state, kind)
                                         elif kind == "auto":
-                                            auto = not auto
+                                            toggle_display_spectrum_control(state, kind)
                                         elif kind == "floor":
                                             floor += value
                                             auto = False
@@ -27002,9 +27829,11 @@ def main():
                                             auto = False
                                         elif kind == "rate":
                                             speed = value
-                                        else:
-                                            palette = value
-                                        if kind not in ("instruments", "scope"):
+                                        elif kind == "palette":
+                                            floor, ceiling, speed, auto, palette, _generation = (
+                                                apply_waterfall_palette_preset(state, value)
+                                            )
+                                        if kind not in ("layout", "palette", "spectrum", "auto", "reset"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -27012,14 +27841,9 @@ def main():
                                                 auto=auto,
                                                 palette=palette,
                                             )
-                                        if reset_display:
-                                            # Palette changes otherwise leave the previous
-                                            # texture visible until it has slowly scrolled
-                                            # away, which makes a successful reset appear
-                                            # inert. Clear it and persist the complete
-                                            # baseline on this same deliberate tap.
-                                            drain_queue(line_queue)
-                                            wf_texture.clear()
+                                        if reset_display or kind == "palette":
+                                            # Theme changes preserve the live image and
+                                            # queued rows; only new rows use the new map.
                                             write_remembered_view(save_current_frequency=True, force=True)
                                         print(f"gl display floor={floor:.0f} ceil={ceiling:.0f} auto={int(auto)} rate={speed} palette={palette}", flush=True)
                                     wake_controls()
@@ -27152,6 +27976,11 @@ def main():
                                     cpu_core_percentages = ()
                                     cpu_core_samples = None
                             wake_controls()
+                        elif touch_started and gesture == "audio_transport_close":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                audio_transport_graph_open = False
+                            wake_controls()
                         elif touch_started and gesture == "cpu_utilization_graph":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -27198,8 +28027,12 @@ def main():
                                     deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
                                         deepgram_key_value
                                     )
+                                    if deepgram_key_error:
+                                        last_vosc_error_key = ()
                                 elif action == "CANCEL":
                                     deepgram_setup_open = False
+                                    if LCD_800_MODE:
+                                        asr_panel_open = True
                                     deepgram_key_value = ""
                                     deepgram_key_error = ""
                                 elif action == "SAVE":
@@ -27207,12 +28040,15 @@ def main():
                                         save_deepgram_api_key(deepgram_key_value)
                                     except ValueError as exc:
                                         deepgram_key_error = str(exc)
+                                        last_vosc_error_key = ()
                                     else:
                                         state.set_asr_engine(deepgram_setup_engine)
                                         drain_caption_audio(transcript_queue)
                                         preferences_dirty = True
                                         write_remembered_view(force=True)
                                         deepgram_setup_open = False
+                                        if LCD_800_MODE:
+                                            asr_panel_open = True
                                         deepgram_key_value = ""
                                         deepgram_key_error = ""
                                 elif action and len(deepgram_key_value) < 512:
@@ -27325,14 +28161,26 @@ def main():
                             if moved <= args.tap_px:
                                 selection = asr_option_at(x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
-                                if selection_kind == "caption_mode":
+                                if selection_kind == "back":
+                                    if asr_moon_language_open:
+                                        asr_moon_language_open = False
+                                    else:
+                                        asr_panel_open = False
+                                elif selection_kind == "callsign":
+                                    enabled = state.callsign_snapshot()[0]
+                                    state.set_callsign_enabled(not enabled)
+                                    drain_caption_audio(callsign_queue)
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
+                                elif selection_kind == "caption_mode":
                                     if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
                                         state.set_asr_engine("whisper")
                                     state.set_caption_mode(selected_value)
                                     drain_caption_audio(transcript_queue)
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
-                                    asr_panel_open = False
+                                    if not LCD_800_MODE:
+                                        asr_panel_open = False
                                     asr_moon_language_open = False
                                 elif selected_value == "moonshine" and not asr_moon_language_open:
                                     asr_moon_language_open = True
@@ -27357,12 +28205,13 @@ def main():
                                     # preference and is worth committing now.
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
-                                    asr_panel_open = False
+                                    if not LCD_800_MODE:
+                                        asr_panel_open = False
                                     asr_moon_language_open = False
                             wake_controls()
                         elif touch_started and gesture == "asr_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if not LCD_800_MODE and moved <= args.tap_px:
                                 asr_panel_open = False
                                 asr_moon_language_open = False
                             wake_controls()
@@ -27374,6 +28223,13 @@ def main():
                                 else overlay_anchor_at_y(y, waterfall_y0, waterfall_y1)
                             )
                             move_overlay_to_lane("asr", target)
+                            wake_controls()
+                        elif touch_started and gesture == "caption_close":
+                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                state.set_asr_engine("off")
+                                drain_caption_audio(transcript_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "caption_translation_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -27396,6 +28252,13 @@ def main():
                             )
                             move_overlay_to_lane("ham", target)
                             wake_controls()
+                        elif touch_started and gesture == "callsign_close":
+                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                state.set_callsign_enabled(False)
+                                drain_caption_audio(callsign_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
+                            wake_controls()
                         elif touch_started and gesture == "buffer_graph_move":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             target = next_overlay_lane(buffer_graph_anchor) if moved <= args.tap_px else overlay_anchor_at_y(y, waterfall_y0, waterfall_y1)
@@ -27417,7 +28280,7 @@ def main():
                                     state.set_spectrum_enabled(True)
                                 scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                                 wake_controls()
-                        elif touch_started and gesture == "scope_height_adjust":
+                        elif touch_started and gesture in ("scope_height_adjust", "scope_hold_drag"):
                             scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                             wake_controls()
                         elif touch_started and gesture == "filter_toggle":
@@ -27463,14 +28326,14 @@ def main():
                                         all_stations, station_query, station_sort, station_route_filter,
                                         favorite_servers, station_health, receiver_home_profile,
                                     )
+                                    receiver_list_focus_on_entry = False
                                     station_scroll = 0
                         elif touch_started and gesture == "picker_map_open":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 picker_map_open = True
                                 picker_map_garden_mode = True
-                                # Every entry returns to the resting satellite
-                                # view and selects the receiver feeding Home.
+                                # Every entry returns to the resting satellite view.
                                 picker_map_view = GLOBE_DEFAULT_VIEW
                                 focus_receiver_map_on_active()
                                 search_open = False
@@ -27521,7 +28384,7 @@ def main():
                                     RADIOGARDEN_ZOOM_MIN,
                                     RADIOGARDEN_ZOOM_MAX,
                                 )
-                                picker_map_notice = f"GLOBE {picker_map_zoom_target:.1f}x"
+                                picker_map_notice = "GLOBE ZOOM"
                                 picker_map_notice_until = time.monotonic() + 1.2
                             wake_controls()
                         elif touch_started and gesture == "picker_map_garden":
@@ -27556,6 +28419,8 @@ def main():
                                     picker_map_hover_server = None
                                     search_open = False
                                     sync_receiver_browser_to_active()
+                                elif dual_vfo_receiver_list_target in ("A", "B"):
+                                    return_to_dual_vfo()
                                 else:
                                     picker_open = False
                                     picker_map_open = False
@@ -27579,9 +28444,11 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                center_active_receiver_in_current_list()
+                                receiver_list_focus_on_entry = False
+                                receiver_list_sort_used = True
+                                station_scroll = 0
                                 picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
-                                picker_list_notice_until = time.monotonic() + 1.8
+                                picker_list_notice_until = time.monotonic() + args.zoom_osd_seconds
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -27607,7 +28474,8 @@ def main():
                                     all_stations, station_query, station_sort, station_route_filter,
                                     favorite_servers, station_health, receiver_home_profile,
                                 )
-                                center_active_receiver_in_current_list()
+                                receiver_list_focus_on_entry = not receiver_list_sort_used
+                                station_scroll = 0
                                 # Moving to another source cancels any connection
                                 # a previous row tap started. The browser must
                                 # never dismiss itself to the main screen just
@@ -27642,35 +28510,52 @@ def main():
                                     connect_to_station(visible_stations[idx])
                         elif touch_started and gesture == "waterfall":
                             wake_controls()
-                            moved = abs((last_x if last_x is not None else x) - start_x)
-                            _server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
-                            if not swipe_started:
-                                # Tuning is drag-only. A tap now just wakes
-                                # the controls, preventing a thumb near an
-                                # overlay from jumping the receiver.
-                                candidate_freq = start_freq
-                            live_step_hz = receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
-                            candidate_freq = clamp(
-                                snap_frequency_khz(candidate_freq, live_step_hz),
-                                *active_tuning_bounds(),
-                            )
-                            if args.swipe_inertia_strength > 0 and swipe_started and abs(swipe_velocity_px_s) >= args.swipe_inertia_min_px_s:
-                                sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args)
-                                inertia_velocity_khz_s = (
-                                    retune_delta_from_drag(swipe_velocity_px_s, start_span, args.invert_tune, sensitivity)
-                                    * args.swipe_inertia_strength
+                            server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
+                            receiver_type = state.receiver_type_snapshot()
+                            live_step_hz = receiver_tune_step_hz(zoom, tune_step_hz, receiver_type, fmdx_tune_step_hz)
+                            if not swipe_started and max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                if frequency_drawer_tuning_allowed(receiver_type, server):
+                                    candidate_freq = clamp(
+                                        snap_frequency_khz(
+                                            waterfall_tap_frequency_khz(
+                                                x, start_view_center_khz, start_span,
+                                            ), live_step_hz,
+                                        ),
+                                        *active_tuning_bounds(),
+                                    )
+                                    inertia_velocity_khz_s = 0.0
+                                    anim_start = 0.0
+                                    display_freq = candidate_freq
+                                    state.set_view(
+                                        freq_khz=candidate_freq,
+                                        waterfall_center_khz=start_view_center_khz,
+                                    )
+                                    remember_current_view()
+                                    print(f"gl waterfall tap tuned {candidate_freq:.3f} kHz", flush=True)
+                            elif swipe_started:
+                                candidate_freq = clamp(
+                                    snap_frequency_khz(candidate_freq, live_step_hz),
+                                    *active_tuning_bounds(),
                                 )
-                                inertia_last_t = time.monotonic()
-                                display_freq = candidate_freq
-                                print(f"gl inertial tune {candidate_freq:.3f} kHz velocity {inertia_velocity_khz_s:.2f} kHz/s", flush=True)
-                            else:
-                                inertia_velocity_khz_s = 0.0
-                                display_freq = candidate_freq
-                                state.set_view(freq_khz=candidate_freq)
-                                remember_current_view()
-                                animate_to(candidate_freq, kiwi.zoom_to_span_khz(zoom), 0.001)
-                                print(f"gl tuned {candidate_freq:.3f} kHz", flush=True)
+                                if args.swipe_inertia_strength > 0 and abs(swipe_velocity_px_s) >= args.swipe_inertia_min_px_s:
+                                    sensitivity = swipe_effective_sensitivity(swipe_velocity_px_s, args)
+                                    inertia_velocity_khz_s = (
+                                        retune_delta_from_drag(swipe_velocity_px_s, start_span, args.invert_tune, sensitivity)
+                                        * args.swipe_inertia_strength
+                                    )
+                                    inertia_last_t = time.monotonic()
+                                    display_freq = candidate_freq
+                                    print(f"gl inertial tune {candidate_freq:.3f} kHz velocity {inertia_velocity_khz_s:.2f} kHz/s", flush=True)
+                                else:
+                                    inertia_velocity_khz_s = 0.0
+                                    display_freq = candidate_freq
+                                    state.set_view(freq_khz=candidate_freq)
+                                    remember_current_view()
+                                    animate_to(candidate_freq, kiwi.zoom_to_span_khz(zoom), 0.001)
+                                    print(f"gl tuned {candidate_freq:.3f} kHz", flush=True)
+                        frequency_drawer_hold.cancel()
                         touch_started = False
+                        scope_drag_eligible = False
                         gesture = None
                         picker_map_pinch_active = False
                         globe_pinch_active = False
@@ -27679,7 +28564,7 @@ def main():
                         filter_drag_center = 0.0
                         filter_drag_audio_center = 0.0
                         filter_drag_limit = FILTER_LIMIT_HZ
-                        start_x = start_freq = last_x = None
+                        start_x = start_freq = start_view_center_khz = last_x = None
 
             now = time.monotonic()
             # The drawer shares its logical bounds with hit-testing. Update
@@ -27691,7 +28576,7 @@ def main():
             if (
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
-                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
+                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open)
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -27706,11 +28591,27 @@ def main():
                 receiver_home_panel_open = False
                 fan_curve_panel_open = False
                 audio_panel_open = False
-                asr_panel_open = False
-                asr_moon_language_open = False
                 audio_transport_graph_open = False
                 cpu_utilization_graph_open = False
                 print("gl LCD drawer idle timeout: returned to Home rail", flush=True)
+            if frequency_drawer_hold.action is not None:
+                identity = frequency_drawer_receiver_identity()
+                pointed_action = (
+                    frequency_drawer_action_at(*UI_PRESS_POINT, identity[2])
+                    if UI_PRESS_POINT is not None else None
+                )
+                if not (
+                    touch_started and gesture == "frequency_drawer" and frequency_drawer_open
+                    and frequency_drawer_tuning_allowed(identity[2], identity[0])
+                ):
+                    frequency_drawer_hold.cancel()
+                    frequency_drawer_pressed = None
+                else:
+                    repeat_action = frequency_drawer_hold.tick(now, pointed_action, identity)
+                    if repeat_action is not None:
+                        step_frequency_in_drawer(repeat_action)
+                    elif frequency_drawer_hold.action is None:
+                        frequency_drawer_pressed = None
             drawer_target = 1.0 if radio_setup_open else 0.0
             drawer_rate = drawer_dt / 0.18
             if drawer_target > LCD_RADIO_DRAWER_PROGRESS:
@@ -28232,10 +29133,10 @@ def main():
                 input_power_ok = read_input_power_ok()
 
             _server, _frequency, _zoom, _smeter, view_generation, server_generation = state.snapshot()
-            _floor, _ceiling, presentation_speed, _auto, _palette, wf_generation = state.waterfall_snapshot()
+            _floor, _ceiling, presentation_speed, _auto, _palette, _wf_generation = state.waterfall_snapshot()
             receiver_type = state.receiver_type_snapshot(server_generation)
-            presentation_key = (
-                server_generation, view_generation, wf_generation, receiver_type,
+            presentation_key = waterfall_stream_key(
+                server_generation, view_generation, receiver_type,
                 state.external_waterfall_snapshot(),
             )
             presentation_fps = waterfall_presentation_fps(
@@ -28255,9 +29156,9 @@ def main():
             # if a server bursts several queued waterfall rows at once.
             if dual_vfo_open:
                 _b_server, _b_frequency, _b_zoom, _b_smeter, b_view_generation, b_server_generation = dual_b_state.snapshot()
-                _b_floor, _b_ceiling, b_speed, _b_auto, _b_palette, b_wf_generation = dual_b_state.waterfall_snapshot()
+                _b_floor, _b_ceiling, b_speed, _b_auto, _b_palette, _b_wf_generation = dual_b_state.waterfall_snapshot()
                 b_receiver_type = dual_b_state.receiver_type_snapshot(b_server_generation)
-                b_key = (b_server_generation, b_view_generation, b_wf_generation, b_receiver_type, False)
+                b_key = waterfall_stream_key(b_server_generation, b_view_generation, b_receiver_type, False)
                 b_fps = waterfall_presentation_fps(b_receiver_type, b_speed, args.wf_row_pixels)
                 for item in dual_b_wf_presenter.take(dual_b_line_queue, now, b_fps, b_key):
                     if isinstance(item, tuple):
@@ -28275,23 +29176,22 @@ def main():
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
-            spectrum_h = int(round(clamp(scope_height, SCOPE_HEIGHT_MIN, SCOPE_HEIGHT_MAX))) if spectrum_enabled else 0
-            # Scope begins at y=40 so its axis can remain visible under the
-            # translucent header. In full-waterfall mode there is no scope
-            # layer to overlap, so begin the waterfall exactly below the top
-            # bar instead of leaving an arbitrary gap.
-            spectrum_y0 = 40 if spectrum_enabled else sdr_ui.TOP_H
-            spectrum_y1 = spectrum_y0 + spectrum_h
+            # Both RF instruments can reach either vertical edge without a
+            # jump or a reserved strip at the zero-height boundary.
+            spectrum_y0, spectrum_y1, ruler_y0 = scope_waterfall_y_bounds(
+                scope_height, spectrum_enabled,
+            )
+            spectrum_h = spectrum_y1 - spectrum_y0
             scope_adjust_active = spectrum_enabled and now < scope_adjust_until
             scope_adjust_box = scope_height_grip_box(spectrum_y1) if scope_adjust_active else None
             # The ruler overlays the first waterfall rows at the scope edge:
             # it remains readable without reserving a black separator band.
             bottom_ruler = False
             ruler_height = SPECTRUM_RULER_H
-            ruler_y0 = spectrum_y1 if spectrum_enabled else sdr_ui.TOP_H
-            # The frequency ruler sits on live waterfall content. Keep just
-            # enough wash for its labels, at half the previous darkening.
-            ruler_background_alpha = 63
+            # The frequency ruler sits on live waterfall content. When the
+            # scope is visible, a dark ruler wash looks like a gap between
+            # the two RF panes even though their geometry already touches.
+            ruler_background_alpha = 0 if spectrum_enabled else 63
             normal_waterfall_y0 = ruler_y0
             focus_waterfall_y0 = normal_waterfall_y0
             waterfall_y0 = normal_waterfall_y0 + (focus_waterfall_y0 - normal_waterfall_y0) * focus_progress
@@ -28299,6 +29199,7 @@ def main():
             # waterfall itself must still occupy the full post-ruler region.
             normal_waterfall_y1 = LOGICAL_H
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
+            waterfall_visible = waterfall_y1 > waterfall_y0
             local_iq_active = state.external_waterfall_snapshot() or rtl_lab.is_running()
             view_center_khz = active_waterfall_center(display_freq, display_span)
             source_span_khz = active_source_span_khz(zoom)
@@ -28306,31 +29207,41 @@ def main():
             # waterfall then covers rows under the ruler/status strip instead
             # of remapping the visible texture and making it appear to scroll up.
             row_offset = round(waterfall_y0 - focus_waterfall_y0)
-            caption_box = caption_box_for_waterfall(waterfall_y0, waterfall_y1, caption_anchor)
+            caption_box = (
+                caption_box_for_waterfall(waterfall_y0, waterfall_y1, caption_anchor)
+                if waterfall_visible else (0, 0, 0, 0)
+            )
             caption_active = state.transcription_snapshot()[0]
             caption_translation_toggle_box_live = (
                 caption_translation_toggle_box(caption_box)
-                if caption_active and asr_engine_family(state.transcription_snapshot()[1]) == "whisper"
+                if waterfall_visible and caption_active
+                and asr_engine_family(state.transcription_snapshot()[1]) == "whisper"
                 else None
             )
-            callsign_box = callsign_box_for_waterfall(
-                waterfall_y0,
-                waterfall_y1,
-                callsign_anchor,
+            callsign_box = (
+                callsign_box_for_waterfall(waterfall_y0, waterfall_y1, callsign_anchor)
+                if waterfall_visible else (0, 0, 0, 0)
             )
-            buffer_graph_box = monitoring_graph_box(waterfall_y0, waterfall_y1, buffer_graph_anchor)
-            cpu_graph_box = monitoring_graph_box(waterfall_y0, waterfall_y1, cpu_graph_anchor)
-            wf_texture.draw(
-                0,
-                waterfall_y0,
-                rf_canvas_width(),
-                waterfall_y1,
-                center_khz=view_center_khz,
-                span_khz=display_span,
-                row_offset=row_offset,
+            buffer_graph_box = (
+                monitoring_graph_box(waterfall_y0, waterfall_y1, buffer_graph_anchor)
+                if waterfall_visible else (0, 0, 0, 0)
             )
+            cpu_graph_box = (
+                monitoring_graph_box(waterfall_y0, waterfall_y1, cpu_graph_anchor)
+                if waterfall_visible else (0, 0, 0, 0)
+            )
+            if waterfall_visible:
+                wf_texture.draw(
+                    0,
+                    waterfall_y0,
+                    rf_canvas_width(),
+                    waterfall_y1,
+                    center_khz=view_center_khz,
+                    span_khz=display_span,
+                    row_offset=row_offset,
+                )
             spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE
-            if spectrum_enabled and not spectrum_foreground:
+            if spectrum_enabled and spectrum_h > 0 and not spectrum_foreground:
                 spectrum_layer.draw(
                     spectrum_values,
                     spectrum_peak_values,
@@ -28347,6 +29258,8 @@ def main():
                 )
             if not local_iq_active:
                 overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
+            passband_stream_ready = not local_iq_active and state.rf_stream_ready_snapshot()
+            if waterfall_visible and passband_stream_ready:
                 draw_filter_overlay(
                     text_cache,
                     display_span,
@@ -28357,11 +29270,25 @@ def main():
                     0.82,
                     tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
                 )
+            scope_passband_visible = spectrum_enabled and spectrum_h > 0 and passband_stream_ready
+            scope_passband_under_top_band = (
+                scope_passband_visible and LCD_800_MODE
+                and instrument_layout in ("middle", "left")
+            )
+            if scope_passband_under_top_band:
+                # The large VFO's translucent strip must tint the passband,
+                # while its frequency text remains fully legible above it.
+                draw_filter_overlay(
+                    text_cache, display_span, overlay_low_cut, overlay_high_cut,
+                    0, spectrum_y1, 0.82,
+                    tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
+                    show_markers=False,
+                )
             radio_drawer_visible = LCD_800_MODE and LCD_RADIO_DRAWER_PROGRESS > 0.002
             # Mode, Audio, and Display are right-rail drawers, not modal
             # screens. Keep the waterfall's operating controls visible and
             # tappable behind them. Full-canvas tools still own the view.
-            control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
+            control_alpha = 0.0 if menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE) or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = (
                 f"LOCAL {rtl_lab.snapshot()['capabilities'].label} · {rtl_lab.snapshot()['preset'][0]}"
                 if local_iq_active else "OPENWEBRX TEST · ON0LLV"
@@ -28388,10 +29315,28 @@ def main():
             transcript_translations = state.transcript_translation_snapshot()
             callsign_enabled, callsign_value, ham_message, callsign_status, _callsign_updated_at = state.callsign_snapshot()
             callsign_history = state.callsign_history_snapshot()
+            vosc_error_key = (
+                ("key", deepgram_key_error) if deepgram_setup_open and deepgram_key_error else (),
+                ("caption", transcript_status) if transcription_enabled and "ERROR" in transcript_status else (),
+                ("callsign", callsign_status) if callsign_enabled and "ERROR" in callsign_status else (),
+            )
+            if any(vosc_error_key) and vosc_error_key != last_vosc_error_key:
+                kind, detail = next(item for item in vosc_error_key if item)
+                vosc_error_osd_message = (
+                    detail if kind == "key" else
+                    "CALLSIGN" if kind == "callsign" else
+                    detail.removesuffix(" ERROR") or "VOSC"
+                )
+                vosc_error_osd_until = now + args.zoom_osd_seconds
+            last_vosc_error_key = vosc_error_key
             audio_jitter_target, audio_jitter_depth = state.audio_jitter_snapshot()
             audio_jitter_history = state.audio_jitter_history_snapshot()
             live_audio_controls, _live_audio_generation = state.audio_controls_snapshot()
             squelch_closed = state.squelch_closed_snapshot()
+            decoder_counts = digital_decoder_session_counts(
+                wspr_tiles, sstv_manager.configs, hell_manager.configs,
+                qrss_manager.configs, cw_manager.configs,
+            )
             draw_ui(
                 text_cache,
                 display_freq,
@@ -28439,6 +29384,11 @@ def main():
                 squelch_closed=squelch_closed,
                 settings_menu_open=settings_menu_open,
                 digital_menu_open=digital_menu_open,
+                active_decoders=frozenset(
+                    kind for kind, count in decoder_counts.items() if count
+                ),
+                running_decoder_count=sum(decoder_counts.values()),
+                decoder_counts=decoder_counts,
                 instrument_layout=instrument_layout,
                 # Font Review is a live specimen: arrowing through candidates
                 # must visibly update the Home frequency readout. ``USE`` is
@@ -28464,7 +29414,7 @@ def main():
                     compact_font_review_liked,
                     compact_frequency_font_family,
                 )
-            if spectrum_foreground:
+            if spectrum_foreground and spectrum_h > 0:
                 draw_spectrum(
                     spectrum_y0,
                     spectrum_y1,
@@ -28475,9 +29425,18 @@ def main():
                     source_span_khz=source_span_khz,
                     visible_span_khz=display_span,
                 )
-            if scope_adjust_active:
+            if scope_passband_visible and not scope_passband_under_top_band:
+                # RIGHT has no top frequency strip over the RF canvas. Keep
+                # its scope passband above the remaining instrument drawing.
+                draw_filter_overlay(
+                    text_cache, display_span, overlay_low_cut, overlay_high_cut,
+                    0, spectrum_y1, 0.82,
+                    tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
+                    show_markers=False,
+                )
+            if scope_adjust_active and not LCD_800_MODE:
                 draw_scope_height_grip(text_cache, spectrum_y1, scope_height)
-            if transcription_enabled:
+            if transcription_enabled and waterfall_visible:
                 draw_vosk_captions(
                     text_cache,
                     transcript_lines,
@@ -28488,38 +29447,35 @@ def main():
                     caption_box,
                     asr_engine,
                 )
-            draw_callsign_captions(
-                text_cache,
-                callsign_enabled,
-                callsign_value,
-                callsign_history,
-                ham_message,
-                callsign_status,
-                callsign_box,
-            )
-            # Captions are movable and may occupy the bottom lane. Restore
-            # the operating controls as the final foreground layer so their
-            # labels remain visible and their touch regions match what users
-            # can see.
-            if transcription_enabled or callsign_enabled:
-                draw_waterfall_operating_controls(text_cache, spectrum_enabled, control_alpha)
+            if waterfall_visible:
+                draw_callsign_captions(
+                    text_cache,
+                    callsign_enabled,
+                    callsign_value,
+                    callsign_history,
+                    ham_message,
+                    callsign_status,
+                    callsign_box,
+                )
+            # draw_ui painted Zoom first. A bottom VOSC popup remains above
+            # the covered buttons until a tap moves the popup away.
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
             if not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
-            if audio_controls.get("mute", False) and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+            if waterfall_visible and audio_controls.get("mute", False) and not (
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_muted_waterfall_badge(text_cache)
-            if audio_transport_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+            if waterfall_visible and audio_transport_graph_open and not (
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -28528,8 +29484,8 @@ def main():
                     audio_jitter_history,
                     buffer_graph_box,
                 )
-            if cpu_utilization_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+            if waterfall_visible and cpu_utilization_graph_open and not (
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -28540,7 +29496,10 @@ def main():
                     cpu_graph_box,
                 )
             if asr_panel_open:
-                draw_asr_panel(text_cache, asr_engine, caption_mode, asr_moon_language_open)
+                draw_asr_panel(
+                    text_cache, asr_engine, caption_mode, asr_moon_language_open,
+                    callsign_enabled,
+                )
             if deepgram_setup_open:
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_drawer_open:
@@ -28554,6 +29513,13 @@ def main():
                     compact_frequency_font_family,
                     frequency_drawer_pressed,
                     state.receiver_type_snapshot(),
+                    frequency_entry_value,
+                    frequency_entry_invalid,
+                    frequency_drawer_tuning_allowed(
+                        state.receiver_type_snapshot(), state.snapshot()[0],
+                    ),
+                    frequency_entry_replace_on_digit,
+                    active_tuning_bounds()[1],
                 )
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
@@ -28571,16 +29537,24 @@ def main():
                         picker_map_garden_mode, picker_map_hover_server, picker_map_view,
                         (touch_started and gesture == "picker_map")
                         or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
+                        notice_alpha=green_osd_alpha(
+                            picker_map_notice_until - time.monotonic(), 1.2,
+                        ),
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
                 else:
                     visible_stations = current_receiver_rows()
                     draw_station_picker(
-                        text_cache, visible_stations, station_scroll, server, station_query,
+                        text_cache, visible_stations, station_scroll,
+                        receiver_list_active_state().snapshot()[0], station_query,
                         station_sort, station_health, station_pending_server, station_connection_status,
                         station_route_filter, receiver_home_profile, fmdx_disclaimer_open,
                         picker_list_notice if time.monotonic() < picker_list_notice_until else "",
+                        green_osd_alpha(
+                            picker_list_notice_until - time.monotonic(),
+                            args.zoom_osd_seconds,
+                        ),
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
@@ -28605,7 +29579,7 @@ def main():
                     wf_floor,
                     wf_ceil,
                     wf_speed,
-                    wf_auto,
+                    state.spectrum_auto_snapshot(),
                     wf_palette,
                     spectrum_enabled,
                     instrument_layout,
@@ -28847,27 +29821,24 @@ def main():
                     frequency_identity_alpha,
                 )
             osd_remaining = zoom_osd_until - now
-            if osd_remaining > 0 and not dual_vfo_open:
-                alpha = 220
-                fade = min(0.45, args.zoom_osd_seconds * 0.33)
-                if osd_remaining < fade:
-                    alpha = int(220 * osd_remaining / fade)
+            if (osd_remaining > 0 and not dual_vfo_open
+                    and not (picker_open and not picker_map_open and now < picker_list_notice_until)):
+                alpha = green_osd_alpha(osd_remaining, args.zoom_osd_seconds)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
+            vosc_error_remaining = vosc_error_osd_until - now
+            if vosc_error_remaining > 0 and not dual_vfo_open:
+                draw_vosc_error_osd(
+                    text_cache, vosc_error_osd_message,
+                    green_osd_alpha(vosc_error_remaining, args.zoom_osd_seconds),
+                )
             rc28_osd_remaining = rc28_mode_osd_until - now
             if rc28_osd_remaining > 0 and not dual_vfo_open:
-                alpha = 232
-                if rc28_osd_remaining < 0.35:
-                    alpha = int(232 * rc28_osd_remaining / 0.35)
-                draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
+                draw_rc28_mode_osd(
+                    text_cache, rc28_dial_mode,
+                    green_osd_alpha(rc28_osd_remaining, args.zoom_osd_seconds),
+                )
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
-            if not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
-                or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open
-                or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open
-                or filter_panel_open or frequency_entry_open or dual_vfo_open
-            ):
-                draw_utc_clock(text_cache)
             if cw_workspace.open:
                 cw_workspace.draw(text_cache, wspr_receiver_choices())
             if qrss_workspace.open:

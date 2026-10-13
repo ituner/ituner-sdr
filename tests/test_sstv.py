@@ -226,10 +226,14 @@ class WorkspaceTests(unittest.TestCase):
                     if view=='gallery':
                         self.assertFalse(any(a[0] in ('toggle','delete') for _,a in workspace.actions))
                         self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),15)
-                        workspace.tap(350,755,rows);self.assertEqual(workspace.page,1)
+                        next_box=next(box for box,action in workspace.actions if action==('page',1))
+                        workspace.tap((next_box[0]+next_box[2])/2,(next_box[1]+next_box[3])/2,rows)
+                        self.assertEqual(workspace.page,1)
                         workspace.draw(None,rows)
                         self.assertEqual(sum(a[0]=='image' for _,a in workspace.actions),2)
-                workspace.tap(1140,40,rows);self.assertIsNone(workspace.enlarged)
+                back_box=next(box for box,action in workspace.actions if action==('back_image',None))
+                workspace.tap((back_box[0]+back_box[2])/2,(back_box[1]+back_box[3])/2,rows)
+                self.assertIsNone(workspace.enlarged)
             finally: manager.stop()
 
 

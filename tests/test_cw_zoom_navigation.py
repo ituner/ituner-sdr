@@ -65,11 +65,11 @@ class NavigationTests(unittest.TestCase):
         return w
     def test_shared_back_home_hierarchy(self):
         for cls in (CWWorkspace,HellWorkspace,QRSSWorkspace,SSTVWorkspace):
-            w=self.make(cls);w.enlarged='image';w.tap(1130,35,[])
+            w=self.make(cls);w.enlarged='image';w.tap(1152,760,[])
             self.assertIsNone(w.enlarged);self.assertTrue(w.open)
-            w.tap(1130,35,[]);self.assertTrue(w.decoders_open);self.assertTrue(w.open)
-            w.add_open=True;w.tap(1130,35,[]);self.assertFalse(w.add_open)
-            w.tap(1220,35,[]);self.assertFalse(w.open)
+            w.tap(1152,760,[]);self.assertTrue(w.decoders_open);self.assertTrue(w.open)
+            w.add_open=True;w.tap(1152,760,[]);self.assertFalse(w.add_open)
+            w.tap(1152,40,[]);self.assertFalse(w.open)
     def test_receiver_card_and_live_button_open_live(self):
         w=self.make(CWWorkspace);w.decoders_open=True;w.draw_receivers(None)
         self.assertTrue(any(a[0]=='select_rx' for b,a in w.actions if b[1]>210))
@@ -77,5 +77,30 @@ class NavigationTests(unittest.TestCase):
         w.decoders_open=True;w.actions=[];w.draw_receivers(None)
         w.tap(230,245,[]);self.assertTrue(w.add_open);self.assertTrue(w.decoders_open)
         w.add_open=False;w.tap(370,245,[]);self.assertFalse(w.decoders_open)
+
+    def test_decoder_setup_buttons_keep_back_and_create_reachable(self):
+        back=(1034,728,1270,792)
+        for cls in (CWWorkspace,HellWorkspace,QRSSWorkspace,SSTVWorkspace):
+            with self.subTest(workspace=cls.__name__):
+                w=self.make(cls);w.add_open=True;w.draw(None,[])
+                self.assertIn((back,('nav_back',None)),w.actions)
+                create=next(box for box,action in w.actions if action[0]=='create')
+                self.assertEqual((create[2]-create[0],create[3]-create[1]),(236,64))
+                self.assertLessEqual(create[2]+8,back[0])
+                for box,action in w.actions:
+                    if action[0]=='nav_back':continue
+                    self.assertIn((box[2]-box[0],box[3]-box[1]),((114,64),(236,64)),action)
+
+    def test_decoder_keypads_and_reporting_use_standard_touch_targets(self):
+        for cls in (CWWorkspace,HellWorkspace,QRSSWorkspace):
+            with self.subTest(workspace=cls.__name__):
+                w=self.make(cls);w.field='freq_khz';w.entry='';w.draw(None,[])
+                for box,action in w.actions:
+                    self.assertIn((box[2]-box[0],box[3]-box[1]),((114,64),(236,64)),action)
+        w=self.make(HellWorkspace)
+        w.reporting=dict(receiver='Local',server='kiwi',call='',reporter='',grid='',confirmed=False)
+        w.draw(None,[])
+        for box,action in w.actions:
+            self.assertIn((box[2]-box[0],box[3]-box[1]),((114,64),(236,64)),action)
 
 if __name__=='__main__':unittest.main()

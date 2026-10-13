@@ -93,21 +93,21 @@ class HellWorkspace(SSTVWorkspace):
                 self.text(cache,24,34,f"{MODES[item['mode']]['label']} · {item['band']} · {item['rf_hz']/1e6:.6f} MHz RF",25)
                 self.text(cache,24,72,item['receiver']+' · '+item['capture_utc'],18,width=1000)
                 self.strip_image(item,(20,160,1260,400),expanded=True)
-                self.button(cache,(24,430,244,486),'< LEFT',('pan_strip',-1))
-                self.button(cache,(1036,430,1256,486),'RIGHT >',('pan_strip',1))
+                self.button(cache,(24,430,138,494),'LEFT',('pan_strip',-1))
+                self.button(cache,(904,430,1018,494),'RIGHT',('pan_strip',1))
                 self.text(cache,280,458,'Scroll across the strip · fixed letter size',20,width=710)
                 self.text(cache,24,530,'Start' if self.strip_offset==0 else 'End' if self.strip_offset>=self.strip_max else 'Middle of strip',18)
-                self.button(cache,(1060,16,1258,76),'BACK',('back_image',None))
-                self.button(cache,(24,704,330,770),'REPORT STATION',('report',item['id']))
-                self.text(cache,354,730,'Read the callsign from the strip; reporting is optional.',18,width=890)
-                self.text(cache,354,761,self.message or ('OCR guess: '+item.get('ocr_text','—')),16,width=890)
+                self.button(cache,(24,728,260,792),'REPORT STATION',('report',item['id']))
+                self.button(cache,(1034,728,1270,792),'BACK',('back_image',None))
+                self.text(cache,276,746,'Read the callsign from the strip; reporting is optional.',18,width=742)
+                self.text(cache,276,776,self.message or ('OCR guess: '+item.get('ocr_text','—')),16,width=742)
                 return
             self.enlarged = None
         self.text(cache,20,36,'Hell RX',29,(104,234,194))
         self.text(cache,175,36,'Receivers' if self.decoders_open else 'Saved strips' if self.saved_view else 'Latest previews',23)
-        self.button(cache,(654,14,842,70),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
-        self.button(cache,(854,14,1090,70),'+ ADD DECODER',('add',None))
-        self.button(cache,(1102,14,1258,70),'HOME',('home',None))
+        self.button(cache,(546,8,782,72),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
+        self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
+        self.button(cache,(1034,8,1270,72),'HOME',('home',None))
         if self.decoders_open:
             self.draw_decoders(cache)
             return
@@ -140,12 +140,12 @@ class HellWorkspace(SSTVWorkspace):
             self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']} · tap to scroll",16,width=1215)
             self.strip_image(item,(24,y+34,1252,y+192))
             self.actions.append(((16,y,1260,y+202),('image',item['id'])))
-        self.button(cache,(16,730,168,786),'< PREV',('page',-1))
-        self.text(cache,188,758,f'{self.page+1} / {pages}',19)
-        self.button(cache,(282,730,434,786),'NEXT >',('page',1))
-        self.button(cache,(450,730,658,786),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
-        self.button(cache,(670,730,870,786),'ALL RECEIVERS',('filter',None))
-        self.button(cache,(890,730,1260,786),'SHOW NEW STRIPS' if changed else 'REFRESH STRIPS',('refresh_strips',None))
+        self.button(cache,(16,728,130,792),'PREVIOUS',('page',-1))
+        self.button(cache,(138,728,252,792),'NEXT',('page',1))
+        self.button(cache,(260,728,496,792),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
+        self.button(cache,(504,728,740,792),'ALL RECEIVERS',('filter',None))
+        self.button(cache,(748,728,984,792),'SHOW NEW STRIPS' if changed else 'REFRESH STRIPS',('refresh_strips',None))
+        self.text(cache,1000,708,f'{self.page+1}/{pages}',16)
 
     def draw_add(self,cache,receivers):
         p = self.preset
@@ -155,38 +155,38 @@ class HellWorkspace(SSTVWorkspace):
             name,location,server,*_ = self.ui.station_fields(row)
             y = 65+i*65
             self.button(cache,(24,y,1256,y+57),name,('receiver',server),location or server,server==self.selected_server)
-        self.button(cache,(24,201,250,246),'< RECEIVERS',('rxpage',-1))
+        self.button(cache,(24,201,138,265),'PREVIOUS',('rxpage',-1))
         self.text(cache,490,224,f'Receivers {self.receiver_page+1}/{max(1,math.ceil(len(receivers)/2))}',18)
-        self.button(cache,(1020,201,1256,246),'RECEIVERS >',('rxpage',1))
+        self.button(cache,(1142,201,1256,265),'NEXT',('rxpage',1))
         for i,preset in enumerate(PRESETS):
-            x,y=24+i%6*208,260+i//6*60
-            self.button(cache,(x,y,x+198,y+53),preset['band'],('hell_preset',preset),active=p['band']==preset['band'])
+            x,y=24+i%6*122,273+i//6*72
+            self.button(cache,(x,y,x+114,y+64),preset['band'],('hell_preset',preset),active=p['band']==preset['band'])
         if self.current and 0<self.current[1]<30000 and self.current[2]=='usb':
-            self.button(cache,(1064,320,1254,373),'CURRENT USB',('current',None))
-        self.text(cache,24,400,'HELL MODES · select several; all share one Kiwi channel',18)
+            self.button(cache,(878,345,1114,409),'CURRENT USB',('current',None))
+        self.text(cache,24,435,'HELL MODES · select several; all share one Kiwi channel',18)
         for i,(key,spec) in enumerate(MODES.items()):
-            x,y=24+i%4*312,420+i//4*59
-            self.button(cache,(x,y,x+300,y+51),spec['label'],('hell_mode',key),active=key in selected_modes(p))
-        self.button(cache,(960,479,1260,530),'ALL MODES',('hell_all',None),active=len(selected_modes(p))==len(MODES))
-        self.button(cache,(24,548,420,610),f"Dial: {p['freq_khz']:.3f} kHz USB",('number','freq_khz'))
-        self.button(cache,(440,548,830,610),f"Audio center: {p['tone_hz']:g} Hz",('number','tone_hz'))
-        self.button(cache,(850,548,1256,610),'REVERSE: '+('ON' if p.get('reverse') else 'OFF'),('reverse',None))
-        self.text(cache,24,639,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · {len(selected_modes(p))} modes / one Kiwi channel",19)
-        self.text(cache,24,674,'One OCR letter or digit keeps a strip. No text: only the latest preview per mode is kept.',16)
-        self.button(cache,(24,714,244,780),'CANCEL',('cancel_add',None))
-        self.text(cache,265,748,self.message,17,width=715)
-        self.button(cache,(990,714,1256,780),'SAVE' if self.edit_id else 'START DECODER',('create',None))
+            x=24+i*122
+            self.button(cache,(x,449,x+114,513),spec['label'],('hell_mode',key),active=key in selected_modes(p))
+        self.button(cache,(878,449,1114,513),'ALL MODES',('hell_all',None),active=len(selected_modes(p))==len(MODES))
+        self.button(cache,(24,529,260,593),'USB DIAL',('number','freq_khz'),f"{p['freq_khz']:.3f} KHZ")
+        self.button(cache,(268,529,504,593),'AUDIO CENTER',('number','tone_hz'),f"{p['tone_hz']:g} HZ")
+        self.button(cache,(512,529,748,593),'REVERSE',('reverse',None),'ON' if p.get('reverse') else 'OFF')
+        self.text(cache,24,626,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · {len(selected_modes(p))} modes / one Kiwi channel",19)
+        self.text(cache,24,658,'One OCR letter or digit keeps a strip. No text: only the latest preview per mode is kept.',16)
+        self.button(cache,(24,728,260,792),'CANCEL',('cancel_add',None))
+        self.text(cache,276,754,self.message,17,width=498)
+        self.button(cache,(782,728,1018,792),'SAVE' if self.edit_id else 'START DECODER',('create',None))
 
     def draw_number(self,cache):
         self.text(cache,24,48,'USB dial frequency (kHz)' if self.field=='freq_khz' else 'Audio center (Hz)',28)
         self.text(cache,24,110,self.entry or '0',36)
         for i,c in enumerate('123456789.0'):
-            x,y=24+i%3*185,160+i//3*105
-            self.button(cache,(x,y,x+170,y+90),c,('digit',c))
-        self.button(cache,(620,160,1000,250),'DELETE',('erase_number',None))
-        self.button(cache,(620,280,1000,370),'APPLY',('apply_number',None))
-        self.button(cache,(620,400,1000,490),'CANCEL',('cancel_number',None))
-        self.text(cache,24,660,self.message,22,width=1230)
+            x,y=24+i%3*122,160+i//3*72
+            self.button(cache,(x,y,x+114,y+64),c,('digit',c))
+        self.button(cache,(512,160,748,224),'DELETE',('erase_number',None))
+        self.button(cache,(512,232,748,296),'APPLY',('apply_number',None))
+        self.button(cache,(512,304,748,368),'CANCEL',('cancel_number',None))
+        self.text(cache,24,660,self.message,22,width=990)
 
     def draw_report(self,cache):
         p=self.reporting
@@ -194,17 +194,20 @@ class HellWorkspace(SSTVWorkspace):
         self.text(cache,24,83,p['receiver']+' · '+p['server'],18,width=1230)
         self.text(cache,24,121,'Use the receiving antenna’s identity and location, not your own for a remote Kiwi.',18)
         for i,(key,label) in enumerate((('call','Heard callsign'),('reporter','Receiver callsign'),('grid','Receiver grid'))):
-            self.button(cache,(24+i*416,151,424+i*416,211),label+': '+p[key],('report_field',key),active=self.report_field==key)
-        self.button(cache,(24,234,1256,293),('[YES] ' if p['confirmed'] else '[NO] ')+'Callsign is correct; I may report for this receiver and its location is correct',('confirm_report',None))
+            x=24+i*244
+            self.button(cache,(x,151,x+236,215),label,('report_field',key),p[key],active=self.report_field==key)
+        self.button(cache,(24,234,260,298),'REPORTING PERMISSION',('confirm_report',None),'YES' if p['confirmed'] else 'NO',active=p['confirmed'])
+        self.text(cache,276,267,'Callsign is correct; I may report for this receiver and its location is correct.',17,width=740)
         for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/')):
             for x,c in enumerate(row):
-                self.button(cache,(24+x*92,322+y*67,108+x*92,381+y*67),c,('report_key',c))
-        self.button(cache,(970,322,1256,380),'DELETE CHARACTER',('report_erase',None))
-        self.button(cache,(970,416,1256,478),'QUEUE REPORT',('send_report',None))
-        self.button(cache,(970,510,1256,572),'CANCEL',('cancel_report',None))
-        self.text(cache,24,650,self.message,19,width=1230)
-        self.text(cache,24,700,'Only confirmed station reports are sent. Images are never uploaded.',18)
-        self.text(cache,24,742,'Sends about every five minutes. PSK Reporter uses UDP; delivery is unconfirmed.',18)
+                left,top=24+x*122,322+y*72
+                self.button(cache,(left,top,left+114,top+64),c,('report_key',c))
+        self.button(cache,(24,616,260,680),'DELETE',('report_erase',None))
+        self.button(cache,(268,616,504,680),'QUEUE REPORT',('send_report',None))
+        self.button(cache,(512,616,748,680),'CANCEL',('cancel_report',None))
+        self.text(cache,24,704,self.message,17,width=990)
+        self.text(cache,24,735,'Only confirmed reports are sent. Images are never uploaded.',16,width=990)
+        self.text(cache,24,770,'PSK Reporter uses UDP; delivery is unconfirmed.',16,width=990)
 
     def tap(self,x,y,receivers):
         receivers = self.kiwi_receivers(receivers)

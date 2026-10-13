@@ -69,6 +69,10 @@ class MenuIconTests(unittest.TestCase):
 
 
 class DrawerGeometryTests(unittest.TestCase):
+    @staticmethod
+    def _center(box):
+        return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+
     def _overlaps(self, a, b):
         return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
@@ -92,26 +96,160 @@ class DrawerGeometryTests(unittest.TestCase):
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.frequency_entry_action_at(*center), label)
 
-    def test_home_destinations_are_preserved_with_updated_mode_label(self):
+    def test_home_destinations_match_text_only_layout(self):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["local_rx", "rx", "audio", "digital", "favorite", "settings"],
+            ["rx", "audio", "digital", "vosc", "display", "dual", "settings"],
         )
-        self.assertEqual(dict(ui.MENU_ITEMS)["local_rx"], "LAN")
-        self.assertEqual(dict(ui.MENU_ITEMS)["digital"], "DIGI")
-        self.assertEqual(dict(ui.MENU_ITEMS)["favorite"], "FAVORITES")
-        self.assertNotIn("dual", kinds)
+        self.assertNotIn("display", dict(ui.SETTINGS_MENU_ITEMS))
+        self.assertEqual(ui.LCD_NAV_TILE_W, 114)
+        self.assertEqual(ui.LCD_NAV_TILE_H, 64)
+        self.assertEqual(ui.LCD_NAV_GAP, 8)
+        boxes = [ui.lcd_nav_box(i) for i in range(len(ui.MENU_ITEMS))]
+        self.assertEqual(boxes[0], (1034, 512, 1148, 576))
+        self.assertEqual(boxes[-1], (1034, 728, 1148, 792))
+
+    def test_vosc_uses_right_rail_controls_and_shared_back(self):
+        options = list(ui.vosc_sidebar_options())
+        self.assertEqual(len(options), len(ui.ASR_ENGINES) + len(ui.CAPTION_MODES) + 1)
+        back = ui.lcd_drawer_back_box()
+        for kind, value, box in options:
+            width = 236 if kind == "callsign" else 114
+            self.assertEqual((box[2] - box[0], box[3] - box[1]), (width, 64))
+            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0 + 10)
+            self.assertLessEqual(box[2], ui.LOGICAL_W - 10)
+            self.assertLessEqual(box[3] + 8, back[1])
+            center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            self.assertEqual(ui.asr_option_at(*center), (kind, value))
+        self.assertEqual(options[-1][:2], ("callsign", None))
+        self.assertLess(options[-2][2][3], options[-1][2][1])
+        self.assertEqual(ui.asr_option_at((back[0] + back[2]) / 2,
+                                          (back[1] + back[3]) / 2), ("back", None))
+
+    def test_vosc_callsign_button_shows_its_live_state(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_sidebar_header"), \
+             mock.patch.object(ui, "draw_text"), \
+             mock.patch.object(ui, "draw_styled_button_frame", return_value=mock.Mock(text=(255, 255, 255))), \
+             mock.patch.object(ui, "draw_radio_close_button"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as callsign_button:
+            ui.draw_asr_panel(None, "vosk", callsign_enabled=True)
+        callsign_button.assert_called_once_with(
+            None, list(ui.vosc_sidebar_options())[-1][2], "CALLSIGN", "ON", active=True,
+        )
+
+    def test_footer_places_clock_after_buffer_and_system_stats_on_right(self):
+        cache = mock.Mock()
+        cache.font.return_value.size.return_value = (90, 13)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "fit_station_text", return_value="TEST RECEIVER"), \
+             mock.patch.object(ui, "read_process_ram_mb", return_value=120), \
+             mock.patch.object(ui, "draw_text") as draw_text:
+            ui.draw_lower_status(cache, 15, 50, 712, 800,
+                                 station_name="TEST RECEIVER", audio_jitter_depth=7)
+        rendered = [(call.args[1], call.args[2], call.args[3]) for call in draw_text.call_args_list]
+        self.assertEqual(rendered[0], (18, 739, "TEST RECEIVER"))
+        self.assertEqual(rendered[1], (18, 771, "BUFFER Q7/T6"))
+        self.assertEqual(rendered[2][0:2], (124, 771))
+        self.assertIn("UTC", rendered[2][2])
+        self.assertEqual(rendered[3], (1006, 739, "CPU 15%   RAM 120 MB"))
+        self.assertEqual(rendered[4], (1006, 771, "TEMP 50 C"))
 
     def test_digi_rail_retains_all_decoder_destinations(self):
         self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},
                          {"wspr", "sstv", "hell", "qrss", "cw", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
-    def test_apps_contains_dual_vfo_action(self):
+    def test_digi_rail_marks_only_decoders_with_enabled_sessions(self):
+        ui.configure_output(True)
+        groups = (
+            [{"paused": False}, {"paused": False}], [{"paused": True}],
+            [{"paused": False}], [], [{"paused": True}, {"paused": False}],
+        )
+        counts = ui.digital_decoder_session_counts(*groups)
+        self.assertEqual(counts, {"wspr": 2, "sstv": 0, "hell": 1,
+                                  "qrss": 0, "cw": 1})
+        active = ui.active_digital_decoder_kinds(*groups)
+        self.assertEqual(active, {"wspr", "hell", "cw"})
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_sidebar_header"), \
+             mock.patch.object(ui, "draw_radio_close_button"), \
+             mock.patch.object(ui, "draw_logical_circle") as circles, \
+             mock.patch.object(ui, "draw_styled_text_button") as buttons:
+            ui.draw_lcd_navigation(
+                None, digital_open=True, active_decoders=active,
+                decoder_counts=counts,
+            )
+        self.assertEqual(
+            [call.args[2] for call in buttons.call_args_list],
+            ["2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE"],
+        )
+        dots = [call.args for call in circles.call_args_list]
+        self.assertEqual(len(dots), 3)
+        for kind in active:
+            index = next(i for i, item in enumerate(ui.DIGITAL_MENU_ITEMS)
+                         if item[0] == kind)
+            x0, y0, x1, _y1 = ui.lcd_nav_box(
+                index, len(ui.DIGITAL_MENU_ITEMS), True,
+            )
+            center_x = (x0 + x1) / 2
+            self.assertIn((center_x, y0 + 47, 3,
+                           ui.APP_UI_STYLE.palette.ready), dots)
+
+    def test_home_digi_button_counts_enabled_decoder_sessions(self):
+        ui.configure_output(True)
+        groups = (
+            [{"paused": False}, {"paused": False}],
+            [{"paused": True}], [{"paused": False}], [],
+            [{"paused": False}, {"paused": True}],
+        )
+        self.assertEqual(sum(ui.digital_decoder_session_counts(*groups).values()), 4)
+        self.assertEqual(sum(ui.digital_decoder_session_counts([], [], [], [], []).values()), 0)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=4)
+        digi_calls = [call.args for call in buttons.call_args_list
+                      if call.args[2] == "DIGI"]
+        self.assertEqual(len(digi_calls), 1)
+        self.assertEqual(digi_calls[0][3], "4 DECODERS")
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=0)
+        zero_digi_calls = [call.args for call in zero_buttons.call_args_list
+                           if call.args[2] == "DIGI"]
+        self.assertEqual(zero_digi_calls[0][3], "DECODERS")
+
+    def test_home_digi_100_count_fits_or_ellipsizes(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+            ui.draw_lcd_navigation(None, running_decoder_count=100)
+        digi = next(call.args for call in buttons.call_args_list
+                    if call.args[2] == "DIGI")
+        self.assertEqual(digi[3], "100 DECODERS")
+        cache = ui.TextCache()
+        font = cache.font(ui.APP_UI_STYLE.button.label_size, bold=True,
+                          family=ui.APP_UI_STYLE.button.font_family)
+        label_cache = mock.Mock()
+        label_cache.texture.side_effect = lambda text, *_args, **_kwargs: (
+            None, font.size(text)[0], font.size(text)[1]
+        )
+        visible = ui.button_label_for_box(label_cache, digi[3], digi[1])
+        self.assertLessEqual(font.size(visible)[0], digi[1][2] - digi[1][0] - 8)
+        if visible != digi[3]:
+            self.assertTrue(visible.endswith("…"))
+
+    def test_apps_no_longer_contains_dual_vfo_action(self):
         cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
         cy = (ui.TEST_DUAL_BOX[1] + ui.TEST_DUAL_BOX[3]) / 2
-        self.assertEqual(ui.tests_option_at(cx, cy), "dual")
+        self.assertIsNone(ui.tests_option_at(cx, cy))
 
     def test_lan_and_network_use_distinct_drawn_icons(self):
         surface = mock.Mock()
@@ -209,6 +347,27 @@ class DrawerGeometryTests(unittest.TestCase):
         mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
         step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
         back_box = ui.lcd_radio_drawer_close_box()
+        for row in range(0, len(mode_boxes), 2):
+            left, right = mode_boxes[row:row + 2]
+            self.assertEqual(left[0], back_box[0])
+            self.assertEqual(right[2], back_box[2])
+            self.assertEqual(right[0] - left[2], 8)
+        self.assertEqual([step for step, _box in ui.radio_step_options("kiwi")],
+                         [10, 100, 1000, 5000])
+        self.assertEqual(len(step_boxes), 4)
+        frequency_boxes = [box for _step, box in ui.frequency_drawer_step_boxes("kiwi")]
+        for (step, box), frequency_box in zip(ui.radio_step_options("kiwi"), frequency_boxes):
+            self.assertEqual(ui.radio_option_at(*self._center(box)), ("step", step))
+            self.assertEqual((box[0], box[2], box[3] - box[1]),
+                             (frequency_box[0], frequency_box[2], 31))
+        self.assertEqual(len({box[1] for box in step_boxes}), 1)
+        self.assertIsNone(ui.radio_option_at(step_boxes[0][0] + 4, step_boxes[0][1] - 18))
+        self.assertEqual(ui.radio_option_at(*self._center(
+            next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
+        ), receiver_type="fmdx", fmdx_shared_control=True), ("step", 100_000))
+        self.assertIsNone(ui.radio_option_at(*self._center(
+            next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
+        ), receiver_type="fmdx", fmdx_shared_control=False))
         decoders = ui.radio_decoder_boxes()
         self.assertEqual({kind for kind, _ in decoders}, {"wspr", "sstv", "hell", "qrss", "cw"})
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
@@ -220,6 +379,28 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="openwebrx"), ("workspace", kind))
             self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="fmdx"), ("workspace", kind))
 
+    def test_modes_drawer_highlights_the_selected_step_in_four_button_row(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
+        ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
+        try:
+            with mock.patch.object(ui, 'draw_logical_rect'), \
+                 mock.patch.object(ui, 'draw_sidebar_header'), \
+                 mock.patch.object(ui, 'draw_radio_close_button'), \
+                 mock.patch.object(ui, 'draw_radio_family_option'), \
+                 mock.patch.object(ui, 'draw_lcd_drawer_heading'), \
+                 mock.patch.object(ui, 'draw_radio_option'), \
+                 mock.patch.object(ui, 'draw_picker_button') as buttons:
+                ui.draw_radio_setup_panel(None, 'AM', 'DIG', 100,
+                                          receiver_type='kiwi')
+        finally:
+            ui.LCD_RADIO_DRAWER_PROGRESS = previous_progress
+        self.assertEqual([entry.args[2] for entry in buttons.call_args_list],
+                         ['10 Hz', '100 Hz', '1 kHz', '5 kHz'])
+        self.assertEqual([entry.args[4] for entry in buttons.call_args_list],
+                         [False, True, False, False])
+
     def test_stats_close_target_is_inside_graph_header(self):
         graph = (120, 90, 900, 420)
         close = ui.cpu_utilization_graph_close_box(graph)
@@ -228,10 +409,23 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertLessEqual(close[2], graph[2])
         self.assertLess(close[3], graph[1] + 44)
 
+    def test_live_pcm_uses_the_stats_close_button(self):
+        graph = (120, 90, 900, 420)
+        close = ui.audio_transport_graph_close_box(graph)
+        self.assertEqual(close, ui.cpu_utilization_graph_close_box(graph))
+        text_cache = object()
+        with mock.patch.object(ui, 'draw_logical_rect'), \
+             mock.patch.object(ui, 'draw_logical_line'), \
+             mock.patch.object(ui, 'draw_text'), \
+             mock.patch.object(ui, 'draw_styled_text_button') as button:
+            ui.draw_audio_transport_graph(text_cache, (), graph)
+        button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
+
     def test_frequency_drawer_controls_are_bounded_and_disjoint(self):
         boxes = ui.frequency_drawer_boxes()
         panel = boxes["panel"]
-        controls = [boxes[name] for name in ("readout", "down", "up", "manual", "step_heading", "close")]
+        controls = [boxes[name] for name in ("readout", "down", "up", "step_heading", "close")]
+        controls += [box for _key, box in ui.frequency_drawer_key_boxes()]
         controls += [box for _step, box in ui.frequency_drawer_step_boxes("kiwi")]
         overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
         for box in controls:
@@ -242,17 +436,26 @@ class DrawerGeometryTests(unittest.TestCase):
         for index, box in enumerate(controls):
             for other in controls[index + 1:]:
                 self.assertFalse(overlaps(box, other))
-        for name in ("down", "up", "manual", "close"):
+        for name in ("down", "up", "close"):
             box = boxes[name]
             self.assertEqual(ui.frequency_drawer_action_at((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), name)
 
-    def test_frequency_drawer_arrows_are_square(self):
+    def test_frequency_drawer_direction_buttons_match_rail_tiles(self):
         boxes = ui.frequency_drawer_boxes()
         for name in ("down", "up"):
             x0, y0, x1, y1 = boxes[name]
-            self.assertAlmostEqual(x1 - x0, y1 - y0, msg=f"{name} is not square")
+            self.assertEqual((x1 - x0, y1 - y0),
+                             (ui.LCD_NAV_TILE_W, ui.LCD_NAV_TILE_H))
         self.assertEqual(boxes["down"][1], boxes["up"][1])
         self.assertEqual(boxes["down"][3], boxes["up"][3])
+        self.assertEqual(boxes["down"][1] - boxes["readout"][3], 16)
+        self.assertEqual(ui.frequency_drawer_key_boxes()[0][1][1] - boxes["down"][3], 16)
+        self.assertEqual(
+            boxes["step_heading"][1] - max(box[3] for _key, box in ui.frequency_drawer_key_boxes()),
+            32,
+        )
+        self.assertEqual(ui.frequency_drawer_step_boxes()[0][1][1] - boxes["step_heading"][3], 8)
+        self.assertNotIn("entry", boxes)
 
     def test_frequency_drawer_no_longer_exposes_a_font_setting(self):
         # The big-frequency typeface is fixed to the enabled face, so the rail
@@ -277,6 +480,15 @@ class DrawerGeometryTests(unittest.TestCase):
                 ui.frequency_drawer_action_at(*center, receiver_type="fmdx" if step in ui.FMDX_TUNE_STEPS_HZ else "kiwi"),
                 f"step_{int(step)}",
             )
+        self.assertEqual(len({box[1] for _step, box in kiwi}), 1)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+                            for _step, box in kiwi))
+        keys = ui.frequency_drawer_key_boxes()
+        self.assertEqual(len(keys), 16)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+                            for _key, box in keys))
+        for key, box in keys:
+            self.assertEqual(ui.frequency_drawer_action_at(*self._center(box)), f"key_{key}")
 
     def test_frequency_step_uses_hz_increment_and_receiver_bounds(self):
         self.assertEqual(ui.frequency_step_target(7075.0, 1, 100, 0, 30000), 7075.1)
@@ -287,27 +499,73 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.configured_tune_step_hz("fmdx", 500, 50_000), 50_000)
         self.assertEqual(ui.format_frequency_digits(7075.794), "007.075.794")
         self.assertEqual(ui.format_tune_step(100_000), "100 kHz")
+        self.assertEqual(ui.format_small_tune_step(100_000), "100K")
+        self.assertEqual(ui.edit_frequency_entry("7.075000", "1", True), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("7.", "."), ("7.", False))
+        self.assertEqual(ui.edit_frequency_entry("7.", "000"), ("7.000", False))
+        self.assertEqual(ui.edit_frequency_entry("7.000", "DEL"), ("7.00", False))
+        self.assertEqual(ui.edit_frequency_entry("7.000", "CLR"), ("", False))
+        self.assertEqual(ui.edit_frequency_entry("", "1"), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("0", "1"), ("1", False))
+        self.assertEqual(ui.edit_frequency_entry("", "00"), ("0", False))
+        self.assertEqual(ui.edit_frequency_entry("", "."), ("0.", False))
+        self.assertEqual(ui.frequency_entry_preview_khz("7.125", 7075.0, False), 7125.0)
+        self.assertEqual(ui.frequency_entry_preview_khz("", 7075.0, False), 0.0)
+        self.assertEqual(ui.frequency_entry_preview_khz("7.125", 7075.0, True), 7075.0)
+        self.assertEqual(
+            [ui.next_radio_tune_step(step) for step in (10, 100, 1000, 5000)],
+            [100, 1000, 5000, 10],
+        )
+
+    def test_frequency_arrow_hold_accelerates_and_cancels_cleanly(self):
+        receiver = ("receiver", 1, "kiwi")
+        hold = ui.FrequencyArrowHold()
+        hold.begin("up", 10.0, receiver)
+        self.assertIsNone(hold.tick(10.49, "up", receiver))
+        self.assertEqual(hold.tick(10.50, "up", receiver), "up")
+        first_interval = hold.next_at - 10.50
+        self.assertEqual(hold.tick(13.0, "up", receiver), "up")
+        self.assertLess(hold.next_at - 13.0, first_interval)
+        self.assertFalse(hold.release("up", receiver))
+
+        hold.begin("down", 20.0, receiver)
+        self.assertTrue(hold.release("down", receiver))
+        hold.begin("up", 30.0, receiver)
+        self.assertIsNone(hold.tick(30.2, None, receiver))
+        self.assertFalse(hold.release("up", receiver))
+        hold.begin("up", 40.0, receiver)
+        self.assertIsNone(hold.tick(40.5, "up", ("another receiver", 2, "kiwi")))
+        self.assertFalse(hold.release("up", receiver))
 
     def test_entire_compact_frequency_area_opens_tuning_target(self):
         compact = ui.compact_frequency_touch_box()
         measured = (compact[0] + 40, compact[1] + 10, compact[2] - 40, compact[3] - 10)
         self.assertTrue(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=True))
         self.assertFalse(ui.is_frequency_readout_touch(compact[0] + 2, compact[1] + 2, measured, compact=False))
+        self.assertFalse(ui.is_frequency_readout_touch(
+            compact[0] + 2, compact[1] + 2, measured,
+            compact=True, home_available=False,
+        ))
 
     def test_sidebar_headers_use_one_centered_compact_style(self):
-        with mock.patch.object(ui, "draw_logical_rect"), mock.patch.object(ui, "draw_logical_line"), mock.patch.object(ui, "draw_text") as draw_text:
+        with mock.patch.object(ui, "draw_logical_rect") as draw_rect, mock.patch.object(ui, "draw_logical_line") as draw_line, mock.patch.object(ui, "draw_text") as draw_text:
             ui.draw_sidebar_header(object(), "SETTINGS")
         args = draw_text.call_args.args
         self.assertEqual(args[1], (ui.LCD_NAV_X0 + ui.LOGICAL_W) / 2)
         self.assertEqual(args[5], 15)
         self.assertTrue(args[6])
         self.assertEqual(args[8], "cm")
+        self.assertEqual(draw_line.call_args.args[:4],
+                         (ui.LCD_NAV_X0 + 10, ui.LCD_DRAWER_HEADER_H,
+                          ui.LOGICAL_W - 10, ui.LCD_DRAWER_HEADER_H))
+        self.assertEqual(draw_rect.call_args.args[-1], (0, 0, 0, 255))
 
 
 class ParentNavigationTests(unittest.TestCase):
     def test_shared_destination_records_the_surface_that_opened_it(self):
         self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "rx"), "home")
-        self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "display"), "settings")
+        self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "display"), "home")
+        self.assertEqual(ui.navigation_parent(ui.MENU_ITEMS, "dual"), "home")
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "tests"), "settings")
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "settings_back"), "home")
 
@@ -365,12 +623,18 @@ class ReceiverBrowserTests(unittest.TestCase):
         self.assertEqual([source for source, _box in segments],
                          ["local", "kiwi", "openwebrx", "fmdx", "all"])
         for box in (box for _source, box in segments):
-            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
-            self.assertLessEqual(box[2], ui.LOGICAL_W)
+            self.assertEqual((box[0], box[2]),
+                             (ui.PICKER_EXIT_BOX[0], ui.PICKER_EXIT_BOX[2]))
             self.assertGreater(box[2] - box[0], box[3] - box[1])
+            self.assertEqual(box[3] - box[1], 48)
         for index, (_name, a) in enumerate(segments):
             for _other, b in segments[index + 1:]:
                 self.assertFalse(ui.boxes_overlap(a, b))
+        self.assertEqual(segments[0][1][1], ui.LCD_DRAWER_HEADER_H + 16)
+        self.assertTrue(all(
+            segments[index + 1][1][1] - segments[index][1][3] == 14
+            for index in range(len(segments) - 1)
+        ))
         self.assertLess(segments[-1][1][3], ui.PICKER_MAP_MODE_BOX[1])
         self.assertEqual(ui.PICKER_HEADER_H, 0)
 
@@ -660,10 +924,11 @@ class AllScreenLayoutTests(unittest.TestCase):
 
 
 class BigFrequencyStyleTests(unittest.TestCase):
-    """The large readout must look identical wherever it is drawn."""
+    """The large readout and the compact Home rail keep their intended sizes."""
 
     def test_one_shared_face_size_and_colour(self):
         self.assertEqual(ui.BIG_FREQUENCY_SIZE, 58)
+        self.assertEqual(ui.COMPACT_FREQUENCY_SIZE, 36)
         self.assertEqual(ui.BIG_FREQUENCY_COLOR, ui.VFO_NEON_COLOR)
 
     def test_helper_draws_the_shared_style(self):
@@ -672,7 +937,8 @@ class BigFrequencyStyleTests(unittest.TestCase):
         cache.font.return_value = mock.Mock(size=lambda text: (100, 30))
         with mock.patch.object(ui, "draw_text_scaled_x", side_effect=lambda *a, **k: calls.append((a, k))):
             ui.draw_big_frequency(cache, 7075.794, 500, 40, 300, family="Oxanium")
-        self.assertEqual(len(calls), 1)
+            ui.draw_big_frequency(cache, 0, 500, 40, 300, display_text="0")
+        self.assertEqual(len(calls), 2)
         args, kwargs = calls[0]
         self.assertEqual(args[3], ui.sdr_ui.format_freq(7075.794))
         self.assertEqual(args[4], ui.BIG_FREQUENCY_COLOR)
@@ -680,11 +946,12 @@ class BigFrequencyStyleTests(unittest.TestCase):
         self.assertEqual(kwargs.get("family"), "Oxanium")
         self.assertTrue(kwargs.get("bold"))
         self.assertEqual(kwargs.get("anchor"), "rm")
+        self.assertEqual(calls[1][0][3], "0")
 
     def test_frequency_rail_readout_uses_the_shared_helper(self):
         calls = []
         with mock.patch.object(ui, "draw_big_frequency", side_effect=lambda *a, **k: calls.append((a, k))), \
-                mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_logical_rect") as rect, \
                 mock.patch.object(ui, "draw_logical_line"), \
                 mock.patch.object(ui, "draw_logical_rounded_rect"), \
                 mock.patch.object(ui, "draw_sidebar_header"), \
@@ -694,10 +961,35 @@ class BigFrequencyStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "frequency_chevron_texture", return_value=(0, 10, 10)), \
                 mock.patch.object(ui, "draw_textured_quad"):
             ui.draw_frequency_drawer(object(), 7075.794, 100, "Oxanium")
-        self.assertEqual(len(calls), 1)
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="7.125",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="1",
+                entry_replace_on_digit=False,
+            )
+            ui.draw_frequency_drawer(
+                object(), 7075.794, 100, "Oxanium", entry_value="999999",
+                entry_invalid=True, entry_replace_on_digit=False,
+            )
+        self.assertEqual(len(calls), 5)
         args, kwargs = calls[0]
         self.assertEqual(args[1], 7075.794)
         self.assertEqual(kwargs.get("family"), "Oxanium")
+        self.assertEqual(calls[1][0][1], 7125.0)
+        self.assertEqual(calls[1][1]["display_text"], "7.125")
+        self.assertEqual(calls[2][0][1], 0.0)
+        self.assertEqual(calls[2][1]["display_text"], "0")
+        self.assertEqual(calls[3][1]["display_text"], "1")
+        self.assertIn(
+            mock.call(*ui.frequency_drawer_boxes()["readout"], (35, 13, 16, 255)),
+            rect.call_args_list,
+        )
 
 
 class FmdxDisclaimerTests(unittest.TestCase):
@@ -774,11 +1066,11 @@ class ReceiverListStyleTests(unittest.TestCase):
     def test_theme_uses_exact_receiver_palette_and_type_scale(self):
         theme = ui.RECEIVER_LIST_THEME
         self.assertEqual(theme.main_background, (18, 18, 18, 255))
-        self.assertEqual(theme.sidebar_background, (26, 26, 26, 255))
+        self.assertEqual(theme.sidebar_background, (0, 0, 0, 255))
         self.assertEqual(theme.primary_text, (255, 255, 255))
         self.assertEqual(theme.secondary_text, (160, 160, 160))
         self.assertEqual(theme.focus, (0, 229, 255, 255))
-        self.assertEqual((theme.label_size, theme.server_name_size), (14, 18))
+        self.assertEqual((theme.label_size, theme.server_name_size), (13, 18))
 
     def test_badges_share_labels_and_exact_state_colors(self):
         theme = ui.RECEIVER_LIST_THEME
@@ -816,23 +1108,69 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertTrue(fitted.endswith("..."))
         self.assertLessEqual(len(fitted) * 10, 105)
 
-    def test_selected_filter_is_cyan_with_dark_text(self):
+    def test_selected_filter_has_dark_gray_fill_and_light_gray_border(self):
         box = (1090, 76, 1270, 128)
         with mock.patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 mock.patch.object(ui, "draw_text") as text:
             ui.draw_receiver_filter_button(self.Cache(), box, "LAN", True)
         rounded.assert_called_once_with(
             *box, ui.APP_UI_STYLE.button.radius,
-            ui.RECEIVER_LIST_THEME.focus, ui.RECEIVER_LIST_THEME.focus, 2,
+            ui.APP_UI_STYLE.palette.active_surface, ui.APP_UI_STYLE.palette.active_border, 2,
         )
-        self.assertEqual(text.call_args.args[4], (18, 18, 18))
+        self.assertEqual(text.call_args.args[4], ui.APP_UI_STYLE.palette.text)
 
-    def test_receiver_rows_show_five_complete_and_a_sixth_teaser(self):
+    def test_receiver_rows_are_six_complete_with_balanced_padding(self):
         boxes = [ui.station_tile(index, 0) for index in range(6)]
         self.assertTrue(all(box is not None for box in boxes))
         self.assertTrue(all(box[3] - box[1] == ui.RECEIVER_PICKER_ROW_HEIGHT for box in boxes))
-        self.assertLess(boxes[-1][1], ui.LOGICAL_H)
-        self.assertGreater(boxes[-1][3], ui.LOGICAL_H)
+        self.assertEqual(boxes[0][1] - ui.PICKER_HEADER_H, ui.RECEIVER_PICKER_ROW_INSET)
+        self.assertEqual(ui.LOGICAL_H - boxes[-1][3], ui.RECEIVER_PICKER_ROW_INSET)
+
+    def test_sorted_rows_keep_selected_receiver_in_natural_order(self):
+        stations = [
+            (f"Receiver {index}", "", f"http://rx{index}.test", 0, 4)
+            for index in range(10)
+        ]
+        focused = ui.receiver_rows_for_display(
+            stations, "http://rx9.test", "kiwi", "kiwi", True,
+        )
+        sorted_rows = ui.receiver_rows_for_display(
+            stations, "http://rx9.test", "kiwi", "kiwi", False,
+        )
+        self.assertEqual(focused[2][0], "Receiver 9")
+        self.assertEqual(sorted_rows, stations)
+
+    def test_sort_notice_uses_zoom_green_osd_typography(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "draw_text") as text, \
+                mock.patch.object(ui, "draw_logical_polyline") as chevron:
+            ui.draw_receiver_sort_notice(
+                self.Cache(), "SORTED BY FARTHEST FIRST", 220, "distance_far",
+            )
+        panel.assert_called_once_with(ui.receiver_list_notice_box(), 220)
+        labels = [call.args[3] for call in text.call_args_list]
+        self.assertEqual(labels, ["SORTED BY", "FARTHEST FIRST"])
+        x0, y0, x1, _y1 = ui.ZOOM_OSD_BOX
+        self.assertEqual(text.call_args_list[0].args[1:3], (x0 + 18, y0 + 22))
+        self.assertEqual(chevron.call_args.args[0],
+                         ui.sort_chevron_points(ui.ZOOM_OSD_BOX, "distance_far"))
+        self.assertEqual(chevron.call_args.args[1:], ((72, 255, 122, 220), 5))
+        for call in text.call_args_list:
+            self.assertEqual(call.args[4:9], ((72, 255, 122), 28, True, True, "lm"))
+            self.assertEqual(call.kwargs["alpha"], 220 / 255.0)
+
+    def test_sort_chevron_points_match_ascending_and_descending_modes(self):
+        box = ui.ZOOM_OSD_BOX
+        for mode in ("distance_near", "name_az"):
+            left, tip, right = ui.sort_chevron_points(box, mode)
+            self.assertLess(tip[1], left[1])
+            self.assertEqual(left[1], right[1])
+            self.assertEqual(right[0], box[2] - 21)
+        for mode in ("distance_far", "name_za"):
+            left, tip, right = ui.sort_chevron_points(box, mode)
+            self.assertGreater(tip[1], left[1])
+            self.assertEqual(left[1], right[1])
+            self.assertEqual(right[0], box[2] - 21)
 
     def test_active_receiver_selects_its_source_tab(self):
         stations = (
@@ -877,7 +1215,8 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(len(boxes), 4)
         self.assertGreaterEqual(min(box[1] for box in boxes), 466)
         self.assertTrue(all(box[2] <= ui.LOGICAL_W for box in boxes))
-        self.assertTrue(all(box[2] - box[0] == box[3] - box[1] for box in boxes))
+        self.assertTrue(all(box[2] - box[0] == ui.LCD_NAV_TILE_W and
+                            box[3] - box[1] == ui.LCD_NAV_TILE_H for box in boxes))
         self.assertEqual(ui.RECEIVER_PICKER_ACTION_SIZE, ui.LCD_NAV_TILE_W)
         self.assertEqual(ui.RECEIVER_PICKER_ACTION_GAP, ui.LCD_NAV_GAP)
         back = ui.RECEIVER_PICKER_BACK_BOX
@@ -929,19 +1268,116 @@ class ReceiverListStyleTests(unittest.TestCase):
             )
         self.assertEqual(texts, ["SORT"])
 
-    def test_sort_notice_is_centered_in_receiver_list_canvas(self):
+    def test_sort_notice_uses_exact_zoom_osd_box(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        notice = ui.receiver_list_notice_box()
+        self.assertEqual(ui.receiver_list_notice_box(), ui.ZOOM_OSD_BOX)
+        self.assertLessEqual(ui.ZOOM_OSD_BOX[2], ui.PICKER_BOX[2])
+
+    def test_vosc_overlays_have_separate_close_and_translation_targets(self):
+        box = (16, 360, 1008, 500)
+        close = ui.compact_header_close_box(box)
+        translation = ui.caption_translation_toggle_box(box)
+        self.assertLessEqual(translation[2], close[0])
+        with mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_text"), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, label, *_args, **_kwargs: label), \
+                mock.patch.object(ui, "draw_styled_text_button") as button:
+            ui.draw_vosk_captions(None, (), (), "", "LISTENING", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "", (), "", "LISTENING", box)
+        self.assertEqual(button.call_count, 2)
+        self.assertTrue(all(call.args[1:] == (close, "CLOSE") for call in button.call_args_list))
+
+    def test_callsign_and_transcription_share_live_popup_geometry_and_type(self):
+        ui.configure_output(True)
+        box = ui.caption_box_for_waterfall(250, 712, "middle")
+        self.assertEqual(box, ui.callsign_box_for_waterfall(250, 712, "middle"))
+        with mock.patch.object(ui, "draw_vosc_live_popup_frame") as frame, \
+                mock.patch.object(ui, "draw_text") as draw, \
+                mock.patch.object(ui, "wrap_caption_lines", return_value=["CQ TEST"]), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, label, *_args, **_kwargs: label):
+            ui.draw_vosk_captions(None, ("CQ TEST",), (), "", "LISTENING", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "G4ZFE", ("G4ZFE",), "", "HEARD", box)
+        self.assertEqual([call.args[1] for call in frame.call_args_list], [box, box])
+        body = {call.args[3]: call.args for call in draw.call_args_list}
+        self.assertEqual(body["CQ TEST"][4:8], body["G4ZFE"][4:8])
+        self.assertEqual(body["G4ZFE"][4:8], ((230, 241, 244), 26, True, False))
+
+    def test_vosc_errors_remain_in_live_popups_even_with_old_text(self):
+        box = (16, 360, 1008, 500)
+        with mock.patch.object(ui, "draw_vosc_live_popup_frame"), \
+                mock.patch.object(ui, "draw_vosc_live_popup_error") as error, \
+                mock.patch.object(ui, "draw_text"):
+            ui.draw_vosk_captions(None, ("OLD WORDS",), (), "", "DEEP ERROR", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "G4ZFE", ("G4ZFE",), "", "ERROR", box)
+        self.assertEqual([call.args[2] for call in error.call_args_list], ["DEEP ERROR", "VOSK ERROR"])
+
+    def test_vosc_live_popup_error_uses_dimmed_color(self):
+        with mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_vosc_live_popup_error(None, (16, 360, 1008, 500), "error")
+        self.assertEqual(draw.call_args.args[3], "ERROR")
+        self.assertEqual(draw.call_args.args[4], (100, 135, 145))
+
+    def test_deepgram_key_error_remains_in_vosc_rail(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_logical_line"), \
+                mock.patch.object(ui, "draw_sidebar_header"), \
+                mock.patch.object(ui, "draw_lcd_drawer_heading"), \
+                mock.patch.object(ui, "draw_styled_text_button"), \
+                mock.patch.object(ui, "draw_radio_close_button"), \
+                mock.patch.object(ui, "fit_station_text", return_value="ENTER THE COMPLETE API KEY"), \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_deepgram_setup(None, "short", "lower", "enter the complete API key")
+        labels = [call.args[3] for call in draw.call_args_list]
+        self.assertIn("ERROR", labels)
+        self.assertIn("ENTER THE COMPLETE API KEY", labels)
+
+    def test_bottom_vosc_popup_owns_covered_zoom_buttons_until_moved(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        caption_bottom = ui.caption_box_for_waterfall(250, 712, "bottom")
+        caption_middle = ui.caption_box_for_waterfall(250, 712, "middle")
+        callsign_bottom = ui.callsign_box_for_waterfall(250, 712, "bottom")
+        for zoom in (ui.ZOOM_MINUS_BOX, ui.ZOOM_PLUS_BOX):
+            zoom_x = (zoom[0] + zoom[2]) / 2
+            zoom_y = (zoom[1] + zoom[3]) / 2
+            self.assertEqual(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, caption_bottom, None, True, False),
+                "caption_readonly",
+            )
+            self.assertEqual(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, None, callsign_bottom, False, True),
+                "callsign_caption",
+            )
+            self.assertIsNone(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, caption_middle, None, True, False)
+            )
+        close = ui.compact_header_close_box(caption_bottom)
         self.assertEqual(
-            (notice[0] + notice[2]) / 2,
-            (ui.PICKER_BOX[0] + ui.PICKER_BOX[2]) / 2,
+            ui.vosc_popup_action_at((close[0] + close[2]) / 2, (close[1] + close[3]) / 2,
+                                    caption_bottom, None, True, False),
+            "caption_close",
         )
-        self.assertEqual(
-            (notice[1] + notice[3]) / 2,
-            (ui.PICKER_BOX[1] + ui.PICKER_BOX[3]) / 2,
-        )
-        self.assertLessEqual(notice[2], ui.PICKER_BOX[2])
+
+    def test_vosc_error_notice_uses_zoom_panel_and_green_type(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "fit_station_text", return_value="API KEY") as fit, \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_vosc_error_osd(None, "api key", 220)
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
+        fit.assert_called_once()
+        self.assertEqual([call.args[3] for call in draw.call_args_list], ["ERROR", "API KEY"])
+        self.assertTrue(all(call.args[4:6] == ((72, 255, 122), 28) for call in draw.call_args_list))
+
+    def test_rc28_mode_notice_uses_zoom_panel_and_green_type(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_rc28_mode_osd(None, "WIDTH", 220)
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
+        self.assertEqual([call.args[3] for call in draw.call_args_list], ["RC-28", "WIDTH"])
+        self.assertTrue(all(call.args[4:6] == ((72, 255, 122), 28) for call in draw.call_args_list))
+        self.assertEqual([call.args[8] for call in draw.call_args_list], ["lm", "rm"])
 
     def test_favorite_star_is_closed_and_mathematically_regular(self):
         points = ui.regular_star_points(0, 0, 23)
@@ -951,14 +1387,18 @@ class ReceiverListStyleTests(unittest.TestCase):
         inner = (points[1][0] ** 2 + points[1][1] ** 2) ** 0.5
         self.assertAlmostEqual(inner / outer, 0.38196601125)
 
-    def test_shared_button_style_uses_cyan_active_state_everywhere(self):
+    def test_shared_button_style_separates_inactive_active_and_pressed_states(self):
         normal = ui.APP_UI_STYLE.button.resolve()
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
-        self.assertEqual(normal.fill, (38, 38, 38, 255))
-        self.assertEqual(active.fill, (0, 229, 255, 255))
-        self.assertEqual(active.text, (18, 18, 18))
-        self.assertEqual(pressed, active)
+        self.assertEqual(normal.fill, (0, 0, 0, 255))
+        self.assertEqual(normal.border, (88, 88, 88, 255))
+        self.assertEqual(active.fill, (42, 42, 42, 255))
+        self.assertEqual(active.border, (160, 160, 160, 255))
+        self.assertEqual(active.text, (255, 255, 255))
+        self.assertEqual(pressed.fill, active.fill)
+        self.assertEqual(pressed.border, active.border)
+        self.assertEqual(pressed.text, active.text)
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)

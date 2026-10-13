@@ -172,6 +172,7 @@ class ViewTests(unittest.TestCase):
                 v.draw(None)
                 for box,a in v.actions:
                     self.assertTrue(0<=box[0]<box[2]<=1280 and 0<=box[1]<box[3]<=800)
+                    self.assertIn((box[2]-box[0],box[3]-box[1]),((114,64),(236,64)),a)
                 box=next(box for box,a in v.actions if a==action);v.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
             try:
                 press(('scope','all'));self.assertEqual(v.scope,'all')

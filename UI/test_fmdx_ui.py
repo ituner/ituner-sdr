@@ -14,6 +14,17 @@ import kiwi_gl_display as ui  # noqa: E402
 
 
 class FmdxUiIntegrationTests(unittest.TestCase):
+    def test_frequency_drawer_respects_shared_tuner_acknowledgement(self):
+        policy = fmdx.FmdxControlPolicy()
+        server = "https://fm.example/radio"
+        self.assertTrue(ui.frequency_drawer_tuning_allowed("kiwi", server, policy))
+        self.assertFalse(ui.frequency_drawer_tuning_allowed("fmdx", server, policy))
+        policy.acknowledge(server)
+        self.assertTrue(ui.frequency_drawer_tuning_allowed("fmdx", server, policy))
+        self.assertFalse(ui.frequency_drawer_tuning_allowed(
+            "fmdx", "https://other.example/radio", policy,
+        ))
+
     def tearDown(self):
         fmdx.register_receivers(ui.FMDX_RECEIVERS)
 
