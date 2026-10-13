@@ -189,16 +189,20 @@ class DrawerGeometryTests(unittest.TestCase):
             ["2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE"],
         )
         dots = [call.args for call in circles.call_args_list]
-        self.assertEqual(len(dots), 3)
+        self.assertEqual(len(dots), 6)
         for kind in active:
             index = next(i for i, item in enumerate(ui.DIGITAL_MENU_ITEMS)
                          if item[0] == kind)
             x0, y0, x1, _y1 = ui.lcd_nav_box(
                 index, len(ui.DIGITAL_MENU_ITEMS), True,
             )
-            center_x = (x0 + x1) / 2
-            self.assertIn((center_x, y0 + 47, 3,
+            self.assertIn((round(x1 - 10), round(y0 + 10), 5,
                            ui.APP_UI_STYLE.palette.ready), dots)
+        active_rims = [call for call in circles.call_args_list
+                       if call.kwargs.get("outline")]
+        self.assertEqual(len(active_rims), 3)
+        self.assertTrue(all(call.args[2] == ui.NAV_STATUS_LED_RADIUS
+                            for call in circles.call_args_list))
 
     def test_home_digi_button_counts_enabled_decoder_sessions(self):
         ui.configure_output(True)

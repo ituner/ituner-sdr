@@ -16506,6 +16506,27 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_sidebar_header(text_cache, "PASSBAND")
 
 
+NAV_STATUS_LED_RADIUS = 5
+NAV_STATUS_LED_INSET = 10
+
+
+def draw_nav_status_led(box, active):
+    """Draw the common instrument lamp used by Home and decoder tiles."""
+    _x0, y0, x1, _y1 = box
+    led_x = round(x1 - NAV_STATUS_LED_INSET)
+    led_y = round(y0 + NAV_STATUS_LED_INSET)
+    draw_logical_circle(
+        led_x, led_y, NAV_STATUS_LED_RADIUS,
+        APP_UI_STYLE.palette.ready if active else (18, 24, 22, 255),
+        segments=20,
+    )
+    draw_logical_circle(
+        led_x, led_y, NAV_STATUS_LED_RADIUS,
+        (126, 255, 178, 210) if active else APP_UI_STYLE.palette.border,
+        segments=20, outline=True, width=1,
+    )
+
+
 def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, settings_open=False,
                         digital_open=False, low_cut=None, high_cut=None, instrument_layout="middle",
                         active_decoders=(), running_decoder_count=0, decoder_counts=None,
@@ -16549,23 +16570,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             }[kind]
             # A physical-instrument lamp: dark when idle, green with a quiet
             # rim when its background process is genuinely running.
-            led_x, led_y = round(bx1 - 10), round(by0 + 10)
-            draw_logical_circle(
-                led_x, led_y, 5,
-                APP_UI_STYLE.palette.ready if led_active else (18, 24, 22, 255),
-                segments=20,
-            )
-            draw_logical_circle(
-                led_x, led_y, 5,
-                (126, 255, 178, 210) if led_active else APP_UI_STYLE.palette.border,
-                segments=20, outline=True, width=1,
-            )
+            draw_nav_status_led(nav_box, led_active)
         if digital_open and kind in active_decoders:
-            center_x = (bx0 + bx1) / 2
-            draw_logical_circle(
-                center_x, by0 + 47, 3, APP_UI_STYLE.palette.ready,
-                segments=16,
-            )
+            draw_nav_status_led(nav_box, True)
 
 
 def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
