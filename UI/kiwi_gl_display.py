@@ -602,7 +602,7 @@ BOTTOM_RULER_H = 0
 SPECTRUM_RULER_H = 60
 BOTTOM_STATUS_H = 88
 ASR_CAPTION_HEIGHT = 140
-CALLSIGN_CAPTION_HEIGHT = 68
+CALLSIGN_CAPTION_HEIGHT = ASR_CAPTION_HEIGHT
 CALLSIGN_CONTEXT_MAX_AGE = 4.5
 # Three deliberate overlay lanes make the live ASR and ham readouts easy to
 # arrange by touch without covering each other.
@@ -8416,7 +8416,7 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
 
 
 def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, pressed=None):
-    """Draw the controls that must remain above movable text overlays."""
+    """Draw controls before the live overlays so covered controls stay behind."""
     # Zoom is two standalone bordered + / - tiles; the shared pill background
     # and its centre "ZOOM" label were removed. ``pressed`` names the zoom
     # gesture in progress so a knob or finger press lights the tile.
@@ -14695,6 +14695,20 @@ def green_osd_alpha(remaining, duration):
     return int(220 * remaining / fade) if remaining < fade else 220
 
 
+def draw_vosc_error_osd(text_cache, message, alpha):
+    """Show speech/key errors with the Zoom notice's position and typography."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or not message:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    color = (72, 255, 122)
+    detail = fit_station_text(text_cache, str(message).upper(), x1 - x0 - 150,
+                              28, True, True)
+    draw_text(text_cache, x0 + 18, y0 + 22, "ERROR", color, 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, detail, color, 28, True, True, "rm")
+
+
 def draw_green_osd_panel(box, alpha):
     """The shared green CRT wash and scanlines used by Zoom and Sort."""
     x0, y0, x1, y1 = box
@@ -14732,16 +14746,15 @@ def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_nea
 
 
 def draw_rc28_mode_osd(text_cache, mode, alpha):
-    """Brief hardware-mode acknowledgement for the Icom RC-28 dial."""
+    """Acknowledge RC-28 dial mode in the same green panel as Zoom."""
     alpha = clamp(int(alpha), 0, 255)
     if alpha <= 0:
         return
-    x0, y0, x1, y1 = 330, 72, 630, 130
-    green = (72, 255, 122, alpha)
-    draw_logical_rect(x0, y0, x1, y1, (0, 9, 5, int(alpha * 0.58)))
-    draw_logical_line(x0 + 10, y1 - 8, x1 - 10, y1 - 8, (72, 255, 122, int(alpha * 0.42)), 1)
-    draw_text(text_cache, x0 + 16, (y0 + y1) / 2, "RC-28", green[:3], 22, True, True, "lm")
-    draw_text(text_cache, x1 - 16, (y0 + y1) / 2, mode, green[:3], 30, True, True, "rm")
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel((x0, y0, x1, y1), alpha)
+    green = (72, 255, 122)
+    draw_text(text_cache, x0 + 18, y0 + 22, "RC-28", green, 28, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, mode, green, 28, True, True, "rm")
 
 
 def frequency_identity_osd_bounds(candidates):
@@ -15926,8 +15939,8 @@ def lcd_filter_drawer_boxes():
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
         "close": lcd_drawer_back_box(),
         "visual": (inner_x0, 108, inner_x1, 211),
-        "shift": (inner_x0, 217, inner_x1, 329),
-        "width": (inner_x0, 341, inner_x1, 441),
+        "width": (inner_x0, 217, inner_x1, 329),
+        "shift": (inner_x0, 341, inner_x1, 441),
         "presets": tuple(preset_boxes),
     }
 
@@ -15937,10 +15950,10 @@ def lcd_filter_drawer_action_at(x, y):
     boxes = lcd_filter_drawer_boxes()
     if not contains(boxes["panel"], x, y):
         return None
-    if contains(boxes["shift"], x, y):
-        return "shift"
     if contains(boxes["width"], x, y):
         return "width"
+    if contains(boxes["shift"], x, y):
+        return "shift"
     return "drawer"
 
 
@@ -16042,8 +16055,8 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=boxes["visual"], title=f"LIVE  {mode.upper()}")
-    draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
+    draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", (169, 203, 208), 13, True, False, "lm", family="Liberation Sans")
     current_preset = filter_preset_index(width_hz)
     for index, (name, preset_width_hz, box) in enumerate(boxes["presets"]):
@@ -16194,6 +16207,40 @@ def deepgram_keyboard_rows(mode):
     return DEEPGRAM_KEY_ROWS
 
 
+def deepgram_sidebar_boxes(mode):
+    """Fit the existing key-entry modes entirely inside the 236 px VOSC rail."""
+    left = LCD_NAV_X0 + 10
+    action_names = ("MODE", "CLEAR", "BACK", "SAVE")
+    actions = {
+        name: (left + index * 60, 176, left + index * 60 + 55, 207)
+        for index, name in enumerate(action_names)
+    }
+    keys = "".join(row for row, _x, _y, _width in deepgram_keyboard_rows(mode))
+    # Two useful key characters fill the last alphabet row so every row spans
+    # the same four-column width as the frequency keypad.
+    if len(keys) % 4:
+        keys += "@/"[:4 - len(keys) % 4]
+    key_boxes = tuple(
+        (
+            "BACK" if key == "<" else key,
+            (left + index % 4 * 60, 223 + index // 4 * 39,
+             left + index % 4 * 60 + 55, 254 + index // 4 * 39),
+        )
+        for index, key in enumerate(keys)
+    )
+    return {
+        "panel": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
+        "field": (left, 112, LOGICAL_W - 10, 160),
+        "actions": actions,
+        "keys": key_boxes,
+        "close": lcd_drawer_back_box(),
+    }
+
+
+def deepgram_setup_surface_box():
+    return (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H) if LCD_800_MODE else DEEPGRAM_SETUP_BOX
+
+
 def keyboard_modal_back_box():
     """The persistent escape target shared by every touch keyboard."""
     return lcd_drawer_back_box()
@@ -16216,6 +16263,11 @@ def draw_keyboard_modal_sidebar(text_cache, title, detail):
 
 
 def deepgram_key_at(x, y, mode):
+    if LCD_800_MODE:
+        for action, box in deepgram_sidebar_boxes(mode)["keys"]:
+            if contains(box, x, y):
+                return action
+        return None
     for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
         if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
             key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
@@ -16224,8 +16276,16 @@ def deepgram_key_at(x, y, mode):
 
 
 def deepgram_setup_action_at(x, y, mode):
-    if LCD_800_MODE and contains(keyboard_modal_back_box(), x, y):
-        return "CANCEL"
+    if LCD_800_MODE:
+        boxes = deepgram_sidebar_boxes(mode)
+        if contains(boxes["close"], x, y):
+            return "CANCEL"
+        if DESKTOP_MODE and contains(boxes["field"], x, y):
+            return "PASTE"
+        for action, box in boxes["actions"].items():
+            if contains(box, x, y):
+                return action
+        return deepgram_key_at(x, y, mode)
     if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
         return "PASTE"
     if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
@@ -16240,7 +16300,41 @@ def deepgram_setup_action_at(x, y, mode):
 
 
 def draw_deepgram_setup(text_cache, value, mode, error=""):
-    """A full-size, touch-safe secret-entry sheet above the live waterfall."""
+    """Draw key entry in the VOSC rail on the 1280x800 screen."""
+    if LCD_800_MODE:
+        boxes = deepgram_sidebar_boxes(mode)
+        draw_logical_rect(*boxes["panel"], APP_UI_STYLE.palette.sidebar)
+        draw_sidebar_header(text_cache, "VOSC")
+        draw_lcd_drawer_heading(text_cache, boxes["field"][0] + 4, 88, "DEEPGRAM API KEY")
+        field = boxes["field"]
+        draw_logical_rect(*field, (11, 20, 27, 255) if not error else (72, 36, 32, 255))
+        draw_logical_line(field[0], field[1], field[2], field[1], (112, 136, 146, 255), 1)
+        masked = "*" * min(len(value), 22) + ("..." if len(value) > 22 else "")
+        field_text = masked or ("TAP TO PASTE OR TYPE" if DESKTOP_MODE else "ENTER KEY BELOW")
+        draw_text(text_cache, field[0] + 8, (field[1] + field[3]) / 2,
+                  field_text, (229, 241, 243) if value else (145, 171, 174),
+                  13, bool(value), False, "lm", family=APP_UI_STYLE.button.font_family)
+        mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
+        for action, box in boxes["actions"].items():
+            label = {"MODE": mode_label, "CLEAR": "CLR", "BACK": "DEL", "SAVE": "OK"}[action]
+            draw_styled_text_button(text_cache, box, label, active=action == "MODE" and mode != "lower")
+        for key, box in boxes["keys"]:
+            draw_styled_text_button(text_cache, box, "DEL" if key == "BACK" else key)
+        if error:
+            draw_text(text_cache, field[0] + 4, 562, "ERROR",
+                      (72, 255, 122), 13, True, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+            draw_text(text_cache, field[0] + 4, 586,
+                      fit_station_text(text_cache, error.upper(), 228, 13, False, False,
+                                       family=APP_UI_STYLE.button.font_family),
+                      (72, 255, 122), 13, False, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+        else:
+            draw_text(text_cache, field[0] + 4, 562, "SAVED LOCALLY ON THIS DEVICE",
+                      (174, 203, 208), 13, False, False, "lm",
+                      family=APP_UI_STYLE.button.font_family)
+        draw_radio_close_button(text_cache, boxes["close"])
+        return
     x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
@@ -17468,7 +17562,26 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
 def caption_translation_toggle_box(box):
     """Small, right-aligned live-caption mode control within its own banner."""
     x0, y0, x1, _y1 = box
-    return (max(x0 + 220, x1 - 252), y0 + 7, x1 - 9, y0 + 41)
+    return (max(x0 + 220, x1 - 362), y0 + 7, x1 - 119, y0 + 41)
+
+
+def vosc_popup_action_at(x, y, caption_box, callsign_box, caption_enabled,
+                         callsign_enabled, translation_box=None, waterfall_visible=True):
+    """Route a visible VOSC popup before controls covered by that popup."""
+    if not waterfall_visible:
+        return None
+    # Callsigns are painted after captions, so their overlapping touch area
+    # owns the foreground just as it does visually.
+    if callsign_enabled and callsign_box and contains(callsign_box, x, y):
+        return ("callsign_close" if contains(compact_header_close_box(callsign_box), x, y)
+                else "callsign_caption")
+    if caption_enabled and caption_box and contains(caption_box, x, y):
+        if contains(compact_header_close_box(caption_box), x, y):
+            return "caption_close"
+        if translation_box and contains(translation_box, x, y):
+            return "caption_translation_toggle"
+        return "caption_readonly"
+    return None
 
 
 def whisper_caption_toggle_label(caption_mode):
@@ -17482,16 +17595,29 @@ def whisper_caption_toggle_label(caption_mode):
     return f"ORIGINAL · {source}"
 
 
+def draw_vosc_live_popup_frame(text_cache, box):
+    """The common waterfall panel and Close control for VOSC live output."""
+    draw_logical_rect(*box, (3, 8, 12, 190))
+    draw_styled_text_button(text_cache, compact_header_close_box(box), "CLOSE", size=12)
+
+
+def draw_vosc_live_popup_error(text_cache, box, message):
+    """Leave a live-engine error visible after its brief Zoom-style notice."""
+    x0, y0, _x1, y1 = box
+    draw_text(text_cache, x0 + 20, (y0 + y1) / 2, str(message).upper(),
+              (100, 135, 145), 24, True, False, "lm", family=caption_font_family())
+
+
 def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
                        engine="off"):
     """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
-    draw_logical_rect(x0, y0, x1, y1, (3, 8, 12, 190))
+    draw_vosc_live_popup_frame(text_cache, (x0, y0, x1, y1))
     caption_mode = str(caption_mode).lower()
     phoneme_mode = asr_engine_family(engine) == "phoneme"
     whisper_mode_control = asr_engine_family(engine) == "whisper"
-    content_x1 = x1 - 274 if whisper_mode_control else x1 - 40
+    content_x1 = x1 - 384 if whisper_mode_control else x1 - 124
     content_y0 = y0
     if phoneme_mode:
         # Explicitly identify this as acoustic-phone evidence. It must never
@@ -17511,6 +17637,9 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
                   whisper_caption_toggle_label(caption_mode),
                   (189, 249, 219) if caption_mode == "english" else (176, 211, 224),
                   14, True, False, "cm", family=family)
+    if "ERROR" in str(status).upper():
+        draw_vosc_live_popup_error(text_cache, (x0, y0, x1, y1), status)
+        return
     if caption_mode == "both":
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
@@ -17554,34 +17683,28 @@ def draw_callsign_captions(text_cache, enabled, callsign, history, ham_message, 
     if not enabled or box is None:
         return
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 16, 14, 202))
-    draw_logical_rect(x0, y0, x0 + 5, y1, (77, 220, 151, 235))
+    draw_vosc_live_popup_frame(text_cache, box)
+    family = caption_font_family()
+    close_box = compact_header_close_box(box)
+    draw_text(text_cache, x0 + 20, y0 + 17, "CALL SIGN", (112, 221, 181),
+              14, True, False, "lm", family=family)
+    if status == "ERROR":
+        draw_vosc_live_popup_error(text_cache, box, "VOSK ERROR")
+        return
     history = tuple(history) if history else (() if not callsign else (callsign,))
     if not history:
-        source = "LISTENING..." if status != "ERROR" else "VOSK ERROR"
-        draw_text(text_cache, x0 + 18, (y0 + y1) / 2, "HAM", (105, 238, 169), 15, True, False, "lm", family="Cantarell")
-        draw_text(text_cache, x0 + 76, (y0 + y1) / 2, source, (158, 203, 191), 21, True, False, "lm", family="Cantarell")
+        draw_text(text_cache, x0 + 20, (y0 + y1) / 2,
+                  "LISTENING..." if status == "LISTENING" else status,
+                  (133, 180, 190), 24, False, False, "lm", family=family)
         return
-    # Callsigns are the only high-confidence entity this lane promises. The
-    # broad ASR phrase remains available in the normal caption pane, but is
-    # deliberately not repeated here as noisy pseudo-traffic.
-    draw_text(text_cache, x0 + 18, y0 + 13, "CALLS", (105, 238, 169), 13, True, False, "lm", family="Cantarell")
-    field_x0 = x0 + 74
-    line_h = (y1 - y0 - 10) / max(1, len(history))
+    # Keep the strict callsign evidence, but use the same typography and row
+    # rhythm as live transcription instead of a second green-chip design.
+    first_y = (y0 + y1) / 2 - (len(history) - 1) * 15
     for index, value in enumerate(history):
-        row_y0 = y0 + 5 + index * line_h
-        row_y1 = row_y0 + line_h - 3
-        call_width = text_cache.font(24 if index == 0 else 19, bold=True, family="Cantarell").size(value)[0]
-        field_x1 = min(x1 - 12, field_x0 + max(116, call_width + 28))
-        if index == 0:
-            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (18, 111, 77, 220))
-            draw_logical_rect(field_x0, row_y0, field_x0 + 4, row_y1, (109, 255, 183, 255))
-            color, size = (230, 255, 243), 24
-        else:
-            draw_logical_rect(field_x0, row_y0, field_x1, row_y1, (9, 53, 40, 174))
-            color, size = (151, 205, 184), 19
-        label = fit_station_text(text_cache, value, field_x1 - field_x0 - 20, size, True, False, family="Cantarell")
-        draw_text(text_cache, field_x0 + 13, (row_y0 + row_y1) / 2, label, color, size, True, False, "lm", family="Cantarell")
+        label = fit_station_text(text_cache, value, close_box[0] - x0 - 32,
+                                 26, True, False, family=family)
+        draw_text(text_cache, x0 + 20, first_y + index * 30, label,
+                  (230, 241, 244), 26, True, False, "lm", family=family)
 
 
 def asr_option_at(x, y, moon_language_menu=False):
@@ -17623,6 +17746,7 @@ def vosc_sidebar_options(moon_language_menu=False):
     if not moon_language_menu:
         for index, value in enumerate(CAPTION_MODES):
             yield "caption_mode", value, lcd_nav_option_box(index, 504)
+        yield "callsign", None, (LCD_NAV_X0 + 10, 656, LOGICAL_W - 10, 720)
 
 
 def lcd_nav_option_box(index, first_y):
@@ -17631,7 +17755,8 @@ def lcd_nav_option_box(index, first_y):
     return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
 
 
-def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False):
+def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_menu=False,
+                   callsign_enabled=False):
     """A large explicit ASR selector rather than a mystery on/off toggle."""
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
@@ -17644,6 +17769,12 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
             draw_text(text_cache, LCD_NAV_X0 + 14, 478, "CAPTIONS",
                       (174, 203, 208), 13, True, False, "lm", family="Liberation Sans")
         for kind, value, box in vosc_sidebar_options(moon_language_menu):
+            if kind == "callsign":
+                draw_styled_two_line_button(
+                    text_cache, box, "CALLSIGN", "ON" if callsign_enabled else "OFF",
+                    active=callsign_enabled,
+                )
+                continue
             if moon_language_menu:
                 title = next(label for language, label in MOONSHINE_LANGUAGE_OPTIONS
                              if value == f"moonshine:{language}")
@@ -22879,6 +23010,9 @@ def main():
     anim_start = 0.0
     anim_duration = 0.20
     zoom_osd_until = 0.0
+    vosc_error_osd_until = 0.0
+    vosc_error_osd_message = ""
+    last_vosc_error_key = ()
     rc28_mode_osd_until = 0.0
     frequency_identity_result_queue = queue.Queue(maxsize=1)
     frequency_identity_pending_key = None
@@ -23015,6 +23149,7 @@ def main():
     caption_box = VOSK_CAPTION_BOX
     caption_translation_toggle_box_live = None
     callsign_box = VOSK_CAPTION_BOX
+    waterfall_visible = False
     buffer_graph_box = None
     cpu_graph_box = None
     audio_volume = audio_output_volume(args)
@@ -24060,7 +24195,7 @@ def main():
                 else:
                     continue
                 rc28_zoom_detents = 0
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 print(f"gl RC-28 dial mode {rc28_dial_mode}", flush=True)
                 continue
@@ -24085,7 +24220,7 @@ def main():
                 # tiny, fussy turns for normal listening adjustments.
                 current_volume = audio_volume if audio_volume is not None else 0.5
                 apply_main_volume(clamp(current_volume + int(value) * 0.02, 0.0, 1.0))
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 continue
 
@@ -24117,7 +24252,7 @@ def main():
                         FILTER_LIMIT_HZ - half_width,
                     )
                     state.set_filter(low_cut=center - half_width, high_cut=center + half_width)
-                rc28_mode_osd_until = time.monotonic() + 1.7
+                rc28_mode_osd_until = time.monotonic() + args.zoom_osd_seconds
                 wake_controls()
                 continue
 
@@ -25129,6 +25264,8 @@ def main():
                     deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
                         deepgram_key_value
                     )
+                    if deepgram_key_error:
+                        last_vosc_error_key = ()
                     wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
@@ -25346,7 +25483,7 @@ def main():
                                     or hell_workspace.open or sstv_workspace.open
                                 )
                                 and not (asr_panel_open and contains(ASR_PANEL_BOX, x, y))
-                                and not (deepgram_setup_open and contains(DEEPGRAM_SETUP_BOX, x, y))
+                                and not (deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y))
                                 and not (band_navigation_open and contains(band_navigation_panel_box(), x, y))
                                 and not (filter_panel_open and contains(FILTER_PANEL_BOX, x, y))
                                 and not (dj_tune_open and contains(DJ_PANEL_BOX, x, y))
@@ -25509,15 +25646,9 @@ def main():
                                         frequency_drawer_hold.begin(
                                             frequency_drawer_pressed, start_time, identity,
                                         )
-                            elif deepgram_setup_open and (
-                                contains(DEEPGRAM_SETUP_BOX, x, y)
-                                or (
-                                    LCD_800_MODE
-                                    and contains(keyboard_modal_back_box(), x, y)
-                                )
-                            ):
+                            elif deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y):
                                 gesture = "deepgram_setup"
-                            elif deepgram_setup_open:
+                            elif deepgram_setup_open and not LCD_800_MODE:
                                 gesture = "deepgram_setup_outside"
                             elif rtl_lab_open:
                                 # The local-source sheet is a full modal
@@ -25536,7 +25667,9 @@ def main():
                                 gesture = "network_panel"
                             elif asr_panel_open and asr_option_at(x, y, asr_moon_language_open) is not None:
                                 gesture = "asr_select"
-                            elif asr_panel_open:
+                            elif asr_panel_open and (not LCD_800_MODE or x >= LCD_NAV_X0):
+                                # VOSC owns its right rail until BACK. The
+                                # waterfall to its left remains interactive.
                                 gesture = "asr_outside"
                             elif band_navigation_open:
                                 # The band sheet is intentionally modal while
@@ -25614,9 +25747,14 @@ def main():
                                 )
                             ):
                                 gesture = "band_navigation_toggle"
-                            # Operating controls always win over movable live
-                            # captions, even when an ASR/HAM lane crosses the
-                            # bottom of the waterfall.
+                            elif (vosc_popup_action := vosc_popup_action_at(
+                                x, y, caption_box, callsign_box,
+                                state.transcription_snapshot()[0], state.callsign_snapshot()[0],
+                                caption_translation_toggle_box_live, waterfall_visible,
+                            )) is not None:
+                                gesture = vosc_popup_action
+                            # A bottom VOSC popup covers Zoom until the user
+                            # taps that popup again to move it to another lane.
                             elif not picker_open and contains(ZOOM_PLUS_BOX, x, y):
                                 gesture = "zoom_plus"
                             elif not picker_open and contains(ZOOM_MINUS_BOX, x, y):
@@ -25665,20 +25803,10 @@ def main():
                             elif drawer_waterfall_touch:
                                 # Rail drawers are intentionally non-modal.
                                 # Their controls own only x=1024..1280; the
-                                # complete live waterfall must remain a
-                                # tuning surface even when a movable ASR/HAM
-                                # caption happens to cross it. Zoom/Filter/
-                                # Scope were claimed above, so they remain
-                                # immediately tappable as well.
+                                # exposed waterfall remains a tuning surface.
+                                # Visible VOSC popups and controls were claimed
+                                # above, so a covered control cannot fire.
                                 gesture = "waterfall"
-                            elif caption_translation_toggle_box_live and contains(caption_translation_toggle_box_live, x, y):
-                                gesture = "caption_translation_toggle"
-                            elif callsign_box and state.callsign_snapshot()[0] and contains(callsign_box, x, y):
-                                gesture = "callsign_caption"
-                            elif state.transcription_snapshot()[0] and contains(caption_box, x, y):
-                                # Protect readable text from accidental tuning,
-                                # but do not move the fixed caption window.
-                                gesture = "caption_readonly"
                             elif (
                                 LCD_800_MODE
                                 and (
@@ -27804,8 +27932,12 @@ def main():
                                     deepgram_key_value, deepgram_key_error = append_desktop_deepgram_clipboard(
                                         deepgram_key_value
                                     )
+                                    if deepgram_key_error:
+                                        last_vosc_error_key = ()
                                 elif action == "CANCEL":
                                     deepgram_setup_open = False
+                                    if LCD_800_MODE:
+                                        asr_panel_open = True
                                     deepgram_key_value = ""
                                     deepgram_key_error = ""
                                 elif action == "SAVE":
@@ -27813,12 +27945,15 @@ def main():
                                         save_deepgram_api_key(deepgram_key_value)
                                     except ValueError as exc:
                                         deepgram_key_error = str(exc)
+                                        last_vosc_error_key = ()
                                     else:
                                         state.set_asr_engine(deepgram_setup_engine)
                                         drain_caption_audio(transcript_queue)
                                         preferences_dirty = True
                                         write_remembered_view(force=True)
                                         deepgram_setup_open = False
+                                        if LCD_800_MODE:
+                                            asr_panel_open = True
                                         deepgram_key_value = ""
                                         deepgram_key_error = ""
                                 elif action and len(deepgram_key_value) < 512:
@@ -27936,6 +28071,12 @@ def main():
                                         asr_moon_language_open = False
                                     else:
                                         asr_panel_open = False
+                                elif selection_kind == "callsign":
+                                    enabled = state.callsign_snapshot()[0]
+                                    state.set_callsign_enabled(not enabled)
+                                    drain_caption_audio(callsign_queue)
+                                    preferences_dirty = True
+                                    write_remembered_view(force=True)
                                 elif selection_kind == "caption_mode":
                                     if selected_value != "original" and asr_engine_family(state.transcription_snapshot()[1]) != "whisper":
                                         state.set_asr_engine("whisper")
@@ -27943,7 +28084,8 @@ def main():
                                     drain_caption_audio(transcript_queue)
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
-                                    asr_panel_open = False
+                                    if not LCD_800_MODE:
+                                        asr_panel_open = False
                                     asr_moon_language_open = False
                                 elif selected_value == "moonshine" and not asr_moon_language_open:
                                     asr_moon_language_open = True
@@ -27968,12 +28110,13 @@ def main():
                                     # preference and is worth committing now.
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
-                                    asr_panel_open = False
+                                    if not LCD_800_MODE:
+                                        asr_panel_open = False
                                     asr_moon_language_open = False
                             wake_controls()
                         elif touch_started and gesture == "asr_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            if not LCD_800_MODE and moved <= args.tap_px:
                                 asr_panel_open = False
                                 asr_moon_language_open = False
                             wake_controls()
@@ -27985,6 +28128,13 @@ def main():
                                 else overlay_anchor_at_y(y, waterfall_y0, waterfall_y1)
                             )
                             move_overlay_to_lane("asr", target)
+                            wake_controls()
+                        elif touch_started and gesture == "caption_close":
+                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                state.set_asr_engine("off")
+                                drain_caption_audio(transcript_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "caption_translation_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28006,6 +28156,13 @@ def main():
                                 else overlay_anchor_at_y(y, waterfall_y0, waterfall_y1)
                             )
                             move_overlay_to_lane("ham", target)
+                            wake_controls()
+                        elif touch_started and gesture == "callsign_close":
+                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                state.set_callsign_enabled(False)
+                                drain_caption_audio(callsign_queue)
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "buffer_graph_move":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28322,7 +28479,7 @@ def main():
             if (
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
-                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open or asr_panel_open)
+                and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open)
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -28337,8 +28494,6 @@ def main():
                 receiver_home_panel_open = False
                 fan_curve_panel_open = False
                 audio_panel_open = False
-                asr_panel_open = False
-                asr_moon_language_open = False
                 audio_transport_graph_open = False
                 cpu_utilization_graph_open = False
                 print("gl LCD drawer idle timeout: returned to Home rail", flush=True)
@@ -29036,7 +29191,7 @@ def main():
             # Mode, Audio, and Display are right-rail drawers, not modal
             # screens. Keep the waterfall's operating controls visible and
             # tappable behind them. Full-canvas tools still own the view.
-            control_alpha = 0.0 if menu_open or picker_open or asr_panel_open or deepgram_setup_open or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
+            control_alpha = 0.0 if menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE) or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = (
                 f"LOCAL {rtl_lab.snapshot()['capabilities'].label} · {rtl_lab.snapshot()['preset'][0]}"
                 if local_iq_active else "OPENWEBRX TEST · ON0LLV"
@@ -29063,6 +29218,20 @@ def main():
             transcript_translations = state.transcript_translation_snapshot()
             callsign_enabled, callsign_value, ham_message, callsign_status, _callsign_updated_at = state.callsign_snapshot()
             callsign_history = state.callsign_history_snapshot()
+            vosc_error_key = (
+                ("key", deepgram_key_error) if deepgram_setup_open and deepgram_key_error else (),
+                ("caption", transcript_status) if transcription_enabled and "ERROR" in transcript_status else (),
+                ("callsign", callsign_status) if callsign_enabled and "ERROR" in callsign_status else (),
+            )
+            if any(vosc_error_key) and vosc_error_key != last_vosc_error_key:
+                kind, detail = next(item for item in vosc_error_key if item)
+                vosc_error_osd_message = (
+                    detail if kind == "key" else
+                    "CALLSIGN" if kind == "callsign" else
+                    detail.removesuffix(" ERROR") or "VOSC"
+                )
+                vosc_error_osd_until = now + args.zoom_osd_seconds
+            last_vosc_error_key = vosc_error_key
             audio_jitter_target, audio_jitter_depth = state.audio_jitter_snapshot()
             audio_jitter_history = state.audio_jitter_history_snapshot()
             live_audio_controls, _live_audio_generation = state.audio_controls_snapshot()
@@ -29191,29 +29360,25 @@ def main():
                     callsign_status,
                     callsign_box,
                 )
-            # Captions are movable and may occupy the bottom lane. Restore
-            # the operating controls as the final foreground layer so their
-            # labels remain visible and their touch regions match what users
-            # can see.
-            if waterfall_visible and (transcription_enabled or callsign_enabled):
-                draw_waterfall_operating_controls(text_cache, spectrum_enabled, control_alpha)
+            # draw_ui painted Zoom first. A bottom VOSC popup remains above
+            # the covered buttons until a tap moves the popup away.
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
             if not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
             if waterfall_visible and audio_controls.get("mute", False) and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
                 draw_muted_waterfall_badge(text_cache)
             if waterfall_visible and audio_transport_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -29223,7 +29388,7 @@ def main():
                     buffer_graph_box,
                 )
             if waterfall_visible and cpu_utilization_graph_open and not (
-                menu_open or picker_open or asr_panel_open or deepgram_setup_open
+                menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
@@ -29234,7 +29399,10 @@ def main():
                     cpu_graph_box,
                 )
             if asr_panel_open:
-                draw_asr_panel(text_cache, asr_engine, caption_mode, asr_moon_language_open)
+                draw_asr_panel(
+                    text_cache, asr_engine, caption_mode, asr_moon_language_open,
+                    callsign_enabled,
+                )
             if deepgram_setup_open:
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_drawer_open:
@@ -29559,12 +29727,18 @@ def main():
                     and not (picker_open and not picker_map_open and now < picker_list_notice_until)):
                 alpha = green_osd_alpha(osd_remaining, args.zoom_osd_seconds)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
+            vosc_error_remaining = vosc_error_osd_until - now
+            if vosc_error_remaining > 0 and not dual_vfo_open:
+                draw_vosc_error_osd(
+                    text_cache, vosc_error_osd_message,
+                    green_osd_alpha(vosc_error_remaining, args.zoom_osd_seconds),
+                )
             rc28_osd_remaining = rc28_mode_osd_until - now
             if rc28_osd_remaining > 0 and not dual_vfo_open:
-                alpha = 232
-                if rc28_osd_remaining < 0.35:
-                    alpha = int(232 * rc28_osd_remaining / 0.35)
-                draw_rc28_mode_osd(text_cache, rc28_dial_mode, alpha)
+                draw_rc28_mode_osd(
+                    text_cache, rc28_dial_mode,
+                    green_osd_alpha(rc28_osd_remaining, args.zoom_osd_seconds),
+                )
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
             if cw_workspace.open:

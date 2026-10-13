@@ -1180,7 +1180,10 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
         ui.configure_popup_layout()
         with patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_logical_rounded_rect"), \
                 patch.object(ui, "draw_text"), \
+                patch.object(ui, "draw_sidebar_header"), \
+                patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_picker_button"), \
                 patch.object(ui, "draw_network_password_eye"), \
                 patch.object(ui, "fit_station_text", side_effect=lambda _cache, text, *_args, **_kwargs: text), \
@@ -1192,11 +1195,42 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
         self.assertEqual(
             sidebar.call_args_list,
             [
-                call(None, "ASR", "DEEPGRAM API KEY"),
                 call(None, "NETWORK", "WI-FI KEY"),
                 call(None, "SEARCH", "RECEIVERS"),
             ],
         )
+
+    def test_deepgram_keypad_uses_only_the_right_rail(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        for mode in ("lower", "upper", "digits"):
+            boxes = ui.deepgram_sidebar_boxes(mode)
+            self.assertEqual(boxes["panel"], (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H))
+            self.assertEqual(ui.deepgram_setup_surface_box(), boxes["panel"])
+            self.assertIsNone(ui.deepgram_setup_action_at(200, 100, mode))
+            self.assertEqual(boxes["close"], ui.lcd_drawer_back_box())
+            self.assertEqual(boxes["field"][2] - boxes["field"][0], 236)
+            field = boxes["field"]
+            self.assertEqual(ui.deepgram_setup_action_at((field[0] + field[2]) / 2,
+                                                          (field[1] + field[3]) / 2, mode), "PASTE")
+            for action, box in (*boxes["actions"].items(), *boxes["keys"]):
+                self.assertGreaterEqual(box[0], ui.LCD_NAV_X0 + 10)
+                self.assertLessEqual(box[2], ui.LOGICAL_W - 10)
+                self.assertEqual((box[2] - box[0], box[3] - box[1]), (55, 31))
+                self.assertEqual(ui.deepgram_setup_action_at((box[0] + box[2]) / 2,
+                                                              (box[1] + box[3]) / 2, mode), action)
+            self.assertLess(max(box[3] for _action, box in boxes["keys"]), boxes["close"][1])
+
+        with patch.object(ui, "draw_logical_rect") as rect, \
+                patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_text"), \
+                patch.object(ui, "draw_sidebar_header"), \
+                patch.object(ui, "draw_lcd_drawer_heading"), \
+                patch.object(ui, "draw_styled_text_button"), \
+                patch.object(ui, "draw_radio_close_button"):
+            ui.draw_deepgram_setup(None, "secret", "lower")
+        self.assertTrue(rect.call_args_list)
+        self.assertTrue(all(call_args.args[0] >= ui.LCD_NAV_X0 for call_args in rect.call_args_list))
 
     def test_all_primary_back_targets_match_after_configuration(self):
         ui.configure_output(True)
@@ -1817,6 +1851,12 @@ class PassbandDrawerInteractionTests(unittest.TestCase):
     def setUp(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
+
+    def test_live_width_shift_order_matches_touch_regions(self):
+        boxes = ui.lcd_filter_drawer_boxes()
+        self.assertLess(boxes['visual'][3], boxes['width'][1])
+        self.assertLess(boxes['width'][3], boxes['shift'][1])
+        self.assertLess(boxes['shift'][3], boxes['presets'][0][2][1])
 
     def test_entire_visible_shift_and_width_controls_are_interactive(self):
         boxes = ui.lcd_filter_drawer_boxes()

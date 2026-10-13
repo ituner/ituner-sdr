@@ -112,17 +112,34 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_vosc_uses_right_rail_controls_and_shared_back(self):
         options = list(ui.vosc_sidebar_options())
-        self.assertEqual(len(options), len(ui.ASR_ENGINES) + len(ui.CAPTION_MODES))
+        self.assertEqual(len(options), len(ui.ASR_ENGINES) + len(ui.CAPTION_MODES) + 1)
         back = ui.lcd_drawer_back_box()
         for kind, value, box in options:
-            self.assertEqual((box[2] - box[0], box[3] - box[1]), (114, 64))
+            width = 236 if kind == "callsign" else 114
+            self.assertEqual((box[2] - box[0], box[3] - box[1]), (width, 64))
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0 + 10)
             self.assertLessEqual(box[2], ui.LOGICAL_W - 10)
             self.assertLessEqual(box[3] + 8, back[1])
             center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(ui.asr_option_at(*center), (kind, value))
+        self.assertEqual(options[-1][:2], ("callsign", None))
+        self.assertLess(options[-2][2][3], options[-1][2][1])
         self.assertEqual(ui.asr_option_at((back[0] + back[2]) / 2,
                                           (back[1] + back[3]) / 2), ("back", None))
+
+    def test_vosc_callsign_button_shows_its_live_state(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+             mock.patch.object(ui, "draw_logical_line"), \
+             mock.patch.object(ui, "draw_sidebar_header"), \
+             mock.patch.object(ui, "draw_text"), \
+             mock.patch.object(ui, "draw_styled_button_frame", return_value=mock.Mock(text=(255, 255, 255))), \
+             mock.patch.object(ui, "draw_radio_close_button"), \
+             mock.patch.object(ui, "draw_styled_two_line_button") as callsign_button:
+            ui.draw_asr_panel(None, "vosk", callsign_enabled=True)
+        callsign_button.assert_called_once_with(
+            None, list(ui.vosc_sidebar_options())[-1][2], "CALLSIGN", "ON", active=True,
+        )
 
     def test_footer_places_clock_after_buffer_and_system_stats_on_right(self):
         cache = mock.Mock()
@@ -1256,6 +1273,111 @@ class ReceiverListStyleTests(unittest.TestCase):
         ui.configure_popup_layout()
         self.assertEqual(ui.receiver_list_notice_box(), ui.ZOOM_OSD_BOX)
         self.assertLessEqual(ui.ZOOM_OSD_BOX[2], ui.PICKER_BOX[2])
+
+    def test_vosc_overlays_have_separate_close_and_translation_targets(self):
+        box = (16, 360, 1008, 500)
+        close = ui.compact_header_close_box(box)
+        translation = ui.caption_translation_toggle_box(box)
+        self.assertLessEqual(translation[2], close[0])
+        with mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_text"), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, label, *_args, **_kwargs: label), \
+                mock.patch.object(ui, "draw_styled_text_button") as button:
+            ui.draw_vosk_captions(None, (), (), "", "LISTENING", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "", (), "", "LISTENING", box)
+        self.assertEqual(button.call_count, 2)
+        self.assertTrue(all(call.args[1:] == (close, "CLOSE") for call in button.call_args_list))
+
+    def test_callsign_and_transcription_share_live_popup_geometry_and_type(self):
+        ui.configure_output(True)
+        box = ui.caption_box_for_waterfall(250, 712, "middle")
+        self.assertEqual(box, ui.callsign_box_for_waterfall(250, 712, "middle"))
+        with mock.patch.object(ui, "draw_vosc_live_popup_frame") as frame, \
+                mock.patch.object(ui, "draw_text") as draw, \
+                mock.patch.object(ui, "wrap_caption_lines", return_value=["CQ TEST"]), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, label, *_args, **_kwargs: label):
+            ui.draw_vosk_captions(None, ("CQ TEST",), (), "", "LISTENING", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "G4ZFE", ("G4ZFE",), "", "HEARD", box)
+        self.assertEqual([call.args[1] for call in frame.call_args_list], [box, box])
+        body = {call.args[3]: call.args for call in draw.call_args_list}
+        self.assertEqual(body["CQ TEST"][4:8], body["G4ZFE"][4:8])
+        self.assertEqual(body["G4ZFE"][4:8], ((230, 241, 244), 26, True, False))
+
+    def test_vosc_errors_remain_in_live_popups_even_with_old_text(self):
+        box = (16, 360, 1008, 500)
+        with mock.patch.object(ui, "draw_vosc_live_popup_frame"), \
+                mock.patch.object(ui, "draw_vosc_live_popup_error") as error, \
+                mock.patch.object(ui, "draw_text"):
+            ui.draw_vosk_captions(None, ("OLD WORDS",), (), "", "DEEP ERROR", box=box, engine="vosk")
+            ui.draw_callsign_captions(None, True, "G4ZFE", ("G4ZFE",), "", "ERROR", box)
+        self.assertEqual([call.args[2] for call in error.call_args_list], ["DEEP ERROR", "VOSK ERROR"])
+
+    def test_vosc_live_popup_error_uses_dimmed_color(self):
+        with mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_vosc_live_popup_error(None, (16, 360, 1008, 500), "error")
+        self.assertEqual(draw.call_args.args[3], "ERROR")
+        self.assertEqual(draw.call_args.args[4], (100, 135, 145))
+
+    def test_deepgram_key_error_remains_in_vosc_rail(self):
+        ui.configure_output(True)
+        with mock.patch.object(ui, "draw_logical_rect"), \
+                mock.patch.object(ui, "draw_logical_line"), \
+                mock.patch.object(ui, "draw_sidebar_header"), \
+                mock.patch.object(ui, "draw_lcd_drawer_heading"), \
+                mock.patch.object(ui, "draw_styled_text_button"), \
+                mock.patch.object(ui, "draw_radio_close_button"), \
+                mock.patch.object(ui, "fit_station_text", return_value="ENTER THE COMPLETE API KEY"), \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_deepgram_setup(None, "short", "lower", "enter the complete API key")
+        labels = [call.args[3] for call in draw.call_args_list]
+        self.assertIn("ERROR", labels)
+        self.assertIn("ENTER THE COMPLETE API KEY", labels)
+
+    def test_bottom_vosc_popup_owns_covered_zoom_buttons_until_moved(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        caption_bottom = ui.caption_box_for_waterfall(250, 712, "bottom")
+        caption_middle = ui.caption_box_for_waterfall(250, 712, "middle")
+        callsign_bottom = ui.callsign_box_for_waterfall(250, 712, "bottom")
+        for zoom in (ui.ZOOM_MINUS_BOX, ui.ZOOM_PLUS_BOX):
+            zoom_x = (zoom[0] + zoom[2]) / 2
+            zoom_y = (zoom[1] + zoom[3]) / 2
+            self.assertEqual(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, caption_bottom, None, True, False),
+                "caption_readonly",
+            )
+            self.assertEqual(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, None, callsign_bottom, False, True),
+                "callsign_caption",
+            )
+            self.assertIsNone(
+                ui.vosc_popup_action_at(zoom_x, zoom_y, caption_middle, None, True, False)
+            )
+        close = ui.compact_header_close_box(caption_bottom)
+        self.assertEqual(
+            ui.vosc_popup_action_at((close[0] + close[2]) / 2, (close[1] + close[3]) / 2,
+                                    caption_bottom, None, True, False),
+            "caption_close",
+        )
+
+    def test_vosc_error_notice_uses_zoom_panel_and_green_type(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "fit_station_text", return_value="API KEY") as fit, \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_vosc_error_osd(None, "api key", 220)
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
+        fit.assert_called_once()
+        self.assertEqual([call.args[3] for call in draw.call_args_list], ["ERROR", "API KEY"])
+        self.assertTrue(all(call.args[4:6] == ((72, 255, 122), 28) for call in draw.call_args_list))
+
+    def test_rc28_mode_notice_uses_zoom_panel_and_green_type(self):
+        with mock.patch.object(ui, "draw_green_osd_panel") as panel, \
+                mock.patch.object(ui, "draw_text") as draw:
+            ui.draw_rc28_mode_osd(None, "WIDTH", 220)
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
+        self.assertEqual([call.args[3] for call in draw.call_args_list], ["RC-28", "WIDTH"])
+        self.assertTrue(all(call.args[4:6] == ((72, 255, 122), 28) for call in draw.call_args_list))
+        self.assertEqual([call.args[8] for call in draw.call_args_list], ["lm", "rm"])
 
     def test_favorite_star_is_closed_and_mathematically_regular(self):
         points = ui.regular_star_points(0, 0, 23)
