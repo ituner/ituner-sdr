@@ -12,18 +12,31 @@ from ui_style import UIPalette, apply_ui_style
 DEFAULT_THEME_ID = "default"
 STRAIGHT_INVERTED_THEME_ID = "straight-inverted"
 GREEN_THEME_ID = "green"
-INSTRUMENT_THEME_ID = "instrument"
 REMOVED_THEME_MIGRATIONS = {
     "default-straight": DEFAULT_THEME_ID,
     "rounded-inverted": STRAIGHT_INVERTED_THEME_ID,
     "red": DEFAULT_THEME_ID,
+    "instrument": DEFAULT_THEME_ID,
 }
 TEXT_SCALE_MIN = 80
 TEXT_SCALE_MAX = 120
+DEFAULT_COLORS = {
+    **{field.name: list(getattr(UIPalette(), field.name)) for field in fields(UIPalette)},
+    # Quiet instrument controls replace the earlier bright default grid.
+    "surface": [0, 0, 0, 255],
+    "border": [46, 46, 46, 255],
+    "active_surface": [30, 30, 30, 255],
+    "active_border": [96, 96, 96, 255],
+    "selected_surface": [24, 24, 24, 255],
+    "selected_border": [82, 82, 82, 255],
+    "pressed_surface": [0, 229, 255, 255],
+    "pressed_border": [0, 229, 255, 255],
+    "secondary_text": [132, 132, 132],
+}
 DEFAULT_THEME = {
     "id": DEFAULT_THEME_ID,
-    "name": "Default Straight",
-    "colors": {field.name: list(getattr(UIPalette(), field.name)) for field in fields(UIPalette)},
+    "name": "Default",
+    "colors": DEFAULT_COLORS,
     "radius": 0,
     "sidebar": "right",
     "text_scale_percent": 100,
@@ -60,32 +73,12 @@ def green_colors(colors):
 
 INVERTED_COLORS = invert_colors(DEFAULT_THEME["colors"])
 STRAIGHT_INVERTED_THEME = {**DEFAULT_THEME, "id": STRAIGHT_INVERTED_THEME_ID,
-                           "name": "Straight Inverted", "colors": INVERTED_COLORS}
+                           "name": "Default Inverted", "colors": INVERTED_COLORS}
 GREEN_THEME = {**DEFAULT_THEME, "id": GREEN_THEME_ID, "name": "Green",
                "colors": green_colors(DEFAULT_THEME["colors"])}
-INSTRUMENT_COLORS = {
-    **DEFAULT_THEME["colors"],
-    # Instrument controls should be discoverable without turning the rail
-    # into a bright grid. Active and pressed controls retain clear feedback.
-    "surface": [0, 0, 0, 255],
-    "border": [46, 46, 46, 255],
-    "active_surface": [30, 30, 30, 255],
-    "active_border": [96, 96, 96, 255],
-    "selected_surface": [24, 24, 24, 255],
-    "selected_border": [82, 82, 82, 255],
-    "pressed_surface": [0, 229, 255, 255],
-    "pressed_border": [0, 229, 255, 255],
-    "secondary_text": [132, 132, 132],
-}
-INSTRUMENT_THEME = {
-    **DEFAULT_THEME,
-    "id": INSTRUMENT_THEME_ID,
-    "name": "Instrument Quiet",
-    "colors": INSTRUMENT_COLORS,
-}
 BUILTIN_THEMES = {
     theme["id"]: theme for theme in (
-        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME, INSTRUMENT_THEME,
+        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME,
     )
 }
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)

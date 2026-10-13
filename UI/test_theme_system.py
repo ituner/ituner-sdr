@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call, patch
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
     BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID,
-    INSTRUMENT_THEME_ID, REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
+    REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
     ThemeLibrary, apply_theme,
     display_distance, display_temperature, distance_axis_label,
     display_to_logical_x, new_theme, runtime_theme,
@@ -226,11 +226,11 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_text") as labels:
             ui.draw_theme_panel(None, editor)
         first_name = next(item for item in labels.call_args_list
-                          if item.args[3] == "DEFAULT STRAIGHT")
+                          if item.args[3] == "DEFAULT")
         self.assertEqual(first_name.args[1:3], (548, 132))
         self.assertEqual(first_name.args[8], "lm")
         self.assertEqual([item.args[2] for item in buttons.call_args_list
-                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 4)
+                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 3)
 
     def test_row_delete_confirmation_is_tied_to_its_theme(self):
         first = new_theme("First")
@@ -242,15 +242,15 @@ class ThemeSystemTests(unittest.TestCase):
             box = theme_screen_boxes(editor)[action]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
-        tap("delete:5")
+        tap("delete:4")
         self.assertEqual(editor.confirm_delete_id, second["id"])
         tap("previous")
         self.assertIsNone(editor.confirm_delete_id)
-        tap("delete:3")
+        tap("delete:2")
         self.assertEqual(editor.notice_action, "LOCKED")
-        tap("delete:4")
+        tap("delete:3")
         self.assertEqual(editor.confirm_delete_id, first["id"])
-        tap("delete:4")
+        tap("delete:3")
         self.assertIsNone(self.library.get(first["id"]))
         self.assertIsNotNone(self.library.get(second["id"]))
         tap("previous")
@@ -271,7 +271,7 @@ class ThemeSystemTests(unittest.TestCase):
 
     def test_default_straight_selection_survives_restart(self):
         straight = self.library.get(DEFAULT_THEME_ID)
-        self.assertEqual(straight["name"], "Default Straight")
+        self.assertEqual(straight["name"], "Default")
         self.assertEqual(straight["radius"], 0)
         editor = ThemeEditor(self.library)
         self.assertEqual([theme["id"] for theme in editor.themes], list(BUILTIN_THEME_IDS))
@@ -295,8 +295,7 @@ class ThemeSystemTests(unittest.TestCase):
 
     def test_inverted_and_monochrome_builtins_preserve_alpha_and_corner_choices(self):
         self.assertEqual(BUILTIN_THEME_IDS, (
-            DEFAULT_THEME_ID, STRAIGHT_INVERTED_THEME_ID,
-            GREEN_THEME_ID, INSTRUMENT_THEME_ID,
+            DEFAULT_THEME_ID, STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID,
         ))
         original = self.library.get(DEFAULT_THEME_ID)
         inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
@@ -323,15 +322,15 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(restarted.active_id, replacement_id)
             self.assertNotIn(removed_id, BUILTIN_THEME_IDS)
 
-    def test_instrument_theme_uses_quiet_square_controls(self):
-        theme = self.library.get(INSTRUMENT_THEME_ID)
-        self.assertEqual(theme["name"], "Instrument Quiet")
+    def test_default_theme_uses_quiet_square_controls(self):
+        theme = self.library.get(DEFAULT_THEME_ID)
+        self.assertEqual(theme["name"], "Default")
         self.assertEqual(theme["radius"], 0)
         self.assertEqual(theme["colors"]["surface"], [0, 0, 0, 255])
         self.assertEqual(theme["colors"]["border"], [46, 46, 46, 255])
         self.assertLess(sum(theme["colors"]["border"][:3]),
                         sum(theme["colors"]["text"][:3]) / 4)
-        self.library.activate(INSTRUMENT_THEME_ID)
+        self.library.activate(DEFAULT_THEME_ID)
         self.assertEqual(APP_UI_STYLE.button.label_size, 13)
         self.assertEqual(APP_UI_STYLE.button.font_family,
                          ("Roboto", "Inter", "DejaVu Sans"))
@@ -403,18 +402,18 @@ class ThemeSystemTests(unittest.TestCase):
         editor.tap((first_box[0] + first_box[2]) / 2,
                    (first_box[1] + first_box[3]) / 2)
         self.assertEqual((editor.notice_action, editor.notice_detail),
-                         ("APPLIED", "DEFAULT STRAIGHT"))
+                         ("APPLIED", "DEFAULT"))
         self.assertGreater(editor.notice_until, 0)
         with patch.object(ui, "draw_green_osd_panel") as panel, \
                 patch.object(ui, "draw_text"), \
-                patch.object(ui, "fit_station_text", return_value="DEFAULT STRAIGHT"):
+                patch.object(ui, "fit_station_text", return_value="DEFAULT"):
             ui.draw_theme_notice_osd(None, editor.notice_action, editor.notice_detail, 220)
             panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 220)
         custom = new_theme("Delete me")
         self.library.upsert(custom)
         editor.selected_id = custom["id"]
         editor.page = 0
-        delete_box = theme_screen_boxes(editor)["delete:4"]
+        delete_box = theme_screen_boxes(editor)["delete:3"]
         for _ in range(2):
             editor.tap((delete_box[0] + delete_box[2]) / 2,
                        (delete_box[1] + delete_box[3]) / 2)
@@ -486,7 +485,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui.WaterfallTexture, "_draw_frequency_aligned"):
             gl.glGenTextures.return_value = 9
             texture = ui.WaterfallTexture()
-            for identifier, expected in ((DEFAULT_THEME_ID, (4, 7, 11, 255)),
+            for identifier, expected in ((DEFAULT_THEME_ID, (0, 0, 0, 255)),
                                          (STRAIGHT_INVERTED_THEME_ID, (255, 255, 255, 255))):
                 self.library.activate(identifier)
                 texture.draw(0, 100, 1024, 800, center_khz=7075, span_khz=20)
@@ -687,7 +686,7 @@ class ThemeSystemTests(unittest.TestCase):
                          [170, 187, 204, border_alpha])
         editor = ThemeEditor(restarted)
         editor.page = 0
-        tap("edit:4")
+        tap("edit:3")
         tap("section:COLORS")
         tap("group:5")
         tap("color:0")

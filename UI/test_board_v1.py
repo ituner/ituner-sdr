@@ -594,9 +594,9 @@ class BoardLayoutTests(unittest.TestCase):
 
     def test_waterfall_zoom_pressed_palette_keeps_translucent_feedback(self):
         fill, border, icon = ui.zoom_button_palette(active=True, pressed=True)
-        self.assertEqual(fill, (*ui.UI_PRESSED_FILL[:3], 216))
-        self.assertEqual(border, ui.UI_PRESSED_EDGE)
-        self.assertEqual(icon, (*ui.UI_PRESSED_TEXT, 255))
+        self.assertEqual(fill, (*ui.APP_UI_STYLE.palette.pressed_surface[:3], 216))
+        self.assertEqual(border, ui.APP_UI_STYLE.palette.pressed_border)
+        self.assertEqual(icon, (0, 0, 0, 255))
 
     def test_waterfall_zoom_matches_favorite_and_pause_size_and_spacing(self):
         ui.configure_output(True)
@@ -1924,6 +1924,9 @@ class GlobeDefaultViewTests(unittest.TestCase):
 
 
 class SharedButtonPressFeedbackTests(unittest.TestCase):
+    def setUp(self):
+        ui.theme_system.apply_theme(ui.theme_system.DEFAULT_THEME)
+
     def tearDown(self):
         ui.set_ui_press_point()
 
@@ -1955,14 +1958,14 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         self.assertEqual(fills[0], ui.APP_UI_STYLE.palette.active_surface)
         self.assertEqual(colors[0], ui.APP_UI_STYLE.palette.text)
 
-    def test_two_line_button_keeps_secondary_subtitle_when_pressed(self):
+    def test_two_line_button_turns_title_and_subtitle_black_when_pressed(self):
         box = (10, 20, 104, 114)
         colors = []
         ui.set_ui_press_point(40, 50)
         with patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
-        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.APP_UI_STYLE.palette.secondary_text])
+        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
 
     def test_legacy_close_entry_point_draws_the_shared_text_back_button(self):
         box = (10, 20, 104, 114)

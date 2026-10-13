@@ -1329,7 +1329,8 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in frame.call_args_list], [box, box])
         body = {call.args[3]: call.args for call in draw.call_args_list}
         self.assertEqual(body["CQ TEST"][4:8], body["G4ZFE"][4:8])
-        self.assertEqual(body["G4ZFE"][4:8], ((230, 241, 244), 26, True, False))
+        self.assertEqual(body["G4ZFE"][4:8],
+                         (ui.APP_UI_STYLE.palette.text, 26, True, False))
 
     def test_vosc_errors_remain_in_live_popups_even_with_old_text(self):
         box = (16, 360, 1008, 500)
@@ -1344,7 +1345,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         with mock.patch.object(ui, "draw_text") as draw:
             ui.draw_vosc_live_popup_error(None, (16, 360, 1008, 500), "error")
         self.assertEqual(draw.call_args.args[3], "ERROR")
-        self.assertEqual(draw.call_args.args[4], (100, 135, 145))
+        self.assertEqual(draw.call_args.args[4], ui.APP_UI_STYLE.palette.secondary_text)
 
     def test_deepgram_key_error_remains_in_vosc_rail(self):
         ui.configure_output(True)
@@ -1416,17 +1417,27 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertAlmostEqual(inner / outer, 0.38196601125)
 
     def test_shared_button_style_separates_inactive_active_and_pressed_states(self):
+        ui.theme_system.apply_theme(ui.theme_system.DEFAULT_THEME)
         normal = ui.APP_UI_STYLE.button.resolve()
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (88, 88, 88, 255))
-        self.assertEqual(active.fill, (42, 42, 42, 255))
-        self.assertEqual(active.border, (160, 160, 160, 255))
+        self.assertEqual(normal.border, (46, 46, 46, 255))
+        self.assertEqual(active.fill, (30, 30, 30, 255))
+        self.assertEqual(active.border, (96, 96, 96, 255))
         self.assertEqual(active.text, (255, 255, 255))
-        self.assertEqual(pressed.fill, active.fill)
-        self.assertEqual(pressed.border, active.border)
-        self.assertEqual(pressed.text, active.text)
+        self.assertEqual(pressed.fill, (0, 229, 255, 255))
+        self.assertEqual(pressed.border, (0, 229, 255, 255))
+        self.assertEqual(pressed.text, (0, 0, 0))
+
+    def test_pressed_two_line_button_uses_black_title_and_subtitle(self):
+        pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
+        with mock.patch.object(ui, "ui_button_pressed", return_value=True), \
+                mock.patch.object(ui, "draw_styled_button_frame", return_value=pressed), \
+                mock.patch.object(ui, "draw_text") as text:
+            ui.draw_styled_two_line_button(None, (10, 20, 124, 84), "TITLE", "SUBTITLE")
+        self.assertEqual([call.args[4] for call in text.call_args_list],
+                         [(0, 0, 0), (0, 0, 0)])
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)

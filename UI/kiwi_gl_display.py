@@ -8339,9 +8339,9 @@ class SpectrumLayerCache:
 # immediate, high-contrast press feedback.  It is session-only display state;
 # actions still commit on release through the existing gesture handlers.
 UI_PRESS_POINT = None
-UI_PRESSED_FILL = APP_UI_STYLE.palette.active_surface
-UI_PRESSED_TEXT = APP_UI_STYLE.palette.text
-UI_PRESSED_EDGE = APP_UI_STYLE.palette.active_border
+UI_PRESSED_FILL = (0, 229, 255, 255)
+UI_PRESSED_TEXT = (0, 0, 0)
+UI_PRESSED_EDGE = (0, 229, 255, 255)
 
 
 def set_ui_press_point(x=None, y=None):
@@ -8371,9 +8371,7 @@ def draw_styled_button_frame(box, *, active=False, pressed=None, selected=False,
 
 
 def themed_instrument_color(name, original):
-    """Retain the original theme's measured shades; theme other instruments."""
-    if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID:
-        return original
+    """Resolve instrument colors through the active theme."""
     return getattr(APP_UI_STYLE.palette, name)
 
 
@@ -8418,7 +8416,8 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
     """The shared 13 px title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
-    visual = draw_styled_button_frame(box, active=active, style=style)
+    pressed = ui_button_pressed(box)
+    visual = draw_styled_button_frame(box, active=active, pressed=pressed, style=style)
     center_x = (x0 + x1) / 2
     if subtitle:
         center_y = (y0 + y1) / 2
@@ -8427,7 +8426,8 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
                   visual.text, style.label_size, True, False, "cm", family=style.font_family)
         draw_text(text_cache, center_x, center_y + 12,
                   button_label_for_box(text_cache, subtitle, box, style),
-                  style.subtitle_color, style.label_size, True, False, "cm", family=style.font_family)
+                  visual.text if pressed else style.subtitle_color,
+                  style.label_size, True, False, "cm", family=style.font_family)
     else:
         draw_text(text_cache, center_x, (y0 + y1) / 2,
                   button_label_for_box(text_cache, title, box, style),
@@ -8508,8 +8508,9 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
         return
     x0, y0, x1, y1 = SPECTRUM_TOGGLE_BOX
     pressed = ui_button_pressed(SPECTRUM_TOGGLE_BOX)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
     if pressed:
-        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.active_surface)
+        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.pressed_surface)
     key = f"spectrum_toggle_display_v1_{int(enabled)}_{int(pressed)}_{theme_system.runtime_revision}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -8521,7 +8522,7 @@ def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (*APP_UI_STYLE.palette.text, 255) if pressed else ((218, 223, 225, 234) if enabled else (220, 224, 226, 170))
+        color = (*visual.text, 255) if pressed else ((218, 223, 225, 234) if enabled else (220, 224, 226, 170))
         label_size = max(16, round(h * 0.24))
         screen_w = min(w - 30, round(h * 0.84))
         screen_h = round(h * 0.38)
@@ -8542,8 +8543,9 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         return
     x0, y0, x1, y1 = FILTER_TOGGLE_BOX
     pressed = ui_button_pressed(FILTER_TOGGLE_BOX)
+    visual = APP_UI_STYLE.button.resolve(pressed=pressed)
     if pressed:
-        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.active_surface)
+        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.pressed_surface)
     key = f"filter_toggle_v3_{int(pressed)}_{theme_system.runtime_revision}"
     cached = text_cache.cache.get(("surface", key))
     if cached is None:
@@ -8555,8 +8557,8 @@ def draw_filter_toggle_button(text_cache, alpha=1.0):
         def p(value):
             return int(round(value * scale))
 
-        color = (*APP_UI_STYLE.palette.text, 255) if pressed else (219, 223, 225, 178)
-        dim = (*APP_UI_STYLE.palette.text, 150) if pressed else (174, 180, 184, 54)
+        color = (*visual.text, 255) if pressed else (219, 223, 225, 178)
+        dim = (*visual.text, 150) if pressed else (174, 180, 184, 54)
         label_size = max(16, round(h * 0.24))
         baseline = h * 0.46
         icon_w = min(w - 22, round(h * 0.88))
@@ -8882,7 +8884,7 @@ def draw_home_button(text_cache, alpha=1.0):
         return
     x0, y0, x1, y1 = HOME_BOX
     pressed = ui_button_pressed(HOME_BOX)
-    draw_styled_button_frame(HOME_BOX, pressed=pressed)
+    visual = draw_styled_button_frame(HOME_BOX, pressed=pressed)
     w, h = int(x1 - x0), int(y1 - y0)
     surface = pygame.Surface((w, h), pygame.SRCALPHA)
     try:
@@ -8893,11 +8895,11 @@ def draw_home_button(text_cache, alpha=1.0):
     except (pygame.error, OSError):
         draw_menu_icon(
             surface, "home", w // 2, h // 2,
-            APP_UI_STYLE.palette.text if pressed else (231, 235, 237, 238),
-            APP_UI_STYLE.palette.text if pressed else (82, 235, 231, 150),
+            visual.text if pressed else (231, 235, 237, 238),
+            visual.text if pressed else (82, 235, 231, 150),
         )
     if pressed:
-        surface.fill((*APP_UI_STYLE.palette.text, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.fill((*visual.text, 255), special_flags=pygame.BLEND_RGBA_MULT)
     tex, tex_w, tex_h = text_cache.surface_texture(
         f"home_button_v12_{'pressed' if pressed else 'normal'}", surface
     )
@@ -9070,7 +9072,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
             bx0 + 7,
             (by0 + by1) / 2 + 1,
             label,
-            APP_UI_STYLE.palette.text if pressed else ((235, 255, 239) if active else (130, 151, 157)),
+            visual.text if pressed else ((235, 255, 239) if active else (130, 151, 157)),
             12,
             True,
             False,
@@ -9079,7 +9081,7 @@ def draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, ban
         )
     footer_y = y0 + 75
     draw_native_line(x0 + 9, footer_y, x1 - 9, footer_y, (64, 103, 112, 150), 1)
-    footer_color = APP_UI_STYLE.palette.text if pressed else (192, 218, 222)
+    footer_color = visual.text if pressed else (192, 218, 222)
     draw_native_text(text_cache, grid_x + 7, y1 - 9, f"BW  {format_filter_width(bandwidth_hz)}", footer_color, 12, True, False, "lm", family="Liberation Sans")
     draw_native_text(text_cache, x1 - 12, y1 - 9, f"STEP  {step_hz} Hz", footer_color, 12, True, False, "rm", family="Liberation Sans")
 
@@ -15394,7 +15396,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     font = text_cache.font(style.label_size, bold=True, family=style.font_family)
     for caption, center_y, color in (
         (label, 23 if subtitle else height / 2, visual.text),
-        (subtitle, 46, style.subtitle_color),
+        (subtitle, 46, visual.text if pressed else style.subtitle_color),
     ):
         if caption:
             rendered = font.render(str(caption).upper(), True, color[:3])
@@ -16254,13 +16256,11 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
     x0, y0, x1, y1 = lcd_home_smeter_box()
     dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     live_segments = smeter_segment_position(dbm)
-    default_theme = theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID
-    draw_logical_rect(x0, y0, x1, y1,
-                      (9, 17, 23, 228) if default_theme else APP_UI_STYLE.palette.section_surface)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
     draw_text(text_cache, x0 + 12, y0 + 13, "S-METER",
-              (170, 201, 207) if default_theme else APP_UI_STYLE.palette.section_heading,
+              APP_UI_STYLE.palette.section_heading,
               14, True, False, "lt", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 13, compact_smeter_label(dbm), themed_instrument_color("smeter_scale", (226, 244, 247)), 17, True, False, "rt", family="Liberation Sans")
     draw_text(text_cache, x1 - 12, y0 + 30, f"{dbm:.0f} dBm", themed_instrument_color("smeter_dbm", (142, 181, 191)), 14, True, False, "rt", family="Liberation Sans")
@@ -16273,11 +16273,9 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         active = index + 0.5 <= live_segments
         red = index >= SMETER_S1_TO_S9_SEGMENTS + SMETER_S9_TO_PLUS20_SEGMENTS
         if active:
-            color = ((243, 105, 111, 242) if red else (83, 216, 248, 244)) if default_theme else (
-                APP_UI_STYLE.palette.meter_hot if red else APP_UI_STYLE.palette.meter_on
-            )
+            color = APP_UI_STYLE.palette.meter_hot if red else APP_UI_STYLE.palette.meter_on
         else:
-            color = ((75, 43, 48, 142) if red else (31, 62, 75, 160)) if default_theme else APP_UI_STYLE.palette.meter_off
+            color = APP_UI_STYLE.palette.meter_off
         draw_logical_rect(sx0, track_y - SMETER_COMPACT_BAR_HALF_HEIGHT, sx1, track_y + SMETER_COMPACT_BAR_HALF_HEIGHT, color)
     for label, position in (("S1", 0), ("S5", 11), ("S9", 22), ("+20", 28)):
         lx = track_x0 + (track_x1 - track_x0) * position / 36.0
@@ -17409,11 +17407,11 @@ def refresh_receiver_list_theme():
         ("main_background", palette.background),
         ("sidebar_background", palette.sidebar),
         ("row_background", palette.background),
-        ("selected_background", (palette.active_surface if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID else palette.selected_surface)),
+        ("selected_background", palette.selected_surface),
         ("primary_text", palette.text),
         ("secondary_text", palette.secondary_text),
         ("focus", palette.focus),
-        ("row_outline", ((66, 66, 66, 210) if theme_system.runtime_theme["id"] == theme_system.DEFAULT_THEME_ID else (*palette.border[:3], 210))),
+        ("row_outline", (*palette.border[:3], 210)),
         ("ready", palette.ready),
         ("waiting", palette.waiting),
         ("untested", palette.untested),

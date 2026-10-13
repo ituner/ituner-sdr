@@ -107,7 +107,7 @@ class ButtonStyle:
         if pressed:
             return ButtonVisualState(
                 self.palette.pressed_surface, self.palette.pressed_border,
-                self.palette.text, 2,
+                (0, 0, 0), 2,
             )
         if active:
             return ButtonVisualState(
