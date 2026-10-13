@@ -1565,7 +1565,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         box = (0, 0, 1024, 800)
         with patch.object(ui, 'satellite_map_texture', return_value=1), \
              patch.object(ui, 'draw_receiver_map_satellite_tiles') as tiles, \
-             patch.object(ui, 'GL'), \
+             patch.object(ui._globe_meshes, 'draw'), \
              patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '1'}):
             self.assertTrue(ui.draw_receiver_map_satellite(
                 None, 0.0, 0.0, box, 1200.0, interactive=True,
@@ -1573,7 +1573,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
             tiles.assert_called_once()
         with patch.object(ui, 'satellite_map_texture', return_value=1), \
              patch.object(ui, 'draw_receiver_map_satellite_tiles') as tiles, \
-             patch.object(ui, 'GL'), \
+             patch.object(ui._globe_meshes, 'draw'), \
              patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '0'}):
             self.assertTrue(ui.draw_receiver_map_satellite(
                 None, 0.0, 0.0, box, 1200.0, interactive=True,
@@ -2034,7 +2034,7 @@ class HomeRailInstrumentTests(unittest.TestCase):
         self.assertTrue(all(kwargs.get('active') is False for _box, kwargs in frames))
         self.assertTrue(all(kwargs.get('style') is ui.APP_UI_STYLE.button for _box, kwargs in frames))
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (46, 46, 46, 255))
+        self.assertEqual(normal.border, ui.APP_UI_STYLE.palette.border)
 
 
 class ReceiverBrowserEmptyStateTests(unittest.TestCase):

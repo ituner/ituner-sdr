@@ -205,7 +205,7 @@ class DrawerGeometryTests(unittest.TestCase):
                             for call in circles.call_args_list))
         self.assertEqual(ui.NAV_STATUS_LED_RADIUS * 2, 7)
 
-    def test_home_digi_button_counts_enabled_decoder_sessions(self):
+    def test_home_digi_button_keeps_mode_count_separate_from_running_sessions(self):
         ui.configure_output(True)
         groups = (
             [{"paused": False}, {"paused": False}],
@@ -217,30 +217,30 @@ class DrawerGeometryTests(unittest.TestCase):
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
-             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+             mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
-                      if call.args[2] == "4 DECODERS"]
+                      if call.args[2] == "DECODERS"]
         self.assertEqual(len(digi_calls), 1)
         self.assertEqual(digi_calls[0][3], "5 DIGITAL MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
-             mock.patch.object(ui, "draw_styled_two_line_button") as zero_buttons:
+             mock.patch.object(ui, "draw_navigation_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
                            if call.args[2] == "DECODERS"]
         self.assertEqual(zero_digi_calls[0][3], "5 DIGITAL MODES")
 
-    def test_home_digi_100_count_fits_or_ellipsizes(self):
+    def test_home_digi_title_stays_compact_with_many_running_sessions(self):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
-             mock.patch.object(ui, "draw_styled_two_line_button") as buttons:
+             mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
-                    if call.args[2] == "100 DECODERS")
+                    if call.args[2] == "DECODERS")
         self.assertEqual(digi[3], "5 DIGITAL MODES")
         cache = ui.TextCache()
         font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
@@ -260,7 +260,7 @@ class DrawerGeometryTests(unittest.TestCase):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
-             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_navigation_button"), \
              mock.patch.object(ui, "draw_logical_circle") as circles:
             ui.draw_lcd_navigation(
                 None, receiver_playing=True, running_decoder_count=2,
@@ -270,7 +270,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(fills, [ui.APP_UI_STYLE.palette.ready] * 3)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
-             mock.patch.object(ui, "draw_styled_two_line_button"), \
+             mock.patch.object(ui, "draw_navigation_button"), \
              mock.patch.object(ui, "draw_logical_circle") as idle_circles:
             ui.draw_lcd_navigation(None)
         idle_fills = [item.args[3] for item in idle_circles.call_args_list
@@ -350,9 +350,9 @@ class DrawerGeometryTests(unittest.TestCase):
             "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
             "settings": "SETTINGS",
         })
-        self.assertEqual(ui.HOME_MENU_SUBTITLES["digital"], "5 DIGITAL MODES")
+        self.assertEqual(ui.menu_subtitle("digital"), "5 DIGITAL MODES")
         self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "SPEECH TO TEXT")
-        self.assertEqual(ui.SETTINGS_MENU_SUBTITLES["theme"], "COLORS & LAYOUT")
+        self.assertEqual(ui.SETTINGS_MENU_SUBTITLES["theme"], "COLORS")
         self.assertEqual((ui.APP_UI_STYLE.button.title_size,
                           ui.APP_UI_STYLE.button.subtitle_size), (14, 12))
 

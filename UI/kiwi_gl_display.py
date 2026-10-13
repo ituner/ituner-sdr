@@ -34,6 +34,7 @@ from urllib.parse import urlencode, urlparse
 import ipaddress
 from urllib.request import Request, urlopen
 import globe_tiles
+import globe_gpu
 
 
 NETWORK_MANAGER_HELPER = "/usr/local/sbin/ituner-network"
@@ -2064,9 +2065,9 @@ MENU_ITEMS = (
     ("settings", "SETTINGS"),
 )
 HOME_MENU_SUBTITLES = {
-    "rx": "BROWSE",
+    "rx": "LOCAL & REMOTE",
     "audio": "VOLUME & DSP",
-    "digital": "5 DIGITAL MODES",
+    "digital": "",  # Computed from the available decoder categories below.
     "vosc": "SPEECH TO TEXT",
     "display": "COLOR & LAYOUT",
     "dual": "TWO RECEIVERS",
@@ -2500,13 +2501,6 @@ SETTINGS_MENU_ITEMS = (
     ("theme", "THEME"),
     ("settings_back", "BACK"),
 )
-SETTINGS_MENU_SUBTITLES = {
-    "network": "WI-FI & LAN",
-    "stats": "USAGE HISTORY",
-    "tests": "EST & EXPLORE",
-    "system": "LOCATION & FAN",
-    "theme": "COLORS & LAYOUT",
-}
 DIGITAL_MENU_ITEMS = (
     ("wspr", "WSPR"),
     ("sstv", "SSTV"),
@@ -2515,6 +2509,22 @@ DIGITAL_MENU_ITEMS = (
     ("cw", "CW MORSE"),
     ("digital_back", "BACK"),
 )
+
+
+SETTINGS_MENU_SUBTITLES = {
+    "network": "WI-FI & LAN",
+    "stats": "USAGE HISTORY",
+    "tests": "TEST & EXPLORE",
+    "system": "LOCATION & FAN",
+    "theme": "COLORS",
+}
+
+
+def menu_subtitle(kind):
+    if kind == "digital":
+        count = sum(key != "digital_back" for key, _ in DIGITAL_MENU_ITEMS)
+        return f"{count} DIGITAL MODES"
+    return HOME_MENU_SUBTITLES.get(kind, SETTINGS_MENU_SUBTITLES.get(kind, ""))
 
 
 def digital_decoder_session_counts(wspr_tiles, sstv_configs, hell_configs,
@@ -8456,6 +8466,34 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
     return visual
 
 
+def navigation_label_size(text_cache, text, width, preferred):
+    """Fit menu labels at their native font size, without stretching."""
+    if not callable(getattr(text_cache, "font", None)):
+        return preferred
+    for size in range(preferred, 7, -1):
+        font = text_cache.font(size, bold=True, family=APP_UI_STYLE.button.font_family)
+        if font.size(str(text).upper())[0] <= width:
+            return size
+    return 8
+
+
+def draw_navigation_button(text_cache, box, title, subtitle):
+    """Larger Home/Settings text, leaving the top corner free for its lamp."""
+    style = APP_UI_STYLE.button
+    pressed = ui_button_pressed(box)
+    visual = draw_styled_button_frame(box, active=False, pressed=pressed, style=style)
+    x0, y0, x1, y1 = box
+    cx = round((x0 + x1) / 2)
+    for text, preferred, cy, color in (
+        (title, 14, y0 + 28, visual.text),
+        (subtitle, 12, y0 + 51, visual.text if pressed else style.subtitle_color),
+    ):
+        size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
+        draw_text(text_cache, cx, round(cy), str(text).upper(), color,
+                  size, True, False, "cm", family=style.font_family)
+    return visual
+
+
 def draw_button(text_cache, x, y, w, h, label, active=False):
     box = (x, y, x + w, y + h)
     draw_styled_text_button(text_cache, box, label, size=14, active=active)
@@ -13924,48 +13962,29 @@ def satellite_light_color(latitude, longitude, sun_lon, sun_lat):
     )
 
 
+_globe_meshes = globe_gpu.GlobeMeshes()
+
+
+def globe_gpu_matrix(center_lon, center_lat, box, scale):
+    return globe_gpu.view_matrix(
+        center_lon, center_lat, radiogarden_radius(box, scale),
+        ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), logical_to_native,
+    )
+
+
 def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, interactive=False):
-    """Map Blue Marble imagery onto the globe with a live solar terminator."""
+    """Draw cached world geometry; the GPU handles view rotation and clipping."""
     texture = satellite_map_texture(text_cache)
     if texture is None:
         return False
-    # Immediate-mode vertices are submitted by Python on this renderer.
-    # 120x60 (28,800 submissions per frame) makes a Pi 5 globe stutter during
-    # drag. The panel's 800-pixel physical width is smooth at 56x28, while the
-    # Mac development view retains the high-detail mesh.
-    lon_steps, lat_steps = (
-        (120, 60) if DESKTOP_MODE
-        else (32, 16) if interactive
-        else (56, 28)
-    )
+    # Keep the same mesh while moving: no detail popping or CPU retessellation.
+    columns, rows = (120, 60) if DESKTOP_MODE else (96, 48)
     sun_lon, sun_lat = solar_subpoint()
-    GL.glEnable(GL.GL_TEXTURE_2D)
-    GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
-    GL.glBegin(GL.GL_QUADS)
-    for lat_index in range(lat_steps):
-        lat0 = -90.0 + 180.0 * lat_index / lat_steps
-        lat1 = -90.0 + 180.0 * (lat_index + 1) / lat_steps
-        v0 = (90.0 - lat0) / 180.0
-        v1 = (90.0 - lat1) / 180.0
-        for lon_index in range(lon_steps):
-            lon0 = -180.0 + 360.0 * lon_index / lon_steps
-            lon1 = -180.0 + 360.0 * (lon_index + 1) / lon_steps
-            p00 = radiogarden_project({"lat": lat0, "lon": lon0}, center_lon, center_lat, box, scale)
-            p10 = radiogarden_project({"lat": lat0, "lon": lon1}, center_lon, center_lat, box, scale)
-            p11 = radiogarden_project({"lat": lat1, "lon": lon1}, center_lon, center_lat, box, scale)
-            p01 = radiogarden_project({"lat": lat1, "lon": lon0}, center_lon, center_lat, box, scale)
-            if not all((p00, p10, p11, p01)):
-                continue
-            u0 = lon0 / 360.0 + 0.5
-            u1 = lon1 / 360.0 + 0.5
-            for point, lon, lat, u, v in (
-                (p00, lon0, lat0, u0, v0), (p10, lon1, lat0, u1, v0),
-                (p11, lon1, lat1, u1, v1), (p01, lon0, lat1, u0, v1),
-            ):
-                GL.glColor4f(*satellite_light_color(lat, lon, sun_lon, sun_lat), 1.0)
-                GL.glTexCoord2f(u, v)
-                GL.glVertex2f(*logical_to_native(point[0], point[1]))
-    GL.glEnd()
+    _globe_meshes.draw(
+        ("earth", columns, rows), texture, (-180, -90, 180, 90), columns, rows,
+        globe_gpu_matrix(center_lon, center_lat, box, scale),
+        (sun_lon, sun_lat), time.monotonic(), interactive,
+    )
     if globe_hd_tiles_enabled() and scale >= 1.5:
         draw_receiver_map_satellite_tiles(
             text_cache, center_lon, center_lat, box, scale, interactive,
@@ -14001,45 +14020,11 @@ def _globe_tile_texture(text_cache, key, payload, upload_budget):
 
 def _draw_globe_tile_mesh(texture, key, center_lon, center_lat, box, scale,
                           sun_lon, sun_lat, interactive):
-    west, south, east, north = key.bounds
-    segments = 6 if interactive else 8
-    points = []
-    for row in range(segments + 1):
-        latitude = north + (south - north) * row / segments
-        points.append(tuple(
-            radiogarden_project(
-                {"lat": latitude, "lon": west + (east - west) * col / segments},
-                center_lon, center_lat, box, scale,
-            )
-            for col in range(segments + 1)
-        ))
-    GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
-    GL.glBegin(GL.GL_QUADS)
-    for row in range(segments):
-        lat_top = north + (south - north) * row / segments
-        lat_bottom = north + (south - north) * (row + 1) / segments
-        for col in range(segments):
-            corners = (points[row][col], points[row][col + 1],
-                       points[row + 1][col + 1], points[row + 1][col])
-            if any(point is None for point in corners):
-                continue
-            if (max(point[0] for point in corners) < box[0]
-                    or min(point[0] for point in corners) > box[2]
-                    or max(point[1] for point in corners) < box[1]
-                    or min(point[1] for point in corners) > box[3]):
-                continue
-            lon_left = west + (east - west) * col / segments
-            lon_right = west + (east - west) * (col + 1) / segments
-            for point, longitude, latitude, u, v in (
-                (corners[0], lon_left, lat_top, col / segments, row / segments),
-                (corners[1], lon_right, lat_top, (col + 1) / segments, row / segments),
-                (corners[2], lon_right, lat_bottom, (col + 1) / segments, (row + 1) / segments),
-                (corners[3], lon_left, lat_bottom, col / segments, (row + 1) / segments),
-            ):
-                GL.glColor4f(*satellite_light_color(latitude, longitude, sun_lon, sun_lat), 1.0)
-                GL.glTexCoord2f(u, v)
-                GL.glVertex2f(*logical_to_native(point[0], point[1]))
-    GL.glEnd()
+    _globe_meshes.draw(
+        ("tile", key), texture, key.bounds, 8, 8,
+        globe_gpu_matrix(center_lon, center_lat, box, scale),
+        (sun_lon, sun_lat), time.monotonic(), interactive,
+    )
 
 
 def draw_receiver_map_satellite_tiles(text_cache, center_lon, center_lat, box, scale,
@@ -14070,7 +14055,7 @@ def draw_receiver_map_satellite_tiles(text_cache, center_lon, center_lat, box, s
     GL.glEnable(GL.GL_SCISSOR_TEST)
     GL.glScissor(left, NATIVE_H - bottom, right - left, bottom - top)
     try:
-        upload_budget = 1
+        upload_budget = 0 if interactive else 1
         for key in keys:
             texture, upload_budget = _globe_tile_texture(
                 text_cache, key, _globe_tile_fetcher.ready(key), upload_budget,
@@ -14112,6 +14097,59 @@ def receiver_map_dot_pixels(scale):
         GLOBE_DOT_GROW_START_PIXELS,
         GLOBE_DOT_MAX_PIXELS,
     ))
+
+
+_receiver_map_render_cache = None
+GLOBE_MOVING_MARKER_BUDGET = 300
+
+
+def receiver_map_render_rows(receivers, selected_server, pending_server, interactive):
+    """Cache stable metadata; moving views only need a representative dot cloud.
+
+    Finger movement and globe rotation never change receiver identity/grouping.
+    A content signature also notices in-place coordinate or type edits.
+    """
+    global _receiver_map_render_cache
+    signature = tuple((r.get("server"), r.get("lat"), r.get("lon"),
+                       r.get("receiver_type")) for r in receivers)
+    cache = _receiver_map_render_cache
+    if cache is None or cache[0] is not receivers or cache[1] != signature or cache[2] != LOCAL_KIWI_SERVER:
+        rows = tuple((r, receiver_map_group(r), receiver_server_key(r.get("server"))) for r in receivers)
+        by_key = {}
+        for row in rows:
+            by_key.setdefault(row[2], row)
+        # Sample each source group evenly so sparse LAN/OpenWebRX sources do
+        # not disappear just because the Kiwi directory is large.
+        groups = defaultdict(list)
+        for row in rows:
+            groups[row[1]].append(row)
+        sparse = []
+        total = max(1, len(rows))
+        for group_rows in groups.values():
+            budget = max(1, int(GLOBE_MOVING_MARKER_BUDGET * len(group_rows) / total))
+            count = min(budget, len(group_rows))
+            sparse.extend(group_rows[i * len(group_rows) // count] for i in range(count))
+        cache = (receivers, signature, LOCAL_KIWI_SERVER, rows, tuple(sparse), by_key)
+        _receiver_map_render_cache = cache
+    selected_key = receiver_server_key(selected_server)
+    pending_key = receiver_server_key(pending_server)
+    rows = cache[4] if interactive else cache[3]
+    if interactive:
+        # Selected/connecting stations always retain exact positions.
+        keys = {row[2] for row in rows}
+        extra = []
+        for key in (selected_key, pending_key):
+            if key and key not in keys and key in cache[5]:
+                extra.append(cache[5][key]); keys.add(key)
+        if extra:
+            rows = rows + tuple(extra)
+    selected = cache[5].get(selected_key)
+    return rows, selected_key, pending_key, selected[0] if selected else None
+
+
+def globe_frame_rate(default_fps, globe_open, moving):
+    """Spend extra frames only on an actively manipulated globe."""
+    return max(default_fps, 60.0) if globe_open and moving else default_fps
 
 
 def draw_receiver_map(
@@ -14179,19 +14217,20 @@ def draw_receiver_map(
                         continue
                     draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
                     draw_text(text_cache, point[0], point[1], country["name"].upper(), (255, 232, 151) if satellite_drawn else (202, 242, 226), 12, True, False, "cm", family="Cantarell")
-    center_candidate = receiver_map_center_candidate(receivers, math.degrees(center_lon), math.degrees(center_lat))
     receiver_point_groups = defaultdict(list)
     selected_point = None
     selected_color = None
-    for receiver in receivers:
-        group = receiver_map_group(receiver)
+    marker_rows, selected_key, pending_key, selected = receiver_map_render_rows(
+        receivers, selected_server, pending_server, interactive,
+    )
+    for receiver, group, endpoint in marker_rows:
         if not receiver_map_group_visible(group):
             continue
         point = radiogarden_project(receiver, center_lon, center_lat, box, scale)
         if not point:
             continue
-        is_pending = receiver_servers_match(receiver["server"], pending_server)
-        is_selected = receiver_servers_match(receiver["server"], selected_server)
+        is_pending = bool(pending_key) and endpoint == pending_key
+        is_selected = bool(selected_key) and endpoint == selected_key
         is_failed = is_pending and connection_status == "failed"
         group_color = RECEIVER_MAP_GROUP_COLORS[group]
         # Each receiver is exactly one filled disc painted in its legend
@@ -14234,13 +14273,6 @@ def draw_receiver_map(
             selected_point[0], selected_point[1], max(2.0, dot_size),
             selected_color, 24,
         )
-    selected = next(
-        (
-            receiver for receiver in receivers
-            if receiver_servers_match(receiver["server"], selected_server)
-        ),
-        None,
-    )
     state_label = {
         "connecting": "CONNECTING",
         "retrying": "RETRYING",
@@ -15413,16 +15445,15 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     pygame.draw.rect(surface, visual.fill, rect, border_radius=style.radius)
     pygame.draw.rect(surface, visual.border, rect, width=visual.border_width,
                      border_radius=style.radius)
-    subtitle = HOME_MENU_SUBTITLES.get(kind, "")
+    subtitle = menu_subtitle(kind)
     for caption, center_y, color, size in (
-        (label, 23 if subtitle else height / 2, visual.text, style.title_size),
-        (subtitle, 46, visual.text if pressed else style.subtitle_color, style.subtitle_size),
+        (label, 28 if subtitle else height / 2, visual.text, 14),
+        (subtitle, 51, visual.text if pressed else style.subtitle_color, 12),
     ):
         if caption:
+            size = navigation_label_size(text_cache, caption, width - 6, size)
             font = text_cache.font(size, bold=True, family=style.font_family)
             rendered = font.render(str(caption).upper(), True, color[:3])
-            if rendered.get_width() > width - 4:
-                rendered = pygame.transform.smoothscale(rendered, (width - 4, rendered.get_height()))
             surface.blit(rendered, rendered.get_rect(center=(width / 2, center_y)))
     return text_cache.surface_texture(key, surface)
 
@@ -15439,10 +15470,7 @@ def draw_main_menu(text_cache, scroll):
         bx0, by0, bx1, by1 = box
         if bx1 < x0 or bx0 > x1:
             continue
-        draw_styled_two_line_button(
-            text_cache, box, label, HOME_MENU_SUBTITLES.get(kind, ""),
-            fit_full_subtitle=True,
-        )
+        draw_navigation_button(text_cache, box, label, menu_subtitle(kind))
 
 
 def desktop_1280_nav_box(index):
@@ -16562,7 +16590,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     if settings_open or digital_open:
-        draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DIGI")
+        draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -16575,13 +16603,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        subtitle = (HOME_MENU_SUBTITLES.get(kind, "") if home_items else
-                    SETTINGS_MENU_SUBTITLES.get(kind, "") if settings_open else "")
-        if home_items and kind == "digital" and running_decoder_count > 0:
-            label = f"{running_decoder_count} {label}"
+        subtitle = menu_subtitle(kind) if home_items or settings_open else ""
         if subtitle:
-            draw_styled_two_line_button(text_cache, nav_box, label, subtitle,
-                                        fit_full_subtitle=True)
+            draw_navigation_button(text_cache, nav_box, label, subtitle)
         else:
             count = (decoder_counts or {}).get(kind, 0) if digital_open else 0
             button_label = f"{count} {label}" if count > 0 else label
@@ -17976,12 +18000,25 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         size = 13
         first_y = y0 + 27
         second_y = y0 + 59
+        used, total = station_capacity or (None, None)
+        capacity_label = (
+            f"{used}/{total} USERS"
+            if isinstance(used, int) and isinstance(total, int) and 0 <= used <= total and total > 0
+            else ""
+        )
+        footer_font = text_cache.font(size, bold=True, family="Liberation Sans")
+        capacity_width = footer_font.size(capacity_label)[0] + 16 if capacity_label else 0
         server = fit_station_text(
-            text_cache, station_name or "NO RECEIVER", status_x1 - 300,
+            text_cache, station_name or "NO RECEIVER", status_x1 - 300 - capacity_width,
             size, True, False, family="Liberation Sans",
         )
         draw_text(text_cache, 18, first_y, server, APP_UI_STYLE.palette.footer_primary, size,
                   True, False, "lm", alpha, family="Liberation Sans")
+        if capacity_label:
+            capacity_x = 18 + footer_font.size(server)[0] + 16
+            draw_text(text_cache, capacity_x, first_y, capacity_label,
+                      APP_UI_STYLE.palette.footer_live, size, True, False,
+                      "lm", alpha, family="Liberation Sans")
         buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
         draw_text(text_cache, 18, second_y, buffer_label, APP_UI_STYLE.palette.footer_live, size,
                   False, False, "lm", alpha, family="Liberation Sans")
@@ -26837,19 +26874,12 @@ def main():
                                         x - start_x, y - start_y,
                                         PICKER_MAP_BOX, picker_map_scale,
                                     )
-                                    # Ease toward the finger target instead of
-                                    # applying every noisy touchscreen sample as
-                                    # a hard orientation change.
-                                    yaw_delta = (target_yaw - picker_map_yaw + math.pi) % math.tau - math.pi
-                                    pitch_delta = target_pitch - picker_map_pitch
-                                    smoothing = 0.27
-                                    applied_yaw = yaw_delta * smoothing
-                                    applied_pitch = pitch_delta * smoothing
-                                    picker_map_yaw = (picker_map_yaw + applied_yaw + math.pi) % math.tau - math.pi
-                                    picker_map_pitch = clamp(
-                                        picker_map_pitch + applied_pitch,
-                                        math.radians(-80), math.radians(80),
-                                    )
+                                    # Follow the latest touch position directly. Event-dependent
+                                    # easing made a slow frame fall further behind the finger.
+                                    applied_yaw = (target_yaw - picker_map_yaw + math.pi) % math.tau - math.pi
+                                    applied_pitch = target_pitch - picker_map_pitch
+                                    picker_map_yaw = target_yaw
+                                    picker_map_pitch = target_pitch
                                     motion_now = time.monotonic()
                                     motion_dt = clamp(motion_now - picker_map_drag_motion_at, 0.008, 0.050)
                                     picker_map_drag_velocity_yaw = (
@@ -29774,6 +29804,7 @@ def main():
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
+            globe_covering_radio = picker_open and picker_map_open
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
@@ -29800,7 +29831,7 @@ def main():
             # waterfall itself must still occupy the full post-ruler region.
             normal_waterfall_y1 = LOGICAL_H
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
-            waterfall_visible = waterfall_y1 > waterfall_y0
+            waterfall_visible = waterfall_y1 > waterfall_y0 and not globe_covering_radio
             local_iq_active = state.external_waterfall_snapshot() or rtl_lab.is_running()
             view_center_khz = active_waterfall_center(display_freq, display_span)
             source_span_khz = active_source_span_khz(zoom)
@@ -29841,8 +29872,8 @@ def main():
                     span_khz=display_span,
                     row_offset=row_offset,
                 )
-            spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE
-            if spectrum_enabled and spectrum_h > 0 and not spectrum_foreground:
+            spectrum_foreground = spectrum_enabled and DESKTOP_1280_MODE and not globe_covering_radio
+            if spectrum_enabled and spectrum_h > 0 and not spectrum_foreground and not globe_covering_radio:
                 spectrum_layer.draw(
                     spectrum_values,
                     spectrum_peak_values,
@@ -29872,7 +29903,7 @@ def main():
                     0.82,
                     tuned_offset_hz=(display_freq - view_center_khz) * 1000.0,
                 )
-            scope_passband_visible = spectrum_enabled and spectrum_h > 0 and passband_stream_ready
+            scope_passband_visible = spectrum_enabled and spectrum_h > 0 and passband_stream_ready and not globe_covering_radio
             scope_passband_under_top_band = (
                 scope_passband_visible and LCD_800_MODE
                 and instrument_layout in ("middle", "left")
@@ -29903,9 +29934,8 @@ def main():
                     "",
                 )
             )
-            # One compact HTTP status request every 20 seconds keeps the
-            # `used/max USERS` annunciator factual without touching the audio
-            # or waterfall sockets.
+            # Read occupancy from the existing Kiwi WebSocket and directory
+            # cache. This never opens an HTTP /status request.
             if not owrx.is_openwebrx_endpoint(server):
                 main_receiver_capacity.refresh(server)
             selected_station_capacity = None if owrx.is_openwebrx_endpoint(server) else main_receiver_capacity.snapshot(server)
@@ -29939,74 +29969,75 @@ def main():
                 wspr_tiles, sstv_manager.configs, hell_manager.configs,
                 qrss_manager.configs, cw_manager.configs,
             )
-            draw_ui(
-                text_cache,
-                display_freq,
-                display_span,
-                smeter_dbm,
-                smeter_peak_dbm,
-                smeter_readout_dbm,
-                effective_receiver_mode(state.receiver_type_snapshot(), radio_mode),
-                digital_mode,
-                receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz),
-                controls_alpha=control_alpha,
-                zoom_pressed=(
-                    gesture if touch_started and gesture in ("zoom_plus", "zoom_minus")
-                    else (zoom_flash_gesture if time.monotonic() < zoom_flash_until else None)
-                ),
-                focus_progress=focus_progress,
-                ruler_y0=ruler_y0,
-                ruler_height=ruler_height,
-                ruler_background_alpha=ruler_background_alpha,
-                bottom_ruler=bottom_ruler,
-                spectrum_enabled=spectrum_enabled,
-                cpu_percent=cpu_percent,
-                temp_c=temp_c,
-                input_power_ok=input_power_ok,
-                station_name=selected_station_name,
-                station_capacity=selected_station_capacity,
-                connection_status=None if local_iq_active else connection_status,
-                connection_timeout_seconds=connection_timeout_seconds,
-                connection_retry_seconds=connection_retry_seconds,
-                bandwidth_hz=high_cut - low_cut,
-                filter_low_hz=low_cut,
-                filter_high_hz=high_cut,
-                transcription_enabled=transcription_enabled,
-                asr_engine=asr_engine,
-                caption_mode=caption_mode,
-                callsign_enabled=callsign_enabled,
-                callsign_value=callsign_value,
-                ham_message=ham_message,
-                callsign_status=callsign_status,
-                audio_jitter_target=audio_jitter_target,
-                audio_jitter_depth=audio_jitter_depth,
-                audio_volume=audio_volume,
-                home_smeter_dbm=smeter_dbm,
-                audio_muted=live_audio_controls["mute"],
-                squelch_closed=squelch_closed,
-                settings_menu_open=settings_menu_open,
-                digital_menu_open=digital_menu_open,
-                active_decoders=frozenset(
-                    kind for kind, count in decoder_counts.items() if count
-                ),
-                running_decoder_count=sum(decoder_counts.values()),
-                decoder_counts=decoder_counts,
-                receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
-                instrument_layout=instrument_layout,
-                # Font Review is a live specimen: arrowing through candidates
-                # must visibly update the Home frequency readout. ``USE`` is
-                # still the only action that makes the preview persistent.
-                compact_frequency_font_family=(
-                    compact_font_review_families[compact_frequency_font_index]
-                    if compact_font_review_open else compact_frequency_font_family
-                ),
-                status_y0=LOGICAL_H - BOTTOM_STATUS_H,
-                ruler_center_khz=view_center_khz,
-                sidebar_open=(radio_setup_open or display_setup_open or audio_panel_open
-                    or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
-                    or frequency_drawer_open or compact_font_review_open
-                    or network_panel_open or tests_panel_open or picker_open or globe_open),
-            )
+            if not globe_covering_radio:
+                draw_ui(
+                    text_cache,
+                    display_freq,
+                    display_span,
+                    smeter_dbm,
+                    smeter_peak_dbm,
+                    smeter_readout_dbm,
+                    effective_receiver_mode(state.receiver_type_snapshot(), radio_mode),
+                    digital_mode,
+                    receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz),
+                    controls_alpha=control_alpha,
+                    zoom_pressed=(
+                        gesture if touch_started and gesture in ("zoom_plus", "zoom_minus")
+                        else (zoom_flash_gesture if time.monotonic() < zoom_flash_until else None)
+                    ),
+                    focus_progress=focus_progress,
+                    ruler_y0=ruler_y0,
+                    ruler_height=ruler_height,
+                    ruler_background_alpha=ruler_background_alpha,
+                    bottom_ruler=bottom_ruler,
+                    spectrum_enabled=spectrum_enabled,
+                    cpu_percent=cpu_percent,
+                    temp_c=temp_c,
+                    input_power_ok=input_power_ok,
+                    station_name=selected_station_name,
+                    station_capacity=selected_station_capacity,
+                    connection_status=None if local_iq_active else connection_status,
+                    connection_timeout_seconds=connection_timeout_seconds,
+                    connection_retry_seconds=connection_retry_seconds,
+                    bandwidth_hz=high_cut - low_cut,
+                    filter_low_hz=low_cut,
+                    filter_high_hz=high_cut,
+                    transcription_enabled=transcription_enabled,
+                    asr_engine=asr_engine,
+                    caption_mode=caption_mode,
+                    callsign_enabled=callsign_enabled,
+                    callsign_value=callsign_value,
+                    ham_message=ham_message,
+                    callsign_status=callsign_status,
+                    audio_jitter_target=audio_jitter_target,
+                    audio_jitter_depth=audio_jitter_depth,
+                    audio_volume=audio_volume,
+                    home_smeter_dbm=smeter_dbm,
+                    audio_muted=live_audio_controls["mute"],
+                    squelch_closed=squelch_closed,
+                    settings_menu_open=settings_menu_open,
+                    digital_menu_open=digital_menu_open,
+                    active_decoders=frozenset(
+                        kind for kind, count in decoder_counts.items() if count
+                    ),
+                    running_decoder_count=sum(decoder_counts.values()),
+                    decoder_counts=decoder_counts,
+                    receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
+                    instrument_layout=instrument_layout,
+                    # Font Review is a live specimen: arrowing through candidates
+                    # must visibly update the Home frequency readout. ``USE`` is
+                    # still the only action that makes the preview persistent.
+                    compact_frequency_font_family=(
+                        compact_font_review_families[compact_frequency_font_index]
+                        if compact_font_review_open else compact_frequency_font_family
+                    ),
+                    status_y0=LOGICAL_H - BOTTOM_STATUS_H,
+                    ruler_center_khz=view_center_khz,
+                    sidebar_open=(radio_setup_open or display_setup_open or audio_panel_open
+                        or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
+                        or frequency_drawer_open or compact_font_review_open
+                        or network_panel_open or tests_panel_open or picker_open or globe_open),
+                )
             if compact_font_review_open:
                 draw_compact_font_review(
                     text_cache,
@@ -30139,7 +30170,8 @@ def main():
                         picker_map_notice if time.monotonic() < picker_map_notice_until else "",
                         picker_map_garden_mode, picker_map_hover_server, picker_map_view,
                         (touch_started and gesture == "picker_map")
-                        or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002,
+                        or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002
+                        or picker_map_zoom_target is not None or picker_map_lock_target is not None,
                         notice_alpha=green_osd_alpha(
                             picker_map_notice_until - time.monotonic(), 1.2,
                         ),
@@ -30482,7 +30514,13 @@ def main():
             frames += 1
             if args.duration and time.monotonic() - start >= args.duration:
                 break
-            clock.tick(args.fps)
+            globe_moving = (
+                (touch_started and gesture == "picker_map")
+                or abs(picker_map_inertia_yaw) + abs(picker_map_inertia_pitch) > 0.002
+                or picker_map_zoom_target is not None or picker_map_lock_target is not None
+                or (args.desktop and desktop_map_dragged)
+            )
+            clock.tick(globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
     finally:
         # An orderly exit commits a genuine last-minute adjustment, including
         # the current frequency, once. Unchanged state produces no write.
