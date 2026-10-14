@@ -30,7 +30,7 @@ import html
 import io
 import wave
 from pathlib import Path
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageChops as PILImageChops
 from urllib.parse import urlencode, urlparse
 import ipaddress
 from urllib.request import Request, urlopen
@@ -16173,6 +16173,23 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
                circle=draw_logical_circle, text=meter_text, palette=theme["colors"])
 
 
+def incandescent_meter_backlight(size):
+    """Static amber light through an imperfect diffuser, baked at display size."""
+    width, height = size
+    pixels = bytearray()
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            # A broad lamp below the left scale and a weaker reflected glow.
+            bulb = math.exp(-((u - .28) / .43) ** 2 - ((v - .92) / .85) ** 2)
+            reflection = math.exp(-((u - .83) / .30) ** 2 - ((v - .42) / .52) ** 2)
+            mottling = .045 * math.sin(11 * u + 4 * v) * math.sin(7 * v - 3 * u)
+            light = max(0, min(1, .30 + .62 * bulb + .20 * reflection + mottling))
+            pixels.extend((round(205 + 50 * light), round(91 + 91 * light), round(20 * light ** 3), 255))
+    return PILImage.frombytes("RGBA", size, bytes(pixels))
+
+
 def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     """Bake detailed faces once; only needles and readouts change each frame."""
     style = METER_STYLES[identifier]
@@ -16180,7 +16197,7 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     w, h = max(1, round(x1 - x0)), max(1, round(y1 - y0))
     bitmap = style.kind in ("skin", "eye")
     transparent_skin = style.kind == "skin" and SKIN_CALIBRATION[identifier].get("transparent_background", False)
-    key = ("smeter-artwork-v5" if bitmap else "smeter-face-borderless-v3", identifier, w, h)
+    key = ("smeter-artwork-v6" if bitmap else "smeter-face-borderless-v3", identifier, w, h)
     cached = text_cache._cached_texture(("surface", key))
     if cached is None:
         # Bitmap skins are filtered once at the actual screen resolution.
@@ -16206,8 +16223,14 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
             left = px if anchor.startswith("l") else px - rendered.get_width() if anchor.startswith("r") else px - rendered.get_width() / 2
             surface.blit(rendered, (round(left), round(py - rendered.get_height() / 2)))
         if bitmap:
+            backlight = None
+            if style.kind == "skin" and SKIN_CALIBRATION[identifier].get("incandescent_backlight"):
+                backlight = incandescent_meter_backlight(surface.get_size())
             if style.kind == "skin" and not transparent_skin:
-                surface.fill(style.face)
+                if backlight is None:
+                    surface.fill(style.face)
+                else:
+                    surface.blit(pygame.image.fromstring(backlight.tobytes(), backlight.size, "RGBA"), (0, 0))
             image_box = eye_image_box if style.kind == "eye" else skin_image_box
             a, b, c, d = image_box(identifier, (0, 0, w, h))
             try:
@@ -16229,9 +16252,14 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
                             # and calibration. White paper becomes the face colour;
                             # darker ink/shading retain contrast and the red arc.
                             lut = [round(channel * (value / 255) ** 1.7)
-                                   for channel in tint for value in range(256)]
+                                   for channel in ((255, 255, 255) if backlight is not None else tint)
+                                   for value in range(256)]
                             artwork = artwork.point(lut + list(range(256)))
                     resized = artwork.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
+                    if backlight is not None:
+                        # Apply light after Lanczos filtering; printed scales keep
+                        # their original sharpness and exact needle calibration.
+                        resized = PILImageChops.multiply(resized, backlight.crop((*point(a, b), *point(c, d))))
                     graphic = pygame.image.fromstring(resized.tobytes(), resized.size, "RGBA")
             except (pygame.error, OSError, ValueError):
                 # A damaged/missing asset must not interrupt the live receiver.

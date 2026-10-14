@@ -108,9 +108,13 @@ Vintage HD White and Vintage HD Orange are on the fifth gallery page alongside
 Transparent and Sliding Pointer Orange. Both HD versions share the publisher's
 1920 × 1110 source and calibration: White shows the original face; Orange uses
 a palette matching Flex Orange (255, 154, 0), with dark ink and preserved scale
-geometry. The palette filter is cached with the face before final-size resizing.
-Existing orange HD selections keep their appearance. The lower-resolution
-Vintage option remains removed; its saved selections migrate to orange HD.
+geometry. Orange adds a static incandescent backlight with a broad lower-left
+hotspot, weaker reflected light and softly uneven amber intensity. The light
+field also fills the readout area so there is no added border or colour seam.
+It is baked once at display size after Lanczos filtering; scale lettering and
+needle calibration remain unchanged. White retains its original artwork.
+The lower-resolution Vintage option remains removed; its saved selections
+migrate to orange HD.
 Flexible faces fill the rail width, with outer margins cropped at runtime and
 no added frame. Transparent keeps its alpha channel so the UI background shows
 through the scale. Titles credit HB9HSJ as the collection publisher.

@@ -620,7 +620,8 @@
       255,
       154,
       0
-    ]
+    ],
+    "incandescent_backlight": true
   },
   "flex_transparent": {
     "file": "flex_transparent.png",

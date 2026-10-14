@@ -23,7 +23,10 @@ uses a runtime palette filter matching Flex Orange (255, 154, 0), with darker
 ink and warm shadows. The lower-resolution Vintage file and entry remain
 removed. Saved low-resolution Vintage selections migrate to the orange HD
 choice, preserving the existing migration behavior. The filter runs once before
-final-size Lanczos resizing; no lettering or scale geometry is redrawn. Runtime
+final-size Lanczos resizing. Orange additionally receives a cached, procedural
+incandescent light field with a broad lamp hotspot, reflected glow and gentle
+diffuser irregularities. This colour treatment follows final-size filtering;
+no lettering or scale geometry is redrawn. White remains unchanged. Runtime
 crop bounds trim unused outer margins. Transparent retains its alpha channel
 over the current UI background.
 The separately linked DX101 transparent-beta and ICOM transparent-v1.1 packages
