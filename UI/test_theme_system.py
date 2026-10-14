@@ -30,7 +30,7 @@ class ThemeSystemTests(unittest.TestCase):
 
     def test_visual_color_math_preserves_family_boundary_and_alpha(self):
         shades = shade_grid(0.0)
-        self.assertEqual(len(shades), 20)
+        self.assertEqual(len(shades), 16)
         self.assertTrue(all(red >= green and red >= blue for red, green, blue in shades))
         colors = {
             "surface": [40, 40, 40, 120],
@@ -54,6 +54,155 @@ class ThemeSystemTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             with_transparency([1, 2, 3], 50)
 
+    @staticmethod
+    def tap_editor(editor, action):
+        box = theme_screen_boxes(editor)[action]
+        editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+
+    def test_dirty_back_choices_restore_live_theme_or_save(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "panel:layout")
+        self.tap_editor(editor, "option:rounded")
+        self.assertTrue(editor.dirty)
+        self.assertEqual(APP_UI_STYLE.button.radius, 8)
+        self.tap_editor(editor, "back")
+        self.assertTrue(editor.confirm_back)
+        self.assertNotIn("option:rounded", theme_screen_boxes(editor))
+        self.tap_editor(editor, "leave_keep")
+        self.assertEqual(editor.mode, "edit")
+        self.assertEqual(APP_UI_STYLE.button.radius, 8)
+        self.tap_editor(editor, "back")
+        self.tap_editor(editor, "leave_discard")
+        self.assertEqual(editor.mode, "browse")
+        self.assertEqual(APP_UI_STYLE.button.radius, 0)
+        self.assertEqual(self.library.themes, [])
+        editor.begin()
+        self.tap_editor(editor, "panel:layout")
+        self.tap_editor(editor, "option:rounded")
+        self.tap_editor(editor, "back")
+        self.tap_editor(editor, "leave_save")
+        self.assertEqual(editor.mode, "browse")
+        self.assertEqual(ThemeLibrary(self.path).active_id, editor.selected_id)
+        self.assertEqual(APP_UI_STYLE.button.radius, 8)
+
+    def test_dirty_back_dialog_draws_all_choices_over_the_editor(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        editor.set_color((25, 95, 72))
+        editor.back()
+        with patch.object(ui, "draw_logical_rect") as rectangles, \
+                patch.object(ui, "draw_logical_rounded_rect"), \
+                patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_styled_text_button") as buttons, \
+                patch.object(ui, "draw_text"):
+            ui.draw_theme_panel(None, editor)
+        labels = [item.args[2] for item in buttons.call_args_list]
+        self.assertIn("SAVE & LEAVE", labels)
+        self.assertIn("DISCARD & LEAVE", labels)
+        self.assertIn("KEEP EDITING", labels)
+        self.assertIn("BACK", labels)
+        self.assertIn(call(0, 0, 1280, 800, (0, 0, 0, 188)),
+                      rectangles.call_args_list)
+
+    def test_family_recolor_only_changes_selected_family_and_keeps_alpha(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        original = {key: list(value) for key, value in editor.draft["colors"].items()}
+        self.tap_editor(editor, "family_open")
+        self.tap_editor(editor, "family:2")
+        self.tap_editor(editor, "apply_family")
+        button_keys = set(editor.family_keys)
+        self.assertEqual(button_keys, {"surface", "border", "active_surface", "active_border",
+                                       "selected_surface", "selected_border", "pressed_surface",
+                                       "pressed_border"})
+        for key, value in editor.draft["colors"].items():
+            if key not in button_keys:
+                self.assertEqual(value, original[key], key)
+            self.assertEqual(value[3:], original[key][3:], key)
+        self.assertEqual(tuple(APP_UI_STYLE.palette.surface),
+                         tuple(editor.draft["colors"]["surface"]))
+
+    def test_hue_drag_changes_selected_part_live_without_touching_alpha(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "family_open")
+        self.tap_editor(editor, "family:5")
+        original_alpha = editor.current_color[3]
+        hue_box = theme_screen_boxes(editor)["hue"]
+        editor.drag(hue_box[0] + (hue_box[2] - hue_box[0]) * 0.35,
+                    (hue_box[1] + hue_box[3]) / 2)
+        self.assertAlmostEqual(editor.hue, 0.35)
+        self.assertEqual(editor.current_color[3], original_alpha)
+        self.assertEqual(tuple(APP_UI_STYLE.palette.passband_fill), tuple(editor.current_color))
+
+    def test_preview_scene_and_color_family_taps_do_not_change_receiver(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "preview:meter")
+        self.assertEqual(editor.color_group, 4)
+        self.tap_editor(editor, "scene:browse")
+        self.assertEqual(editor.scene, "browse")
+        self.tap_editor(editor, "preview:browse_rows")
+        self.assertEqual(editor.color_group, 0)
+        self.assertEqual(editor.panel, "colors")
+        self.assertFalse(editor.dirty)
+
+    def test_failed_editor_save_keeps_live_draft_for_retry(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "panel:layout")
+        self.tap_editor(editor, "option:rounded")
+        with patch.object(self.library, "save", side_effect=OSError("disk unavailable")):
+            self.tap_editor(editor, "save")
+        self.assertEqual(editor.mode, "edit")
+        self.assertEqual(editor.notice_action, "ERROR")
+        self.assertEqual(self.library.active_id, DEFAULT_THEME_ID)
+        self.assertEqual(APP_UI_STYLE.button.radius, 8)
+
+    def test_blank_name_can_preview_layout_but_cannot_be_saved(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "theme_name")
+        self.tap_editor(editor, "name:CLEAR")
+        self.tap_editor(editor, "name:DONE")
+        self.tap_editor(editor, "panel:layout")
+        self.tap_editor(editor, "option:rounded")
+        self.assertEqual(APP_UI_STYLE.button.radius, 8)
+        self.tap_editor(editor, "save")
+        self.assertEqual(editor.notice_action, "ERROR")
+        self.assertEqual(editor.mode, "edit")
+        self.assertEqual(self.library.themes, [])
+
+    def test_transparency_cancel_restores_previous_live_alpha(self):
+        editor = ThemeEditor(self.library)
+        editor.begin()
+        self.tap_editor(editor, "family_open")
+        self.tap_editor(editor, "family:5")
+        original = list(editor.current_color)
+        self.tap_editor(editor, "alpha_open")
+        self.tap_editor(editor, "alpha:0")
+        self.assertEqual(editor.current_color[-1], 255)
+        self.tap_editor(editor, "alpha:CANCEL")
+        self.assertEqual(editor.current_color, original)
+        self.assertEqual(tuple(APP_UI_STYLE.palette.passband_fill), tuple(original))
+
+    def test_theme_controls_do_not_overlap_fixed_back_target(self):
+        editor = ThemeEditor(self.library)
+        for mode in ("browse", "edit"):
+            if mode == "edit":
+                editor.begin()
+            boxes = theme_screen_boxes(editor)
+            back = boxes["back"]
+            for name, box in boxes.items():
+                self.assertGreaterEqual(box[0], 0, name)
+                self.assertGreaterEqual(box[1], 0, name)
+                self.assertLessEqual(box[2], 1280, name)
+                self.assertLessEqual(box[3], 800, name)
+                if name != "back":
+                    self.assertFalse(box[0] < back[2] and back[0] < box[2]
+                                     and box[1] < back[3] and back[1] < box[3], name)
+
     def test_named_theme_survives_restart_and_updates_shared_style(self):
         custom = new_theme("Amber")
         custom["colors"]["frequency"] = [255, 175, 60]
@@ -76,24 +225,25 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(display_temperature(40), "40°C")
         self.assertEqual(distance_axis_label(1000), "1k")
 
-    def test_editor_columns_and_saved_text_scale(self):
+    def test_full_canvas_editor_and_saved_text_scale(self):
         editor = ThemeEditor(self.library)
         editor.begin()
         boxes = theme_screen_boxes(editor)
-        self.assertEqual(boxes["section:SIDEBAR"][1], 392)
-        self.assertGreaterEqual(boxes["option:straight"][0], 536)
-        editor.section = "UNITS"
+        self.assertEqual(boxes["back"], (1034, 728, 1270, 792))
+        self.assertLess(boxes["scene:home"][0], 256)
+        self.assertEqual(boxes["save"], (1034, 16, 1270, 80))
+        editor.panel = "text"
         boxes = theme_screen_boxes(editor)
         self.assertLess(boxes["text:smaller"][2], boxes["text:larger"][0])
-        editor.tap(650, 362)
+        editor.tap(900, 240)
         self.assertEqual(editor.draft["text_scale_percent"], 95)
-        editor.tap(900, 362)
+        editor.tap(1100, 240)
         self.assertEqual(editor.draft["text_scale_percent"], 100)
-        editor.tap(900, 362)
+        editor.tap(1100, 240)
         self.assertEqual(editor.draft["text_scale_percent"], 105)
-        editor.tap(700, 440)
+        editor.tap(950, 320)
         self.assertEqual(editor.draft["text_scale_percent"], 100)
-        editor.tap(900, 362)
+        editor.tap(1100, 240)
         save = boxes["save"]
         editor.tap((save[0] + save[2]) / 2, (save[1] + save[3]) / 2)
         saved = ThemeLibrary(self.path).get(editor.selected_id)
@@ -201,7 +351,7 @@ class ThemeSystemTests(unittest.TestCase):
                     self.assertEqual(tuple(text.call_args.args[4]), tuple(custom["colors"][role][:3]))
                     self.assertEqual(rectangles.call_args_list[0].args[-1][-1], alpha)
 
-    def test_theme_preview_uses_left_column_and_draft_text_size(self):
+    def test_theme_preview_uses_full_canvas_and_scene_controls(self):
         editor = ThemeEditor(self.library)
         editor.begin()
         editor.draft["text_scale_percent"] = 120
@@ -209,55 +359,41 @@ class ThemeSystemTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect") as rectangles, \
                 patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 patch.object(ui, "draw_logical_line") as line, \
-                patch.object(ui, "draw_sidebar_header"), \
-                patch.object(ui, "draw_styled_text_button"), \
+                patch.object(ui, "draw_styled_text_button") as buttons, \
                 patch.object(ui, "draw_text") as draw_text:
             ui.draw_theme_panel(None, editor)
         labels = {item.args[3]: item.args for item in draw_text.call_args_list}
-        self.assertEqual(labels["LIVE PREVIEW"][1], 24)
-        self.assertEqual(labels[editor.draft["name"]][1], 536)
-        self.assertEqual(labels["1.088.900"][5], 43)
-        self.assertEqual(labels["SUBTITLE"][5], 13)
-        self.assertEqual(labels["ZOOM  24x"][2], 530)
-        units_label = (ui.theme_system.display_distance(100, editor.draft) + "   "
-                       + ui.theme_system.display_temperature(40, editor.draft))
-        self.assertEqual(labels[units_label][2], 530)
-        self.assertIn(call(48, 584, 464, 726, editor.draft["colors"]["background"]),
+        self.assertIn("1.088.900", labels)
+        self.assertIn(call(0, 0, 1280, 800, APP_UI_STYLE.palette.background),
                       rectangles.call_args_list)
-        self.assertEqual([item.args[:4] for item in rounded.call_args_list
-                          if item.args[1] == 330],
-                         [(48, 330, 146, 394), (154, 330, 252, 394),
-                          (260, 330, 358, 394), (366, 330, 464, 394)])
-        self.assertTrue(any(item.args[:4] == (48, 584, 152, 584)
-                            for item in line.call_args_list))
+        self.assertTrue(any(item.args[:4] == (24, 160, 820, 708)
+                            for item in rounded.call_args_list))
+        self.assertIn("BACK", [item.args[2] for item in buttons.call_args_list])
+        self.assertIn("SAVE THEME", [item.args[2] for item in buttons.call_args_list])
+        self.assertTrue(line.call_count)
 
-    def test_browse_rows_have_left_aligned_names_and_own_actions(self):
+    def test_library_cards_use_full_width_and_separate_actions(self):
         editor = ThemeEditor(self.library)
+        self.library.upsert(new_theme("Saved"))
         boxes = theme_screen_boxes(editor)
-        self.assertNotIn("edit", boxes)
-        self.assertNotIn("delete", boxes)
-        self.assertEqual(boxes["new"], (1034, 104, 1270, 168))
-        for index in range(7):
-            name, edit, delete = (boxes[f"{action}:{index}"]
-                                  for action in ("theme", "edit", "delete"))
-            self.assertEqual((name[1], name[3]), (edit[1], edit[3]))
-            self.assertEqual((edit[1], edit[3]), (delete[1], delete[3]))
-            self.assertEqual((name[0], delete[2]), (536, 1000))
+        self.assertEqual(boxes["new"], (1034, 24, 1270, 88))
+        self.assertEqual(boxes["back"], (1034, 728, 1270, 792))
+        self.assertEqual(boxes["theme:0"][0], 24)
+        self.assertGreater(boxes["theme:2"][2], 1200)
+        self.assertNotIn("delete:0", boxes)
+        self.assertIn("delete:3", boxes)
         with patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_logical_rounded_rect"), \
                 patch.object(ui, "draw_logical_line"), \
-                patch.object(ui, "draw_sidebar_header"), \
                 patch.object(ui, "draw_styled_text_button") as buttons, \
-                patch.object(ui, "draw_styled_button_frame",
-                             return_value=APP_UI_STYLE.button.resolve()), \
                 patch.object(ui, "draw_text") as labels:
             ui.draw_theme_panel(None, editor)
         first_name = next(item for item in labels.call_args_list
                           if item.args[3] == "DEFAULT")
-        self.assertEqual(first_name.args[1:3], (548, 132))
+        self.assertEqual(first_name.args[1:3], (40, 158))
         self.assertEqual(first_name.args[8], "lm")
-        self.assertEqual([item.args[2] for item in buttons.call_args_list
-                          if item.args[2] in ("EDIT", "DELETE")].count("EDIT"), 3)
+        self.assertEqual([item.args[2] for item in buttons.call_args_list].count("CUSTOMIZE"), 3)
+        self.assertIn("DELETE", [item.args[2] for item in buttons.call_args_list])
 
     def test_row_delete_confirmation_is_tied_to_its_theme(self):
         first = new_theme("First")
@@ -271,18 +407,15 @@ class ThemeSystemTests(unittest.TestCase):
 
         tap("delete:4")
         self.assertEqual(editor.confirm_delete_id, second["id"])
-        tap("previous")
+        tap("delete_cancel")
         self.assertIsNone(editor.confirm_delete_id)
-        tap("delete:2")
-        self.assertEqual(editor.notice_action, "LOCKED")
+        self.assertNotIn("delete:2", theme_screen_boxes(editor))
         tap("delete:3")
         self.assertEqual(editor.confirm_delete_id, first["id"])
-        tap("delete:3")
+        tap("delete_confirm")
         self.assertIsNone(self.library.get(first["id"]))
         self.assertIsNotNone(self.library.get(second["id"]))
-        tap("previous")
-        tap("delete:0")
-        self.assertEqual(editor.notice_action, "LOCKED")
+        self.assertEqual(editor.notice_action, "DELETED")
 
     def test_delete_active_falls_back_and_default_preserves_existing_units(self):
         custom = new_theme("Delete me")
@@ -366,7 +499,7 @@ class ThemeSystemTests(unittest.TestCase):
     def test_section_divider_is_dark_thin_and_theme_editable(self):
         self.assertEqual(DEFAULT_THEME["colors"]["divider"], [42, 42, 42, 180])
         self.assertIn("divider", next(
-            keys for name, keys in ui.COLOR_GROUPS if name == "BASE"))
+            keys for name, keys in ui.COLOR_GROUPS if name == "SURFACES"))
         custom = new_theme("Quiet rules")
         custom["colors"]["divider"] = [21, 22, 23, 96]
         self.library.upsert(custom)
@@ -395,7 +528,7 @@ class ThemeSystemTests(unittest.TestCase):
         cache = MagicMock()
         cache.font.return_value.size.return_value = (187, 36)
         self.assertIn("top_instrument_band", next(
-            keys for name, keys in ui.COLOR_GROUPS if name == "BASE"))
+            keys for name, keys in ui.COLOR_GROUPS if name == "SURFACES"))
         with ExitStack() as stack:
             rectangles = stack.enter_context(patch.object(ui, "draw_logical_rect"))
             for name in ("draw_ruler", "draw_lower_status",
@@ -441,9 +574,11 @@ class ThemeSystemTests(unittest.TestCase):
         editor.selected_id = custom["id"]
         editor.page = 0
         delete_box = theme_screen_boxes(editor)["delete:3"]
-        for _ in range(2):
-            editor.tap((delete_box[0] + delete_box[2]) / 2,
-                       (delete_box[1] + delete_box[3]) / 2)
+        editor.tap((delete_box[0] + delete_box[2]) / 2,
+                   (delete_box[1] + delete_box[3]) / 2)
+        confirm_box = theme_screen_boxes(editor)["delete_confirm"]
+        editor.tap((confirm_box[0] + confirm_box[2]) / 2,
+                   (confirm_box[1] + confirm_box[3]) / 2)
         self.assertEqual((editor.notice_action, editor.notice_detail),
                          ("DELETED", "DELETE ME"))
 
@@ -473,6 +608,26 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(upload[4:6], (2, 2))
             self.assertEqual(upload[-1][row_before * 8:(row_before + 1) * 8],
                              bytes((245, 235, 225, 255, 155, 105, 55, 42)))
+
+    def test_live_button_edits_do_not_upload_whole_waterfall_texture(self):
+        apply_theme(DEFAULT_THEME)
+        with patch.object(ui, "GL") as gl, patch.object(ui, "WF_TEX_W", 2), \
+                patch.object(ui, "WF_TEX_H", 2):
+            gl.glGenTextures.return_value = 9
+            texture = ui.WaterfallTexture()
+            editor = ThemeEditor(self.library)
+            editor.begin()
+            gl.glTexSubImage2D.reset_mock()
+            editor._choose_family(2)
+            editor.set_color((27, 61, 92))
+            texture.ensure_theme()
+            gl.glTexSubImage2D.assert_not_called()
+            editor._choose_family(next(index for index, (name, _keys) in enumerate(ui.COLOR_GROUPS)
+                                       if name == "WATERFALL"))
+            editor.set_color((30, 45, 60))
+            texture.ensure_theme()
+            gl.glTexSubImage2D.assert_called_once()
+            self.assertTrue(all(value is None for value in texture.row_center_khz))
 
     def test_waterfall_controls_retain_transparency_in_each_theme(self):
         ui.configure_output(True)
@@ -529,19 +684,19 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(transformed, bytes((10, 20, 30, 255, 100, 180, 220, 42)))
         editor = ThemeEditor(self.library)
         editor.begin(self.library.get(custom["id"]))
-        editor.section = "COLORS"
         spectrum_group = next(index for index, group in enumerate(ui.COLOR_GROUPS)
                               if group[0] == "SPECTRUM")
         waterfall_group = next(index for index, group in enumerate(ui.COLOR_GROUPS)
                                if group[0] == "WATERFALL")
         for index, key in ((spectrum_group, "spectrum_field"),
                            (waterfall_group, "waterfall_low")):
-            box = theme_screen_boxes(editor)[f"group:{index}"]
+            box = theme_screen_boxes(editor)["family_open"]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-            box = theme_screen_boxes(editor)["color:0"]
+            box = theme_screen_boxes(editor)[f"family:{index}"]
+            editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            box = theme_screen_boxes(editor)["part:0"]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(editor.color_key, key)
-            editor.back()
 
     def test_straight_receivers_and_rf_instruments_use_theme_tokens(self):
         self.library.activate(STRAIGHT_INVERTED_THEME_ID)
@@ -652,6 +807,8 @@ class ThemeSystemTests(unittest.TestCase):
         new_box = theme_screen_boxes(editor)["new"]
         editor.tap((new_box[0] + new_box[2]) / 2, (new_box[1] + new_box[3]) / 2)
         self.assertEqual(editor.mode, "edit")
+        panel_box = theme_screen_boxes(editor)["panel:layout"]
+        editor.tap((panel_box[0] + panel_box[2]) / 2, (panel_box[1] + panel_box[3]) / 2)
         style_box = theme_screen_boxes(editor)["option:straight"]
         editor.tap((style_box[0] + style_box[2]) / 2, (style_box[1] + style_box[3]) / 2)
         save_box = theme_screen_boxes(editor)["save"]
@@ -664,19 +821,20 @@ class ThemeSystemTests(unittest.TestCase):
     def test_touch_color_keypad_replaces_existing_hex_value(self):
         editor = ThemeEditor(self.library)
         editor.begin()
-        editor.section = "COLORS"
-        color_box = theme_screen_boxes(editor)["color:0"]
-        editor.tap((color_box[0] + color_box[2]) / 2, (color_box[1] + color_box[3]) / 2)
+        box = theme_screen_boxes(editor)["panel:advanced"]
+        editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
         self.assertEqual(editor.color_key, "background")
-        for digit in "AABBCC":
+        box = theme_screen_boxes(editor)["hex_open"]
+        editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+        for digit in "AABBCCFF":
             box = theme_screen_boxes(editor)[f"hex:{digit}"]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
         box = theme_screen_boxes(editor)["hex:APPLY"]
         editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-        self.assertIsNone(editor.color_key)
+        self.assertFalse(editor.hex_open)
         self.assertEqual(editor.draft["colors"]["background"], [170, 187, 204, 255])
 
-    def test_color_preview_cancel_save_and_reopen_match_saved_value(self):
+    def test_visual_color_and_transparency_save_and_reopen(self):
         editor = ThemeEditor(self.library)
 
         def tap(action):
@@ -684,43 +842,32 @@ class ThemeSystemTests(unittest.TestCase):
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
         tap("new")
-        tap("section:COLORS")
-        tap("group:5")
+        tap("family_open")
+        tap("family:5")
         original = list(editor.draft["colors"]["passband_fill"])
-        tap("color:0")
-        for digit in "AABBCC":
-            tap(f"hex:{digit}")
-        self.assertEqual(editor.draft["colors"]["passband_fill"],
-                         [170, 187, 204, original[3]])
-        tap("hex:CANCEL")
-        self.assertEqual(editor.draft["colors"]["passband_fill"], original)
-        tap("color:0")
-        tap("swatch:0")
-        self.assertEqual(editor.draft["colors"]["passband_fill"],
-                         [255, 255, 255, original[3]])
-        tap("hex:APPLY")
-        border_alpha = editor.draft["colors"]["passband_border"][3]
-        tap("color:1")
-        for digit in "AABBCC":
-            tap(f"hex:{digit}")
-        tap("hex:APPLY")
+        tap("shade:7")
+        self.assertEqual(editor.draft["colors"]["passband_fill"][3], original[3])
+        self.assertEqual(tuple(APP_UI_STYLE.palette.passband_fill),
+                         tuple(editor.draft["colors"]["passband_fill"]))
+        tap("alpha_open")
+        tap("alpha:4")
+        tap("alpha:0")
+        tap("alpha:DONE")
+        expected = list(editor.draft["colors"]["passband_fill"])
+        self.assertEqual(transparency_percent(expected), 40)
         tap("save")
         saved_id = editor.selected_id
         restarted = ThemeLibrary(self.path)
-        self.assertEqual(restarted.get(saved_id)["colors"]["passband_fill"],
-                         [255, 255, 255, original[3]])
-        self.assertEqual(restarted.get(saved_id)["colors"]["passband_border"],
-                         [170, 187, 204, border_alpha])
+        self.assertEqual(restarted.get(saved_id)["colors"]["passband_fill"], expected)
         editor = ThemeEditor(restarted)
         editor.page = 0
         tap("edit:3")
-        tap("section:COLORS")
-        tap("group:5")
-        tap("color:0")
-        self.assertEqual(editor.hex_value, f"FFFFFF{original[3]:02X}")
-        tap("hex:APPLY")
-        tap("color:1")
-        self.assertEqual(editor.hex_value, f"AABBCC{border_alpha:02X}")
+        tap("family_open")
+        tap("family:5")
+        self.assertEqual(editor.current_color, expected)
+        tap("panel:advanced")
+        tap("hex_open")
+        self.assertEqual(editor.hex_value, "".join(f"{value:02X}" for value in expected))
 
     def test_failed_save_does_not_apply_an_unsaved_theme(self):
         custom = new_theme("Cannot Save")

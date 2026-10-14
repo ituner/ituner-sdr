@@ -3,7 +3,7 @@
 import colorsys
 
 
-SHADE_LIGHTNESS = (0.18, 0.34, 0.50, 0.68, 0.84)
+SHADE_LIGHTNESS = (0.18, 0.38, 0.60, 0.82)
 SHADE_SATURATION = (0.30, 0.50, 0.72, 0.92)
 
 
@@ -14,7 +14,7 @@ def _rgb(hue, lightness, saturation):
 
 
 def shade_grid(hue):
-    """Return five lightness rows by four saturation columns for one hue."""
+    """Return four lightness rows by four saturation columns for one hue."""
     return tuple(
         _rgb(hue, lightness, saturation)
         for lightness in SHADE_LIGHTNESS
@@ -30,7 +30,9 @@ def recolor_family(colors, keys, hue):
         _old_hue, lightness, saturation = colorsys.rgb_to_hls(
             *(channel / 255.0 for channel in value[:3])
         )
-        value[:3] = _rgb(hue, lightness, max(0.22, saturation))
+        # Keep pure black/white distinguishable as dark/light shades of the
+        # chosen hue; the affine map retains every member's lightness order.
+        value[:3] = _rgb(hue, 0.06 + 0.88 * lightness, max(0.22, saturation))
     return result
 
 

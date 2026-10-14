@@ -354,6 +354,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "TRANSCRIBE")
         self.assertNotIn("theme", dict(ui.SETTINGS_MENU_ITEMS))
         self.assertNotIn("theme", ui.SETTINGS_MENU_SUBTITLES)
+        self.assertEqual(ui.navigation_back_surface("display"), "display")
         self.assertEqual((ui.APP_UI_STYLE.button.title_size,
                           ui.APP_UI_STYLE.button.subtitle_size), (14, 12))
 
