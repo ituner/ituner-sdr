@@ -14009,58 +14009,6 @@ _globe_borders = globe_gpu.GlobeBorders(
     ring for country in GLOBE_COUNTRY_SHAPES for ring in country["rings"])
 
 
-class GlobeFrameProfiler:
-    """Temporary CM5 motion profiler with bounded, periodic summaries."""
-
-    def __init__(self, report_seconds=8.0, sample_limit=900):
-        self.report_seconds = report_seconds
-        self.sample_limit = sample_limit
-        self.samples = defaultdict(list)
-        self.last_report = time.monotonic()
-        self.last_frame = None
-
-    @staticmethod
-    def _percentile(values, fraction):
-        ordered = sorted(values)
-        return ordered[min(len(ordered) - 1, round((len(ordered) - 1) * fraction))]
-
-    def record(self, timings, *, interactive, markers):
-        now = time.monotonic()
-        if not interactive:
-            self.last_frame = None
-            return
-        if self.last_frame is not None:
-            timings["interval"] = (now - self.last_frame) * 1000.0
-        self.last_frame = now
-        for name, value in timings.items():
-            bucket = self.samples[name]
-            bucket.append(float(value))
-            if len(bucket) > self.sample_limit:
-                del bucket[:len(bucket) - self.sample_limit]
-        self.samples["marker_count"].append(float(markers))
-        if now - self.last_report < self.report_seconds or len(self.samples["total"]) < 20:
-            return
-        parts = []
-        for name in ("total", "satellite", "borders", "markers", "chrome", "interval",
-                     "marker_count"):
-            values = self.samples.get(name)
-            if not values:
-                continue
-            parts.append(
-                f"{name}=p50:{self._percentile(values, .50):.1f} "
-                f"p95:{self._percentile(values, .95):.1f} max:{max(values):.1f}"
-            )
-        print(
-            f"[DEBUG-globe-perf] frames={len(self.samples['total'])} " + " | ".join(parts),
-            flush=True,
-        )
-        self.samples.clear()
-        self.last_report = now
-
-
-_globe_frame_profiler = GlobeFrameProfiler()
-
-
 def globe_gpu_matrix(center_lon, center_lat, box, scale):
     return globe_gpu.view_matrix(
         center_lon, center_lat, radiogarden_radius(box, scale),
@@ -14273,7 +14221,6 @@ def draw_receiver_map(
     map_view="borders", interactive=False, notice_alpha=220,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
-    profile_started = time.perf_counter()
     box = PICKER_MAP_BOX
     draw_logical_rect(*box, (7, 19, 29, 255))
     center_lon, center_lat = yaw, pitch
@@ -14288,7 +14235,6 @@ def draw_receiver_map(
     if not satellite_drawn:
         draw_logical_circle(cx, cy, radius, (14, 40, 48, 255), 96)
     draw_logical_circle(cx, cy, radius, (87, 204, 186, 154), 96, True)
-    satellite_finished = time.perf_counter()
     # Cached world-space outlines rotate on the GPU, including during swipes.
     # Thin translucent lines need no expensive shadow pass or motion redraw.
     if map_view != "satellite_only":
@@ -14304,7 +14250,6 @@ def draw_receiver_map(
                     continue
                 draw_text(text_cache, point[0] + 1, point[1] + 1, country["name"].upper(), (4, 10, 12), 12, True, False, "cm", family="Cantarell")
                 draw_text(text_cache, point[0], point[1], country["name"].upper(), (173, 193, 183), 12, True, False, "cm", family="Cantarell")
-    borders_finished = time.perf_counter()
     receiver_point_groups = defaultdict(list)
     selected_point = None
     selected_color = None
@@ -14361,7 +14306,6 @@ def draw_receiver_map(
             selected_point[0], selected_point[1], max(2.0, dot_size),
             selected_color, 24,
         )
-    markers_finished = time.perf_counter()
     state_label = {
         "connecting": "CONNECTING",
         "retrying": "RETRYING",
@@ -14459,18 +14403,6 @@ def draw_receiver_map(
         text_cache, min(box[2], LCD_NAV_X0) - 18, box[3] - 16,
         "DRAG / PINCH / WHEEL", (137, 195, 204), 13, True, False, "rm",
         family="Cantarell",
-    )
-    profile_finished = time.perf_counter()
-    _globe_frame_profiler.record(
-        {
-            "total": (profile_finished - profile_started) * 1000.0,
-            "satellite": (satellite_finished - profile_started) * 1000.0,
-            "borders": (borders_finished - satellite_finished) * 1000.0,
-            "markers": (markers_finished - borders_finished) * 1000.0,
-            "chrome": (profile_finished - markers_finished) * 1000.0,
-        },
-        interactive=interactive,
-        markers=len(marker_rows),
     )
 
 
