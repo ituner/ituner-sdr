@@ -9,7 +9,8 @@ The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer
 moving horizontally), Classic Ivory, Precision Dark, Aviation Black and Aviation
 Brass. The aviation designs use round dials inside rectangular metal housings.
 The gallery shows a moving demonstration signal, independent of the receiver.
-LED and sliding-pointer scales follow the theme palette; analog faces retain
+LED Bar retains its original flat Home-rail background and wide segment track,
+without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
 The expanded gallery has 26 designs across five pages. **More Designs** and

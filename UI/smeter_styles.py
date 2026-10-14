@@ -320,18 +320,24 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
         rect(a, b, c, d, color)
         line(a, b, c, b, (155, 163, 160), max(1, unit))
         line(a, d, c, d, (18, 23, 26), max(1, unit))
-    frame(box, style.metal)
-    inset = max(2, 5 * unit)
-    rect(x0 + inset / 2, y0 + inset / 2, x1 - inset / 2, y1 - inset / 2,
-         tuple(round(channel * .64) for channel in style.metal))
-    rect(x0 + inset, y0 + inset, x1 - inset, y1 - inset, style.face)
+    if style.kind == "led":
+        # The original LED instrument is a flat part of the Home rail.
+        rect(*box, palette["section_surface"])
+    else:
+        frame(box, style.metal)
+        inset = max(2, 5 * unit)
+        rect(x0 + inset / 2, y0 + inset / 2, x1 - inset / 2, y1 - inset / 2,
+             tuple(round(channel * .64) for channel in style.metal))
+        rect(x0 + inset, y0 + inset, x1 - inset, y1 - inset, style.face)
     level = meter_fraction(value)
     readout = "— dBm" if missing else f"{value:.0f} dBm"
 
     if style.kind in ("led", "linear"):
-        label(x0 + 10 * unit, y0 + h * .17, "S-METER", 12, anchor="lm")
-        label(x1 - 10 * unit, y0 + h * .17, readout, 12, palette["smeter_dbm"], "rm")
-        a, b, cy = x0 + 14 * unit, x1 - 14 * unit, y0 + h * .55
+        padding = 4 if style.kind == "led" else 10
+        label(x0 + padding * unit, y0 + h * .17, "S-METER", 12, anchor="lm")
+        label(x1 - padding * unit, y0 + h * .17, readout, 12, palette["smeter_dbm"], "rm")
+        track_padding = 4 if style.kind == "led" else 14
+        a, b, cy = x0 + track_padding * unit, x1 - track_padding * unit, y0 + h * .55
         if style.kind == "led":
             for index in range(36):
                 left = a + (b - a) * index / 36
@@ -351,7 +357,10 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
             xx = a + (b - a) * meter_fraction(peak_dbm)
             line(xx, cy - h * .18, xx, cy + h * .18, palette["smeter_peak"], max(1, unit))
         for db, content in SCALE_LABELS:
-            label(a + (b - a) * meter_fraction(db), y0 + h * .86,
+            label_x = a + (b - a) * meter_fraction(db)
+            if style.kind == "led":
+                label_x = max(x0 + 12 * unit, min(x1 - 14 * unit, label_x))
+            label(label_x, y0 + h * .86,
                   "S" + content if content == "1" else content, 10,
                   palette["smeter_hot"] if db > -73 else ink)
         return
