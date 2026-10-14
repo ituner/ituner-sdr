@@ -852,7 +852,7 @@ class BoardLayoutTests(unittest.TestCase):
                     continue  # Back is the shared full-width return target.
                 box = ui.lcd_nav_box(index, len(items), has_back)
                 self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
-                self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H)
+                self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H if has_back else ui.LCD_HOME_NAV_TILE_H)
         # The Globe retains its four compact rail commands and full-width Back.
         ui.configure_output(True)
         ui.configure_popup_layout()

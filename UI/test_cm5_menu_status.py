@@ -28,9 +28,9 @@ class MenuStatusTests(unittest.TestCase):
 
     def test_decoder_subtitle_tracks_available_modes(self):
         count=sum(kind!='digital_back' for kind,_ in ui.DIGITAL_MENU_ITEMS)
-        self.assertEqual(ui.menu_subtitle('digital'),f'{count} DIGITAL MODES')
+        self.assertEqual(ui.menu_subtitle('digital'),f'{count} MODES')
         with patch.object(ui,'DIGITAL_MENU_ITEMS',ui.DIGITAL_MENU_ITEMS+(('new_mode','NEW'),)):
-            self.assertEqual(ui.menu_subtitle('digital'),f'{count+1} DIGITAL MODES')
+            self.assertEqual(ui.menu_subtitle('digital'),f'{count+1} MODES')
 
     def test_footer_shows_valid_occupancy_and_reserves_space_for_it(self):
         cache=Mock()

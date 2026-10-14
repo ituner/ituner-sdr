@@ -717,7 +717,7 @@ class ThemeSystemTests(unittest.TestCase):
         items = ui.lcd_nav_items()
         self.assertEqual(items, ui.MENU_ITEMS)
         boxes = [ui.lcd_nav_box(index, len(items)) for index in range(len(items))]
-        self.assertTrue(all(box[2] - box[0] == 114 and box[3] - box[1] == 64 for box in boxes))
+        self.assertTrue(all(box[2] - box[0] == 114 and box[3] - box[1] == ui.LCD_HOME_NAV_TILE_H for box in boxes))
         self.assertEqual(max(box[3] for box in boxes), 792)
 
     def test_left_sidebar_composition_uses_matching_touch_and_draw_regions(self):

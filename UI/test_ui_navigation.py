@@ -100,15 +100,15 @@ class DrawerGeometryTests(unittest.TestCase):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["rx", "audio", "digital", "vosc", "display", "dual", "settings"],
+            ["rx", "audio", "digital", "vosc", "display", "dual", "settings", "tests"],
         )
         self.assertNotIn("display", dict(ui.SETTINGS_MENU_ITEMS))
         self.assertEqual(ui.LCD_NAV_TILE_W, 114)
         self.assertEqual(ui.LCD_NAV_TILE_H, 64)
         self.assertEqual(ui.LCD_NAV_GAP, 8)
         boxes = [ui.lcd_nav_box(i) for i in range(len(ui.MENU_ITEMS))]
-        self.assertEqual(boxes[0], (1034, 512, 1148, 576))
-        self.assertEqual(boxes[-1], (1034, 728, 1148, 792))
+        self.assertEqual(boxes[0], (1034, 480, 1148, 552))
+        self.assertEqual(boxes[-1], (1156, 720, 1270, 792))
 
     def test_vosc_uses_right_rail_controls_and_shared_back(self):
         options = list(ui.vosc_sidebar_options())
@@ -220,17 +220,17 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
-                      if call.args[2] == "DECODERS"]
+                      if call.args[2] == "DECODE"]
         self.assertEqual(len(digi_calls), 1)
-        self.assertEqual(digi_calls[0][3], "5 DIGITAL MODES")
+        self.assertEqual(digi_calls[0][3], "5 MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
              mock.patch.object(ui, "draw_navigation_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
-                           if call.args[2] == "DECODERS"]
-        self.assertEqual(zero_digi_calls[0][3], "5 DIGITAL MODES")
+                           if call.args[2] == "DECODE"]
+        self.assertEqual(zero_digi_calls[0][3], "5 MODES")
 
     def test_home_digi_title_stays_compact_with_many_running_sessions(self):
         ui.configure_output(True)
@@ -240,8 +240,8 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
-                    if call.args[2] == "DECODERS")
-        self.assertEqual(digi[3], "5 DIGITAL MODES")
+                    if call.args[2] == "DECODE")
+        self.assertEqual(digi[3], "5 MODES")
         cache = ui.TextCache()
         font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
                           family=ui.APP_UI_STYLE.button.font_family)
@@ -346,12 +346,12 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_home_and_settings_tiles_use_requested_copy_and_full_subtitles(self):
         self.assertEqual(dict(ui.MENU_ITEMS), {
-            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DECODERS",
+            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DECODE",
             "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
-            "settings": "SETTINGS",
+            "settings": "SYSTEM", "tests": "APPS",
         })
-        self.assertEqual(ui.menu_subtitle("digital"), "5 DIGITAL MODES")
-        self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "SPEECH TO TEXT")
+        self.assertEqual(ui.menu_subtitle("digital"), "5 MODES")
+        self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "TRANSCRIBE")
         self.assertEqual(ui.SETTINGS_MENU_SUBTITLES["theme"], "COLORS")
         self.assertEqual((ui.APP_UI_STYLE.button.title_size,
                           ui.APP_UI_STYLE.button.subtitle_size), (14, 12))

@@ -2053,25 +2053,27 @@ MENU_CLOSE_BOX = (0, 0, 0, 0)
 MENU_COLS = 2
 MENU_ROWS = 4
 # The permanent Home rail is deliberately limited to live operating tools.
-# Secondary configuration pages live one tap deeper under Settings so the
-# 800x1280 control rail does not read as an eight-button wall.
+# Secondary configuration pages live under Settings. Home also offers a
+# direct shortcut to the existing Apps workspace.
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("audio", "AUDIO"),
-    ("digital", "DECODERS"),
+    ("digital", "DECODE"),
     ("vosc", "CAPTIONS"),
     ("display", "DISPLAY"),
     ("dual", "DUAL RX"),
-    ("settings", "SETTINGS"),
+    ("settings", "SYSTEM"),
+    ("tests", "APPS"),
 )
 HOME_MENU_SUBTITLES = {
     "rx": "LOCAL & REMOTE",
     "audio": "VOLUME & DSP",
     "digital": "",  # Computed from the available decoder categories below.
-    "vosc": "SPEECH TO TEXT",
-    "display": "COLOR & LAYOUT",
-    "dual": "TWO RECEIVERS",
-    "settings": "DEVICE & TOOLS",
+    "vosc": "TRANSCRIBE",
+    "display": "LOOK & FEEL",
+    "dual": "RX1, RX2",
+    "settings": "SETUP",
+    "tests": "TOOLS, ETC",
 }
 
 
@@ -2523,7 +2525,7 @@ SETTINGS_MENU_SUBTITLES = {
 def menu_subtitle(kind):
     if kind == "digital":
         count = sum(key != "digital_back" for key, _ in DIGITAL_MENU_ITEMS)
-        return f"{count} DIGITAL MODES"
+        return f"{count} MODES"
     return HOME_MENU_SUBTITLES.get(kind, SETTINGS_MENU_SUBTITLES.get(kind, ""))
 
 
@@ -8484,9 +8486,10 @@ def draw_navigation_button(text_cache, box, title, subtitle):
     visual = draw_styled_button_frame(box, active=False, pressed=pressed, style=style)
     x0, y0, x1, y1 = box
     cx = round((x0 + x1) / 2)
+    extra_height = max(0, y1 - y0 - LCD_NAV_TILE_H)
     for text, preferred, cy, color in (
-        (title, 14, y0 + 28, visual.text),
-        (subtitle, 12, y0 + 51, visual.text if pressed else style.subtitle_color),
+        (title, 14, y0 + 28 + extra_height / 3, visual.text),
+        (subtitle, 12, y0 + 51 + 2 * extra_height / 3, visual.text if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
         draw_text(text_cache, cx, round(cy), str(text).upper(), color,
@@ -15485,6 +15488,7 @@ LCD_NAV_TOP_MIN = 88
 # right edges: 114 + 8 + 114 = 236 px inside the rail's 10 px margins.
 LCD_NAV_TILE_W = 114
 LCD_NAV_TILE_H = 64
+LCD_HOME_NAV_TILE_H = 72
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = APP_UI_STYLE.palette.section_heading
@@ -15806,7 +15810,7 @@ def lcd_nav_top(item_count=None, has_back=False):
     """Bottom-align only the rows actually present in this rail view."""
     item_count = len(MENU_ITEMS) if item_count is None else max(1, int(item_count))
     rows = math.ceil((item_count - int(has_back)) / 2)
-    tile_height = LCD_NAV_TILE_H
+    tile_height = LCD_NAV_TILE_H if has_back else LCD_HOME_NAV_TILE_H
     tiles_h = rows * tile_height + (rows - 1) * LCD_NAV_GAP
     bottom = (
         lcd_drawer_back_box()[1] - LCD_NAV_GAP
@@ -16094,7 +16098,7 @@ def lcd_home_volume_box(show_compact_readouts=True):
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
     y0 = pass_y1 + 16
-    y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 18, y0 + 72)
+    y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 12, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 
 
@@ -16165,7 +16169,7 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     row = index // 2
     grid_width = 2 * LCD_NAV_TILE_W + LCD_NAV_GAP
     x0 = LCD_NAV_X0 + (LOGICAL_W - LCD_NAV_X0 - grid_width) / 2 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
-    tile_height = LCD_NAV_TILE_H
+    tile_height = LCD_NAV_TILE_H if has_back else LCD_HOME_NAV_TILE_H
     y0 = lcd_nav_top(item_count, has_back) + row * (tile_height + LCD_NAV_GAP)
     return x0, y0, x0 + LCD_NAV_TILE_W, y0 + tile_height
 
@@ -16586,7 +16590,8 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_radio_close_button(text_cache, lcd_drawer_back_box())
             continue
         nav_box = (bx0, by0, bx1, by1)
-        subtitle = menu_subtitle(kind) if home_items or settings_open else ""
+        subtitle = (menu_subtitle(kind) if home_items else
+                    SETTINGS_MENU_SUBTITLES.get(kind, "") if settings_open else "")
         if subtitle:
             draw_navigation_button(text_cache, nav_box, label, subtitle)
         else:
