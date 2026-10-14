@@ -7,6 +7,7 @@ from pathlib import Path
 import uuid
 
 from ui_style import UIPalette, apply_ui_style
+from smeter_styles import DEFAULT_METER_STYLE, normalize_meter_style
 
 
 DEFAULT_THEME_ID = "default"
@@ -44,6 +45,7 @@ DEFAULT_THEME = {
     # The historical UI mixes station miles and WSPR kilometres. Keep the
     # built-in theme visually unchanged; saved themes choose a unified system.
     "units": "original",
+    "smeter_style": DEFAULT_METER_STYLE,
 }
 
 
@@ -160,6 +162,7 @@ def normalize_theme(value, *, allow_default=False):
         "radius": 0 if value.get("radius") == 0 else 8,
         "sidebar": value.get("sidebar") if value.get("sidebar") in ("left", "right") else "right",
         "text_scale_percent": text_scale,
+        "smeter_style": normalize_meter_style(value.get("smeter_style")),
         "units": value.get("units") if value.get("units") in ("original", "imperial", "metric") else "original",
     }
 

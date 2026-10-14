@@ -6,6 +6,7 @@ import math
 import time
 
 from theme_colors import recolor_family, shade_grid, transparency_percent, with_transparency
+from smeter_styles import METER_STYLES
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX, apply_theme,
                           is_builtin_theme_id, new_theme)
@@ -39,6 +40,7 @@ NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 BACK_BOX = (1034, 728, 1270, 792)
 SAVED_CARDS_PER_PAGE = 8
+METER_CARDS_PER_PAGE = 6
 EDITOR_PREVIEW_BOX = (24, 160, 820, 708)
 EDITOR_INSPECTOR_BOX = (836, 96, 1256, 728)
 
@@ -73,6 +75,7 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
 
     boxes = {"back": BACK_BOX}
     if editor.mode == "browse":
+        boxes["meters"] = (790, 24, 1026, 88)
         boxes["new"] = (1034, 24, 1270, 88)
         for slot in range(len(BUILTIN_THEME_IDS) + SAVED_CARDS_PER_PAGE):
             item = editor.card_item(slot)
@@ -114,16 +117,18 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         return boxes
 
     boxes["theme_name"] = (24, 16, 412, 80)
-    boxes["panel:colors"] = (424, 16, 552, 80)
-    boxes["panel:layout"] = (560, 16, 688, 80)
-    boxes["panel:text"] = (696, 16, 824, 80)
-    boxes["panel:advanced"] = (832, 16, 1000, 80)
+    boxes["panel:colors"] = (424, 16, 532, 80)
+    boxes["panel:layout"] = (540, 16, 648, 80)
+    boxes["panel:text"] = (656, 16, 764, 80)
+    boxes["panel:meters"] = (772, 16, 880, 80)
+    boxes["panel:advanced"] = (888, 16, 1000, 80)
     boxes["save"] = (1034, 16, 1270, 80)
     for index, scene in enumerate(("home", "browse", "popups")):
         left = 24 + index * 136
         boxes[f"scene:{scene}"] = (left, 96, left + 128, 144)
 
-    if editor.panel in ("colors", "advanced"):
+    panel = "meters" if editor.section == "METERS" else editor.panel
+    if panel in ("colors", "advanced"):
         boxes["family_open"] = (848, 96, 1256, 152)
         keys = editor.family_keys
         for slot in range(4):
@@ -135,7 +140,7 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             boxes[f"part:{index}"] = (x0, y0, x0 + 200, y0 + 56)
         boxes["part_previous"] = (848, 288, 980, 332)
         boxes["part_next"] = (988, 288, 1120, 332)
-        if editor.panel == "advanced":
+        if panel == "advanced":
             boxes["hex_open"] = (1128, 288, 1256, 332)
         boxes["hue"] = (848, 344, 1256, 392)
         for index in range(16):
@@ -145,7 +150,7 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         if len(editor.current_color) == 4:
             boxes["alpha_open"] = (848, 608, 1256, 656)
         boxes["apply_family"] = (848, 664, 1256, 712)
-    elif editor.panel == "layout":
+    elif panel == "layout":
         for index, name in enumerate(("straight", "rounded")):
             x0 = 848 + index * 208
             boxes[f"option:{name}"] = (x0, 178, x0 + 200, 242)
@@ -155,10 +160,18 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         for index, name in enumerate(("imperial", "metric")):
             x0 = 848 + index * 208
             boxes[f"option:{name}"] = (x0, 498, x0 + 200, 562)
-    elif editor.panel == "text":
+    elif panel == "text":
         boxes["text:smaller"] = (848, 208, 1048, 272)
         boxes["text:larger"] = (1056, 208, 1256, 272)
         boxes["text:reset"] = (848, 288, 1256, 352)
+    elif panel == "meters":
+        first = editor.meter_page * METER_CARDS_PER_PAGE
+        for slot, identifier in enumerate(list(METER_STYLES)[first:first + METER_CARDS_PER_PAGE]):
+            left = 848 + (slot % 2) * 208
+            top = 100 + (slot // 2) * 184
+            boxes[f"meter:{identifier}"] = (left, top, left + 200, top + 172)
+        boxes["meter_previous"] = (848, 656, 1048, 712)
+        boxes["meter_next"] = (1056, 656, 1256, 712)
 
     preview = EDITOR_PREVIEW_BOX
     rail = ((24, 192) if editor.draft["sidebar"] == "left" else (652, 820))
@@ -188,11 +201,13 @@ class ThemeEditor:
         self.mode = "browse"
         self.selected_id = library.active_id
         self.page = 0
+        self.meter_page = 0
         self.draft = None
         self.baseline = None
         self.entry_theme = None
         self.scene = "home"
         self.panel = "colors"
+        self.section = "STYLE"
         self.color_group = 0
         self.part_page = 0
         self.color_key = COLOR_GROUPS[0][1][0]
@@ -279,6 +294,8 @@ class ThemeEditor:
         self.mode = "edit"
         self.scene = "home"
         self.panel = "colors"
+        self.section = "STYLE"
+        self.meter_page = 0
         self.color_group = 0
         self.part_page = 0
         self.color_key = self.family_keys[0]
@@ -467,6 +484,10 @@ class ThemeEditor:
                     self.page += -1 if action == "previous" else 1
             elif action == "new":
                 self.begin()
+            elif action == "meters":
+                self.begin(self.selected)
+                self.panel = "meters"
+                self.section = "METERS"
             elif action.startswith(("theme:", "edit:", "delete:")):
                 verb, slot_text = action.split(":")
                 item = self.card_item(int(slot_text))
@@ -511,6 +532,7 @@ class ThemeEditor:
             self.name_open = True
         elif action.startswith("panel:"):
             self.panel = action.split(":")[1]
+            self.section = self.panel.upper()
         elif action.startswith("scene:"):
             self.scene = action.split(":")[1]
         elif action == "family_open":
@@ -543,6 +565,15 @@ class ThemeEditor:
             self.hex_value = "".join(f"{value:02X}" for value in self.current_color)
             self.hex_pristine = True
             self.hex_open = True
+        elif action == "meter_previous":
+            self.meter_page = max(0, self.meter_page - 1)
+        elif action == "meter_next":
+            self.meter_page = min(
+                (len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE,
+                self.meter_page + 1,
+            )
+        elif action.startswith("meter:"):
+            self.draft["smeter_style"] = action.split(":", 1)[1]
         elif action.startswith("option:"):
             value = action.split(":")[1]
             if value in ("rounded", "straight"):

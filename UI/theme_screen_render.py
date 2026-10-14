@@ -8,8 +8,10 @@ import colorsys
 
 from theme_colors import shade_grid, transparency_percent
 from theme_editor import (BACK_BOX, COLOR_GROUPS, EDITOR_INSPECTOR_BOX,
-                          EDITOR_PREVIEW_BOX, SAVED_CARDS_PER_PAGE,
+                          EDITOR_PREVIEW_BOX, METER_CARDS_PER_PAGE,
+                          SAVED_CARDS_PER_PAGE,
                           theme_screen_boxes)
+from smeter_styles import METER_STYLES
 import theme_system
 from ui_style import ButtonStyle, UIPalette
 
@@ -42,6 +44,7 @@ def _draw_library(ui, cache, editor, boxes):
     palette = ui.APP_UI_STYLE.palette
     _text(ui, cache, 24, 46, "THEMES", palette.text, 26)
     _text(ui, cache, 24, 78, "TOUCH A THEME TO APPLY IT", palette.secondary_text, 14)
+    _button(ui, cache, boxes["meters"], "S-METERS")
     _button(ui, cache, boxes["new"], "NEW THEME")
     _text(ui, cache, 24, 112, "BUILT-IN", palette.section_heading, 14)
     _text(ui, cache, 24, 308, "SAVED THEMES", palette.section_heading, 14)
@@ -264,10 +267,34 @@ def _draw_text_inspector(ui, cache, editor, boxes):
     _text(ui, cache, 848, 394, "80% – 120%", palette.secondary_text, 13)
 
 
+def _draw_meter_inspector(ui, cache, editor, boxes):
+    palette = ui.APP_UI_STYLE.palette
+    first = editor.meter_page * METER_CARDS_PER_PAGE
+    identifiers = list(METER_STYLES)[first:first + METER_CARDS_PER_PAGE]
+    for identifier in identifiers:
+        box = boxes[f"meter:{identifier}"]
+        active = editor.preview["smeter_style"] == identifier
+        _frame(ui, box, palette.active_surface if active else palette.surface,
+               palette.active_border if active else palette.border,
+               ui.APP_UI_STYLE.button.radius)
+        _text(ui, cache, box[0] + 12, box[1] + 18,
+              METER_STYLES[identifier].name.upper(),
+              palette.text, 12)
+        ui.draw_selected_smeter(
+            cache, (box[0] + 8, box[1] + 30, box[2] - 8, box[3] - 8),
+            -85, None, theme=editor.preview, style_id=identifier,
+        )
+    _button(ui, cache, boxes["meter_previous"], "PREV")
+    _button(ui, cache, boxes["meter_next"], "NEXT")
+    pages = max(1, (len(METER_STYLES) + METER_CARDS_PER_PAGE - 1) // METER_CARDS_PER_PAGE)
+    _text(ui, cache, 1052, 640, f"{editor.meter_page + 1} / {pages}",
+          palette.secondary_text, 12, "cm")
+
+
 def _draw_editor(ui, cache, editor, boxes):
     palette = ui.APP_UI_STYLE.palette
     _button(ui, cache, boxes["theme_name"], editor.draft["name"].upper() + "  EDIT")
-    for panel in ("colors", "layout", "text", "advanced"):
+    for panel in ("colors", "layout", "text", "meters", "advanced"):
         _button(ui, cache, boxes[f"panel:{panel}"], panel.upper(), editor.panel == panel)
     _button(ui, cache, boxes["save"], "SAVE THEME")
     if editor.dirty:
@@ -281,6 +308,8 @@ def _draw_editor(ui, cache, editor, boxes):
         _draw_color_inspector(ui, cache, editor, boxes)
     elif editor.panel == "layout":
         _draw_layout_inspector(ui, cache, editor, boxes)
+    elif editor.panel == "meters":
+        _draw_meter_inspector(ui, cache, editor, boxes)
     else:
         _draw_text_inspector(ui, cache, editor, boxes)
 

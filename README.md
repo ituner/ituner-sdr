@@ -238,6 +238,14 @@ sudo reboot
 - `UI/assets/menu-icons/` — `64x64` transparent PNG copies loaded by the OpenGL runtime.
 - `scripts/` and `systemd/` — installation, configuration, uninstall, and boot integration.
 
+## S-meter designs
+
+Display → Themes → S-Meters offers 14 designs with moving previews, including
+original Flexible S-Meter faces and black, amber and copper instruments with
+S, dBm and µV scales. Tall meters reclaim the Home Bandpass panel's space.
+Flexible faces fill the rail width and use sharper resizing without an added
+grey border. See [meter selection, calibration and artwork sources](docs/s-meters.md).
+
 ## SSTV
 
 Digital tools → SSTV adds continuous receiver decoders, a 1280 × 800 touch
