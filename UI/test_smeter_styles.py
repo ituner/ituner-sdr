@@ -9,6 +9,7 @@ import kiwi_gl_display as ui
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           dbm_to_microvolts, meter_fraction, needle_point,
                           skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip)
+from smeter_styles import EYE_ARTWORK, meter_asset_path, eye_closure, eye_image_box, draw_eye_signal
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
 
@@ -66,7 +67,7 @@ class MeterTests(unittest.TestCase):
 
     def test_original_skin_needle_uses_all_source_calibration_points(self):
         for identifier, skin in SKIN_CALIBRATION.items():
-            self.assertTrue((SKIN_ASSET_DIR / skin['file']).is_file())
+            self.assertTrue(meter_asset_path(identifier).is_file())
             self.assertEqual(len(skin['points']), 16)
             for level, point in zip(skin['dbm'], skin['points']):
                 self.assertEqual(skin_tip(identifier, level), tuple(point))
@@ -89,7 +90,7 @@ class MeterTests(unittest.TestCase):
             editor.begin()
             editor.section = 'METERS'
             seen = set()
-            for _ in range(5):
+            for _ in range((len(METER_STYLES) + 5) // 6 + 1):
                 boxes = theme_screen_boxes(editor)
                 cards = [key.split(':')[1] for key in boxes if key.startswith('meter:')]
                 self.assertLessEqual(len(cards), 6)
@@ -124,10 +125,50 @@ class MeterTests(unittest.TestCase):
                 ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 160), -85, None, Mock())
                 key, surface = cache.surface_texture.call_args.args
                 self.assertEqual(surface.get_size(), (236, 160))
-                self.assertNotEqual(tuple(surface.get_at((0, 0))[:3]), METER_STYLES[identifier].metal)
+                if identifier.startswith('flex_'):
+                    self.assertNotEqual(tuple(surface.get_at((0, 0))[:3]), METER_STYLES[identifier].metal)
                 cache._cached_texture.return_value = (1, 236, 160)
                 ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 160), -73, None, Mock())
                 cache.surface_texture.assert_called_once()
+
+    def test_tr7_pointer_tracks_s_marks_vertically(self):
+        for dbm in (-127, -121, -73, -53, -13):
+            a, b, c, d = skin_needle_segment('ke9ns_tr7', (0, 0, 236, 160), dbm)
+            self.assertEqual(a, c)
+            self.assertGreater(b, d)
+
+    def test_magic_eye_shadow_closes_monotonically_and_missing_signal_turns_it_off(self):
+        values = [eye_closure(dbm) for dbm in range(-150, 0)]
+        self.assertEqual(values, sorted(values))
+        self.assertEqual(eye_closure(-127), 0)
+        self.assertEqual(eye_closure(-73), 1)
+        for identifier in EYE_ARTWORK:
+            self.assertTrue(meter_asset_path(identifier).is_file())
+            a, b, c, d = eye_image_box(identifier, (0, 0, 236, 210))
+            self.assertLessEqual(d, 168)
+            circle, polygon = Mock(), Mock()
+            draw_eye_signal(identifier, (0, 0, 236, 210), -109, circle=circle, polygon=polygon)
+            self.assertEqual(polygon.call_count, 1)
+            draw_eye_signal(identifier, (0, 0, 236, 210), -73, circle=circle, polygon=polygon)
+            self.assertEqual(polygon.call_count, 1)
+            for missing in (None, float('nan'), float('inf')):
+                circle.reset_mock(); polygon.reset_mock()
+                draw_eye_signal(identifier, (0, 0, 236, 210), missing, circle=circle, polygon=polygon)
+                circle.assert_called_once(); polygon.assert_not_called()
+
+    def test_eye_glass_stays_transparent_and_signal_changes_do_not_rebake_it(self):
+        for identifier in EYE_ARTWORK:
+            cache = Mock()
+            cache._cached_texture.return_value = None
+            cache.surface_texture.return_value = (1, 236, 210)
+            with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_eye_signal') as signal:
+                ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 210), -121, None, Mock())
+                _, surface = cache.surface_texture.call_args.args
+                self.assertLess(surface.get_at((118, 84)).a, 255)
+                cache._cached_texture.return_value = (1, 236, 210)
+                ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 210), -73, None, Mock())
+                cache.surface_texture.assert_called_once()
+                self.assertEqual(signal.call_count, 2)
 
     def test_icom_fills_the_face_area_and_orange_keeps_its_approved_geometry(self):
         self.assertEqual(skin_image_box('flex_icom', (0, 0, 236, 160)), (0, 0, 236, 128))

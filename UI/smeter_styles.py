@@ -26,14 +26,14 @@ class MeterStyle:
 
 
 METER_STYLES = {
-    "flex_dx": MeterStyle("FLEX · DX101", "skin", 160, (0, 0, 0), (216, 225, 248), (62, 69, 78), (255, 48, 35), skin="flex_dx", scales=("S", "ARTWORK")),
-    "flex_icom": MeterStyle("FLEX · ICOM", "skin", 160, (0, 0, 0), (228, 235, 239), (50, 60, 65), (255, 255, 255), skin="flex_icom", scales=("S", "ARTWORK")),
-    "flex_orange": MeterStyle("FLEX · ORANGE", "skin", 160, (255, 154, 0), (28, 17, 8), (140, 82, 16), (255, 48, 35), skin="flex_orange", scales=("S", "ARTWORK")),
+    "flex_dx": MeterStyle("FLEX DX101 · HB9HSJ", "skin", 160, (0, 0, 0), (216, 225, 248), (62, 69, 78), (255, 48, 35), skin="flex_dx", scales=("S", "ARTWORK")),
+    "flex_icom": MeterStyle("FLEX ICOM · HB9HSJ", "skin", 160, (0, 0, 0), (228, 235, 239), (50, 60, 65), (255, 255, 255), skin="flex_icom", scales=("S", "ARTWORK")),
+    "flex_orange": MeterStyle("FLEX ORANGE · HB9HSJ", "skin", 160, (255, 154, 0), (28, 17, 8), (140, 82, 16), (255, 48, 35), skin="flex_orange", scales=("S", "ARTWORK")),
     "triple_black": MeterStyle("OBSIDIAN · RF LAB", "triple", 190, (10, 17, 22), (211, 230, 230), (60, 72, 80), (255, 82, 53), -31, 62, scales=("S", "dBm", "µV")),
     "triple_amber": MeterStyle("AMBER · RF LAB", "triple", 190, (27, 18, 10), (255, 191, 85), (117, 89, 43), (255, 224, 159), -31, 62, scales=("S", "dBm", "µV")),
     "triple_copper": MeterStyle("COPPER · RF LAB", "triple", 190, (183, 81, 20), (35, 23, 13), (95, 58, 32), (39, 23, 14), -31, 62, scales=("S", "dBm", "µV")),
-    "flex_dark": MeterStyle("FLEX · DARK", "skin", 160, (12, 30, 39), (222, 235, 237), (55, 75, 86), (255, 48, 35), skin="flex_dark", scales=("S", "ARTWORK")),
-    "flex_neon": MeterStyle("FLEX · NEON", "skin", 160, (0, 0, 0), (72, 214, 255), (53, 74, 94), (57, 255, 20), skin="flex_neon"),
+    "flex_dark": MeterStyle("FLEX DARK · HB9HSJ", "skin", 160, (12, 30, 39), (222, 235, 237), (55, 75, 86), (255, 48, 35), skin="flex_dark", scales=("S", "ARTWORK")),
+    "flex_neon": MeterStyle("FLEX NEON · HB9HSJ", "skin", 160, (0, 0, 0), (72, 214, 255), (53, 74, 94), (57, 255, 20), skin="flex_neon"),
     "led": MeterStyle("LED BAR", "led", 80, (8, 13, 17), (203, 226, 232), (48, 57, 64), (96, 221, 249)),
     "linear": MeterStyle("SLIDING POINTER", "linear", 80, (13, 20, 25), (204, 225, 230), (58, 69, 77), (255, 188, 79)),
     "classic": MeterStyle("CLASSIC IVORY", "radial", 160, (232, 223, 198), (45, 43, 38), (89, 92, 86), (155, 39, 28)),
@@ -46,6 +46,73 @@ SCALE_LABELS = ((-121, "1"), (-109, "3"), (-97, "5"), (-85, "7"),
                 (-73, "9"), (-53, "+20"), (-33, "+40"))
 SKIN_ASSET_DIR = Path(__file__).parent / "assets" / "smeters" / "flexible"
 SKIN_CALIBRATION = json.loads((SKIN_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
+COMMUNITY_ASSET_DIR = SKIN_ASSET_DIR.parent / "community"
+COMMUNITY_ARTWORK = json.loads((COMMUNITY_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
+EYE_ARTWORK = {key: data for key, data in COMMUNITY_ARTWORK.items() if data["kind"] == "eye"}
+for identifier, artwork in COMMUNITY_ARTWORK.items():
+    METER_STYLES[identifier] = MeterStyle(
+        artwork["name"], artwork["kind"], 210 if artwork["kind"] == "eye" else 160,
+        tuple(artwork["face"]), tuple(artwork["ink"]), (0, 0, 0),
+        tuple(artwork.get("needle_color", artwork.get("glow"))), skin=identifier,
+        scales=("S", "dBm") if artwork["kind"] == "eye" else ("S", "ARTWORK"))
+    if artwork["kind"] == "skin":
+        SKIN_CALIBRATION[identifier] = artwork
+
+
+def meter_asset_path(identifier):
+    """Resolve preserved artwork from its own publisher collection."""
+    artwork = COMMUNITY_ARTWORK.get(identifier) or SKIN_CALIBRATION[identifier]
+    directory = COMMUNITY_ASSET_DIR if identifier in COMMUNITY_ARTWORK else SKIN_ASSET_DIR
+    return directory / artwork["file"]
+
+
+def eye_closure(dbm):
+    """Close the shadow from S0 to S9, then brighten overlap above S9."""
+    if not isinstance(dbm, (int, float)) or not math.isfinite(dbm):
+        return 0.0
+    return max(0.0, min(1.0, (dbm + 127) / 54))
+
+
+def eye_image_box(identifier, box):
+    x0, y0, x1, y1 = box
+    left, top, right, bottom = EYE_ARTWORK[identifier]["crop"]
+    scale = min((x1 - x0) / (right - left), (y1 - y0) * .80 / (bottom - top))
+    width, height = max(1, round((right - left) * scale)), max(1, round((bottom - top) * scale))
+    x = round(x0 + (x1 - x0 - width) / 2)
+    return x, round(y0), x + width, round(y0) + height
+
+
+def draw_eye_signal(identifier, box, dbm, *, circle, polygon, glow=None):
+    """Original animated phosphor, drawn beneath the author's glass/housing."""
+    data = EYE_ARTWORK[identifier]
+    a, b, c, d = eye_image_box(identifier, box)
+    left, top, right, bottom = data["crop"]
+    scale = (c - a) / (right - left)
+    cx, cy = data["center"]
+    cx, cy = a + (cx - left) * scale, b + (cy - top) * (d - b) / (bottom - top)
+    radius = data["radius"] * scale
+    closure = eye_closure(dbm)
+    valid = isinstance(dbm, (int, float)) and math.isfinite(dbm)
+    if not valid:
+        circle(cx, cy, radius, (12, 24, 17))
+        return
+    # A vertex-colour gradient gives smooth phosphor without changing textures.
+    boost = max(0, min(1, (dbm + 73) / 60))
+    def glow_color(fraction):
+        intensity = (.48 + .30 * (1 - fraction) + .14 * closure + .08 * boost)
+        return tuple(round(channel * intensity) for channel in data["glow"])
+    if glow:
+        glow(cx, cy, radius, glow_color(0), glow_color(1))
+    else:
+        for step in range(16, 0, -1):
+            fraction = step / 16
+            circle(cx, cy, radius * fraction, glow_color(fraction))
+    if closure < 1:
+        gap = math.radians(140 * (1 - closure))
+        arc = [(cx + math.sin(-gap / 2 + gap * i / 48) * radius,
+                cy + math.cos(-gap / 2 + gap * i / 48) * radius) for i in range(49)]
+        polygon([(cx, cy), *arc], (8, 33, 17))
+    circle(cx, cy, radius * .11, (5, 12, 9))
 
 
 def dbm_to_microvolts(dbm):
@@ -109,6 +176,8 @@ def skin_needle_segment(style_id, box, dbm):
     scale_y = (bottom - top) / (source_bottom - source_top)
     px, py = skin["pivot"]
     tx, ty = skin_tip(style_id, dbm)
+    if skin.get("movement") == "vertical":
+        px, py = tx, skin["pivot"][1]
     # Conceal the pivot beneath the bitmap, ending before the RF readouts.
     # The original calibration tip retains its exact position on the artwork.
     clip_y = min(source_bottom, source_top + (box[1] + (box[3] - box[1]) * .80 - top) / scale_y)

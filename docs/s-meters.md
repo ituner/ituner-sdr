@@ -12,7 +12,7 @@ The gallery shows a moving demonstration signal, independent of the receiver.
 LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The expanded gallery has 14 designs across three pages. **More Designs** and
+The expanded gallery has 26 designs across five pages. **More Designs** and
 **Previous Designs** navigate without changing the selected preview or theme.
 Five entries use the actual PNG backgrounds from the Flexible S-Meter download
 bundles: DX101, ICOM, Orange, Dark and Neon. Their background files are retained
@@ -77,3 +77,28 @@ the original downloaded PNG skins with source attribution; their bundles contain
 no separate license text and no license is inferred. Their source configuration
 files and original calibration points are preserved in the research/deployment
 record, with runtime geometry in `calibration.json`.
+
+## Community faces and Magic Eye
+
+Twelve additional designs use unchanged source images from the OE3IDE and KE9NS
+downloads: FTDX-5000, FTDX-9000, Matrix, Star Trek, High Vis and Drake TR7, plus
+Magic Eye Black, Brass, Silver, Plain Black, Aero and Retro. Gallery titles
+include **OE3IDE** or **KE9NS** credits. Flexible titles credit **HB9HSJ** as their
+collection publisher; individual artists for those faces have not been verified.
+Titles shrink as needed to keep the callsign visible.
+
+Analog faces fill the available width; unused source padding is cropped at
+render time. The original scales and OE3IDE watermark remain intact. TR7 uses a
+vertical pointer on its horizontal ruler. Magic Eye preserves the artwork's
+aspect ratio and distinctive housing, filling the available height without an
+added grey frame. Its shadow closes continuously from S0 to S9; the phosphor
+brightens above S9. Missing signal turns the phosphor off and displays missing
+readings. Original transparent glass is cached above the dynamic glow. All
+bitmap faces are filtered once with Lanczos at final resolution.
+
+Magic Eye styles reclaim the Bandpass area like other tall meters. Their
+phosphor follows the receiver's existing smoothed RSSI; numeric S, dBm and 50 Ω
+RMS voltage readouts use the same signal. The source transmit-power/SWR
+cross-needle faces are retained in the download record, rather than shown as
+S-meters without corresponding telemetry. Artwork source and license status
+are documented in `UI/assets/smeters/community/SOURCE.md`.

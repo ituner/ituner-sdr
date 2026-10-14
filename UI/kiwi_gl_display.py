@@ -225,7 +225,8 @@ import theme_system
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
-                          skin_needle_segment, skin_source_bounds, s_label, voltage_label)
+                          skin_needle_segment, skin_source_bounds, s_label, voltage_label,
+                          meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal)
 
 
 LCD_NATIVE_W = 800
@@ -15692,13 +15693,16 @@ def draw_theme_panel(text_cache, editor):
             # A coloured title/lamp indicates selection without surrounding
             # the meter with the grey frame used by ordinary theme buttons.
             draw_logical_rect(*box, active_colors.background)
+            title = METER_STYLES[identifier].name
+            title_size = (navigation_label_size(text_cache, title, box[2] - box[0] - 24, 12)
+                          if isinstance(text_cache, TextCache) else 12)
             draw_text(text_cache, (box[0] + box[2]) / 2, box[1] + 17,
-                      METER_STYLES[identifier].name,
-                      active_colors.ready if selected else active_colors.text, 12, True, False, "cm")
+                      title,
+                      active_colors.ready if selected else active_colors.text, title_size, True, False, "cm")
             if selected:
                 draw_logical_circle(box[0] + 9, box[1] + 17, 3, active_colors.ready)
             face_box = ((box[0], box[1] + 32, box[2], box[3])
-                        if identifier != "flex_orange" and METER_STYLES[identifier].kind in ("skin", "triple")
+                        if identifier != "flex_orange" and METER_STYLES[identifier].kind in ("skin", "triple", "eye")
                         else (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - 10))
             draw_selected_smeter(text_cache, face_box,
                                  preview_dbm, theme=theme, style_id=identifier)
@@ -16161,7 +16165,7 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
         # Fixed dial typography must fit its face even at 120% app text size.
         size = max(1, round(size * 100 / theme_system.runtime_theme["text_scale_percent"]))
         draw_text(text_cache, x, y, content, color, size, True, False, anchor, family="Liberation Sans")
-    if style.kind in ("skin", "triple") and isinstance(text_cache, TextCache):
+    if style.kind in ("skin", "triple", "eye") and isinstance(text_cache, TextCache):
         draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
     draw_meter("precision" if style.kind == "skin" else identifier, box, dbm, peak_dbm,
@@ -16174,13 +16178,14 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     style = METER_STYLES[identifier]
     x0, y0, x1, y1 = box
     w, h = max(1, round(x1 - x0)), max(1, round(y1 - y0))
-    key = ("smeter-skin-fill-v4" if style.kind == "skin" else "smeter-face-borderless-v3", identifier, w, h)
+    bitmap = style.kind in ("skin", "eye")
+    key = ("smeter-artwork-v5" if bitmap else "smeter-face-borderless-v3", identifier, w, h)
     cached = text_cache._cached_texture(("surface", key))
     if cached is None:
         # Bitmap skins are filtered once at the actual screen resolution.
         # Supersampling them and then using GL_LINEAR to shrink a 3x texture
         # misses source pixels, producing ripples in fine scales and lettering.
-        factor = 1 if style.kind == "skin" else 3
+        factor = 1 if bitmap else 3
         surface = pygame.Surface((w * factor, h * factor), pygame.SRCALPHA)
         def point(x, y):
             return round(x * factor), round(y * factor)
@@ -16199,16 +16204,22 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
             px, py = point(x, y)
             left = px if anchor.startswith("l") else px - rendered.get_width() if anchor.startswith("r") else px - rendered.get_width() / 2
             surface.blit(rendered, (round(left), round(py - rendered.get_height() / 2)))
-        if style.kind == "skin":
-            surface.fill(style.face)
-            a, b, c, d = skin_image_box(identifier, (0, 0, w, h))
+        if bitmap:
+            if style.kind == "skin":
+                surface.fill(style.face)
+            image_box = eye_image_box if style.kind == "eye" else skin_image_box
+            a, b, c, d = image_box(identifier, (0, 0, w, h))
             try:
-                with PILImage.open(SKIN_ASSET_DIR / SKIN_CALIBRATION[identifier]["file"]) as original:
+                with PILImage.open(meter_asset_path(identifier)) as original:
                     # Composite transparency before filtering so transparent
                     # edge colours cannot bleed into the printed tick marks.
-                    matte = PILImage.new("RGBA", original.size, (*style.face, 255))
-                    matte.alpha_composite(original.convert("RGBA"))
-                    artwork = matte.crop(skin_source_bounds(identifier))
+                    if style.kind == "eye":
+                        # Glass must remain transparent over the live phosphor.
+                        artwork = original.convert("RGBA").crop(EYE_ARTWORK[identifier]["crop"])
+                    else:
+                        matte = PILImage.new("RGBA", original.size, (*style.face, 255))
+                        matte.alpha_composite(original.convert("RGBA"))
+                        artwork = matte.crop(skin_source_bounds(identifier))
                     resized = artwork.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
                     graphic = pygame.image.fromstring(resized.tobytes(), resized.size, "RGBA")
             except (pygame.error, OSError, ValueError):
@@ -16220,17 +16231,41 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
             draw_triple_meter(identifier, (0, 0, w, h), None, None,
                               rect=rect, line=line, circle=circle, text=text, dynamic=False)
         cached = text_cache.surface_texture(key, surface)
+    if style.kind == "eye":
+        draw_logical_rect(*box, style.face)
+        def polygon(points, color):
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glColor4f(*rgba(color))
+            GL.glBegin(GL.GL_TRIANGLE_FAN)
+            for point in points:
+                GL.glVertex2f(*logical_to_native(*point))
+            GL.glEnd()
+            GL.glEnable(GL.GL_TEXTURE_2D)
+        def glow(cx, cy, radius, center_color, edge_color):
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            GL.glBegin(GL.GL_TRIANGLE_FAN)
+            GL.glColor4f(*rgba(center_color))
+            GL.glVertex2f(*logical_to_native(cx, cy))
+            GL.glColor4f(*rgba(edge_color))
+            for index in range(97):
+                angle = math.tau * index / 96
+                GL.glVertex2f(*logical_to_native(cx + math.cos(angle) * radius,
+                                               cy + math.sin(angle) * radius))
+            GL.glEnd()
+            GL.glEnable(GL.GL_TEXTURE_2D)
+        draw_eye_signal(identifier, box, dbm, circle=draw_logical_circle, polygon=polygon, glow=glow)
     draw_textured_quad(cached[0], x0, y0, x1, y1, 0, 0, 1, 1)
     if style.kind == "triple":
         draw_triple_meter(identifier, box, dbm, peak_dbm, rect=draw_logical_rect,
                           line=draw_logical_line, circle=draw_logical_circle,
                           text=meter_text, face=False)
     else:
-        # Peak reference uses the same calibration as the live needle.
-        if isinstance(peak_dbm, (int, float)) and peak_dbm > (dbm if isinstance(dbm, (int, float)) else -127) + .75:
-            draw_logical_line(*skin_needle_segment(identifier, box, peak_dbm), (147, 156, 165, 150), 1)
-        draw_logical_line(*skin_needle_segment(identifier, box, dbm), (0, 0, 0, 90), 3)
-        draw_logical_line(*skin_needle_segment(identifier, box, dbm), style.needle, 1.4)
+        if style.kind == "skin":
+            # Peak reference uses the same calibration as the live needle.
+            if isinstance(peak_dbm, (int, float)) and peak_dbm > (dbm if isinstance(dbm, (int, float)) else -127) + .75:
+                draw_logical_line(*skin_needle_segment(identifier, box, peak_dbm), (147, 156, 165, 150), 1)
+            draw_logical_line(*skin_needle_segment(identifier, box, dbm), (0, 0, 0, 90), 3)
+            draw_logical_line(*skin_needle_segment(identifier, box, dbm), style.needle, 1.4)
         size = max(7, round(12 * min(w / 236, h / 160)))
         reading = "— dBm" if not isinstance(dbm, (int, float)) or not math.isfinite(dbm) else f"{dbm:.0f} dBm"
         meter_text((x0 + x1) / 2, y0 + h * .86,
