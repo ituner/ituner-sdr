@@ -14,6 +14,7 @@ from theme_system import (
     display_to_logical_x, new_theme, runtime_theme,
 )
 from ui_style import APP_UI_STYLE
+from theme_colors import shade_grid, recolor_family, transparency_percent, with_transparency
 import kiwi_gl_display as ui
 
 
@@ -26,6 +27,32 @@ class ThemeSystemTests(unittest.TestCase):
     def tearDown(self):
         apply_theme(DEFAULT_THEME)
         self.directory.cleanup()
+
+    def test_visual_color_math_preserves_family_boundary_and_alpha(self):
+        shades = shade_grid(0.0)
+        self.assertEqual(len(shades), 20)
+        self.assertTrue(all(red >= green and red >= blue for red, green, blue in shades))
+        colors = {
+            "surface": [40, 40, 40, 120],
+            "active_surface": [140, 140, 140, 220],
+            "text": [230, 230, 230],
+        }
+        updated = recolor_family(colors, ("surface", "active_surface"), 0.35)
+        self.assertEqual(updated["text"], colors["text"])
+        self.assertEqual(updated["surface"][3], 120)
+        self.assertEqual(updated["active_surface"][3], 220)
+        self.assertLess(sum(updated["surface"][:3]), sum(updated["active_surface"][:3]))
+        self.assertNotEqual(updated["surface"][:3], colors["surface"][:3])
+        self.assertEqual(colors["surface"], [40, 40, 40, 120])
+
+    def test_transparency_percent_input_maps_to_alpha(self):
+        self.assertEqual(with_transparency([1, 2, 3, 80], 0), [1, 2, 3, 255])
+        self.assertEqual(with_transparency([1, 2, 3, 80], 100), [1, 2, 3, 0])
+        self.assertEqual(transparency_percent(with_transparency([1, 2, 3, 80], 47)), 47)
+        with self.assertRaises(ValueError):
+            with_transparency([1, 2, 3, 80], 101)
+        with self.assertRaises(ValueError):
+            with_transparency([1, 2, 3], 50)
 
     def test_named_theme_survives_restart_and_updates_shared_style(self):
         custom = new_theme("Amber")
