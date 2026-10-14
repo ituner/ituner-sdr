@@ -2,7 +2,8 @@
 
 Open Display → Themes → S-Meters, or edit a theme and choose **S-Meter Design**.
 Select a preview and tap **Save Theme** to apply it. Editing a built-in theme
-creates a custom theme; name it in the Name section. An existing custom theme
+creates a custom theme with an unused name (New Theme, New Theme 2, etc.);
+you can rename it in the Name section. An existing custom theme
 is updated in place. Leaving without saving discards the meter selection.
 
 The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer

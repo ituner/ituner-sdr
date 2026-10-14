@@ -6,7 +6,7 @@ from smeter_styles import METER_STYLES
 
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX,
-                          color_hex, is_builtin_theme_id, new_theme)
+                          color_hex, is_builtin_theme_id)
 
 
 COLOR_GROUPS = (
@@ -154,7 +154,7 @@ class ThemeEditor:
         self.notice_until = time.monotonic() + self.notice_duration
 
     def begin(self, theme=None):
-        self.draft = new_theme(source=theme) if theme is None else {
+        self.draft = self.library.new_theme(source=theme) if theme is None else {
             **theme, "colors": {key: list(value) for key, value in theme["colors"].items()},
         }
         self.mode = "edit"
@@ -219,7 +219,7 @@ class ThemeEditor:
                             self.confirm_delete_id = None
                     elif action.startswith("edit:"):
                         self.confirm_delete_id = None
-                        self.begin(new_theme(source=item) if is_builtin_theme_id(identifier) else item)
+                        self.begin(self.library.new_theme(source=item) if is_builtin_theme_id(identifier) else item)
                     elif is_builtin_theme_id(identifier):
                         self.confirm_delete_id = None
                         self.notify("LOCKED", "BUILT-IN THEME")
@@ -237,7 +237,7 @@ class ThemeEditor:
                         self.confirm_delete_id = identifier
                         self.notify("CONFIRM", f"DELETE {item['name']}")
             elif action == "meters":
-                self.begin(new_theme(source=self.selected) if is_builtin_theme_id(self.selected_id) else self.selected)
+                self.begin(self.library.new_theme(source=self.selected) if is_builtin_theme_id(self.selected_id) else self.selected)
                 self.section = "METERS"
             elif action == "new":
                 self.begin()

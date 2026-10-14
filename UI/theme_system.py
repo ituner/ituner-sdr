@@ -211,6 +211,16 @@ class ThemeLibrary:
             return normalize_theme(BUILTIN_THEMES[identifier], allow_default=True)
         return next((theme for theme in self.themes if theme["id"] == identifier), None)
 
+    def new_theme(self, source=None):
+        """Give each new editor draft a name that can be saved immediately."""
+        used_names = {item["name"].casefold()
+                      for item in (*BUILTIN_THEMES.values(), *self.themes)}
+        name, suffix = "New Theme", 2
+        while name.casefold() in used_names:
+            name = f"New Theme {suffix}"
+            suffix += 1
+        return new_theme(name, source=source)
+
     def load(self):
         try:
             document = json.loads(self.path.read_text(encoding="utf-8"))
