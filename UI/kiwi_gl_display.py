@@ -444,6 +444,9 @@ SPECTRUM_RAISE_Y = 12
 WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
 RADIOGARDEN_DRAG_GAIN = 1.0
+# The CM5 panel benefits from a little more geographic travel per finger
+# movement. Desktop mouse dragging keeps the exact 1:1 gain above.
+RADIOGARDEN_TOUCH_DRAG_GAIN = 1.3
 RADIOGARDEN_ZOOM_MIN = 0.55
 RADIOGARDEN_ZOOM_MAX = 1200.0
 # Six taps traverse the complete map scale from the global overview to the
@@ -13736,12 +13739,12 @@ def radiogarden_radius(box, scale):
     return base * max(RADIOGARDEN_ZOOM_MIN, float(scale))
 
 
-def radiogarden_pan_angles(yaw, pitch, dx, dy, box, scale):
+def radiogarden_pan_angles(yaw, pitch, dx, dy, box, scale, gain=RADIOGARDEN_DRAG_GAIN):
     """Keep a one-pixel drag close to one map pixel at every zoom level."""
     radius = max(1.0, radiogarden_radius(box, scale))
-    yaw = (yaw - RADIOGARDEN_DRAG_GAIN * dx / radius + math.pi) % math.tau - math.pi
+    yaw = (yaw - gain * dx / radius + math.pi) % math.tau - math.pi
     pitch = clamp(
-        pitch + RADIOGARDEN_DRAG_GAIN * dy / radius,
+        pitch + gain * dy / radius,
         math.radians(-82), math.radians(82),
     )
     return yaw, pitch
@@ -14037,7 +14040,7 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
     )
     # The base globe stays sharp; skip HD tile traversal/draws during fast swipes.
     # Cached tiles remain available when motion slows, without another download.
-    if not fast_motion and globe_hd_tiles_enabled() and scale >= 1.5:
+    if not interactive and globe_hd_tiles_enabled() and scale >= 1.5:
         draw_receiver_map_satellite_tiles(
             text_cache, center_lon, center_lat, box, scale, interactive,
             sun_lon, sun_lat,
@@ -14159,7 +14162,7 @@ def receiver_map_dot_pixels(scale):
 
 
 _receiver_map_render_cache = None
-GLOBE_MOVING_MARKER_BUDGET = 300
+GLOBE_MOVING_MARKER_BUDGET = 180
 
 
 def receiver_map_render_rows(receivers, selected_server, pending_server, interactive):
@@ -14169,10 +14172,19 @@ def receiver_map_render_rows(receivers, selected_server, pending_server, interac
     A content signature also notices in-place coordinate or type edits.
     """
     global _receiver_map_render_cache
-    signature = tuple((r.get("server"), r.get("lat"), r.get("lon"),
-                       r.get("receiver_type")) for r in receivers)
     cache = _receiver_map_render_cache
-    if cache is None or cache[0] is not receivers or cache[1] != signature or cache[2] != LOCAL_KIWI_SERVER:
+    rebuild = cache is None or cache[0] is not receivers or cache[2] != LOCAL_KIWI_SERVER
+    # Directory refreshes replace the receiver list. While the same list is
+    # moving, reuse its stable metadata instead of rebuilding an O(N)
+    # signature 60 times per second. A stationary frame still notices an
+    # unusual in-place metadata update and refreshes the cache immediately.
+    if rebuild or not interactive:
+        signature = tuple((r.get("server"), r.get("lat"), r.get("lon"),
+                           r.get("receiver_type")) for r in receivers)
+        rebuild = rebuild or cache[1] != signature
+    else:
+        signature = cache[1]
+    if rebuild:
         rows = tuple((r, receiver_map_group(r), receiver_server_key(r.get("server"))) for r in receivers)
         by_key = {}
         for row in rows:
@@ -27192,6 +27204,7 @@ def main():
                                         picker_map_start_yaw, picker_map_start_pitch,
                                         x - start_x, y - start_y,
                                         PICKER_MAP_BOX, picker_map_scale,
+                                        gain=RADIOGARDEN_TOUCH_DRAG_GAIN,
                                     )
                                     # Follow the latest touch position directly. Event-dependent
                                     # easing made a slow frame fall further behind the finger.
