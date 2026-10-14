@@ -1770,7 +1770,7 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
-    global DISPLAY_RESET_BOX, DISPLAY_LAYOUT_BOXES
+    global DISPLAY_RESET_BOX, DISPLAY_THEME_BOX, DISPLAY_LAYOUT_BOXES
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1808,6 +1808,7 @@ def configure_popup_layout():
     DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
+    DISPLAY_THEME_BOX = (0, 0, 0, 0)
     DISPLAY_LAYOUT_BOXES = ()
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
@@ -1832,7 +1833,9 @@ def configure_popup_layout():
         palette_y1 = palette_y0 + small_h
         rate_y0 = palette_y1 + section_gap + 24
         layout_y0 = rate_y0 + small_h + section_gap + 24
-        reset_y0 = layout_y0 + small_h + section_gap
+        theme_y0 = layout_y0 + small_h + section_gap
+        reset_y0 = theme_y0 + tile_h + section_gap
+        DISPLAY_THEME_BOX = (inner_x0, theme_y0, inner_x1, theme_y0 + tile_h)
         DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y0 + tile_h)
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
@@ -2500,7 +2503,6 @@ SETTINGS_MENU_ITEMS = (
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
-    ("theme", "THEME"),
     ("settings_back", "BACK"),
 )
 DIGITAL_MENU_ITEMS = (
@@ -2518,7 +2520,6 @@ SETTINGS_MENU_SUBTITLES = {
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
     "system": "LOCATION & FAN",
-    "theme": "COLORS",
 }
 
 
@@ -9563,6 +9564,8 @@ def display_option_at(x, y):
         return "close", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
+    if LCD_800_MODE and contains(DISPLAY_THEME_BOX, x, y):
+        return "theme", None
     if LCD_800_MODE:
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
@@ -14659,6 +14662,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
+        draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEME", "COLORS & LAYOUT")
         draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
                                 DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
                                 "FREQUENCY POSITION")
@@ -16198,6 +16202,7 @@ def navigation_parent(items, kind):
 NAVIGATION_SURFACES = frozenset({
     "home",
     "settings",
+    "display",
     "receivers",
     "info",
     "apps",
@@ -25233,11 +25238,12 @@ def main():
 
     def restore_navigation_parent(parent):
         """Close a leaf and restore the screen that opened it."""
-        nonlocal settings_menu_open, digital_menu_open
+        nonlocal settings_menu_open, digital_menu_open, display_setup_open
         nonlocal picker_open, picker_map_open, receiver_home_panel_open, tests_panel_open
         nonlocal audio_panel_open, frequency_drawer_open, radio_setup_open, wspr_panel_open
         target = navigation_back_surface(parent)
         settings_menu_open = target == "settings"
+        display_setup_open = target == "display"
         digital_menu_open = False
         picker_open = target == "receivers"
         if picker_open:
@@ -28420,6 +28426,11 @@ def main():
                                     if kind == "close":
                                         display_setup_open = False
                                         restore_navigation_parent(display_parent)
+                                    elif kind == "theme":
+                                        display_setup_open = False
+                                        theme_editor.open = True
+                                        theme_editor.mode = "browse"
+                                        theme_editor.selected_id = theme_editor.library.active_id
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -28540,7 +28551,7 @@ def main():
                                     write_remembered_view(force=True)
                                 refresh_receiver_list_theme()
                                 if not theme_editor.open:
-                                    restore_navigation_parent("settings")
+                                    restore_navigation_parent("display")
                             wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
