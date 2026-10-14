@@ -58,6 +58,15 @@ for identifier, artwork in COMMUNITY_ARTWORK.items():
     if artwork["kind"] == "skin":
         SKIN_CALIBRATION[identifier] = artwork
 
+# Keep existing gallery positions stable, including LED BAR on page two.
+for identifier, title, face, ink in (
+        ("flex_vintage", "FLEX VINTAGE · HB9HSJ", (236, 238, 225), (34, 43, 38)),
+        ("flex_vintage_hd", "FLEX VINTAGE HD · HB9HSJ", (236, 238, 225), (34, 43, 38)),
+        ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240))):
+    METER_STYLES[identifier] = MeterStyle(
+        title, "skin", 160, face, ink, (55, 65, 70),
+        tuple(SKIN_CALIBRATION[identifier]["needle_color"]), skin=identifier)
+
 
 def meter_asset_path(identifier):
     """Resolve preserved artwork from its own publisher collection."""

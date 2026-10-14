@@ -170,6 +170,16 @@ class MeterTests(unittest.TestCase):
                 cache.surface_texture.assert_called_once()
                 self.assertEqual(signal.call_count, 2)
 
+    def test_transparent_skin_keeps_background_clear_and_printed_scale_visible(self):
+        cache = Mock()
+        cache._cached_texture.return_value = None
+        cache.surface_texture.return_value = (1, 236, 160)
+        with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line'):
+            ui.draw_cached_smeter(cache, 'flex_transparent', (0, 0, 236, 160), -73, None, Mock())
+            _, surface = cache.surface_texture.call_args.args
+            self.assertEqual(surface.get_at((118, 140)).a, 0)
+            self.assertGreater(ui.pygame.mask.from_surface(surface, 32).count(), 0)
+
     def test_icom_fills_the_face_area_and_orange_keeps_its_approved_geometry(self):
         self.assertEqual(skin_image_box('flex_icom', (0, 0, 236, 160)), (0, 0, 236, 128))
         self.assertEqual(skin_source_bounds('flex_icom'), (17, 15, 464, 186))

@@ -240,9 +240,10 @@ sudo reboot
 
 ## S-meter designs
 
-Display → Themes → S-Meters offers 26 designs with moving previews, including
-original Flexible, OE3IDE and KE9NS faces, six animated Magic Eye styles,
-and black, amber and copper instruments with S, dBm and µV scales. Tall meters reclaim the Home Bandpass panel's space.
+Display → Themes → S-Meters offers 29 designs with moving previews, including
+Flexible faces such as Vintage HD, OE3IDE and KE9NS faces, six animated Magic
+Eye styles, and black, amber and copper instruments with S, dBm and µV scales.
+Tall meters reclaim the Home Bandpass panel's space.
 Flexible faces fill the rail width and use sharper resizing without an added
 grey border. See [meter selection, calibration and artwork sources](docs/s-meters.md).
 

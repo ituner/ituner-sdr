@@ -16179,6 +16179,7 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     x0, y0, x1, y1 = box
     w, h = max(1, round(x1 - x0)), max(1, round(y1 - y0))
     bitmap = style.kind in ("skin", "eye")
+    transparent_skin = style.kind == "skin" and SKIN_CALIBRATION[identifier].get("transparent_background", False)
     key = ("smeter-artwork-v5" if bitmap else "smeter-face-borderless-v3", identifier, w, h)
     cached = text_cache._cached_texture(("surface", key))
     if cached is None:
@@ -16205,7 +16206,7 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
             left = px if anchor.startswith("l") else px - rendered.get_width() if anchor.startswith("r") else px - rendered.get_width() / 2
             surface.blit(rendered, (round(left), round(py - rendered.get_height() / 2)))
         if bitmap:
-            if style.kind == "skin":
+            if style.kind == "skin" and not transparent_skin:
                 surface.fill(style.face)
             image_box = eye_image_box if style.kind == "eye" else skin_image_box
             a, b, c, d = image_box(identifier, (0, 0, w, h))
@@ -16213,9 +16214,11 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
                 with PILImage.open(meter_asset_path(identifier)) as original:
                     # Composite transparency before filtering so transparent
                     # edge colours cannot bleed into the printed tick marks.
-                    if style.kind == "eye":
-                        # Glass must remain transparent over the live phosphor.
-                        artwork = original.convert("RGBA").crop(EYE_ARTWORK[identifier]["crop"])
+                    if style.kind == "eye" or transparent_skin:
+                        # Glass and clear skins retain their transparent background.
+                        bounds = (EYE_ARTWORK[identifier]["crop"] if style.kind == "eye"
+                                  else skin_source_bounds(identifier))
+                        artwork = original.convert("RGBA").crop(bounds)
                     else:
                         matte = PILImage.new("RGBA", original.size, (*style.face, 255))
                         matte.alpha_composite(original.convert("RGBA"))
