@@ -11,7 +11,7 @@ The display is 1280 × 800 logical pixels. New Theme and Edit Theme use the full
 
 ## Theme Library
 
-The Library opens from Settings → Theme. Its first row presents the three built-in themes as large preview cards. Saved custom themes follow in a scrollable/pageable card grid. Each card shows the theme name, button corner shape, representative colors, and active state. Touching the body of a card applies it immediately and persists the active choice. Each custom card has separate **Edit** and **Delete** actions. Built-in cards have **Customize**, which starts a new custom copy; they cannot be overwritten or deleted. **New Theme** creates a draft based on the currently active theme. Back returns to Settings.
+The Library opens from **Display → Theme**. Theme is removed from the Settings menu and appears as a 236 × 64 px button in the Display rail, above **Reset Display**, which remains the final action before Back. Its first row presents the three built-in themes as large preview cards. Saved custom themes follow in a scrollable/pageable card grid. Each card shows the theme name, button corner shape, representative colors, and active state. Touching the body of a card applies it immediately and persists the active choice. Each custom card has separate **Edit** and **Delete** actions. Built-in cards have **Customize**, which starts a new custom copy; they cannot be overwritten or deleted. **New Theme** creates a draft based on the currently active theme. Back from the Library returns to Display.
 
 Delete requires an explicit, persistent confirmation tied to the selected custom theme. Theme-applied, saved, deleted, and error notices use the existing green analog-TV/Zoom notification style in its usual position. A failed save or delete leaves the current screen and draft intact and shows the error.
 
@@ -37,7 +37,7 @@ Entering the editor captures the previously active, persisted theme and starts a
 
 **Save Theme** validates a nonempty, unique name of at most 32 characters and atomically saves/activates the draft using the existing version-1 theme library. Saving a built-in customization writes a new custom ID; editing an existing custom theme keeps its ID. After a successful save, the editor returns to the Library with the saved card active. An error retains the draft and the editor.
 
-Back from an unchanged editor returns to the Library immediately. Back with unsaved changes opens a persistent modal with **Save & Leave**, **Discard & Leave**, and **Keep Editing**. Save & Leave follows the same validation and persistence path as Save Theme, then returns to the Library. Discard & Leave restores the theme that was active on entry and returns to the Library; it does not modify the theme file. Keep Editing closes only the modal. The modal blocks underlying controls, has touch-sized buttons, and cannot expire like a transient notice. A name change, color change, layout choice, units choice, or text-size choice marks the draft dirty; returning each value to its starting value clears the indicator. Back from the Library returns to Settings without this modal.
+Back from an unchanged editor returns to the Library immediately. Back with unsaved changes opens a persistent modal with **Save & Leave**, **Discard & Leave**, and **Keep Editing**. Save & Leave follows the same validation and persistence path as Save Theme, then returns to the Library. Discard & Leave restores the theme that was active on entry and returns to the Library; it does not modify the theme file. Keep Editing closes only the modal. The modal blocks underlying controls, has touch-sized buttons, and cannot expire like a transient notice. A name change, color change, layout choice, units choice, or text-size choice marks the draft dirty; returning each value to its starting value clears the indicator. Back from the Library returns to Display without this modal.
 
 ## Architecture and data contracts
 
@@ -48,6 +48,7 @@ The semantic family map is a view over existing palette keys, not a second persi
 ## Verification and acceptance
 
 - All three built-in cards appear; a card applies and survives restart; Customize creates a custom copy. Existing version-1 custom themes still load.
+- Theme appears under Display, not Settings. Reset Display remains the last Display action before Back. Leaving the Theme Library returns to Display.
 - New and Edit use the full 1280 × 800 canvas; Back remains at `(1034, 728, 1270, 792)`; preview, picker, and confirmation touch areas have no overlap.
 - Hue/shade selection changes the selected part live. Apply Matching Shades changes only the selected family and preserves its member colors' relative contrast. Hue/shade selection preserves alpha. Transparency accepts 0–100 only and round-trips through save/reload within one percentage point.
 - The three preview scenes show the expected component states. A preview tap selects a family without controlling the real receiver. Straight corners, sidebar position, units, and 80–120% text scaling preview and apply live.
