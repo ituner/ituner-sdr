@@ -30,6 +30,7 @@ import html
 import io
 import wave
 from pathlib import Path
+from PIL import Image as PILImage
 from urllib.parse import urlencode, urlparse
 import ipaddress
 from urllib.request import Request, urlopen
@@ -222,6 +223,9 @@ import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
+from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
+                          draw_meter, draw_triple_meter, skin_image_box,
+                          skin_needle_segment, s_label, voltage_label)
 
 
 LCD_NATIVE_W = 800
@@ -9558,11 +9562,18 @@ def draw_radio_setup_panel(
         draw_radio_option(text_cache, box, label, option == step_hz)
 
 
+def lcd_display_themes_box():
+    x0, _y0, x1, y1 = DISPLAY_RESET_BOX
+    return x0, y1 + 16, x1, y1 + 80
+
+
 def display_option_at(x, y):
     if LCD_800_MODE and contains(lcd_display_drawer_close_box(), x, y):
         return "close", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
+    if LCD_800_MODE and contains(lcd_display_themes_box(), x, y):
+        return "themes", None
     if LCD_800_MODE:
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
@@ -14659,6 +14670,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
+        draw_lcd_audio_tile(text_cache, lcd_display_themes_box(), "THEMES", "COLORS & S-METERS")
         draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
                                 DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
                                 "FREQUENCY POSITION")
@@ -15635,6 +15647,8 @@ def draw_theme_panel(text_cache, editor):
     theme = editor.preview
     colors = theme["colors"]
     active_colors = APP_UI_STYLE.palette
+    meter_gallery = editor.mode == "edit" and editor.section == "METERS"
+    preview_dbm = -89 + 31 * math.sin(time.monotonic() * .9) if meter_gallery else -85
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, active_colors.background)
     draw_logical_rect(512, 0, 1024, LOGICAL_H, active_colors.section_surface)
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, active_colors.sidebar)
@@ -15647,13 +15661,14 @@ def draw_theme_panel(text_cache, editor):
     for action, box in boxes.items():
         if action == "back":
             draw_styled_text_button(text_cache, box, "BACK")
-        elif action in ("new", "save", "previous", "next"):
-            label = {"new": "NEW THEME", "save": "SAVE THEME",
-                     "previous": "PREVIOUS", "next": "NEXT"}[action]
+        elif action in ("new", "meters", "save", "previous", "next", "meter_previous", "meter_next"):
+            label = {"new": "NEW THEME", "meters": "S-METERS", "save": "SAVE THEME",
+                     "previous": "PREVIOUS", "next": "NEXT",
+                     "meter_previous": "PREVIOUS DESIGNS", "meter_next": "MORE DESIGNS"}[action]
             draw_styled_text_button(text_cache, box, label)
         elif action.startswith("section:"):
             name = action.split(":")[1]
-            label = {"UNITS": "UNITS & TEXT SIZE", "SIDEBAR": "SIDEBAR POSITION"}.get(name, name)
+            label = {"METERS": "S-METER DESIGN", "UNITS": "UNITS & TEXT SIZE", "SIDEBAR": "SIDEBAR POSITION"}.get(name, name)
             draw_styled_text_button(text_cache, box, label, active=editor.section == name)
         elif action.startswith("theme:"):
             index = editor.page * 7 + int(action.split(":")[1])
@@ -15671,6 +15686,13 @@ def draw_theme_panel(text_cache, editor):
                     text_cache, box, "DELETE" if deleting else "EDIT",
                     danger=deleting and editor.confirm_delete_id == editor.themes[index]["id"],
                 )
+        elif action.startswith("meter:"):
+            identifier = action.split(":")[1]
+            visual = draw_styled_button_frame(box, active=theme["smeter_style"] == identifier)
+            draw_text(text_cache, (box[0] + box[2]) / 2, box[1] + 17,
+                      METER_STYLES[identifier].name, visual.text, 12, True, False, "cm")
+            draw_selected_smeter(text_cache, (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - 10),
+                                 preview_dbm, theme=theme, style_id=identifier)
         elif action.startswith("option:"):
             name = action.split(":")[1]
             selected = (name == theme["sidebar"] or name == theme["units"]
@@ -15740,12 +15762,29 @@ def draw_theme_panel(text_cache, editor):
               preview_size(36), True, False, "cm", family=APP_UI_STYLE.button.font_family)
     draw_text(text_cache, (px0 + px1) / 2, 177, "MW  AM", colors["secondary_text"],
               preview_size(13), True, False, "cm")
-    draw_logical_rect(px0 + 16, 218, px1 - 16, 304, colors["section_surface"])
-    draw_text(text_cache, px0 + 24, 237, "S-METER", colors["section_heading"], preview_size(13), True, False, "lm")
-    for index in range(35):
-        x = px0 + 24 + index * 11.7
-        draw_logical_rect(x, 258, x + 8, 284,
-                          colors["meter_on"] if index < 19 else colors["meter_off"])
+    if meter_gallery:
+        meter_height = METER_STYLES[theme["smeter_style"]].height * 1.5
+        draw_selected_smeter(text_cache, (76, 210, 436, 210 + meter_height),
+                             preview_dbm, theme=theme)
+        draw_text(text_cache, 256, 568, METER_STYLES[theme["smeter_style"]].name,
+                  colors["text"], 20, True, False, "cm")
+        detail = ("ORIGINAL FLEXIBLE S-METER FACE" if METER_STYLES[theme["smeter_style"]].kind == "skin"
+                  else "S · dBm · µV RMS / 50 Ω" if METER_STYLES[theme["smeter_style"]].kind == "triple"
+                  else "MOVING SIGNAL PREVIEW")
+        draw_text(text_cache, 256, 608, detail, colors["section_heading"],
+                  13, True, False, "cm")
+        footnote = ("RX NEEDLE DRIVES THE S SCALE" if METER_STYLES[theme["smeter_style"]].kind == "skin"
+                    else "TALL DIALS HIDE THE BANDPASS PANEL")
+        draw_text(text_cache, 256, 645, footnote,
+                  colors["secondary_text"], 12, False, False, "cm")
+        draw_text(text_cache, 256, 683, "SAVE THEME TO APPLY", colors["secondary_text"],
+                  13, True, False, "cm")
+        draw_text(text_cache, 768, 65,
+                  f"DESIGNS {editor.meter_page + 1} / {(len(METER_STYLES) + 5) // 6}",
+                  active_colors.secondary_text, 12, False, False, "cm")
+        return
+    draw_selected_smeter(text_cache, (px0 + 16, 198, px1 - 16, 314),
+                         -85, -73, theme=theme)
     for index, (label, fill_key, border_key) in enumerate((
         ("NORMAL", "surface", "border"),
         ("ACTIVE", "active_surface", "active_border"),
@@ -15834,7 +15873,8 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     # 15% reduction keeps the group calm without making the labels fussy.
     gap = 4
     compact_cell_h = 31
-    grid_y0 = LCD_COMPACT_MODE_GRID_TOP if show_compact_readouts else 28
+    grid_y0 = (LCD_COMPACT_MODE_GRID_TOP + smeter_rail_extra_height()
+               if show_compact_readouts else 28)
     return grid_y0, compact_cell_h, gap
 
 
@@ -16096,10 +16136,108 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
     draw_radio_close_button(text_cache, boxes["exit"])
 
 
+def smeter_rail_extra_height():
+    return METER_STYLES[theme_system.runtime_theme["smeter_style"]].height - LCD_COMPACT_SMETER_HEIGHT
+
+
+def home_bandpass_visible():
+    return smeter_rail_extra_height() == 0
+
+
+def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, style_id=None):
+    theme = theme or theme_system.runtime_theme
+    identifier = style_id or theme["smeter_style"]
+    style = METER_STYLES[identifier]
+    def meter_text(x, y, content, color, size, anchor):
+        # Fixed dial typography must fit its face even at 120% app text size.
+        size = max(1, round(size * 100 / theme_system.runtime_theme["text_scale_percent"]))
+        draw_text(text_cache, x, y, content, color, size, True, False, anchor, family="Liberation Sans")
+    if style.kind in ("skin", "triple") and isinstance(text_cache, TextCache):
+        draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
+        return
+    draw_meter("precision" if style.kind == "skin" else identifier, box, dbm, peak_dbm,
+               rect=draw_logical_rect, line=draw_logical_line,
+               circle=draw_logical_circle, text=meter_text, palette=theme["colors"])
+
+
+def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
+    """Bake detailed faces once; only needles and readouts change each frame."""
+    style = METER_STYLES[identifier]
+    x0, y0, x1, y1 = box
+    w, h = max(1, round(x1 - x0)), max(1, round(y1 - y0))
+    key = ("smeter-skin-native-v3" if style.kind == "skin" else "smeter-face-v2", identifier, w, h)
+    cached = text_cache._cached_texture(("surface", key))
+    if cached is None:
+        # Bitmap skins are filtered once at the actual screen resolution.
+        # Supersampling them and then using GL_LINEAR to shrink a 3x texture
+        # misses source pixels, producing ripples in fine scales and lettering.
+        factor = 1 if style.kind == "skin" else 3
+        surface = pygame.Surface((w * factor, h * factor), pygame.SRCALPHA)
+        def point(x, y):
+            return round(x * factor), round(y * factor)
+        def rect(a, b, c, d, color):
+            left, top = point(a, b)
+            right, bottom = point(c, d)
+            pygame.draw.rect(surface, color, pygame.Rect(left, top, max(0, right - left), max(0, bottom - top)))
+        def line(a, b, c, d, color, width=1):
+            pygame.draw.line(surface, color, point(a, b), point(c, d), max(1, round(width * factor)))
+        def circle(cx, cy, radius, color, **kwargs):
+            pygame.draw.circle(surface, color, point(cx, cy), max(1, round(radius * factor)))
+        def text(x, y, content, color, size, anchor="cm"):
+            font_size = max(1, round(size * factor * 100 / theme_system.runtime_theme["text_scale_percent"]))
+            font = text_cache.font(font_size, bold=True, family="Liberation Sans")
+            rendered = font.render(content, True, color)
+            px, py = point(x, y)
+            left = px if anchor.startswith("l") else px - rendered.get_width() if anchor.startswith("r") else px - rendered.get_width() / 2
+            surface.blit(rendered, (round(left), round(py - rendered.get_height() / 2)))
+        if style.kind == "skin":
+            surface.fill(style.face)
+            a, b, c, d = skin_image_box(identifier, (0, 0, w, h))
+            try:
+                with PILImage.open(SKIN_ASSET_DIR / SKIN_CALIBRATION[identifier]["file"]) as original:
+                    # Composite transparency before filtering so transparent
+                    # edge colours cannot bleed into the printed tick marks.
+                    matte = PILImage.new("RGBA", original.size, (*style.face, 255))
+                    matte.alpha_composite(original.convert("RGBA"))
+                    resized = matte.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
+                    graphic = pygame.image.fromstring(resized.tobytes(), resized.size, "RGBA")
+            except (pygame.error, OSError, ValueError):
+                # A damaged/missing asset must not interrupt the live receiver.
+                draw_selected_smeter(text_cache, box, dbm, peak_dbm, style_id="precision")
+                return
+            surface.blit(graphic, point(a, b))
+        else:
+            draw_triple_meter(identifier, (0, 0, w, h), None, None,
+                              rect=rect, line=line, circle=circle, text=text, dynamic=False)
+        cached = text_cache.surface_texture(key, surface)
+    draw_textured_quad(cached[0], x0, y0, x1, y1, 0, 0, 1, 1)
+    if style.kind == "triple":
+        draw_triple_meter(identifier, box, dbm, peak_dbm, rect=draw_logical_rect,
+                          line=draw_logical_line, circle=draw_logical_circle,
+                          text=meter_text, face=False)
+    else:
+        # Peak reference uses the same calibration as the live needle.
+        if isinstance(peak_dbm, (int, float)) and peak_dbm > (dbm if isinstance(dbm, (int, float)) else -127) + .75:
+            draw_logical_line(*skin_needle_segment(identifier, box, peak_dbm), (147, 156, 165, 150), 1)
+        draw_logical_line(*skin_needle_segment(identifier, box, dbm), (0, 0, 0, 90), 3)
+        draw_logical_line(*skin_needle_segment(identifier, box, dbm), style.needle, 1.4)
+        size = max(7, round(12 * min(w / 236, h / 160)))
+        reading = "— dBm" if not isinstance(dbm, (int, float)) or not math.isfinite(dbm) else f"{dbm:.0f} dBm"
+        meter_text((x0 + x1) / 2, y0 + h * .86,
+                   f"{s_label(dbm)}   {reading}", style.ink, size, "cm")
+        meter_text((x0 + x1) / 2, y0 + h * .945,
+                   voltage_label(dbm) + " RMS · 50 Ω", style.ink, max(7, size - 1), "cm")
+
+
 def lcd_home_volume_box(show_compact_readouts=True):
     """Persistent Home volume instrument in the calm upper right-rail gap."""
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
+    if not home_bandpass_visible():
+        if show_compact_readouts:
+            pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)[1]
+        else:
+            pass_y1 = lcd_home_bandwidth_box(False)[1] + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
     y0 = pass_y1 + 16
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 12, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
@@ -16146,7 +16284,7 @@ def lcd_compact_smeter_box():
     """Short S-meter strip that leaves room for the full Home Volume block."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     top = y0 + LCD_COMPACT_SMETER_TOP
-    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_COMPACT_SMETER_HEIGHT
+    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height()
 
 
 def left_smeter_trace_x(text_cache, freq_khz, font_family=None):
@@ -16296,6 +16434,9 @@ def compact_smeter_label(dbm):
 def draw_lcd_home_smeter(text_cache, smeter_dbm):
     """A small live, calibrated RF reading for the persistent Home rail."""
     x0, y0, x1, y1 = lcd_home_smeter_box()
+    if theme_system.runtime_theme["smeter_style"] != "led":
+        draw_selected_smeter(text_cache, (x0, y0, x1, y1), smeter_dbm)
+        return
     dbm = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
     live_segments = smeter_segment_position(dbm)
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
@@ -16614,30 +16755,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
             draw_nav_status_led(nav_box, True)
 
 
-def draw_lcd_compact_smeter(text_cache, box, smeter_dbm):
-    """Draw the compact calibrated LED meter in the right rail."""
-    meter_x0, meter_y0, meter_x1, meter_y1 = box
-    meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
-    meter_level = smeter_segment_position(meter_value)
-    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, APP_UI_STYLE.palette.section_surface)
-    draw_section_divider(meter_x0, meter_y0, meter_x1)
-    draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", themed_instrument_color("smeter_dbm", (190, 218, 223)), 13, True, False, "rm", family="Liberation Sans")
-    meter_track_x0 = meter_x0 + ((meter_x1 - meter_x0) - (35 * 4.65 + 34 * 2)) / 2
-    meter_track_y = meter_y0 + 25
-    for index in range(35):
-        sx0 = meter_track_x0 + index * (4.65 + 2)
-        sx1 = sx0 + 4.65
-        active = index + 0.5 <= meter_level
-        color = APP_UI_STYLE.palette.meter_on if index < 28 else APP_UI_STYLE.palette.meter_hot
-        draw_logical_rect(
-            sx0, meter_track_y, sx1, meter_track_y + 26,
-            color if active else APP_UI_STYLE.palette.meter_off,
-        )
-    for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
-        lx = max(meter_x0 + 14, meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0)
-        color = APP_UI_STYLE.palette.smeter_hot[:3] if label in ("S9", "+20") else themed_instrument_color("smeter_dbm", (151, 183, 191))[:3]
-        draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
+def draw_lcd_compact_smeter(text_cache, box, smeter_dbm, peak_dbm=None):
+    """Render the selected face in the Home rail, including its retained peak."""
+    draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
 
 
 def draw_home_mode_buttons(text_cache, buttons, mode, digital):
@@ -16656,7 +16776,8 @@ def draw_home_mode_buttons(text_cache, buttons, mode, digital):
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
                                show_compact_readouts=True,
-                               compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY):
+                               compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
+                               peak_dbm=None):
     """Show Home-rail modes, optionally with the compact VFO instruments."""
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
     # The expanded surface stops just under the mode buttons instead of
@@ -16687,7 +16808,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # rather than a thin status decoration beside the VFO.
         # Reserve quiet air around the meter so it reads as its own small
         # instrument rather than touching either the band tag or mode grid.
-        draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm)
+        draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm, peak_dbm)
 
     draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital)
 
@@ -17771,6 +17892,9 @@ def draw_smeter(text_cache, smeter_dbm, scope_enabled, peak_dbm=None, meter_x0=N
     # horizontal starting point changes beside the selected VFO position.
     meter_x0 = 675 + smeter_x_offset if meter_x0 is None else meter_x0
     meter_x1 = meter_x0 + SMETER_TRACE_WIDTH
+    if theme_system.runtime_theme["smeter_style"] != "led":
+        draw_selected_smeter(text_cache, (meter_x0 - 105, 3, meter_x1 + 6, 78), smeter_dbm, peak_dbm)
+        return
     smeter_colors = APP_UI_STYLE.palette
     green = (*smeter_colors.smeter_scale, 255)
     red = smeter_colors.smeter_hot
@@ -18870,13 +18994,20 @@ def draw_ui(
             text_cache, mode, digital, freq_khz, smeter_dbm,
             show_compact_readouts=show_compact_readouts,
             compact_frequency_font_family=compact_frequency_font_family,
+            peak_dbm=smeter_peak_dbm,
         )
         # Home instruments are painted last so the short mode surface can never
         # cover the passband and volume sitting directly under the mode buttons.
-        draw_lcd_home_bandwidth(
-            text_cache, filter_low_hz, filter_high_hz,
-            box=lcd_home_bandwidth_box(show_compact_readouts),
-        )
+        if home_bandpass_visible():
+            draw_lcd_home_bandwidth(
+                text_cache, filter_low_hz, filter_high_hz,
+                box=lcd_home_bandwidth_box(show_compact_readouts),
+            )
+        elif not show_compact_readouts:
+            bx0, by0, bx1, _by1 = lcd_home_bandwidth_box(False)
+            draw_selected_smeter(text_cache,
+                                 (bx0, by0, bx1, by0 + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height),
+                                 smeter_dbm, smeter_peak_dbm)
         draw_lcd_home_volume_slider(
             text_cache, audio_volume, audio_muted,
             show_compact_readouts=show_compact_readouts,
@@ -26593,7 +26724,7 @@ def main():
                                     gesture = "lcd_filter_width"
                                 else:
                                     gesture = "lcd_filter_drawer"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
+                            elif LCD_800_MODE and home_bandpass_visible() and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_bandwidth_box(instrument_layout == "right"), x, y
                             ):
                                 gesture = "home_passband"
@@ -28420,6 +28551,8 @@ def main():
                                     if kind == "close":
                                         display_setup_open = False
                                         restore_navigation_parent(display_parent)
+                                    elif kind == "themes":
+                                        activate_navigation_item(0, (("theme", "THEME"),))
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"

@@ -2,6 +2,8 @@
 
 import time
 
+from smeter_styles import METER_STYLES
+
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX,
                           color_hex, is_builtin_theme_id, new_theme)
@@ -42,6 +44,7 @@ def theme_screen_boxes(editor):
     if editor.mode == "browse":
         boxes.update({
             "new": (rail_left, 104, rail_right, 168),
+            "meters": (rail_left, 176, rail_right, 240),
             "previous": (editor_left, 676, 764, 732),
             "next": (772, 676, editor_right, 732),
         })
@@ -51,13 +54,21 @@ def theme_screen_boxes(editor):
             boxes[f"edit:{index}"] = (editor_left + 232, top, editor_left + 342, top + 64)
             boxes[f"delete:{index}"] = (editor_left + 354, top, editor_right, top + 64)
     else:
-        for index, name in enumerate(("STYLE", "UNITS", "COLORS", "NAME", "SIDEBAR")):
+        for index, name in enumerate(("STYLE", "UNITS", "COLORS", "NAME", "SIDEBAR", "METERS")):
             boxes[f"section:{name}"] = (rail_left, 104 + index * 72, rail_right, 168 + index * 72)
         boxes["save"] = (rail_left, 656, rail_right, 720)
         if editor.section == "STYLE":
             for index, name in enumerate(("straight", "rounded")):
                 boxes[f"option:{name}"] = (editor_left + index * 236, 126,
                                             editor_left + 228 + index * 236, 198)
+        elif editor.section == "METERS":
+            boxes["meter_previous"] = (editor_left, 676, 764, 732)
+            boxes["meter_next"] = (772, 676, editor_right, 732)
+            styles = list(METER_STYLES)[editor.meter_page * 6:editor.meter_page * 6 + 6]
+            for index, identifier in enumerate(styles):
+                left = editor_left + index % 2 * 236
+                top = 100 + index // 2 * 188
+                boxes[f"meter:{identifier}"] = (left, top, left + 228, top + 176)
         elif editor.section == "SIDEBAR":
             for index, name in enumerate(("left", "right")):
                 boxes[f"option:{name}"] = (editor_left + index * 236, 126,
@@ -109,6 +120,7 @@ class ThemeEditor:
         self.mode = "browse"
         self.selected_id = library.active_id
         self.page = 0
+        self.meter_page = 0
         self.draft = None
         self.section = "STYLE"
         self.color_group = 0
@@ -146,6 +158,7 @@ class ThemeEditor:
             **theme, "colors": {key: list(value) for key, value in theme["colors"].items()},
         }
         self.mode = "edit"
+        self.meter_page = 0
         self.section = "STYLE"
         self.color_key = None
         self.color_original = None
@@ -223,6 +236,9 @@ class ThemeEditor:
                     else:
                         self.confirm_delete_id = identifier
                         self.notify("CONFIRM", f"DELETE {item['name']}")
+            elif action == "meters":
+                self.begin(new_theme(source=self.selected) if is_builtin_theme_id(self.selected_id) else self.selected)
+                self.section = "METERS"
             elif action == "new":
                 self.begin()
             elif action == "previous":
@@ -235,6 +251,10 @@ class ThemeEditor:
         if action.startswith("section:"):
             self.cancel_color_edit()
             self.section = action.split(":")[1]
+        elif action == "meter_previous":
+            self.meter_page = max(0, self.meter_page - 1)
+        elif action == "meter_next":
+            self.meter_page = min((len(METER_STYLES) - 1) // 6, self.meter_page + 1)
         elif action == "save":
             if self.color_key:
                 if not self.preview_hex_color():
@@ -252,6 +272,8 @@ class ThemeEditor:
                 self.draft = None
                 self.page = (len(self.themes) - 1) // 7
                 self.notify("APPLIED", self.selected["name"])
+        elif action.startswith("meter:"):
+            self.draft["smeter_style"] = action.split(":")[1]
         elif action.startswith("option:"):
             value = action.split(":")[1]
             if value in ("rounded", "straight"):
