@@ -1579,7 +1579,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
              patch.object(ui._globe_meshes, 'draw'), \
              patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '1'}):
             self.assertTrue(ui.draw_receiver_map_satellite(
-                None, 0.0, 0.0, box, 1200.0, interactive=True,
+                None, 0.0, 0.0, box, 1200.0, interactive=False,
             ))
             tiles.assert_called_once()
         with patch.object(ui, 'satellite_map_texture', return_value=1), \
