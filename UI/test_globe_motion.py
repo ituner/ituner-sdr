@@ -4,7 +4,7 @@ import kiwi_gl_display as ui
 
 
 class GlobeMotionTests(unittest.TestCase):
-    def test_fast_satellite_view_keeps_base_but_skips_hd_work(self):
+    def test_fast_satellite_view_keeps_cached_hd_layer_attached(self):
         with patch.object(ui, 'satellite_map_texture', return_value=1), \
              patch.object(ui._globe_meshes, 'draw') as base, \
              patch.object(ui, 'globe_hd_tiles_enabled', return_value=True), \
@@ -12,9 +12,14 @@ class GlobeMotionTests(unittest.TestCase):
             self.assertTrue(ui.draw_receiver_map_satellite(
                 None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True, fast_motion=True))
             base.assert_called_once()
-            tiles.assert_not_called()
+            tiles.assert_called_once_with(
+                None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True,
+                unittest.mock.ANY, unittest.mock.ANY,
+            )
+            tiles.reset_mock()
             ui.draw_receiver_map_satellite(None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True)
-            tiles.assert_not_called()
+            tiles.assert_called_once()
+            tiles.reset_mock()
             ui.draw_receiver_map_satellite(None, 0, 0, ui.PICKER_MAP_BOX, 2.2, False)
             tiles.assert_called_once()
 

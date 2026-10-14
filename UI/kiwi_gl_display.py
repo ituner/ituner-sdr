@@ -333,6 +333,8 @@ _satellite_map_surfaces = {}
 _globe_tile_fetcher = None
 _globe_tile_gpu_lru = OrderedDict()
 _globe_tile_decode_failed = set()
+_globe_interactive_tile_keys = ()
+_globe_interactive_tile_refresh_at = 0.0
 
 
 def _vendor_roots():
@@ -14030,9 +14032,10 @@ def draw_receiver_map_satellite(text_cache, center_lon, center_lat, box, scale, 
         globe_gpu_matrix(center_lon, center_lat, box, scale),
         (sun_lon, sun_lat), time.monotonic(), interactive,
     )
-    # The base globe stays sharp; skip HD tile traversal/draws during fast swipes.
-    # Cached tiles remain available when motion slows, without another download.
-    if not interactive and globe_hd_tiles_enabled() and scale >= 1.5:
+    # Keep already uploaded HD tiles attached to the globe while it moves. Tile
+    # discovery is throttled and uploads stay paused during a swipe, so cached
+    # imagery remains sharp without putting decode/upload stalls in touch frames.
+    if globe_hd_tiles_enabled() and scale >= 1.5:
         draw_receiver_map_satellite_tiles(
             text_cache, center_lon, center_lat, box, scale, interactive,
             sun_lon, sun_lat,
@@ -14083,15 +14086,30 @@ def _draw_globe_tile_mesh(texture, key, center_lon, center_lat, box, scale,
 
 def draw_receiver_map_satellite_tiles(text_cache, center_lon, center_lat, box, scale,
                                       interactive, sun_lon, sun_lat):
-    """Overlay ready high-resolution tiles; never wait for the network."""
-    global _globe_tile_fetcher
+    """Overlay retained HD tiles and asynchronously fill newly exposed areas."""
+    global _globe_tile_fetcher, _globe_interactive_tile_keys
+    global _globe_interactive_tile_refresh_at
     if _globe_tile_fetcher is None:
         _globe_tile_fetcher = globe_tiles.GlobeTileFetcher(
             cache_dir=globe_tiles.default_cache_dir(),
         )
-    keys = globe_tiles.visible_tiles(
-        center_lon, center_lat, box, radiogarden_radius(box, scale),
+    now = time.monotonic()
+    # The retained meshes rotate entirely on the GPU. Recompute geographic
+    # coverage at 10 Hz while moving instead of sampling the globe 81 times on
+    # every 60 Hz touch frame. A settled view refreshes immediately.
+    refresh_keys = (
+        not interactive
+        or not _globe_interactive_tile_keys
+        or now >= _globe_interactive_tile_refresh_at
     )
+    if refresh_keys:
+        keys = globe_tiles.visible_tiles(
+            center_lon, center_lat, box, radiogarden_radius(box, scale),
+        )
+        _globe_interactive_tile_keys = keys
+        _globe_interactive_tile_refresh_at = now + 0.1
+    else:
+        keys = _globe_interactive_tile_keys
     missing = [
         key for key in keys
         if ("surface", ("gibs-blue-marble", key.level, key.row, key.col)) not in text_cache.cache
