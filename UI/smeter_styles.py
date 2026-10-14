@@ -82,9 +82,16 @@ def skin_tip(style_id, dbm):
     return tuple(points[-1])
 
 
+def skin_source_bounds(style_id):
+    skin = SKIN_CALIBRATION[style_id]
+    return tuple(skin.get("crop", (0, 0, *skin["size"])))
+
+
 def skin_image_box(style_id, box):
-    """Use the full face width and whole pixels, retaining its aspect ratio."""
+    """Fill the face area; Orange retains its accepted size and proportions."""
     x0, y0, x1, y1 = box
+    if style_id != "flex_orange":
+        return round(x0), round(y0), round(x1), round(y0 + (y1 - y0) * .80)
     width, height = SKIN_CALIBRATION[style_id]["size"]
     body_height = max(1, round((y1 - y0) * .86))
     scale = min((x1 - x0) / width, body_height / height)
@@ -97,19 +104,20 @@ def skin_image_box(style_id, box):
 def skin_needle_segment(style_id, box, dbm):
     skin = SKIN_CALIBRATION[style_id]
     left, top, right, bottom = skin_image_box(style_id, box)
-    scale_x = (right - left) / skin["size"][0]
-    scale_y = (bottom - top) / skin["size"][1]
+    source_left, source_top, source_right, source_bottom = skin_source_bounds(style_id)
+    scale_x = (right - left) / (source_right - source_left)
+    scale_y = (bottom - top) / (source_bottom - source_top)
     px, py = skin["pivot"]
     tx, ty = skin_tip(style_id, dbm)
     # Conceal the pivot beneath the bitmap, ending before the RF readouts.
     # The original calibration tip retains its exact position on the artwork.
-    clip_y = min(skin["size"][1], (box[1] + (box[3] - box[1]) * .80 - top) / scale_y)
+    clip_y = min(source_bottom, source_top + (box[1] + (box[3] - box[1]) * .80 - top) / scale_y)
     clip_y = max(ty, clip_y)
     if py > clip_y:
         fraction = (clip_y - ty) / (py - ty)
         px, py = tx + (px - tx) * fraction, clip_y
-    return (left + px * scale_x, top + py * scale_y,
-            left + tx * scale_x, top + ty * scale_y)
+    return (left + (px - source_left) * scale_x, top + (py - source_top) * scale_y,
+            left + (tx - source_left) * scale_x, top + (ty - source_top) * scale_y)
 
 
 def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
@@ -120,7 +128,8 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
     w, h = x1 - x0, y1 - y0
     unit = min(w / 236, h / 190)
     def xy(x, y):
-        return x0 + x * w / 236, y0 + y * h / 190
+        # Expand the RF Lab instrument into its former seven-pixel bezel.
+        return x0 + (x - 7) * w / 222, y0 + (y - 6) * h / 178
     def stroke(a, b, color, width=1):
         line(*xy(*a), *xy(*b), color, max(.7, width * unit))
     def fill(a, b, color):
@@ -135,18 +144,11 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
     voltage_ink = (127, 203, 156) if style_id == "triple_black" else secondary
     hot = (255, 92, 61) if style_id != "triple_copper" else (98, 20, 12)
     if face:
-        fill((0, 0), (236, 190), (9, 12, 15))
-        # Brushed metal bezel and illuminated face use continuous shading,
-        # baked once into a supersampled texture in the production renderer.
-        for row in range(190):
-            shine = .58 + .36 * math.exp(-((row - 16) / 50) ** 2)
-            color = tuple(round(c * shine) for c in style.metal)
-            fill((2, row + 2), (234, min(188, row + 3)), color)
+        # The illuminated face reaches all four edges without a metal frame.
         for row in range(6, 185):
             glow = .86 + .27 * math.exp(-((row - 70) / 75) ** 2)
             color = tuple(min(255, round(c * glow)) for c in style.face)
             fill((7, row), (229, row + 1), color)
-        stroke((8, 7), (228, 7), tuple(min(255, c + 23) for c in style.metal))
         label(16, 16, "RF", size=10, anchor="lm")
         label(220, 16, "50 Ω", color=secondary, size=9, anchor="rm")
         for radius, ink in ((190, style.ink), (151, secondary), (111, voltage_ink)):
@@ -161,7 +163,8 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
                 major = db in (-121, -109, -97, -85, -73, -53, -33)
                 stroke(point(db, radius), point(db, radius - (7 if major else 3.5)), ink, 1.1 if major else .6)
         for db, content in SCALE_LABELS:
-            label(*point(db, 202), content, color=hot if db > -73 else style.ink, size=11)
+            label(*point(db, 202), content, color=hot if db > -73 else style.ink, size=11,
+                  anchor="rm" if db == -33 else "cm")
         for db in (-120, -100, -80, -60, -40):
             label(*point(db, 163), str(db), color=secondary, size=9)
         for db in (-121, -109, -97, -85, -73, -53, -33):
@@ -176,9 +179,6 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
         stroke((12, 153), (224, 153), style.metal, .8)
         for x, content, color in ((42, "S / dB", style.ink), (118, "dBm", secondary), (194, "µV RMS", voltage_ink)):
             label(x, 161, content, color=color, size=8)
-        for xx in (4.5, 231.5):
-            for yy in (4.5, 185.5):
-                circle(*xy(xx, yy), 1.5 * unit, style.metal)
     if dynamic:
         value = dbm if isinstance(dbm, (int, float)) and math.isfinite(dbm) else -121
         tip = point(value, 183)

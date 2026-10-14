@@ -225,7 +225,7 @@ import theme_system
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
-                          skin_needle_segment, s_label, voltage_label)
+                          skin_needle_segment, skin_source_bounds, s_label, voltage_label)
 
 
 LCD_NATIVE_W = 800
@@ -15688,10 +15688,19 @@ def draw_theme_panel(text_cache, editor):
                 )
         elif action.startswith("meter:"):
             identifier = action.split(":")[1]
-            visual = draw_styled_button_frame(box, active=theme["smeter_style"] == identifier)
+            selected = theme["smeter_style"] == identifier
+            # A coloured title/lamp indicates selection without surrounding
+            # the meter with the grey frame used by ordinary theme buttons.
+            draw_logical_rect(*box, active_colors.background)
             draw_text(text_cache, (box[0] + box[2]) / 2, box[1] + 17,
-                      METER_STYLES[identifier].name, visual.text, 12, True, False, "cm")
-            draw_selected_smeter(text_cache, (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - 10),
+                      METER_STYLES[identifier].name,
+                      active_colors.ready if selected else active_colors.text, 12, True, False, "cm")
+            if selected:
+                draw_logical_circle(box[0] + 9, box[1] + 17, 3, active_colors.ready)
+            face_box = ((box[0], box[1] + 32, box[2], box[3])
+                        if identifier != "flex_orange" and METER_STYLES[identifier].kind in ("skin", "triple")
+                        else (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - 10))
+            draw_selected_smeter(text_cache, face_box,
                                  preview_dbm, theme=theme, style_id=identifier)
         elif action.startswith("option:"):
             name = action.split(":")[1]
@@ -16165,7 +16174,7 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     style = METER_STYLES[identifier]
     x0, y0, x1, y1 = box
     w, h = max(1, round(x1 - x0)), max(1, round(y1 - y0))
-    key = ("smeter-skin-native-v3" if style.kind == "skin" else "smeter-face-v2", identifier, w, h)
+    key = ("smeter-skin-fill-v4" if style.kind == "skin" else "smeter-face-borderless-v3", identifier, w, h)
     cached = text_cache._cached_texture(("surface", key))
     if cached is None:
         # Bitmap skins are filtered once at the actual screen resolution.
@@ -16199,7 +16208,8 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
                     # edge colours cannot bleed into the printed tick marks.
                     matte = PILImage.new("RGBA", original.size, (*style.face, 255))
                     matte.alpha_composite(original.convert("RGBA"))
-                    resized = matte.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
+                    artwork = matte.crop(skin_source_bounds(identifier))
+                    resized = artwork.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
                     graphic = pygame.image.fromstring(resized.tobytes(), resized.size, "RGBA")
             except (pygame.error, OSError, ValueError):
                 # A damaged/missing asset must not interrupt the live receiver.

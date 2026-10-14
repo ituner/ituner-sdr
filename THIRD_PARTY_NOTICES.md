@@ -18,6 +18,7 @@ License: [Flaticon Free License](https://www.flaticon.com/license/license.pdf).
 
 `UI/assets/smeters/flexible/` contains original, unchanged DX101, ICOM, Orange,
 Dark and Neon PNG backgrounds from [Flexible S-Meter](https://flexiblesmeter.svabi.ch/),
+published by Jan Svabenik according to the site's [imprint](https://flexiblesmeter.svabi.ch/impressum/),
 retrieved on 2026-10-14 from its published
 [skin bundle](https://flexiblesmeter.svabi.ch/shared-files/83/?flexiblesmeter_skinbundle.zip)
 and [Neon bundle](https://flexiblesmeter.svabi.ch/shared-files/148/?flexiblesmeter_skin_neon.zip).

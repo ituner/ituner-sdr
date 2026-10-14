@@ -1,4 +1,5 @@
 import math
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -7,7 +8,7 @@ from unittest.mock import Mock, patch
 import kiwi_gl_display as ui
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           dbm_to_microvolts, meter_fraction, needle_point,
-                          skin_image_box, skin_needle_segment, skin_tip)
+                          skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip)
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
 
@@ -127,6 +128,30 @@ class MeterTests(unittest.TestCase):
                 cache._cached_texture.return_value = (1, 236, 160)
                 ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 160), -73, None, Mock())
                 cache.surface_texture.assert_called_once()
+
+    def test_icom_fills_the_face_area_and_orange_keeps_its_approved_geometry(self):
+        self.assertEqual(skin_image_box('flex_icom', (0, 0, 236, 160)), (0, 0, 236, 128))
+        self.assertEqual(skin_source_bounds('flex_icom'), (17, 15, 464, 186))
+        self.assertEqual(skin_image_box('flex_orange', (0, 0, 236, 160)), (0, 10, 236, 129))
+        self.assertEqual(skin_source_bounds('flex_orange'), (0, 0, 397, 200))
+
+    def test_meter_gallery_has_no_card_frames_and_uses_title_selection_lamp(self):
+        with TemporaryDirectory() as directory:
+            editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
+            editor.begin()
+            editor.section = 'METERS'
+            editor.draft['smeter_style'] = 'flex_icom'
+            with ExitStack() as stack:
+                mocks = {name: stack.enter_context(patch.object(ui, name)) for name in (
+                    'draw_logical_rect', 'draw_logical_line', 'draw_logical_circle',
+                    'draw_logical_rounded_rect', 'draw_text', 'draw_sidebar_header',
+                    'draw_styled_text_button', 'draw_styled_button_frame', 'draw_selected_smeter')}
+                ui.draw_theme_panel(None, editor)
+                mocks['draw_styled_button_frame'].assert_not_called()
+                mocks['draw_logical_circle'].assert_called_once()
+                labels = [call.args for call in mocks['draw_text'].call_args_list]
+                self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name
+                                    and call[4] == ui.APP_UI_STYLE.palette.ready for call in labels))
 
     def test_legacy_and_invalid_saved_styles_fall_back_to_led(self):
         for value in (None, 'unknown', [], {}):

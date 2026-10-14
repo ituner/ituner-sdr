@@ -30,7 +30,11 @@ The faces keep units visible and use conventional HF S9 = −73 dBm, approximate
 retained peak and numerical readings to change on each frame.
 
 Flexible faces fill the available rail width without an added metal border,
-divider or inset padding. Their original aspect ratios are preserved. Skin
+divider or inset padding. Orange retains its approved proportions. The other
+Flexible faces expand to the full image area, with unused source margins trimmed
+from ICOM and Dark. Separate horizontal and vertical calibration transforms keep
+the needle aligned with the enlarged artwork. Preview cards use a coloured title
+and selection lamp instead of a grey frame; RF Lab faces also have no metal bezel. Skin
 images are composited against their face colour and resized once with Lanczos
 filtering to their final pixel dimensions, then cached at 1:1 resolution.
 Whole-pixel image placement and matching needle transforms keep the lettering
