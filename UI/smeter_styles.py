@@ -60,11 +60,15 @@ for identifier, artwork in COMMUNITY_ARTWORK.items():
 
 # Keep existing gallery positions stable, including LED BAR on page two.
 for identifier, title, face, ink in (
-        ("flex_vintage_hd", "FLEX VINTAGE HD · HB9HSJ", (255, 154, 0), (28, 17, 8)),
-        ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240))):
+        ("flex_vintage_hd", "VINTAGE HD ORANGE · HB9HSJ", (255, 154, 0), (28, 17, 8)),
+        ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240)),
+        ("flex_vintage_hd_white", "VINTAGE HD WHITE · HB9HSJ", (236, 238, 225), (34, 43, 38))):
     METER_STYLES[identifier] = MeterStyle(
         title, "skin", 160, face, ink, (55, 65, 70),
         tuple(SKIN_CALIBRATION[identifier]["needle_color"]), skin=identifier)
+METER_STYLES["linear_orange"] = MeterStyle(
+    "SLIDING POINTER ORANGE", "linear", 80, (255, 154, 0), (28, 17, 8),
+    (140, 82, 16), (135, 24, 12))
 
 
 def meter_asset_path(identifier):
@@ -321,7 +325,7 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
     ink = style.ink
     # Compact instruments follow the theme; physical analog faces retain their
     # material colours, like a radio's cream dial or a cockpit's black gauge.
-    if style.kind in ("led", "linear"):
+    if style.kind in ("led", "linear") and style_id != "linear_orange":
         ink = tuple(palette["smeter_scale"][:3])
     def label(x, y, content, size=12, color=None, anchor="cm"):
         text(x, y, content, color or ink, max(7, round(size * unit)), anchor)
@@ -333,6 +337,8 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
     if style.kind == "led":
         # The original LED instrument is a flat part of the Home rail.
         rect(*box, palette["section_surface"])
+    elif style_id == "linear_orange":
+        rect(*box, style.face)
     else:
         frame(box, style.metal)
         inset = max(2, 5 * unit)
@@ -345,7 +351,8 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
     if style.kind in ("led", "linear"):
         padding = 4 if style.kind == "led" else 10
         label(x0 + padding * unit, y0 + h * .17, "S-METER", 12, anchor="lm")
-        label(x1 - padding * unit, y0 + h * .17, readout, 12, palette["smeter_dbm"], "rm")
+        label(x1 - padding * unit, y0 + h * .17, readout, 12,
+              ink if style_id == "linear_orange" else palette["smeter_dbm"], "rm")
         track_padding = 4 if style.kind == "led" else 14
         a, b, cy = x0 + track_padding * unit, x1 - track_padding * unit, y0 + h * .55
         if style.kind == "led":
@@ -355,7 +362,7 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
                 rect(left + unit, cy - h * .15, left + (b - a) / 36 - unit,
                      cy + h * .15, color if index + .5 <= level * 36 else palette["meter_off"])
         else:
-            line(a, cy, b, cy, palette["smeter_rail"], max(2, 3 * unit))
+            line(a, cy, b, cy, ink if style_id == "linear_orange" else palette["smeter_rail"], max(2, 3 * unit))
             for index in range(37):
                 xx = a + (b - a) * index / 36
                 length = h * (.16 if index % 2 == 0 else .08)
@@ -365,14 +372,15 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
             line(xx - 4 * unit, cy - h * .26, xx + 4 * unit, cy - h * .26, style.needle, max(2, 3 * unit))
         if peak_dbm is not None and math.isfinite(peak_dbm) and peak_dbm > value + .75:
             xx = a + (b - a) * meter_fraction(peak_dbm)
-            line(xx, cy - h * .18, xx, cy + h * .18, palette["smeter_peak"], max(1, unit))
+            line(xx, cy - h * .18, xx, cy + h * .18,
+                 (30, 79, 86) if style_id == "linear_orange" else palette["smeter_peak"], max(1, unit))
         for db, content in SCALE_LABELS:
             label_x = a + (b - a) * meter_fraction(db)
             if style.kind == "led":
                 label_x = max(x0 + 12 * unit, min(x1 - 14 * unit, label_x))
             label(label_x, y0 + h * .86,
                   "S" + content if content == "1" else content, 10,
-                  palette["smeter_hot"] if db > -73 else ink)
+                  ((156, 28, 12) if style_id == "linear_orange" else palette["smeter_hot"]) if db > -73 else ink)
         return
 
     if style.kind == "round":

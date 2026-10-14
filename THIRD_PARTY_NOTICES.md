@@ -40,6 +40,6 @@ application code. No separate artwork license appears in these ZIP archives,
 and no license is inferred. See `UI/assets/smeters/community/SOURCE.md` for exact
 source files, download IDs, calibration and the scope of each credit.
 
-Vintage HD uses an orange palette filter at rendering time; its source PNG
-and printed scale geometry remain unchanged. The lower-resolution Vintage
+Vintage HD has separate White and Orange choices sharing an unchanged source
+PNG and printed scale geometry. Orange uses a palette filter at rendering time. The lower-resolution Vintage
 option and its PNG have been removed.

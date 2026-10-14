@@ -17,11 +17,12 @@ Remaining library downloads, retrieved 2026-10-14:
 - Vintage HD (1920 x 1110): https://flexiblesmeter.svabi.ch/shared-files/78/?flexiblesmeter_skin_vintage_1080.zip
 - Transparent: https://flexiblesmeter.svabi.ch/shared-files/81/?flexiblesmeter_skin_transparent.zip
 
-Only Vintage HD remains in the gallery; the lower-resolution Vintage file
-and entry were removed. Saved low-resolution Vintage selections migrate to HD.
-Vintage HD retains its original PNG and all 16 supplied calibration points.
-Its runtime palette filter maps the light face to the same orange (255, 154, 0)
-as Flex Orange, with darker ink and warm shadows. The filter runs once before
+Vintage HD has separate White and Orange choices sharing the original PNG and
+all 16 supplied calibration points. White renders the original face; Orange
+uses a runtime palette filter matching Flex Orange (255, 154, 0), with darker
+ink and warm shadows. The lower-resolution Vintage file and entry remain
+removed. Saved low-resolution Vintage selections migrate to the orange HD
+choice, preserving the existing migration behavior. The filter runs once before
 final-size Lanczos resizing; no lettering or scale geometry is redrawn. Runtime
 crop bounds trim unused outer margins. Transparent retains its alpha channel
 over the current UI background.
