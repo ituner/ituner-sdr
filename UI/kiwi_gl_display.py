@@ -16168,9 +16168,13 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
     if style.kind in ("skin", "triple", "eye") and isinstance(text_cache, TextCache):
         draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
+    backlit = identifier == "linear_orange" and isinstance(text_cache, TextCache)
+    if backlit:
+        draw_incandescent_meter_background(text_cache, box)
     draw_meter("precision" if style.kind == "skin" else identifier, box, dbm, peak_dbm,
                rect=draw_logical_rect, line=draw_logical_line,
-               circle=draw_logical_circle, text=meter_text, palette=theme["colors"])
+               circle=draw_logical_circle, text=meter_text, palette=theme["colors"],
+               background=not backlit)
 
 
 def incandescent_meter_backlight(size):
@@ -16188,6 +16192,19 @@ def incandescent_meter_backlight(size):
             light = max(0, min(1, .30 + .62 * bulb + .20 * reflection + mottling))
             pixels.extend((round(205 + 50 * light), round(91 + 91 * light), round(20 * light ** 3), 255))
     return PILImage.frombytes("RGBA", size, bytes(pixels))
+
+
+def draw_incandescent_meter_background(text_cache, box):
+    """Reuse the Vintage Orange lamp field beneath a live procedural meter."""
+    x0, y0, x1, y1 = box
+    size = (max(1, round(x1 - x0)), max(1, round(y1 - y0)))
+    key = ("smeter-backlight-v1", *size)
+    cached = text_cache._cached_texture(("surface", key))
+    if cached is None:
+        artwork = incandescent_meter_backlight(size)
+        surface = pygame.image.fromstring(artwork.tobytes(), size, "RGBA")
+        cached = text_cache.surface_texture(key, surface)
+    draw_textured_quad(cached[0], x0, y0, x1, y1, 0, 0, 1, 1)
 
 
 def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):

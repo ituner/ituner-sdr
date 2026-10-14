@@ -120,7 +120,8 @@ no added frame. Transparent keeps its alpha channel so the UI background shows
 through the scale. Titles credit HB9HSJ as the collection publisher.
 
 Sliding Pointer Orange is an additional original procedural face, with an
-orange background, dark scale/readout and a dark red vertical pointer moving
+orange background with the same cached, uneven incandescent light field as
+Vintage HD Orange, dark scale/readout and a dark red vertical pointer moving
 horizontally. It shares the standard Sliding Pointer calibration and retained
 peak, has no added bezel, and stays 80 pixels tall so the Bandpass remains
 visible. The standard Sliding Pointer and LED Bar keep their existing designs.

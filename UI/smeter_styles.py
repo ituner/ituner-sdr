@@ -302,7 +302,7 @@ def needle_point(style, dbm, pivot, radius):
     return pivot[0] + math.sin(angle) * radius, pivot[1] - math.cos(angle) * radius
 
 
-def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palette):
+def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palette, background=True):
     style = METER_STYLES[normalize_meter_style(style_id)]
     if style.kind == "triple":
         return draw_triple_meter(style_id, box, dbm, peak_dbm,
@@ -338,7 +338,8 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
         # The original LED instrument is a flat part of the Home rail.
         rect(*box, palette["section_surface"])
     elif style_id == "linear_orange":
-        rect(*box, style.face)
+        if background:
+            rect(*box, style.face)
     else:
         frame(box, style.metal)
         inset = max(2, 5 * unit)
