@@ -13,10 +13,10 @@ LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The expanded gallery has 29 designs across five pages. **More Designs** and
+The expanded gallery has 28 designs across five pages. **More Designs** and
 **Previous Designs** navigate without changing the selected preview or theme.
-Eight entries use the actual PNG backgrounds from the Flexible S-Meter download
-bundles: DX101, ICOM, Orange, Dark, Neon, Transparent, Vintage and Vintage HD. Their background files are retained
+Seven entries use the actual PNG backgrounds from the Flexible S-Meter download
+bundles: DX101, ICOM, Orange, Dark, Neon, Transparent and Vintage HD. Their background files are retained
 unchanged and credited in `UI/assets/smeters/flexible/SOURCE.md` and the third-party
 notices. Original printed PO, SWR, COMP and TEMP scales are face artwork; iTuner
 drives the S scale, rather than inventing readings for those transmit functions.
@@ -104,12 +104,14 @@ cross-needle faces are retained in the download record, rather than shown as
 S-meters without corresponding telemetry. Artwork source and license status
 are documented in `UI/assets/smeters/community/SOURCE.md`.
 
-Vintage and Vintage HD are on the fifth gallery page alongside Transparent.
-Vintage HD uses the publisher's 1920 × 1110 source for sharper printed scales;
-the smaller Vintage face remains available as a separate original download.
-Both fill the rail width, with outer margins cropped at runtime and no added
-frame. Transparent keeps its alpha channel so the UI background shows through
-the scale. All three titles credit HB9HSJ as the collection publisher.
+Vintage HD is on the fifth gallery page alongside Transparent. It uses the
+publisher's 1920 × 1110 source and an orange palette matching Flex Orange
+(255, 154, 0), with dark ink and preserved scale geometry. The palette filter
+is cached with the face before final-size resizing. The lower-resolution
+Vintage option is removed; saved selections migrate to Vintage HD. Both
+remaining designs fill the rail width, with outer margins cropped at runtime
+and no added frame. Transparent keeps its alpha channel so the UI background
+shows through the scale. Titles credit HB9HSJ as the collection publisher.
 
 The linked Groups.io discussion confirms Jan / HB9HSJ as the application's
 creator and includes an older ICOM download and a VU-meter photograph shared

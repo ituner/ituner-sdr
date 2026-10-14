@@ -16223,6 +16223,14 @@ def draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
                         matte = PILImage.new("RGBA", original.size, (*style.face, 255))
                         matte.alpha_composite(original.convert("RGBA"))
                         artwork = matte.crop(skin_source_bounds(identifier))
+                        tint = SKIN_CALIBRATION[identifier].get("face_tint")
+                        if tint:
+                            # A cached palette filter preserves source typography
+                            # and calibration. White paper becomes the face colour;
+                            # darker ink/shading retain contrast and the red arc.
+                            lut = [round(channel * (value / 255) ** 1.7)
+                                   for channel in tint for value in range(256)]
+                            artwork = artwork.point(lut + list(range(256)))
                     resized = artwork.resize(point(c - a, d - b), PILImage.Resampling.LANCZOS)
                     graphic = pygame.image.fromstring(resized.tobytes(), resized.size, "RGBA")
             except (pygame.error, OSError, ValueError):

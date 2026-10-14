@@ -17,10 +17,14 @@ Remaining library downloads, retrieved 2026-10-14:
 - Vintage HD (1920 x 1110): https://flexiblesmeter.svabi.ch/shared-files/78/?flexiblesmeter_skin_vintage_1080.zip
 - Transparent: https://flexiblesmeter.svabi.ch/shared-files/81/?flexiblesmeter_skin_transparent.zip
 
-Both Vintage resolutions are retained as separate choices. The original PNGs
-and all 16 supplied calibration points remain unchanged; runtime crop bounds
-trim unused outer margins. Transparent retains its alpha channel over the
-current UI background. Vintage HD is the preferred choice for sharper scales.
+Only Vintage HD remains in the gallery; the lower-resolution Vintage file
+and entry were removed. Saved low-resolution Vintage selections migrate to HD.
+Vintage HD retains its original PNG and all 16 supplied calibration points.
+Its runtime palette filter maps the light face to the same orange (255, 154, 0)
+as Flex Orange, with darker ink and warm shadows. The filter runs once before
+final-size Lanczos resizing; no lettering or scale geometry is redrawn. Runtime
+crop bounds trim unused outer margins. Transparent retains its alpha channel
+over the current UI background.
 The separately linked DX101 transparent-beta and ICOM transparent-v1.1 packages
 have byte-identical PNGs to the already installed bundle versions. The site
 currently publishes eight skin packages, including the two Vintage resolutions.

@@ -17,7 +17,7 @@ License: [Flaticon Free License](https://www.flaticon.com/license/license.pdf).
 ## Flexible S-Meter faces
 
 `UI/assets/smeters/flexible/` contains original, unchanged DX101, ICOM, Orange,
-Dark, Neon, Transparent, Vintage and Vintage HD PNG backgrounds from [Flexible S-Meter](https://flexiblesmeter.svabi.ch/),
+Dark, Neon, Transparent and Vintage HD PNG backgrounds from [Flexible S-Meter](https://flexiblesmeter.svabi.ch/),
 published by Jan Svabenik according to the site's [imprint](https://flexiblesmeter.svabi.ch/impressum/),
 retrieved on 2026-10-14 from its published
 [skin bundle](https://flexiblesmeter.svabi.ch/shared-files/83/?flexiblesmeter_skinbundle.zip)
@@ -39,3 +39,7 @@ claiming verified per-face authorship. The Magic Eye animation is original
 application code. No separate artwork license appears in these ZIP archives,
 and no license is inferred. See `UI/assets/smeters/community/SOURCE.md` for exact
 source files, download IDs, calibration and the scope of each credit.
+
+Vintage HD uses an orange palette filter at rendering time; its source PNG
+and printed scale geometry remain unchanged. The lower-resolution Vintage
+option and its PNG have been removed.

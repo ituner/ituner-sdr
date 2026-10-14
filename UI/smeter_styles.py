@@ -60,8 +60,7 @@ for identifier, artwork in COMMUNITY_ARTWORK.items():
 
 # Keep existing gallery positions stable, including LED BAR on page two.
 for identifier, title, face, ink in (
-        ("flex_vintage", "FLEX VINTAGE · HB9HSJ", (236, 238, 225), (34, 43, 38)),
-        ("flex_vintage_hd", "FLEX VINTAGE HD · HB9HSJ", (236, 238, 225), (34, 43, 38)),
+        ("flex_vintage_hd", "FLEX VINTAGE HD · HB9HSJ", (255, 154, 0), (28, 17, 8)),
         ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240))):
     METER_STYLES[identifier] = MeterStyle(
         title, "skin", 160, face, ink, (55, 65, 70),
@@ -274,6 +273,8 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
 
 
 def normalize_meter_style(value):
+    if value == "flex_vintage":
+        return "flex_vintage_hd"
     return value if isinstance(value, str) and value in METER_STYLES else DEFAULT_METER_STYLE
 
 

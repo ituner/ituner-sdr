@@ -210,6 +210,14 @@ class MeterTests(unittest.TestCase):
             theme['smeter_style'] = value
             self.assertEqual(normalize_theme(theme)['smeter_style'], 'led')
 
+    def test_removed_vintage_selection_migrates_to_hd_without_changing_theme_colors(self):
+        theme = new_theme()
+        theme['smeter_style'] = 'flex_vintage'
+        normalized = normalize_theme(theme)
+        self.assertEqual(normalized['smeter_style'], 'flex_vintage_hd')
+        self.assertEqual(normalized['colors'], theme['colors'])
+        self.assertNotIn('flex_vintage', METER_STYLES)
+
     def test_tall_meters_reclaim_bandpass_space_and_keep_all_controls_clear(self):
         ui.configure_output(True)
         for sidebar in ('left', 'right'):
