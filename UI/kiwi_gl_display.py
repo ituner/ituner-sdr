@@ -8513,7 +8513,7 @@ def draw_navigation_button(text_cache, box, title, subtitle):
     subtitle_y = y1 - 16 if taller_tile else y0 + 51
     for text, preferred, cy, color in (
         (title, 14, title_y, visual.text),
-        (subtitle, 12, subtitle_y, visual.text if pressed else style.subtitle_color),
+        (subtitle, 13 if taller_tile else 12, subtitle_y, visual.text if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
         draw_text(text_cache, cx, round(cy), str(text).upper(), color,
