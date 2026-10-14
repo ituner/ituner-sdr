@@ -511,6 +511,7 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(color[0], color[1], key)
             self.assertEqual(color[1], color[2], key)
             self.assertEqual(color[3:], original["colors"][key][3:])
+        self.assertEqual(monochrome["colors"]["border"], original["colors"]["border"])
         for identifier in (STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID, BLACK_WHITE_THEME_ID):
             self.library.activate(identifier)
             self.assertEqual(ThemeLibrary(self.path).active_id, identifier)

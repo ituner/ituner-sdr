@@ -78,9 +78,10 @@ def black_white_colors(colors):
     for name, value in colors.items():
         gray = round(0.2126 * value[0] + 0.7152 * value[1] + 0.0722 * value[2])
         result[name] = [gray, gray, gray, *value[3:]]
-    # Give the neutral theme clear white edges and a readable live trace.
+    # Keep inactive borders as quiet as Default while giving active states
+    # clear neutral edges and preserving a readable live trace.
     for name, gray in (("background", 0), ("section_surface", 24),
-                       ("section_border", 205), ("border", 175),
+                       ("section_border", 205),
                        ("active_border", 255), ("selected_border", 225),
                        ("section_heading", 240), ("frequency", 255),
                        ("smeter_active", 225), ("smeter_hot", 255),
