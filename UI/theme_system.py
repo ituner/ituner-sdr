@@ -12,6 +12,7 @@ from ui_style import UIPalette, apply_ui_style
 DEFAULT_THEME_ID = "default"
 STRAIGHT_INVERTED_THEME_ID = "straight-inverted"
 GREEN_THEME_ID = "green"
+BLACK_WHITE_THEME_ID = "black-white"
 REMOVED_THEME_MIGRATIONS = {
     "default-straight": DEFAULT_THEME_ID,
     "rounded-inverted": STRAIGHT_INVERTED_THEME_ID,
@@ -71,14 +72,34 @@ def green_colors(colors):
     return result
 
 
+def black_white_colors(colors):
+    """Use neutral grays throughout the palette while retaining transparency."""
+    result = {}
+    for name, value in colors.items():
+        gray = round(0.2126 * value[0] + 0.7152 * value[1] + 0.0722 * value[2])
+        result[name] = [gray, gray, gray, *value[3:]]
+    # Give the neutral theme clear white edges and a readable live trace.
+    for name, gray in (("background", 0), ("section_surface", 24),
+                       ("section_border", 205), ("border", 175),
+                       ("active_border", 255), ("selected_border", 225),
+                       ("section_heading", 240), ("frequency", 255),
+                       ("smeter_active", 225), ("smeter_hot", 255),
+                       ("smeter_marker", 245)):
+        result[name][:3] = [gray] * 3
+    return result
+
+
 INVERTED_COLORS = invert_colors(DEFAULT_THEME["colors"])
 STRAIGHT_INVERTED_THEME = {**DEFAULT_THEME, "id": STRAIGHT_INVERTED_THEME_ID,
                            "name": "Default Inverted", "colors": INVERTED_COLORS}
 GREEN_THEME = {**DEFAULT_THEME, "id": GREEN_THEME_ID, "name": "Green",
                "colors": green_colors(DEFAULT_THEME["colors"])}
+BLACK_WHITE_THEME = {**DEFAULT_THEME, "id": BLACK_WHITE_THEME_ID,
+                     "name": "Black & White",
+                     "colors": black_white_colors(DEFAULT_THEME["colors"])}
 BUILTIN_THEMES = {
     theme["id"]: theme for theme in (
-        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME,
+        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME, BLACK_WHITE_THEME,
     )
 }
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)

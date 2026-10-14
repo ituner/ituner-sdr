@@ -38,6 +38,7 @@ NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CL
 NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 BACK_BOX = (1034, 728, 1270, 792)
+SAVED_CARDS_PER_PAGE = 8
 EDITOR_PREVIEW_BOX = (24, 160, 820, 708)
 EDITOR_INSPECTOR_BOX = (836, 96, 1256, 728)
 
@@ -73,21 +74,21 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
     boxes = {"back": BACK_BOX}
     if editor.mode == "browse":
         boxes["new"] = (1034, 24, 1270, 88)
-        for slot in range(9):
+        for slot in range(len(BUILTIN_THEME_IDS) + SAVED_CARDS_PER_PAGE):
             item = editor.card_item(slot)
             if item is None:
                 continue
-            col, row = slot % 3, slot // 3
-            x0 = 24 + col * 408
+            col, row = slot % 4, slot // 4
+            x0 = 24 + col * 312
             y0 = 128 if row == 0 else 324 + (row - 1) * 164
-            boxes[f"theme:{slot}"] = (x0, y0, x0 + 392, y0 + 148)
-            if slot < 3:
-                boxes[f"edit:{slot}"] = (x0 + 248, y0 + 88, x0 + 376, y0 + 136)
+            boxes[f"theme:{slot}"] = (x0, y0, x0 + 296, y0 + 148)
+            if slot < len(BUILTIN_THEME_IDS):
+                boxes[f"edit:{slot}"] = (x0 + 152, y0 + 88, x0 + 280, y0 + 136)
             else:
-                boxes[f"edit:{slot}"] = (x0 + 176, y0 + 88, x0 + 268, y0 + 136)
-                boxes[f"delete:{slot}"] = (x0 + 276, y0 + 88, x0 + 376, y0 + 136)
-        boxes["previous"] = (840, 654, 972, 710)
-        boxes["next"] = (980, 654, 1112, 710)
+                boxes[f"edit:{slot}"] = (x0 + 88, y0 + 88, x0 + 184, y0 + 136)
+                boxes[f"delete:{slot}"] = (x0 + 192, y0 + 88, x0 + 280, y0 + 136)
+        boxes["previous"] = (24, 728, 260, 792)
+        boxes["next"] = (268, 728, 504, 792)
         return boxes
 
     if editor.name_open and not ignore_overlay:
@@ -240,12 +241,20 @@ class ThemeEditor:
 
     @property
     def page_count(self):
-        return max(1, math.ceil(len(self.library.themes) / 6))
+        return max(1, math.ceil(len(self.library.themes) / SAVED_CARDS_PER_PAGE))
+
+    @property
+    def can_previous(self):
+        return self.page > 0
+
+    @property
+    def can_next(self):
+        return self.page < self.page_count - 1
 
     def card_item(self, slot):
-        if slot < 3:
+        if slot < len(BUILTIN_THEME_IDS):
             return self.library.get(BUILTIN_THEME_IDS[slot])
-        index = self.page * 6 + slot - 3
+        index = self.page * SAVED_CARDS_PER_PAGE + slot - len(BUILTIN_THEME_IDS)
         return self.library.themes[index] if index < len(self.library.themes) else None
 
     def notify(self, action, detail=""):
@@ -313,7 +322,7 @@ class ThemeEditor:
         self.selected_id = self.draft["id"]
         name = self.draft["name"]
         self._leave_edit(restore=False)
-        self.page = max(0, (len(self.library.themes) - 1) // 6)
+        self.page = max(0, (len(self.library.themes) - 1) // SAVED_CARDS_PER_PAGE)
         self.notify("SAVED", name)
         return True
 
@@ -454,8 +463,8 @@ class ThemeEditor:
             return
         if self.mode == "browse":
             if action in ("previous", "next"):
-                self.page = max(0, min(self.page_count - 1,
-                                       self.page + (-1 if action == "previous" else 1)))
+                if (action == "previous" and self.can_previous) or (action == "next" and self.can_next):
+                    self.page += -1 if action == "previous" else 1
             elif action == "new":
                 self.begin()
             elif action.startswith(("theme:", "edit:", "delete:")):

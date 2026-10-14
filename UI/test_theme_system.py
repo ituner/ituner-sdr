@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call, patch
 
 from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
-    BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID,
+    BLACK_WHITE_THEME_ID, BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID,
     REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
     ThemeLibrary, apply_theme,
     display_distance, display_temperature, distance_axis_label,
@@ -203,6 +203,14 @@ class ThemeSystemTests(unittest.TestCase):
                     self.assertFalse(box[0] < back[2] and back[0] < box[2]
                                      and box[1] < back[3] and back[1] < box[3], name)
 
+    def test_library_page_buttons_share_back_row_on_the_left(self):
+        editor = ThemeEditor(self.library)
+        boxes = theme_screen_boxes(editor)
+        self.assertEqual(boxes["previous"], (24, 728, 260, 792))
+        self.assertEqual(boxes["next"], (268, 728, 504, 792))
+        self.assertEqual(boxes["previous"][1::2], boxes["back"][1::2])
+        self.assertEqual(boxes["next"][1::2], boxes["back"][1::2])
+
     def test_named_theme_survives_restart_and_updates_shared_style(self):
         custom = new_theme("Amber")
         custom["colors"]["frequency"] = [255, 175, 60]
@@ -379,11 +387,12 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(boxes["new"], (1034, 24, 1270, 88))
         self.assertEqual(boxes["back"], (1034, 728, 1270, 792))
         self.assertEqual(boxes["theme:0"][0], 24)
-        self.assertGreater(boxes["theme:2"][2], 1200)
+        self.assertGreater(boxes["theme:3"][2], 1200)
         self.assertNotIn("delete:0", boxes)
-        self.assertIn("delete:3", boxes)
+        self.assertNotIn("delete:3", boxes)
+        self.assertIn("delete:4", boxes)
         with patch.object(ui, "draw_logical_rect"), \
-                patch.object(ui, "draw_logical_rounded_rect"), \
+                patch.object(ui, "draw_logical_rounded_rect") as rounded, \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_styled_text_button") as buttons, \
                 patch.object(ui, "draw_text") as labels:
@@ -392,8 +401,38 @@ class ThemeSystemTests(unittest.TestCase):
                           if item.args[3] == "DEFAULT")
         self.assertEqual(first_name.args[1:3], (40, 158))
         self.assertEqual(first_name.args[8], "lm")
-        self.assertEqual([item.args[2] for item in buttons.call_args_list].count("CUSTOMIZE"), 3)
+        self.assertEqual([item.args[2] for item in buttons.call_args_list].count("CUSTOMIZE"), 4)
         self.assertIn("DELETE", [item.args[2] for item in buttons.call_args_list])
+        self.assertNotIn("PREV", [item.args[2] for item in buttons.call_args_list])
+        self.assertNotIn("NEXT", [item.args[2] for item in buttons.call_args_list])
+        inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
+        inverted_box = boxes["theme:1"]
+        self.assertIn(call(*inverted_box, inverted["radius"],
+                           inverted["colors"]["section_surface"],
+                           inverted["colors"]["section_border"]),
+                      rounded.call_args_list)
+        inverted_button = next(item for item in buttons.call_args_list
+                               if item.args[1] == boxes["edit:1"])
+        self.assertEqual(tuple(inverted_button.kwargs["style"].palette.surface),
+                         tuple(inverted["colors"]["surface"]))
+
+    def test_library_pagination_disables_unavailable_directions(self):
+        editor = ThemeEditor(self.library)
+        self.assertEqual(editor.page_count, 1)
+        self.assertFalse(editor.can_previous)
+        self.assertFalse(editor.can_next)
+        self.tap_editor(editor, "previous")
+        self.assertEqual(editor.page, 0)
+        for index in range(9):
+            self.library.upsert(new_theme(f"Saved {index}"))
+        self.assertEqual(editor.page_count, 2)
+        self.assertTrue(editor.can_next)
+        self.tap_editor(editor, "next")
+        self.assertEqual(editor.page, 1)
+        self.assertTrue(editor.can_previous)
+        self.assertFalse(editor.can_next)
+        self.tap_editor(editor, "previous")
+        self.assertEqual(editor.page, 0)
 
     def test_row_delete_confirmation_is_tied_to_its_theme(self):
         first = new_theme("First")
@@ -405,12 +444,12 @@ class ThemeSystemTests(unittest.TestCase):
             box = theme_screen_boxes(editor)[action]
             editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
-        tap("delete:4")
+        tap("delete:5")
         self.assertEqual(editor.confirm_delete_id, second["id"])
         tap("delete_cancel")
         self.assertIsNone(editor.confirm_delete_id)
-        self.assertNotIn("delete:2", theme_screen_boxes(editor))
-        tap("delete:3")
+        self.assertNotIn("delete:3", theme_screen_boxes(editor))
+        tap("delete:4")
         self.assertEqual(editor.confirm_delete_id, first["id"])
         tap("delete_confirm")
         self.assertIsNone(self.library.get(first["id"]))
@@ -455,7 +494,7 @@ class ThemeSystemTests(unittest.TestCase):
 
     def test_inverted_and_monochrome_builtins_preserve_alpha_and_corner_choices(self):
         self.assertEqual(BUILTIN_THEME_IDS, (
-            DEFAULT_THEME_ID, STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID,
+            DEFAULT_THEME_ID, STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID, BLACK_WHITE_THEME_ID,
         ))
         original = self.library.get(DEFAULT_THEME_ID)
         inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
@@ -467,7 +506,12 @@ class ThemeSystemTests(unittest.TestCase):
         for key, color in green["colors"].items():
             self.assertGreaterEqual(color[1], max(color[:3]))
             self.assertEqual(color[3:], original["colors"][key][3:])
-        for identifier in (STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID):
+        monochrome = self.library.get(BLACK_WHITE_THEME_ID)
+        for key, color in monochrome["colors"].items():
+            self.assertEqual(color[0], color[1], key)
+            self.assertEqual(color[1], color[2], key)
+            self.assertEqual(color[3:], original["colors"][key][3:])
+        for identifier in (STRAIGHT_INVERTED_THEME_ID, GREEN_THEME_ID, BLACK_WHITE_THEME_ID):
             self.library.activate(identifier)
             self.assertEqual(ThemeLibrary(self.path).active_id, identifier)
             with self.assertRaises(ValueError):
@@ -573,7 +617,7 @@ class ThemeSystemTests(unittest.TestCase):
         self.library.upsert(custom)
         editor.selected_id = custom["id"]
         editor.page = 0
-        delete_box = theme_screen_boxes(editor)["delete:3"]
+        delete_box = theme_screen_boxes(editor)["delete:4"]
         editor.tap((delete_box[0] + delete_box[2]) / 2,
                    (delete_box[1] + delete_box[3]) / 2)
         confirm_box = theme_screen_boxes(editor)["delete_confirm"]
@@ -593,6 +637,13 @@ class ThemeSystemTests(unittest.TestCase):
             recolored = ui.themed_waterfall_pixels(original)
             self.assertEqual(recolored[3::4], original[3::4])
             self.assertGreaterEqual(recolored[dominant], max(recolored[:3]))
+        self.library.activate(BLACK_WHITE_THEME_ID)
+        monochrome = ui.themed_waterfall_pixels(original)
+        self.assertEqual(monochrome[3::4], original[3::4])
+        self.assertEqual(monochrome[0], monochrome[1])
+        self.assertEqual(monochrome[1], monochrome[2])
+        self.assertEqual(monochrome[4], monochrome[5])
+        self.assertEqual(monochrome[5], monochrome[6])
         with patch.object(ui, "GL") as gl, patch.object(ui, "WF_TEX_W", 2), \
                 patch.object(ui, "WF_TEX_H", 2):
             gl.glGenTextures.return_value = 9
@@ -861,7 +912,7 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(restarted.get(saved_id)["colors"]["passband_fill"], expected)
         editor = ThemeEditor(restarted)
         editor.page = 0
-        tap("edit:3")
+        tap("edit:4")
         tap("family_open")
         tap("family:5")
         self.assertEqual(editor.current_color, expected)

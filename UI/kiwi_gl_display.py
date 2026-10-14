@@ -6819,7 +6819,8 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     if identifier == theme_system.DEFAULT_THEME_ID:
         return bytes(data)
     if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
-                           theme_system.GREEN_THEME_ID)
+                           theme_system.GREEN_THEME_ID,
+                           theme_system.BLACK_WHITE_THEME_ID)
             and tuple(palette.waterfall_low) == (0, 0, 0)
             and tuple(palette.waterfall_high) == (255, 255, 255)):
         return bytes(data)
@@ -6870,7 +6871,8 @@ def waterfall_theme_signature():
     low, high = tuple(palette.waterfall_low), tuple(palette.waterfall_high)
     identity = (identifier == theme_system.DEFAULT_THEME_ID or
                 (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
-                                    theme_system.GREEN_THEME_ID)
+                                    theme_system.GREEN_THEME_ID,
+                                    theme_system.BLACK_WHITE_THEME_ID)
                  and low == (0, 0, 0) and high == (255, 255, 255)))
     mapping = ("identity" if identity else
                "inverted" if identifier == theme_system.STRAIGHT_INVERTED_THEME_ID

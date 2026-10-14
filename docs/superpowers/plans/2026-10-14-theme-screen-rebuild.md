@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Keep built-ins **Default**, **Default Inverted**, and **Green**; built-ins cannot be overwritten or deleted.
+- Keep built-ins **Default**, **Default Inverted**, **Green**, and **Black & White**; built-ins cannot be overwritten or deleted.
 - Preserve version-1 JSON theme fields and every existing palette key.
 - New/Edit use all 1280 × 800 logical pixels. Back remains `(1034, 728, 1270, 792)`.
 - Default picker is rainbow hue plus shades; hex is Advanced only.

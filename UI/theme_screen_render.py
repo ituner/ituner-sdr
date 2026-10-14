@@ -8,8 +8,10 @@ import colorsys
 
 from theme_colors import shade_grid, transparency_percent
 from theme_editor import (BACK_BOX, COLOR_GROUPS, EDITOR_INSPECTOR_BOX,
-                          EDITOR_PREVIEW_BOX, theme_screen_boxes)
+                          EDITOR_PREVIEW_BOX, SAVED_CARDS_PER_PAGE,
+                          theme_screen_boxes)
 import theme_system
+from ui_style import ButtonStyle, UIPalette
 
 
 def _text(ui, cache, x, y, value, color, size=14, anchor="lm", bold=True):
@@ -43,35 +45,50 @@ def _draw_library(ui, cache, editor, boxes):
     _button(ui, cache, boxes["new"], "NEW THEME")
     _text(ui, cache, 24, 112, "BUILT-IN", palette.section_heading, 14)
     _text(ui, cache, 24, 308, "SAVED THEMES", palette.section_heading, 14)
-    for slot in range(9):
+    for slot in range(len(theme_system.BUILTIN_THEME_IDS) + SAVED_CARDS_PER_PAGE):
         item = editor.card_item(slot)
         if item is None:
             continue
         box = boxes[f"theme:{slot}"]
         colors = item["colors"]
+        card_palette = UIPalette(**{key: tuple(value) for key, value in colors.items()})
+        card_style = ButtonStyle(card_palette, radius=item["radius"],
+                                 label_size=round(13 * item["text_scale_percent"] / 100))
         active = item["id"] == editor.library.active_id
-        _frame(ui, box, palette.active_surface if active else palette.section_surface,
-               palette.active_border if active else palette.section_border,
+        _frame(ui, box, colors["active_surface"] if active else colors["section_surface"],
+               colors["active_border"] if active else colors["section_border"],
                item["radius"])
         name = item["name"].upper()
-        if len(name) > 24:
-            name = name[:23] + "…"
-        _text(ui, cache, box[0] + 16, box[1] + 30, name, palette.text, 19)
+        name_size = round(19 * item["text_scale_percent"] / 100)
+        if callable(getattr(cache, "texture", None)):
+            name = ui.fit_station_text(cache, name, box[2] - box[0] - 32,
+                                       name_size, bold=True,
+                                       family=card_style.font_family)
+        elif len(name) > 21:
+            name = name[:20] + "…"
+        _text(ui, cache, box[0] + 16, box[1] + 30, name, colors["text"], name_size)
         _text(ui, cache, box[0] + 16, box[1] + 58,
-              "ACTIVE" if active else ("ROUNDED" if item["radius"] else "STRAIGHT"),
-              palette.ready if active else palette.secondary_text, 12)
-        for index, key in enumerate(("background", "surface", "frequency", "ready", "passband_fill")):
-            x0 = box[0] + 16 + index * 42
-            _swatch(ui, (x0, box[1] + 76, x0 + 34, box[1] + 108),
-                    colors[key], palette.border)
-        _button(ui, cache, boxes[f"edit:{slot}"],
-                "CUSTOMIZE" if slot < 3 else "EDIT")
-        if slot >= 3:
-            _button(ui, cache, boxes[f"delete:{slot}"], "DELETE")
-    _button(ui, cache, boxes["previous"], "PREV")
-    _button(ui, cache, boxes["next"], "NEXT")
-    _text(ui, cache, 1130, 682, f"{editor.page + 1} / {editor.page_count}",
-          palette.secondary_text, 13, "cm")
+              "ACTIVE" if active else ("ROUNDED CORNERS" if item["radius"] else "STRAIGHT CORNERS"),
+              colors["ready"] if active else colors["secondary_text"],
+              round(12 * item["text_scale_percent"] / 100))
+        ui.draw_styled_text_button(cache, boxes[f"edit:{slot}"],
+                                   "CUSTOMIZE" if slot < len(theme_system.BUILTIN_THEME_IDS) else "EDIT",
+                                   style=card_style)
+        if slot >= len(theme_system.BUILTIN_THEME_IDS):
+            ui.draw_styled_text_button(cache, boxes[f"delete:{slot}"], "DELETE",
+                                       style=card_style)
+    for action, label, enabled in (("previous", "PREV", editor.can_previous),
+                                   ("next", "NEXT", editor.can_next)):
+        if enabled:
+            _button(ui, cache, boxes[action], label)
+        else:
+            _frame(ui, boxes[action], palette.surface, palette.border,
+                   ui.APP_UI_STYLE.button.radius)
+            _text(ui, cache, (boxes[action][0] + boxes[action][2]) / 2,
+                  (boxes[action][1] + boxes[action][3]) / 2,
+                  label, palette.secondary_text, 13, "cm")
+    _text(ui, cache, 528, 760, f"{editor.page + 1} / {editor.page_count}",
+          palette.secondary_text, 13, "lm")
 
 
 def _draw_preview(ui, cache, editor):
