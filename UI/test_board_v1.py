@@ -644,12 +644,14 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
-    def test_display_theme_precedes_reset(self):
+    def test_display_reset_sits_directly_above_back(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
                          ui.DISPLAY_THEME_BOX[1])
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_RESET_BOX[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
+                         ui.lcd_drawer_back_box()[1])
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         self.assertEqual(ui.DISPLAY_THEME_BOX[2] - ui.DISPLAY_THEME_BOX[0], 236)
         self.assertEqual(ui.display_option_at(1150, (ui.DISPLAY_THEME_BOX[1] + ui.DISPLAY_THEME_BOX[3]) / 2),
                          ('theme', None))
@@ -686,7 +688,9 @@ class BoardLayoutTests(unittest.TestCase):
                          - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
                          ui.DISPLAY_THEME_BOX[1])
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_RESET_BOX[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
+                         ui.lcd_drawer_back_box()[1])
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         states = {entry.args[2]: entry.args[3] for entry in controls.call_args_list}
         self.assertFalse(states['LEFT'])
         self.assertTrue(states['MIDDLE'])
@@ -744,8 +748,8 @@ class BoardLayoutTests(unittest.TestCase):
                                                   (box[1] + box[3]) / 2),
                              ('palette', palette))
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16, ui.DISPLAY_THEME_BOX[1])
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_RESET_BOX[1])
-        self.assertGreaterEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], 16)
+        self.assertEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], ui.LCD_NAV_GAP)
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         for earlier in boxes:
             if earlier != ui.DISPLAY_RESET_BOX:
                 self.assertFalse(earlier[0] < ui.DISPLAY_RESET_BOX[2]
