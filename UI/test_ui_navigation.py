@@ -100,15 +100,15 @@ class DrawerGeometryTests(unittest.TestCase):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["rx", "audio", "digital", "vosc", "display", "dual", "settings", "tests"],
+            ["rx", "dual", "audio", "display", "digital", "vosc", "tests", "settings"],
         )
         self.assertNotIn("display", dict(ui.SETTINGS_MENU_ITEMS))
         self.assertEqual(ui.LCD_NAV_TILE_W, 114)
         self.assertEqual(ui.LCD_NAV_TILE_H, 64)
         self.assertEqual(ui.LCD_NAV_GAP, 8)
         boxes = [ui.lcd_nav_box(i) for i in range(len(ui.MENU_ITEMS))]
-        self.assertEqual(boxes[0], (1034, 480, 1148, 552))
-        self.assertEqual(boxes[-1], (1156, 720, 1270, 792))
+        self.assertEqual(boxes[0], (1034, 488, 1148, 558))
+        self.assertEqual(boxes[-1], (1156, 722, 1270, 792))
 
     def test_vosc_uses_right_rail_controls_and_shared_back(self):
         options = list(ui.vosc_sidebar_options())

@@ -2057,17 +2057,17 @@ MENU_ROWS = 4
 # direct shortcut to the existing Apps workspace.
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
+    ("dual", "DUAL RX"),
     ("audio", "AUDIO"),
+    ("display", "DISPLAY"),
     ("digital", "DECODE"),
     ("vosc", "CAPTIONS"),
-    ("display", "DISPLAY"),
-    ("dual", "DUAL RX"),
-    ("settings", "SYSTEM"),
     ("tests", "APPS"),
+    ("settings", "SYSTEM"),
 )
 HOME_MENU_SUBTITLES = {
-    "rx": "LOCAL & REMOTE",
-    "audio": "VOLUME & DSP",
+    "rx": "FIND & TUNE",
+    "audio": "VOL & DSP",
     "digital": "",  # Computed from the available decoder categories below.
     "vosc": "TRANSCRIBE",
     "display": "LOOK & FEEL",
@@ -8486,10 +8486,13 @@ def draw_navigation_button(text_cache, box, title, subtitle):
     visual = draw_styled_button_frame(box, active=False, pressed=pressed, style=style)
     x0, y0, x1, y1 = box
     cx = round((x0 + x1) / 2)
-    extra_height = max(0, y1 - y0 - LCD_NAV_TILE_H)
+    # Preserve top/bottom padding; the shorter Home tile tightens only the text gap.
+    taller_tile = y1 - y0 > LCD_NAV_TILE_H
+    title_y = y0 + (31 if taller_tile else 28)
+    subtitle_y = y1 - 16 if taller_tile else y0 + 51
     for text, preferred, cy, color in (
-        (title, 14, y0 + 28 + extra_height / 3, visual.text),
-        (subtitle, 12, y0 + 51 + 2 * extra_height / 3, visual.text if pressed else style.subtitle_color),
+        (title, 14, title_y, visual.text),
+        (subtitle, 12, subtitle_y, visual.text if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
         draw_text(text_cache, cx, round(cy), str(text).upper(), color,
@@ -15488,7 +15491,7 @@ LCD_NAV_TOP_MIN = 88
 # right edges: 114 + 8 + 114 = 236 px inside the rail's 10 px margins.
 LCD_NAV_TILE_W = 114
 LCD_NAV_TILE_H = 64
-LCD_HOME_NAV_TILE_H = 72
+LCD_HOME_NAV_TILE_H = 70
 LCD_NAV_GAP = 8
 LCD_DRAWER_HEADER_H = 64
 LCD_DRAWER_HEADING_COLOR = APP_UI_STYLE.palette.section_heading
