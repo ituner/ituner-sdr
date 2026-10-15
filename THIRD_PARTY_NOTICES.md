@@ -1,4 +1,17 @@
-# Third-party artwork
+# Third-party assets
+
+## Bundled fonts
+
+`assets/fonts/roboto/` contains unmodified Roboto Regular and Bold files under
+the included SIL Open Font License (`OFL.txt`). `assets/fonts/liberation/`
+contains unmodified Liberation Sans, Mono, and Serif Regular and Bold files
+from Liberation Fonts 2.1.5 under its included SIL Open Font License
+(`LICENSE`). `assets/fonts/dejavu/` contains unmodified DejaVu Sans Regular and
+Bold files under the included Bitstream Vera/Arev terms (`LICENSE.txt`). See
+`assets/fonts/README.md` for their UI roles. The existing Oxanium font retains
+its own notice and license in `assets/fonts/oxanium/`.
+
+## Navigation icons
 
 The following navigation icons are distributed under the Flaticon Free
 License, which permits personal and commercial use with attribution. The
