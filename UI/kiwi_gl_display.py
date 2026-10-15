@@ -12,7 +12,10 @@ import json
 import lzma
 import math
 import os
-import resource
+try:
+    import resource
+except ImportError:  # Windows has no POSIX resource module.
+    resource = None
 import queue
 import select
 import signal
@@ -23982,8 +23985,12 @@ def main():
     def request_zoom_osd(_signum, _frame):
         zoom_osd_requested.set()
 
-    signal.signal(signal.SIGUSR1, request_screenshot)
-    signal.signal(signal.SIGUSR2, request_zoom_osd)
+    # SIGUSR1/SIGUSR2 are service diagnostics on Unix and do not exist on
+    # native Windows. Desktop input and rendering do not depend on them.
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, request_screenshot)
+    if hasattr(signal, "SIGUSR2"):
+        signal.signal(signal.SIGUSR2, request_zoom_osd)
     radio_mode = remembered_radio_mode or default_sideband_mode(args.freq_khz)
     auto_sideband_mode = radio_mode
     manual_radio_mode = remembered_radio_mode is not None
