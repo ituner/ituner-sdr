@@ -4,7 +4,7 @@ import kiwi_gl_display as ui
 
 
 class GlobeMotionTests(unittest.TestCase):
-    def test_fast_satellite_view_keeps_base_but_skips_hd_work(self):
+    def test_fast_satellite_view_keeps_cached_hd_layer_attached(self):
         with patch.object(ui, 'satellite_map_texture', return_value=1), \
              patch.object(ui._globe_meshes, 'draw') as base, \
              patch.object(ui, 'globe_hd_tiles_enabled', return_value=True), \
@@ -12,8 +12,15 @@ class GlobeMotionTests(unittest.TestCase):
             self.assertTrue(ui.draw_receiver_map_satellite(
                 None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True, fast_motion=True))
             base.assert_called_once()
-            tiles.assert_not_called()
+            tiles.assert_called_once_with(
+                None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True,
+                unittest.mock.ANY, unittest.mock.ANY,
+            )
+            tiles.reset_mock()
             ui.draw_receiver_map_satellite(None, 0, 0, ui.PICKER_MAP_BOX, 2.2, True)
+            tiles.assert_called_once()
+            tiles.reset_mock()
+            ui.draw_receiver_map_satellite(None, 0, 0, ui.PICKER_MAP_BOX, 2.2, False)
             tiles.assert_called_once()
 
     def setUp(self):
@@ -46,6 +53,32 @@ class GlobeMotionTests(unittest.TestCase):
         replacement=[dict(r,name='new '+r['name']) for r in self.rows]
         _,_,_,selected=ui.receiver_map_render_rows(replacement,replacement[0]['server'],'',True)
         self.assertEqual(selected['name'],'new 0')
+
+    def test_motion_reuses_cached_receiver_metadata_until_stationary(self):
+        class CountedReceiver(dict):
+            reads = 0
+
+            def get(self, key, default=None):
+                type(self).reads += 1
+                return super().get(key, default)
+
+        rows = [CountedReceiver(row) for row in self.rows]
+        ui.receiver_map_render_rows(rows, '', '', True)
+        CountedReceiver.reads = 0
+        ui.receiver_map_render_rows(rows, '', '', True)
+        self.assertEqual(CountedReceiver.reads, 0)
+        rows[0]['receiver_type'] = 'fmdx'
+        full, *_ = ui.receiver_map_render_rows(rows, '', '', False)
+        self.assertEqual(full[0][1], 'fmdx')
+
+    def test_cm5_touch_gain_is_faster_without_changing_desktop_gain(self):
+        box = (0, 0, 1280, 800)
+        desktop = ui.radiogarden_pan_angles(0, 0, 10, 0, box, 2.2)
+        touch = ui.radiogarden_pan_angles(
+            0, 0, 10, 0, box, 2.2,
+            gain=ui.RADIOGARDEN_TOUCH_DRAG_GAIN,
+        )
+        self.assertAlmostEqual(abs(touch[0]), abs(desktop[0]) * 1.3)
 
     def test_sixty_fps_only_when_globe_is_moving(self):
         self.assertEqual(ui.globe_frame_rate(30,True,True),60)

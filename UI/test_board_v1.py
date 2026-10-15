@@ -81,6 +81,24 @@ class AudioJitterBufferTests(unittest.TestCase):
         self.assertEqual(player.target_packets, 7)
 
 class BoardLayoutTests(unittest.TestCase):
+    def test_only_horizontal_smeters_share_the_top_frequency_strip(self):
+        self.assertTrue(ui.smeter_supports_top_instrument_strip('led'))
+        self.assertTrue(ui.smeter_supports_top_instrument_strip('linear_orange'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('bakelite_square'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('aviation'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('oe3ide_eye_plain'))
+
+    def test_meterless_middle_frequency_is_forced_to_the_1280_screen_center(self):
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (300, 58)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}):
+            self.assertEqual(ui.large_frequency_placement('middle'), (640, 'cm'))
+            box = ui.frequency_display_box(text_cache, 7075, position='middle')
+            self.assertEqual((box[0] + box[2]) / 2, 640)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'linear_orange'}):
+            self.assertEqual(ui.large_frequency_placement('middle')[1], 'rm')
+
     def test_old_frequency_positions_keep_their_screen_locations(self):
         self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
         self.assertEqual(ui.normalize_frequency_position('expanded'), 'middle')
@@ -1020,6 +1038,16 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertEqual(selected,expected)
                 self.assertEqual(state.radio_snapshot()[0].upper(),expected)
 
+    def test_large_smeter_moves_mode_hit_region_with_visible_buttons(self):
+        ui.configure_output(True)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}):
+            mode_boxes = tuple(box for _label, box in ui.lcd_home_mode_boxes(True))
+            hit_box = ui.radio_toggle_box(None, 7075.0, True)
+            self.assertGreater(max(box[3] for box in mode_boxes), ui.LCD_ANNUNCIATOR_BOX[3])
+            for box in mode_boxes:
+                center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                self.assertTrue(ui.contains(hit_box, *center))
+
 
 class DualVfoHomeControlTests(unittest.TestCase):
     def test_receiver_list_selection_changes_only_the_requested_vfo(self):
@@ -1099,13 +1127,17 @@ class DualVfoHomeControlTests(unittest.TestCase):
             self.assertEqual(min(box[1] for _label, box in modes), layout[f'mode_{vfo.lower()}'][1])
             self.assertEqual(max(box[3] for _label, box in modes), layout[f'mode_{vfo.lower()}'][3])
 
-    def test_dual_meter_uses_home_renderer_and_mode_change_is_isolated(self):
+    def test_dual_meter_forces_default_compact_face_and_mode_change_is_isolated(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         meter = ui.dual_vfo_layout()['smeter_a']
-        with patch.object(ui, 'draw_lcd_compact_smeter') as draw_meter:
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}), \
+                patch.object(ui, 'draw_selected_smeter') as draw_meter:
             ui.draw_dual_vfo_smeter(None, meter, -95)
-        draw_meter.assert_called_once_with(None, meter, -95)
+            self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'bakelite_square')
+        draw_meter.assert_called_once_with(
+            None, meter, -95, style_id=ui.DEFAULT_METER_STYLE,
+        )
 
         primary = ui.SharedState('http://a.test', 7075, 7, -95, 142, 245, 4, 'am', True)
         secondary = ui.SharedState('http://b.test', 7075, 7, -95, 142, 245, 4, 'lsb', True)
@@ -1579,7 +1611,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
              patch.object(ui._globe_meshes, 'draw'), \
              patch.dict(ui.os.environ, {'ITUNER_GLOBE_HD_TILES': '1'}):
             self.assertTrue(ui.draw_receiver_map_satellite(
-                None, 0.0, 0.0, box, 1200.0, interactive=True,
+                None, 0.0, 0.0, box, 1200.0, interactive=False,
             ))
             tiles.assert_called_once()
         with patch.object(ui, 'satellite_map_texture', return_value=1), \

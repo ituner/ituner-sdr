@@ -11,7 +11,7 @@ from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           normalize_theme, theme_appearance)
 
 COLOR_GROUPS = (
-    ("BASE", ("background", "sidebar", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
+    ("BASE", ("background", "sidebar", "sidebar_header", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
     ("TEXT", ("text", "secondary_text", "section_heading", "sidebar_title", "frequency", "focus_text", "untested_text")),
     ("BUTTON", ("surface", "border", "active_surface", "active_border", "selected_surface", "selected_border", "pressed_surface", "pressed_border")),
     ("STATES", ("ready", "waiting", "danger", "danger_border", "untested", "notice")),
@@ -68,11 +68,11 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         for slot, item in enumerate(items[page * count:page * count + count]):
             identifier = item["id"] if editor.tab == "themes" else item
             x = 736 + (slot % 2) * 266
-            y = (152 + (slot // 2) * 156) if editor.tab == "themes" else (194 + (slot // 2) * 228)
-            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (x, y, x + 254, y + (144 if editor.tab == "themes" else 216))
+            y = (152 + (slot // 2) * 84) if editor.tab == "themes" else (184 + (slot // 2) * 224)
+            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (x, y, x + 254, y + (72 if editor.tab == "themes" else 216))
         prefix = "theme" if editor.tab == "themes" else "meter"
-        boxes[f"{prefix}_previous"] = (736, 662, 904, 714)
-        boxes[f"{prefix}_next"] = (1088, 662, 1256, 714)
+        boxes[f"{prefix}_previous"] = (736, FULLSCREEN_BOX[1], 904, FULLSCREEN_BOX[3])
+        boxes[f"{prefix}_next"] = (1088, FULLSCREEN_BOX[1], 1256, FULLSCREEN_BOX[3])
         if editor.tab == "meters":
             for index, (name, _label) in enumerate(METER_FILTERS):
                 x = 736 + index * 132
