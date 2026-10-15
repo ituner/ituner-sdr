@@ -6857,8 +6857,11 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     if inverted:
         rgb[:] = 255 - rgb
     else:
-        lightness = rgb.astype(np.float32) @ np.array((0.2126, 0.7152, 0.0722),
-                                                       dtype=np.float32)
+        # Element-wise RGB math avoids BLAS setup and platform-specific
+        # floating-point warnings when recoloring a full captured waterfall.
+        channels = rgb.astype(np.float32)
+        lightness = (channels[:, 0] * 0.2126 + channels[:, 1] * 0.7152
+                     + channels[:, 2] * 0.0722)
         low = np.asarray(palette.waterfall_low, dtype=np.float32)
         high = np.asarray(palette.waterfall_high, dtype=np.float32)
         rgb[:] = np.clip(np.rint(low + lightness[:, None] / 255.0 * (high - low)),
@@ -30560,7 +30563,6 @@ def main():
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if theme_editor.open:
-                theme_editor.preview_palette = state.waterfall_snapshot()[4]
                 draw_theme_panel(text_cache, theme_editor)
                 theme_notice_remaining = theme_editor.notice_until - now
                 if theme_notice_remaining > 0:

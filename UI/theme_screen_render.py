@@ -4,7 +4,7 @@ import math
 import time
 
 import theme_system
-from ui_style import UIPalette
+from theme_preview import home_capture, frontend_preview
 from smeter_styles import METER_STYLES
 from theme_colors import shade_grid, transparency_percent
 from theme_editor import (APPLY_BOX, BACK_BOX, COLOR_GROUPS, METER_FILTERS,
@@ -44,44 +44,32 @@ def _button(ui, cache, box, label, *, active=False, primary=False, enabled=True,
           label, color, 14, "cm", box[2] - box[0] - 20)
 
 
-def _waterfall(ui, cache, theme, box, palette_id):
-    """Cache a demonstration through the same palette mapping used on Home."""
-    colors = theme["colors"]
+def _captured_frontend(ui, cache, theme, box):
+    """Resize the real captured frontend once per candidate appearance."""
     if not isinstance(cache, ui.TextCache):
-        ui.draw_logical_rect(*box, colors["waterfall_low"])
+        ui.draw_logical_rect(*box, theme['colors']['background'])
         return
-    render_theme = theme
-    if theme_system.is_builtin_theme_id(theme["id"]) and theme != theme_system.BUILTIN_THEMES[theme["id"]]:
-        render_theme = {**theme, "id": "preview-custom"}
-    key = ("theme-waterfall-preview-v1", render_theme["id"], palette_id,
-           tuple(colors["waterfall_low"]), tuple(colors["waterfall_high"]))
-    cached = cache._cached_texture(("surface", key))
+    metadata, _image = home_capture()
+    size = (max(1, round(box[2] - box[0])), max(1, round(box[3] - box[1])))
+    key = ('theme-home-capture-v1', metadata['sha256'], theme['id'], size,
+           tuple((key, tuple(value)) for key, value in sorted(theme['colors'].items())))
+    cached = cache._cached_texture(('surface', key))
     if cached is None:
-        mapper = ui.waterfall_mapper(palette_id)
-        pixels = bytearray()
-        size = (160, 90)
-        for y in range(size[1]):
-            for x in range(size[0]):
-                grain = (x + y * 160 + 1) * 374761393
-                grain = ((grain ^ (grain >> 13)) * 1274126177) & 0xffffffff
-                noise = (grain ^ (grain >> 16)) / 0xffffffff
-                level = round(14 + 22 * noise + 145 * math.exp(-((x - 96 - .5 * math.sin(y / 12)) / 3) ** 2)
-                              + 75 * math.exp(-((x - 44) / 2) ** 2))
-                pixels.extend((*(channel[min(255, level)] for channel in mapper), 255))
-        mapped = ui.themed_waterfall_pixels(bytes(pixels), render_theme,
-                    UIPalette(**{key: tuple(value) for key, value in colors.items()}))
-        surface = ui.pygame.image.fromstring(mapped, size, "RGBA")
+        artwork = frontend_preview(theme, ui.themed_waterfall_pixels)
+        artwork = artwork.resize(size, ui.PILImage.Resampling.LANCZOS)
+        surface = ui.pygame.image.fromstring(artwork.tobytes(), size, 'RGBA')
         cached = cache.surface_texture(key, surface)
     ui.draw_textured_quad(cached[0], *box, 0, 0, 1, 1)
 
 
-def _home(ui, cache, theme, box, palette_id="classic"):
+def _home(ui, cache, theme, box):
     """Use the real meter renderer, palette, sidebar and text proportions."""
     x0, y0, x1, y1 = box
     sx, sy = (x1 - x0) / 1280, (y1 - y0) / 800
     def b(a, c, d, e):
         return x0 + a * sx, y0 + c * sy, x0 + d * sx, y0 + e * sy
     colors = theme["colors"]
+    capture, _image = home_capture()
     def rect(bounds, color):ui.draw_logical_rect(*b(*bounds), color)
     def line(a, c, d, e, color, width=1):ui.draw_logical_line(*b(a, c, d, e), color, width)
     def text(x, y, value, color, size=20, anchor="cm", width=None):
@@ -94,12 +82,12 @@ def _home(ui, cache, theme, box, palette_id="classic"):
     rx = (rail[0] + rail[1]) / 2
     rect((0, 0, 1280, 800), colors["background"])
     rect((rail[0], 0, rail[1], 800), colors["sidebar"])
-    text(rx, 55, "1.088.900", colors["frequency"], 38, width=240)
-    text(rx, 97, "MW   AM", colors["secondary_text"], 19)
+    text(rx, 55, capture["frequency_label"], colors["frequency"], 38, width=240)
+    text(rx, 97, capture["band_mode"], colors["secondary_text"], 19, width=240)
     meter = METER_STYLES[theme["smeter_style"]]
     mh = meter.height
     ui.draw_selected_smeter(cache, b(rail[0] + 10, 120, rail[1] - 10, 120 + mh),
-                            -85, -73, theme=theme, style_id=theme["smeter_style"])
+                            capture["signal_dbm"], None, theme=theme, style_id=theme["smeter_style"])
     # Preserve Home's actual instrument order and compact/tall-meter spacing.
     mode_y = 120 + mh + 18
     for index, caption in enumerate(("AM", "SAM", "DRM", "LSB", "USB", "CW", "FM", "IQ")):
@@ -109,16 +97,17 @@ def _home(ui, cache, theme, box, palette_id="classic"):
         text(bx + 28, by + 16, caption, colors["text"], 17)
     if mh == 80:
         text(rail[0] + 14, 318, "BANDPASS", colors["section_heading"], 16, "lm")
-        text(rail[1] - 14, 318, "2.4 kHz", colors["text"], 17, "rm")
+        text(rail[1] - 14, 318, capture["bandwidth_label"], colors["text"], 17, "rm")
         rect((rail[0] + 90, 337, rail[1] - 90, 372), colors["home_passband_fill"])
         line(rail[0] + 24, 372, rail[1] - 24, 372, colors["home_passband_border"])
         line(rx, 333, rx, 374, colors["home_passband_center"])
     volume_y = max(408, mode_y + 84)
     text(rail[0] + 14, volume_y, "VOLUME", colors["secondary_text"], 17, "lm")
-    text(rail[1] - 14, volume_y, "50%", colors["text"], 17, "rm")
+    text(rail[1] - 14, volume_y, str(capture["volume_percent"]) + "%", colors["text"], 17, "rm")
+    fill_end = rail[0] + 60 + (rail[1] - rail[0] - 80) * capture["volume_percent"] / 100
     rect((rail[0] + 60, volume_y + 31, rail[1] - 20, volume_y + 38), colors["slider_track"])
-    rect((rail[0] + 60, volume_y + 31, rail[0] + 142, volume_y + 38), colors["slider_fill"])
-    rect((rail[0] + 137, volume_y + 25, rail[0] + 147, volume_y + 44), colors["slider_thumb"])
+    rect((rail[0] + 60, volume_y + 31, fill_end, volume_y + 38), colors["slider_fill"])
+    rect((fill_end - 5, volume_y + 25, fill_end + 5, volume_y + 44), colors["slider_thumb"])
     for index, (kind, caption) in enumerate(ui.MENU_ITEMS):
         bx, by = rail[0] + 10 + (index % 2) * 122, 488 + (index // 2) * 78
         bounds = b(bx, by, bx + 114, by + 70)
@@ -127,25 +116,7 @@ def _home(ui, cache, theme, box, palette_id="classic"):
         text(bx + 57, by + 27, caption, colors["text"], 19, width=106)
         text(bx + 57, by + 52, ui.menu_subtitle(kind), colors["secondary_text"], 15, width=106)
     a, z = screen
-    rect((a + 8, 16, z - 8, 258), colors["spectrum_field"])
-    for row in range(1, 5):
-        yy = 20 + row * 45
-        line(a + 8, yy, z - 8, yy, colors["spectrum_grid"])
-    last = None
-    for index in range(97):
-        x = a + 8 + index * (z - a - 16) / 96
-        height = 30 + (index * 37 % 31) + 115 * math.exp(-((index - 58) / 4) ** 2)
-        if last:
-            line(*last, x, 250 - height, colors["spectrum_line"])
-        last = x, 250 - height
-    _waterfall(ui, cache, theme, b(a + 8, 262, z - 8, 714), palette_id)
-    center = a + (z - a) * .60
-    rect((center - 42, 18, center + 42, 714), colors["passband_fill"])
-    line(center - 42, 18, center - 42, 714, colors["passband_border"])
-    line(center + 42, 18, center + 42, 714, colors["passband_border"])
-    rect((a + 8, 726, z - 8, 790), colors["footer_background"])
-    text(a + 22, 750, "RECEIVER   •   AM", colors["footer_primary"], 20, "lm")
-    text(a + 22, 776, "CONNECTED", colors["footer_live"], 18, "lm")
+    _captured_frontend(ui, cache, theme, b(a, 0, z, 800))
 
 
 def _preview(ui, cache, editor):
@@ -164,11 +135,11 @@ def _preview(ui, cache, editor):
         _text(ui, cache, 326, 600, "Theme: " + theme["name"], MUTED, 15, "cm", 570)
         _text(ui, cache, 326, 630, "Choose any meter to preview it here.", MUTED, 14, "cm")
     else:
-        _home(ui, cache, theme, PREVIEW_BOX, getattr(editor, "preview_palette", "classic"))
+        _home(ui, cache, theme, PREVIEW_BOX)
         _text(ui, cache, 24, 584, theme["name"], TEXT, 24, width=600)
         _text(ui, cache, 24, 619, "S-meter: " + METER_STYLES[theme["smeter_style"]].name,
               MUTED, 14, width=600)
-        _text(ui, cache, 24, 656, "Your Home screen after applying these choices.", MUTED, 13)
+        _text(ui, cache, 24, 656, "Your captured SDR screen with this theme.", MUTED, 13)
 
 
 def _pages(ui, cache, boxes, prefix, page, count):
@@ -187,7 +158,7 @@ def _gallery(ui, cache, editor, boxes):
             colors = item["colors"]
             ui.draw_logical_rounded_rect(*box, 8, colors["background"], ACCENT if active else BORDER)
             _text(ui, cache, box[0] + 16, box[1] + 28, item["name"], colors["text"], 18, width=260)
-            _text(ui, cache, box[0] + 16, box[1] + 64, "1.088.900", colors["frequency"], 22)
+            _text(ui, cache, box[0] + 16, box[1] + 64, home_capture()[0]["frequency_label"], colors["frequency"], 22)
             for index, key in enumerate(("surface", "active_surface", "pressed_surface", "selected_surface")):
                 x = box[0] + 16 + index * 66
                 ui.draw_logical_rounded_rect(x, box[1] + 91, x + 56, box[1] + 120, item["radius"],

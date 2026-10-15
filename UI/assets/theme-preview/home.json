@@ -1,0 +1,427 @@
+{
+  "description": "Real CM5 Home screen, captured at the user-selected 17.6832 MHz waterfall setup.",
+  "logical_size": [
+    1280,
+    800
+  ],
+  "native_rotation": "rotate_90_ccw",
+  "frontend_box": [
+    0,
+    0,
+    1024,
+    800
+  ],
+  "waterfall_box": [
+    0,
+    280,
+    1024,
+    800
+  ],
+  "frequency_label": "17.683.200",
+  "band_mode": "16 m \u00b7 SW AM",
+  "signal_dbm": -55,
+  "volume_percent": 100,
+  "bandwidth_label": "9.8 kHz",
+  "source_colors": {
+    "active_border": [
+      96,
+      96,
+      96,
+      255
+    ],
+    "active_surface": [
+      30,
+      30,
+      30,
+      255
+    ],
+    "background": [
+      18,
+      18,
+      18,
+      255
+    ],
+    "border": [
+      46,
+      46,
+      46,
+      255
+    ],
+    "danger": [
+      102,
+      31,
+      39,
+      255
+    ],
+    "danger_border": [
+      252,
+      103,
+      111,
+      255
+    ],
+    "divider": [
+      42,
+      42,
+      42,
+      180
+    ],
+    "focus": [
+      0,
+      229,
+      255,
+      255
+    ],
+    "focus_text": [
+      18,
+      18,
+      18
+    ],
+    "footer_background": [
+      4,
+      8,
+      12,
+      208
+    ],
+    "footer_live": [
+      120,
+      255,
+      179
+    ],
+    "footer_primary": [
+      162,
+      175,
+      179
+    ],
+    "frequency": [
+      115,
+      255,
+      177
+    ],
+    "home_passband_border": [
+      113,
+      234,
+      240,
+      238
+    ],
+    "home_passband_center": [
+      238,
+      202,
+      96,
+      232
+    ],
+    "home_passband_fill": [
+      42,
+      154,
+      176,
+      88
+    ],
+    "meter_hot": [
+      244,
+      104,
+      90,
+      238
+    ],
+    "meter_off": [
+      31,
+      52,
+      61,
+      208
+    ],
+    "meter_on": [
+      92,
+      221,
+      231,
+      238
+    ],
+    "notice": [
+      72,
+      255,
+      122
+    ],
+    "passband_border": [
+      255,
+      196,
+      86,
+      136
+    ],
+    "passband_center": [
+      255,
+      192,
+      68,
+      222
+    ],
+    "passband_fill": [
+      255,
+      190,
+      64,
+      42
+    ],
+    "pressed_border": [
+      0,
+      229,
+      255,
+      255
+    ],
+    "pressed_surface": [
+      0,
+      229,
+      255,
+      255
+    ],
+    "ready": [
+      0,
+      230,
+      118,
+      255
+    ],
+    "secondary_text": [
+      132,
+      132,
+      132
+    ],
+    "section_border": [
+      112,
+      136,
+      146,
+      255
+    ],
+    "section_heading": [
+      174,
+      203,
+      208
+    ],
+    "section_surface": [
+      11,
+      20,
+      27,
+      255
+    ],
+    "selected_border": [
+      82,
+      82,
+      82,
+      255
+    ],
+    "selected_surface": [
+      24,
+      24,
+      24,
+      255
+    ],
+    "sidebar": [
+      0,
+      0,
+      0,
+      255
+    ],
+    "sidebar_rule": [
+      72,
+      101,
+      112,
+      160
+    ],
+    "sidebar_title": [
+      215,
+      235,
+      239
+    ],
+    "slider_fill": [
+      80,
+      226,
+      164,
+      235
+    ],
+    "slider_marker": [
+      112,
+      238,
+      177,
+      190
+    ],
+    "slider_thumb": [
+      229,
+      246,
+      246,
+      250
+    ],
+    "slider_track": [
+      27,
+      45,
+      52,
+      255
+    ],
+    "smeter_active": [
+      0,
+      76,
+      245,
+      255
+    ],
+    "smeter_dbm": [
+      189,
+      198,
+      201,
+      225
+    ],
+    "smeter_hot": [
+      230,
+      20,
+      42,
+      255
+    ],
+    "smeter_marker": [
+      139,
+      234,
+      255,
+      255
+    ],
+    "smeter_minor": [
+      160,
+      178,
+      182,
+      155
+    ],
+    "smeter_peak": [
+      182,
+      197,
+      200,
+      178
+    ],
+    "smeter_rail": [
+      27,
+      43,
+      51,
+      230
+    ],
+    "smeter_scale": [
+      222,
+      255,
+      228
+    ],
+    "smeter_tick": [
+      192,
+      211,
+      214,
+      220
+    ],
+    "spectrum_axis": [
+      125,
+      169,
+      181,
+      118
+    ],
+    "spectrum_field": [
+      2,
+      7,
+      12,
+      236
+    ],
+    "spectrum_fill": [
+      161,
+      184,
+      196,
+      154
+    ],
+    "spectrum_grid": [
+      89,
+      139,
+      155,
+      48
+    ],
+    "spectrum_label": [
+      180,
+      207,
+      211
+    ],
+    "spectrum_line": [
+      204,
+      219,
+      224,
+      208
+    ],
+    "spectrum_peak_fill": [
+      145,
+      159,
+      168,
+      76
+    ],
+    "spectrum_peak_line": [
+      174,
+      187,
+      194,
+      142
+    ],
+    "spectrum_tick": [
+      163,
+      203,
+      211,
+      172
+    ],
+    "surface": [
+      0,
+      0,
+      0,
+      255
+    ],
+    "text": [
+      255,
+      255,
+      255
+    ],
+    "top_instrument_band": [
+      0,
+      0,
+      0,
+      144
+    ],
+    "untested": [
+      33,
+      33,
+      33,
+      255
+    ],
+    "untested_text": [
+      117,
+      117,
+      117
+    ],
+    "waiting": [
+      255,
+      179,
+      0,
+      255
+    ],
+    "waterfall_high": [
+      255,
+      255,
+      255
+    ],
+    "waterfall_low": [
+      0,
+      0,
+      0
+    ],
+    "waterfall_ruler_background": [
+      10,
+      15,
+      21,
+      185
+    ],
+    "waterfall_ruler_label": [
+      160,
+      187,
+      197
+    ],
+    "waterfall_ruler_major": [
+      202,
+      218,
+      224,
+      220
+    ],
+    "waterfall_ruler_minor": [
+      157,
+      182,
+      192,
+      196
+    ]
+  },
+  "sha256": "3909f6021216cf4d4aa75e5af5d27746284831ce839d58707e0542a3950a3700"
+}

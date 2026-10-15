@@ -20,8 +20,11 @@ stay on the page with an inline error and retain the preview for retry.
 
 The preview uses the selected palette, sidebar side, text size and actual
 S-meter renderer. Tall meters hide the Bandpass area as they do on Home.
-Signal and waterfall data in previews are demonstrations, separate from the
-receiver. Color controls preserve opacity when adjusting RGB.
+The Home preview uses an unchanged capture of the user's actual CM5 SDR
+frontend at 17.6832 MHz, including the spectrum, ruler, waterfall and footer.
+Candidate themes recolor the captured pixels; no generated RF image is used.
+The enlarged S-meter uses a demonstration signal. Color controls preserve
+opacity when adjusting RGB.
 
 Changing a saved theme updates it in place. Customizing a built-in creates an
 automatically named copy, such as **Default Custom**; further copies receive an
