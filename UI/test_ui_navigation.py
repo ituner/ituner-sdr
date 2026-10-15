@@ -141,7 +141,7 @@ class DrawerGeometryTests(unittest.TestCase):
             None, list(ui.vosc_sidebar_options())[-1][2], "CALLSIGN", "ON", active=True,
         )
 
-    def test_footer_places_clock_after_buffer_and_system_stats_on_right(self):
+    def test_footer_places_larger_clock_before_buffer_and_system_stats_on_right(self):
         cache = mock.Mock()
         cache.font.return_value.size.return_value = (90, 13)
         with mock.patch.object(ui, "draw_logical_rect"), \
@@ -152,11 +152,12 @@ class DrawerGeometryTests(unittest.TestCase):
                                  station_name="TEST RECEIVER", audio_jitter_depth=7)
         rendered = [(call.args[1], call.args[2], call.args[3]) for call in draw_text.call_args_list]
         self.assertEqual(rendered[0], (18, 739, "TEST RECEIVER"))
-        self.assertEqual(rendered[1], (18, 771, "BUFFER Q7/T6"))
-        self.assertEqual(rendered[2][0:2], (124, 771))
-        self.assertIn("UTC", rendered[2][2])
+        self.assertEqual(rendered[1][0:2], (18, 771))
+        self.assertIn("UTC", rendered[1][2])
+        self.assertEqual(rendered[2], (124, 771, "BUFFER Q7/T6"))
         self.assertEqual(rendered[3], (1006, 739, "CPU 15%   RAM 120 MB"))
         self.assertEqual(rendered[4], (1006, 771, "TEMP 50 C"))
+        self.assertTrue(all(call.args[5] == 18 for call in draw_text.call_args_list))
 
     def test_digi_rail_retains_all_decoder_destinations(self):
         self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},

@@ -4760,7 +4760,7 @@ def favorite_waterfall_box():
 def audio_jitter_status_box():
     """Touch target for the left-lane ``BUFFER Q…/T…`` annunciator.
 
-    The label is rendered at x=18 in the second status row. Its former
+    The label follows the UTC clock in the second status row. Its former
     middle-of-bar hitbox not only missed the visible text but overlapped the
     CPU control, making the transport graph effectively unreachable.
     """
@@ -18481,7 +18481,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         status_x1 = DESKTOP_1280_MAIN_W
         footer_back = APP_UI_STYLE.palette.footer_background
         draw_logical_rect(0, y0, status_x1, y1, (*footer_back[:3], int(footer_back[3] * alpha)))
-        size = 13
+        size = 18
         first_y = y0 + 27
         second_y = y0 + 59
         used, total = station_capacity or (None, None)
@@ -18503,12 +18503,13 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
             draw_text(text_cache, capacity_x, first_y, capacity_label,
                       APP_UI_STYLE.palette.footer_live, size, True, False,
                       "lm", alpha, family="Liberation Sans")
-        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-        draw_text(text_cache, 18, second_y, buffer_label, APP_UI_STYLE.palette.footer_live, size,
-                  False, False, "lm", alpha, family="Liberation Sans")
-        buffer_width = text_cache.font(size, family="Liberation Sans").size(buffer_label)[0]
         clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
-        draw_text(text_cache, 18 + buffer_width + 16, second_y, clock_label,
+        draw_text(text_cache, 18, second_y, clock_label,
+                  APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
+                  family="Liberation Sans")
+        clock_width = text_cache.font(size, family="Liberation Sans").size(clock_label)[0]
+        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
+        draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
                   APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
                   family="Liberation Sans")
         ram_mb = read_process_ram_mb()
