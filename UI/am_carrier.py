@@ -11,6 +11,12 @@ def carrier_available(mode, receiver_type='kiwi'):
     return receiver_type == 'kiwi' and str(mode).lower() in AM_MODES
 
 
+def rf_view_center_hz(requested_hz, bandwidth_hz, zoom):
+    """Kiwi clamps its RF window at DC and the upper sampling-band edge."""
+    half_span = bandwidth_hz / (2 ** zoom * 2)
+    return max(half_span, min(bandwidth_hz-half_span, requested_hz))
+
+
 def carrier_peak(rows, first_hz, bin_hz, target_hz, radius_hz):
     """Require a narrow, prominent, persistent and unambiguous RF peak."""
     if len(rows) < 5 or bin_hz <= 0:
@@ -101,7 +107,8 @@ class CarrierSearch:
         center_hz = first_hz + bin_hz * 512
         # Server pan is quantized to its native start-bin grid. Queued rows
         # from the old view must never be measured against our new frequency.
-        if abs(center_hz-self.center_hz) > max(2 * bin_hz, 3):
+        expected_center_hz = rf_view_center_hz(self.center_hz, bandwidth_hz, zoom)
+        if abs(center_hz-expected_center_hz) > max(2 * bin_hz, 3):
             return None
         geometry = start, zoom
         if geometry != self.geometry:

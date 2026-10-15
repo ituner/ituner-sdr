@@ -230,7 +230,7 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
-from am_carrier import CarrierSearch, carrier_available
+from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
 from meter_artwork import linear_strip_image
 
 
@@ -23677,7 +23677,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                             continue
                         first_hz = packet_start * wf_bandwidth_hz / (1024 * 2**wf_zoom_max)
                         span_hz = wf_bandwidth_hz / 2**packet_zoom
-                        if abs(first_hz + span_hz/2 - sent_freq_khz*1000) > max(3, span_hz/512):
+                        expected_center_hz = rf_view_center_hz(
+                            sent_freq_khz*1000, wf_bandwidth_hz, packet_zoom)
+                        if abs(first_hz + span_hz/2 - expected_center_hz) > max(3, span_hz/512):
                             continue
                         carrier_restoring = False
                     samples = message[16:]
