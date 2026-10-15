@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title description">
+  <title id="title">Guided Theme Editor rough preview</title>
+  <desc id="description">A full-screen theme editor showing the Surfaces category, two color-family rows, a rainbow hue strip, a shade and color-strength field, and four bottom navigation controls.</desc>
+  <defs>
+    <linearGradient id="rainbow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff4a4a"/>
+      <stop offset="0.17" stop-color="#ffbe55"/>
+      <stop offset="0.34" stop-color="#f2f56a"/>
+      <stop offset="0.50" stop-color="#76f4a5"/>
+      <stop offset="0.67" stop-color="#65d6f6"/>
+      <stop offset="0.84" stop-color="#a486ff"/>
+      <stop offset="1" stop-color="#ff68af"/>
+    </linearGradient>
+    <linearGradient id="toneHorizontal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#898989"/>
+      <stop offset="1" stop-color="#63d992"/>
+    </linearGradient>
+    <linearGradient id="toneVertical" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="0.47" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.83"/>
+    </linearGradient>
+    <clipPath id="toneClip"><rect x="24" y="452" width="1232" height="190" rx="8"/></clipPath>
+    <style>
+      text { font-family: Inter, Roboto, "Liberation Sans", Arial, sans-serif; }
+      .caps { font-weight: 700; letter-spacing: 0.5px; }
+      .soft { fill: #a0a0a0; }
+      .heading { fill: #aecbd0; }
+      .main { fill: #f4f6f7; }
+      .button { fill: #15191b; stroke: #585858; stroke-width: 1; }
+      .button-text { fill: #ffffff; font-size: 13px; font-weight: 700; letter-spacing: 0.6px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="800" fill="#000000"/>
+
+  <text x="24" y="37" class="heading caps" font-size="13">THEME EDITOR</text>
+  <text x="24" y="76" class="main caps" font-size="32">SURFACES</text>
+  <text x="1256" y="38" text-anchor="end" class="soft caps" font-size="13">DEFAULT CUSTOM · CATEGORY 1 / 6</text>
+  <text x="1256" y="75" text-anchor="end" fill="#78ffb3" class="caps" font-size="13">UNSAVED CHANGES</text>
+  <line x1="24" y1="96" x2="1256" y2="96" stroke="#708892" stroke-width="1"/>
+  <rect x="24" y="105" width="198" height="3" rx="1.5" fill="#78ffb3"/>
+  <rect x="230" y="105" width="198" height="3" rx="1.5" fill="#424b4f"/>
+  <rect x="436" y="105" width="198" height="3" rx="1.5" fill="#424b4f"/>
+  <rect x="642" y="105" width="198" height="3" rx="1.5" fill="#424b4f"/>
+  <rect x="848" y="105" width="198" height="3" rx="1.5" fill="#424b4f"/>
+  <rect x="1054" y="105" width="202" height="3" rx="1.5" fill="#424b4f"/>
+
+  <text x="24" y="141" class="heading caps" font-size="13">CHOOSE A COLOR FAMILY</text>
+  <rect x="24" y="157" width="1232" height="66" rx="8" fill="#142018" stroke="#8b9d90" stroke-width="1"/>
+  <rect x="24" y="157" width="4" height="66" rx="2" fill="#78ffb3"/>
+  <text x="44" y="185" class="main caps" font-size="16">APP &amp; RAIL</text>
+  <text x="44" y="205" class="soft" font-size="12">Background, sidebar, panels and borders</text>
+  <rect x="1194" y="173" width="42" height="34" rx="5" fill="#0b141b" stroke="#708892" stroke-width="1"/>
+
+  <rect x="24" y="231" width="1232" height="66" rx="8" fill="#0b141b" stroke="#455158" stroke-width="1"/>
+  <text x="44" y="259" class="main caps" font-size="16">FOOTER</text>
+  <text x="44" y="279" class="soft" font-size="12">Receiver details, buffer, clock and status</text>
+  <rect x="1194" y="247" width="42" height="34" rx="5" fill="#091015" stroke="#708892" stroke-width="1"/>
+
+  <text x="24" y="343" class="heading caps" font-size="13">APP &amp; RAIL COLOR</text>
+  <text x="1256" y="343" text-anchor="end" class="soft" font-size="12">CHANGES APPEAR IN THE APP IMMEDIATELY</text>
+  <text x="24" y="378" class="main caps" font-size="13">COLOR</text>
+  <rect x="24" y="389" width="1232" height="43" rx="8" fill="url(#rainbow)"/>
+  <rect x="603" y="387" width="4" height="47" rx="2" fill="#ffffff" stroke="#263b32" stroke-width="1"/>
+
+  <text x="24" y="448" class="main caps" font-size="13">SHADE &amp; COLOR STRENGTH</text>
+  <g clip-path="url(#toneClip)">
+    <rect x="24" y="452" width="1232" height="190" fill="url(#toneHorizontal)"/>
+    <rect x="24" y="452" width="1232" height="190" fill="url(#toneVertical)"/>
+  </g>
+  <rect x="24" y="452" width="1232" height="190" rx="8" fill="none" stroke="#708892" stroke-width="1"/>
+  <circle cx="764" cy="539" r="10" fill="none" stroke="#151b19" stroke-width="5"/>
+  <circle cx="764" cy="539" r="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <text x="24" y="662" class="soft caps" font-size="11">NEUTRAL</text>
+  <text x="1256" y="662" text-anchor="end" class="soft caps" font-size="11">FULL COLOR</text>
+
+  <text x="24" y="700" fill="#aecbd0" class="caps" font-size="13">FINE TUNE</text>
+  <text x="160" y="700" fill="#aecbd0" class="caps" font-size="13">RESET CATEGORY</text>
+
+  <rect x="24" y="728" width="236" height="64" rx="8" fill="#111315" stroke="#3d4144" stroke-width="1"/>
+  <text x="142" y="766" text-anchor="middle" fill="#747b7e" class="button-text">PREV</text>
+  <rect x="268" y="728" width="236" height="64" rx="8" class="button"/>
+  <text x="386" y="766" text-anchor="middle" class="button-text">NEXT</text>
+  <rect x="512" y="728" width="236" height="64" rx="8" class="button"/>
+  <text x="630" y="766" text-anchor="middle" class="button-text">VIEW APP</text>
+  <rect x="1034" y="728" width="236" height="64" rx="8" class="button"/>
+  <text x="1152" y="766" text-anchor="middle" class="button-text">BACK</text>
+</svg>

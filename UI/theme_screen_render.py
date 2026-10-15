@@ -5,11 +5,11 @@ always comes from theme_editor.theme_screen_boxes.
 """
 
 import colorsys
+from types import SimpleNamespace
 
-from theme_colors import shade_grid, transparency_percent
-from theme_editor import (BACK_BOX, COLOR_GROUPS, EDITOR_INSPECTOR_BOX,
-                          EDITOR_PREVIEW_BOX, METER_CARDS_PER_PAGE,
-                          SAVED_CARDS_PER_PAGE,
+from theme_colors import transparency_percent
+from theme_editor import (BACK_BOX, COLOR_GROUPS, METER_CARDS_PER_PAGE,
+                          SAVED_CARDS_PER_PAGE, GUIDED_CATEGORIES,
                           theme_screen_boxes)
 from smeter_styles import METER_STYLES
 import theme_system
@@ -94,226 +94,6 @@ def _draw_library(ui, cache, editor, boxes):
           palette.secondary_text, 13, "lm")
 
 
-def _draw_preview(ui, cache, editor):
-    theme = editor.preview
-    colors = theme["colors"]
-    x0, y0, x1, y1 = EDITOR_PREVIEW_BOX
-    _frame(ui, EDITOR_PREVIEW_BOX, colors["background"], colors["section_border"], 4)
-    rail_width = 168
-    rail = ((x0, y0, x0 + rail_width, y1) if theme["sidebar"] == "left"
-            else (x1 - rail_width, y0, x1, y1))
-    main = ((x0 + rail_width, y0, x1, y1) if theme["sidebar"] == "left"
-            else (x0, y0, x1 - rail_width, y1))
-    ui.draw_logical_rect(*rail, colors["sidebar"])
-    ui.draw_logical_line(rail[2] if theme["sidebar"] == "left" else rail[0],
-                         y0, rail[2] if theme["sidebar"] == "left" else rail[0],
-                         y1, colors["section_border"], 1)
-    if editor.scene == "home":
-        _draw_preview_home(ui, cache, theme, rail, main)
-    elif editor.scene == "browse":
-        _draw_preview_browse(ui, cache, theme, rail, main)
-    else:
-        _draw_preview_popups(ui, cache, theme, rail, main)
-
-
-def _draw_preview_home(ui, cache, theme, rail, main):
-    colors = theme["colors"]
-    rx = (rail[0] + rail[2]) / 2
-    _text(ui, cache, rx, 205, "1.088.900", colors["frequency"], 28, "cm")
-    _text(ui, cache, rx, 240, "MW  AM", colors["secondary_text"], 13, "cm")
-    _text(ui, cache, rail[0] + 12, 275, "S-METER", colors["section_heading"], 13)
-    for index in range(24):
-        x = rail[0] + 12 + index * 6
-        ui.draw_logical_rect(x, 291, x + 4, 311,
-                             colors["meter_on"] if index < 13 else colors["meter_off"])
-    _text(ui, cache, rail[0] + 12, 330, "S1  S3  S5  S7  S9", colors["smeter_scale"], 11)
-    labels = (("NORMAL", "surface", "border"), ("ACTIVE", "active_surface", "active_border"),
-              ("SELECTED", "selected_surface", "selected_border"),
-              ("PRESSED", "pressed_surface", "pressed_border"))
-    for index, (label, fill_key, border_key) in enumerate(labels):
-        bx = rail[0] + 10 + (index % 2) * 78
-        by = 374 + (index // 2) * 72
-        box = (bx, by, bx + 70, by + 64)
-        _frame(ui, box, colors[fill_key], colors[border_key], theme["radius"])
-        _text(ui, cache, bx + 35, by + 25, label, colors["text"], 10, "cm")
-        _text(ui, cache, bx + 35, by + 43, "TEXT", colors["secondary_text"], 10, "cm")
-    mx0, my0, mx1, my1 = main
-    ui.draw_logical_rect(mx0 + 8, 178, mx1 - 8, 315, colors["spectrum_field"])
-    for row in range(1, 4):
-        yy = 178 + row * 34
-        ui.draw_logical_line(mx0 + 8, yy, mx1 - 8, yy, colors["spectrum_grid"], 1)
-    for index in range(56):
-        xx = mx0 + 8 + index * (mx1 - mx0 - 16) / 55
-        peak = 22 + (index * 17 % 39)
-        ui.draw_logical_line(xx, 315, xx, 315 - peak,
-                             colors["spectrum_line"], 1)
-    ui.draw_logical_rect(mx0 + 8, 315, mx1 - 8, 630, colors["waterfall_low"])
-    for index in range(22):
-        xx = mx0 + 10 + index * (mx1 - mx0 - 20) / 21
-        ui.draw_logical_line(xx, 315, xx, 630,
-                             colors["waterfall_high"] if index % 6 == 0 else colors["waterfall_low"], 2)
-    cx = (mx0 + mx1) / 2
-    ui.draw_logical_rect(cx - 34, 178, cx + 34, 630, colors["passband_fill"])
-    ui.draw_logical_line(cx - 34, 178, cx - 34, 630, colors["passband_border"], 1)
-    ui.draw_logical_line(cx + 34, 178, cx + 34, 630, colors["passband_border"], 1)
-    ui.draw_logical_rect(mx0 + 8, 640, mx1 - 8, 698, colors["footer_background"])
-    _text(ui, cache, mx0 + 20, 661, "RECEIVER  •  BRACKNELL", colors["footer_primary"], 12)
-    _text(ui, cache, mx0 + 20, 686, "BUFFER  Q7/T6   05:32 UTC", colors["footer_live"], 12)
-    _text(ui, cache, mx1 - 20, 686,
-          theme_system.display_distance(100, theme) + "   "
-          + theme_system.display_temperature(40, theme),
-          colors["footer_primary"], 12, "rm")
-
-
-def _draw_preview_browse(ui, cache, theme, rail, main):
-    colors = theme["colors"]
-    _text(ui, cache, rail[0] + 12, 198, "RECEIVERS", colors["sidebar_title"], 15)
-    for index, label in enumerate(("ALL", "KIWI", "OPENWEBRX", "FM-DX")):
-        box = (rail[0] + 10, 220 + index * 72, rail[2] - 10, 276 + index * 72)
-        _frame(ui, box, colors["active_surface"] if index == 0 else colors["surface"],
-               colors["active_border"] if index == 0 else colors["border"], theme["radius"])
-        _text(ui, cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, label,
-              colors["text"], 12, "cm")
-    _text(ui, cache, main[0] + 20, 196, "BROWSE RECEIVERS", colors["section_heading"], 17)
-    for index, name in enumerate(("KIWI BRACKNELL", "SDR ENGLAND", "OPENWEBRX NORTH", "KIWI EAST")):
-        box = (main[0] + 20, 220 + index * 94, main[2] - 20, 302 + index * 94)
-        _frame(ui, box, colors["selected_surface"] if index == 1 else colors["section_surface"],
-               colors["selected_border"] if index == 1 else colors["section_border"], theme["radius"])
-        _text(ui, cache, box[0] + 16, box[1] + 28, name, colors["text"], 15)
-        _text(ui, cache, box[0] + 16, box[1] + 57, "RECEIVER DETAILS  •  3 USERS",
-              colors["secondary_text"], 12)
-
-
-def _draw_preview_popups(ui, cache, theme, rail, main):
-    colors = theme["colors"]
-    _text(ui, cache, rail[0] + 12, 198, "CAPTIONS", colors["sidebar_title"], 15)
-    notice = (main[0] + 24, 195, main[2] - 24, 266)
-    ui.draw_logical_rect(*notice, colors["section_surface"])
-    ui.draw_logical_line(notice[0], notice[1], notice[2], notice[1], colors["notice"], 2)
-    _text(ui, cache, notice[0] + 16, 229, "ZOOM  24x", colors["notice"], 22)
-    popup = (main[0] + 24, 300, main[2] - 24, 520)
-    _frame(ui, popup, colors["section_surface"], colors["section_border"], theme["radius"])
-    _text(ui, cache, popup[0] + 20, 333, "LIVE TRANSCRIPTION", colors["section_heading"], 16)
-    _text(ui, cache, popup[0] + 20, 389, "Sample speech appears here.", colors["text"], 18)
-    _text(ui, cache, popup[0] + 20, 448, "WAITING FOR SPEECH", colors["secondary_text"], 13)
-    _text(ui, cache, popup[2] - 20, 494, "CLOSE", colors["text"], 13, "rm")
-
-
-def _draw_color_inspector(ui, cache, editor, boxes):
-    palette = ui.APP_UI_STYLE.palette
-    family, keys = COLOR_GROUPS[editor.color_group]
-    _button(ui, cache, boxes["family_open"], f"{family}  •  {len(keys)} PARTS  •  CHANGE")
-    for slot in range(4):
-        index = editor.part_page * 4 + slot
-        name = f"part:{index}"
-        if name in boxes:
-            _button(ui, cache, boxes[name], keys[index].replace("_", " ").upper(),
-                    active=keys[index] == editor.color_key)
-    _button(ui, cache, boxes["part_previous"], "PREV")
-    _button(ui, cache, boxes["part_next"], "NEXT")
-    if "hex_open" in boxes:
-        _button(ui, cache, boxes["hex_open"], "HEX")
-    else:
-        _swatch(ui, (1128, 288, 1184, 332),
-                editor.baseline["colors"][editor.color_key], palette.border)
-        _swatch(ui, (1192, 288, 1256, 332), editor.current_color, palette.border)
-    color = editor.current_color
-    _text(ui, cache, 848, 340, editor.color_key.replace("_", " ").upper(),
-          palette.section_heading, 13)
-    _text(ui, cache, 1256, 340, theme_system.color_hex(color),
-          palette.secondary_text, 12, "rm")
-    hue_box = boxes["hue"]
-    strips = 48
-    strip_w = (hue_box[2] - hue_box[0]) / strips
-    for index in range(strips):
-        hue = index / strips
-        rgb = colorsys.hls_to_rgb(hue, 0.5, 1.0)
-        fill = tuple(round(value * 255) for value in rgb)
-        x = hue_box[0] + index * strip_w
-        ui.draw_logical_rect(x, hue_box[1], x + strip_w + 1, hue_box[3], fill)
-    marker_x = hue_box[0] + editor.hue * (hue_box[2] - hue_box[0])
-    ui.draw_logical_line(marker_x, hue_box[1], marker_x, hue_box[3], palette.text, 3)
-    for index, rgb in enumerate(shade_grid(editor.hue)):
-        box = boxes[f"shade:{index}"]
-        _swatch(ui, box, (*rgb, *color[3:]), palette.text if index == editor.shade_index else palette.border)
-    if "alpha_open" in boxes:
-        _button(ui, cache, boxes["alpha_open"],
-                f"TRANSPARENCY   {transparency_percent(color)}%")
-    else:
-        _text(ui, cache, 848, 632, "OPAQUE COLOR", palette.secondary_text, 13)
-    _button(ui, cache, boxes["apply_family"], f"APPLY MATCHING SHADES  •  {family}")
-
-
-def _draw_layout_inspector(ui, cache, editor, boxes):
-    palette = ui.APP_UI_STYLE.palette
-    theme = editor.preview
-    for title, y in (("BUTTON CORNERS", 142), ("SIDEBAR POSITION", 302),
-                     ("DISTANCE & TEMPERATURE", 462)):
-        _text(ui, cache, 848, y, title, palette.section_heading, 14)
-    for name in ("straight", "rounded", "left", "right", "imperial", "metric"):
-        active = (name == ("rounded" if theme["radius"] else "straight")
-                  or name == theme["sidebar"] or name == theme["units"])
-        _button(ui, cache, boxes[f"option:{name}"], name.upper(), active)
-
-
-def _draw_text_inspector(ui, cache, editor, boxes):
-    palette = ui.APP_UI_STYLE.palette
-    _text(ui, cache, 848, 150, "ALL APP TEXT", palette.section_heading, 15)
-    _text(ui, cache, 1052, 182, f"{editor.preview['text_scale_percent']}%",
-          palette.text, 32, "cm")
-    _button(ui, cache, boxes["text:smaller"], "SMALLER")
-    _button(ui, cache, boxes["text:larger"], "LARGER")
-    _button(ui, cache, boxes["text:reset"], "RESET TO 100%")
-    _text(ui, cache, 848, 394, "80% – 120%", palette.secondary_text, 13)
-
-
-def _draw_meter_inspector(ui, cache, editor, boxes):
-    palette = ui.APP_UI_STYLE.palette
-    first = editor.meter_page * METER_CARDS_PER_PAGE
-    identifiers = list(METER_STYLES)[first:first + METER_CARDS_PER_PAGE]
-    for identifier in identifiers:
-        box = boxes[f"meter:{identifier}"]
-        active = editor.preview["smeter_style"] == identifier
-        _frame(ui, box, palette.active_surface if active else palette.surface,
-               palette.active_border if active else palette.border,
-               ui.APP_UI_STYLE.button.radius)
-        _text(ui, cache, box[0] + 12, box[1] + 18,
-              METER_STYLES[identifier].name.upper(),
-              palette.text, 12)
-        ui.draw_selected_smeter(
-            cache, (box[0] + 8, box[1] + 30, box[2] - 8, box[3] - 8),
-            -85, None, theme=editor.preview, style_id=identifier,
-        )
-    _button(ui, cache, boxes["meter_previous"], "PREV")
-    _button(ui, cache, boxes["meter_next"], "NEXT")
-    pages = max(1, (len(METER_STYLES) + METER_CARDS_PER_PAGE - 1) // METER_CARDS_PER_PAGE)
-    _text(ui, cache, 1052, 640, f"{editor.meter_page + 1} / {pages}",
-          palette.secondary_text, 12, "cm")
-
-
-def _draw_editor(ui, cache, editor, boxes):
-    palette = ui.APP_UI_STYLE.palette
-    _button(ui, cache, boxes["theme_name"], editor.draft["name"].upper() + "  EDIT")
-    for panel in ("colors", "layout", "text", "meters", "advanced"):
-        _button(ui, cache, boxes[f"panel:{panel}"], panel.upper(), editor.panel == panel)
-    _button(ui, cache, boxes["save"], "SAVE THEME")
-    if editor.dirty:
-        _text(ui, cache, 24, 92, "UNSAVED", palette.notice, 12)
-    for scene in ("home", "browse", "popups"):
-        _button(ui, cache, boxes[f"scene:{scene}"], scene.upper(), editor.scene == scene)
-    _draw_preview(ui, cache, editor)
-    ui.draw_logical_line(EDITOR_INSPECTOR_BOX[0] - 10, 96,
-                         EDITOR_INSPECTOR_BOX[0] - 10, 708, palette.divider, 1)
-    if editor.panel in ("colors", "advanced"):
-        _draw_color_inspector(ui, cache, editor, boxes)
-    elif editor.panel == "layout":
-        _draw_layout_inspector(ui, cache, editor, boxes)
-    elif editor.panel == "meters":
-        _draw_meter_inspector(ui, cache, editor, boxes)
-    else:
-        _draw_text_inspector(ui, cache, editor, boxes)
-
-
 def _draw_overlay(ui, cache, editor, boxes):
     palette = ui.APP_UI_STYLE.palette
     ui.draw_logical_rect(0, 0, 1280, 800, (0, 0, 0, 188))
@@ -344,12 +124,6 @@ def _draw_overlay(ui, cache, editor, boxes):
         title = "EXACT COLOR"
         subtitle = "#" + editor.hex_value
         actions = tuple((name, name.split(":")[1]) for name in boxes if name.startswith("hex:"))
-    else:
-        panel = (16, 96, 1264, 660)
-        title = "SELECT COLOR FAMILY"
-        subtitle = "CHANGES APPLY TO THE SELECTED FAMILY"
-        actions = tuple((f"family:{index}", name) for index, (name, _keys) in enumerate(COLOR_GROUPS))
-        actions += (("family_cancel", "CANCEL"),)
     _frame(ui, panel, palette.section_surface, palette.section_border, 8)
     title_y = 334 if editor.confirm_back or editor.confirm_delete_id else 148
     subtitle_y = 382 if editor.confirm_back or editor.confirm_delete_id else 194
@@ -362,15 +136,209 @@ def _draw_overlay(ui, cache, editor, boxes):
 
 def draw_theme_screen(text_cache, editor, ui):
     """Paint exactly the state represented by ThemeEditor's hit geometry."""
+    if editor.mode == "edit":
+        return draw_guided_theme_editor(text_cache, editor, ui)
     palette = ui.APP_UI_STYLE.palette
     ui.draw_logical_rect(0, 0, 1280, 800, palette.background)
     overlay = (editor.confirm_back or editor.confirm_delete_id or editor.name_open
-               or editor.alpha_open or editor.hex_open or editor.family_picker)
+               or editor.alpha_open or editor.hex_open)
     base_boxes = theme_screen_boxes(editor, ignore_overlay=True)
     if editor.mode == "browse":
         _draw_library(ui, text_cache, editor, base_boxes)
-    else:
-        _draw_editor(ui, text_cache, editor, base_boxes)
     if overlay:
         _draw_overlay(ui, text_cache, editor, theme_screen_boxes(editor))
     _button(ui, text_cache, BACK_BOX, "BACK")
+
+
+GUIDED_CHROME_BUTTON_STYLE = ButtonStyle(UIPalette())
+
+
+class _GuidedChromeUI:
+    """Keep editor controls legible while the real app previews any draft."""
+
+    def __init__(self, ui):
+        self._ui = ui
+        self.APP_UI_STYLE = SimpleNamespace(palette=GUIDED_CHROME_BUTTON_STYLE.palette,
+                                            button=GUIDED_CHROME_BUTTON_STYLE)
+
+    def __getattr__(self, name):
+        return getattr(self._ui, name)
+
+    def draw_styled_text_button(self, cache, box, label, **kwargs):
+        kwargs["style"] = self.APP_UI_STYLE.button
+        return self._ui.draw_styled_text_button(cache, box, label, **kwargs)
+
+
+_FAMILY_DESCRIPTIONS = {
+    "SURFACES": "App background, sidebar and panels",
+    "FOOTER": "Footer background and status text",
+    "TEXT": "Labels, headings and frequency text",
+    "BUTTONS": "Normal, active, selected and pressed buttons",
+    "STATES": "Ready, waiting, notices and alerts",
+    "S-METER": "Meter bars, scales, ticks and markers",
+    "PASSBAND": "Passband fill, edges and center lines",
+    "SLIDERS": "Slider track, fill, thumb and marker",
+    "SPECTRUM": "Spectrum field, grid, labels and traces",
+    "WATERFALL": "Waterfall colors, ruler and labels",
+}
+
+
+def _draw_guided_picker(ui, cache, editor, boxes):
+    palette = ui.APP_UI_STYLE.palette
+    label = editor.color_key.replace("_", " ").upper() if editor.fine_tune else editor.selected_family
+    _text(ui, cache, 440, 366, label, palette.text, 20)
+    _swatch(ui, (1176, 344, 1256, 384), editor.current_color, palette.border)
+    hue_box, tone_box = boxes["hue"], boxes["tone"]
+    for index in range(96):
+        left = hue_box[0] + index * (hue_box[2] - hue_box[0]) / 96
+        right = hue_box[0] + (index + 1) * (hue_box[2] - hue_box[0]) / 96
+        rgb = tuple(round(value * 255) for value in colorsys.hls_to_rgb(index / 96, 0.5, 1.0))
+        ui.draw_logical_rect(left, hue_box[1], right, hue_box[3], rgb)
+    for row in range(24):
+        top = tone_box[1] + row * (tone_box[3] - tone_box[1]) / 24
+        bottom = tone_box[1] + (row + 1) * (tone_box[3] - tone_box[1]) / 24
+        for col in range(64):
+            left = tone_box[0] + col * (tone_box[2] - tone_box[0]) / 64
+            right = tone_box[0] + (col + 1) * (tone_box[2] - tone_box[0]) / 64
+            rgb = tuple(round(value * 255) for value in colorsys.hls_to_rgb(
+                editor.hue % 1.0, 1 - row / 23, col / 63))
+            ui.draw_logical_rect(left, top, right, bottom, rgb)
+    hx = hue_box[0] + editor.hue * (hue_box[2] - hue_box[0])
+    tx = tone_box[0] + editor.strength * (tone_box[2] - tone_box[0])
+    ty = tone_box[1] + (1 - editor.lightness) * (tone_box[3] - tone_box[1])
+    # A dark outline and white center stay visible on every picker color.
+    for color, width in (((0, 0, 0), 5), ((255, 255, 255), 2)):
+        ui.draw_logical_line(hx, hue_box[1], hx, hue_box[3], color, width)
+        ui.draw_logical_line(tx - 8, ty, tx + 8, ty, color, width)
+        ui.draw_logical_line(tx, ty - 8, tx, ty + 8, color, width)
+    _text(ui, cache, 440, 464, "LIGHTER ↑", palette.secondary_text, 12)
+    _text(ui, cache, 440, 664, "NEUTRAL", palette.secondary_text, 12)
+    _text(ui, cache, 1256, 664, "COLOR STRENGTH →", palette.secondary_text, 12, "rm")
+    _button(ui, cache, boxes["reset_category"], "RESET CATEGORY")
+    if editor.fine_tune:
+        _button(ui, cache, boxes["fine_tune_close"], "DONE FINE TUNING")
+        _button(ui, cache, boxes["hex_open"], "EXACT HEX COLOR")
+        if "alpha_open" in boxes:
+            _button(ui, cache, boxes["alpha_open"],
+                    f"TRANSPARENCY  {transparency_percent(editor.current_color)}%")
+    else:
+        _button(ui, cache, boxes["fine_tune"], "FINE TUNE")
+
+
+def _guided_nav_button(ui, cache, box, label, enabled):
+    if enabled:
+        _button(ui, cache, box, label)
+    else:
+        palette = ui.APP_UI_STYLE.palette
+        _frame(ui, box, palette.surface, palette.border)
+        _text(ui, cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+              label, palette.secondary_text, 13, "cm")
+
+
+def _draw_guided_layout(ui, cache, editor, boxes):
+    palette = ui.APP_UI_STYLE.palette
+    theme = editor.draft
+    for title, top in (("BUTTON CORNERS", 156), ("SIDEBAR POSITION", 292),
+                       ("DISTANCE & TEMPERATURE", 428), ("ALL APP TEXT", 564)):
+        _text(ui, cache, 24, top + 32, title, palette.section_heading, 17)
+    active = {"rounded" if theme["radius"] else "straight", theme["sidebar"], theme["units"]}
+    for name in ("straight", "rounded", "left", "right", "original", "imperial", "metric"):
+        _button(ui, cache, boxes[f"option:{name}"], name.upper(), name in active)
+    percent = theme["text_scale_percent"]
+    _text(ui, cache, 24, 624, f"{percent}%", palette.text, 26)
+    _guided_nav_button(ui, cache, boxes["text:smaller"], "SMALLER",
+                       percent > theme_system.TEXT_SCALE_MIN)
+    _guided_nav_button(ui, cache, boxes["text:larger"], "LARGER",
+                       percent < theme_system.TEXT_SCALE_MAX)
+    _button(ui, cache, boxes["text:reset"], "RESET TO 100%")
+    _button(ui, cache, boxes["reset_category"], "RESET CATEGORY")
+    _text(ui, cache, 440, 664, "80% – 120%  •  5% STEPS", palette.secondary_text, 14)
+
+
+def _draw_guided_meter_card(ui, cache, editor, box, identifier, selected=False, chooser=False):
+    palette = ui.APP_UI_STYLE.palette
+    _frame(ui, box, palette.active_surface if selected else palette.surface,
+           palette.active_border if selected else palette.border)
+    label = METER_STYLES[identifier].name.upper()
+    _text(ui, cache, box[0] + 12, box[1] + 18, label, palette.text, 13)
+    if chooser:
+        _text(ui, cache, box[2] - 12, box[3] - 12, "CHANGE FACE", palette.secondary_text, 11, "rm")
+    ui.draw_selected_smeter(
+        cache, (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - (28 if chooser else 8)),
+        -85, None, theme=editor.draft, style_id=identifier,
+    )
+
+
+def _draw_guided_meter_gallery(ui, cache, editor, boxes):
+    palette = ui.APP_UI_STYLE.palette
+    _text(ui, cache, 24, 44, "S-METER FACES", palette.text, 26)
+    _text(ui, cache, 24, 80, "TOUCH A FACE TO USE IT  •  SWIPE FOR MORE", palette.secondary_text, 14)
+    for action, box in boxes.items():
+        if action.startswith("meter:"):
+            identifier = action.split(":", 1)[1]
+            _draw_guided_meter_card(ui, cache, editor, box, identifier,
+                                   selected=identifier == editor.draft["smeter_style"])
+    _guided_nav_button(ui, cache, boxes["meter_previous"], "PREV", editor.can_meter_previous)
+    _guided_nav_button(ui, cache, boxes["meter_next"], "NEXT", editor.can_meter_next)
+    _button(ui, cache, boxes["meter_close"], "CLOSE")
+    pages = (len(METER_STYLES) + METER_CARDS_PER_PAGE - 1) // METER_CARDS_PER_PAGE
+    _text(ui, cache, 640, 680, f"{editor.meter_page + 1} / {pages}", palette.secondary_text, 14, "cm")
+
+
+def draw_guided_theme_editor(cache, editor, ui):
+    """Draw one category with the same geometry used by guided touch input."""
+    if editor.mode == "browse":
+        draw_theme_screen(cache, editor, ui)
+        return
+    ui = _GuidedChromeUI(ui)
+    palette = ui.APP_UI_STYLE.palette
+    boxes = theme_screen_boxes(editor, ignore_overlay=True)
+    if editor.view_app:
+        _button(ui, cache, boxes["return_to_editor"], "RETURN TO EDITOR")
+        return
+    ui.draw_logical_rect(0, 0, 1280, 800, palette.background)
+    if editor.meter_gallery_open and not (editor.confirm_back or editor.confirm_delete_id
+                                          or editor.name_open or editor.alpha_open
+                                          or editor.hex_open):
+        _draw_guided_meter_gallery(ui, cache, editor, theme_screen_boxes(editor))
+        return
+    _text(ui, cache, 24, 44, editor.draft["name"], palette.text, 26)
+    _text(ui, cache, 24, 80, GUIDED_CATEGORIES[editor.category_index][0].upper(),
+          palette.section_heading, 18)
+    _text(ui, cache, 1256, 44, f"CATEGORY {editor.category_index + 1} / 6",
+          palette.secondary_text, 15, "rm")
+    if editor.dirty:
+        _text(ui, cache, 1256, 80, "UNSAVED", palette.notice, 12, "rm")
+    for action, box in boxes.items():
+        if action.startswith(("family:", "key:")):
+            name = action.split(":", 1)[1]
+            is_family = action.startswith("family:")
+            key = dict(COLOR_GROUPS)[name][0] if is_family else name
+            selected = name == (editor.selected_family if is_family else editor.color_key)
+            _frame(ui, box, palette.active_surface if selected else palette.surface,
+                   palette.active_border if selected else palette.border)
+            _swatch(ui, (box[0] + 16, box[1] + 12, box[0] + 72, box[3] - 12),
+                    editor.draft["colors"][key], palette.border)
+            _text(ui, cache, box[0] + 92, box[1] + 24,
+                  name.replace("_", " ").upper(), palette.text, 17)
+            if is_family:
+                _text(ui, cache, box[0] + 92, box[1] + 48,
+                      _FAMILY_DESCRIPTIONS[name], palette.secondary_text, 13)
+    if editor.category_index == 5:
+        _draw_guided_layout(ui, cache, editor, boxes)
+    elif editor.selected_family:
+        _draw_guided_picker(ui, cache, editor, boxes)
+    if "meter_gallery" in boxes:
+        _draw_guided_meter_card(ui, cache, editor, boxes["meter_gallery"],
+                               editor.draft["smeter_style"], chooser=True)
+    if editor.fine_tune:
+        for action, label in (("key_previous", "PREV KEYS"), ("key_next", "NEXT KEYS")):
+            _button(ui, cache, boxes[action], label)
+    for action, label, enabled in (("previous", "PREV", editor.can_previous),
+                                   ("next", "NEXT", editor.can_next)):
+        _guided_nav_button(ui, cache, boxes[action], label, enabled)
+    _button(ui, cache, boxes["view_app"], "VIEW APP")
+    _button(ui, cache, boxes["back"], "BACK")
+    if (editor.confirm_back or editor.confirm_delete_id or editor.name_open
+            or editor.alpha_open or editor.hex_open):
+        _draw_overlay(ui, cache, editor, theme_screen_boxes(editor))

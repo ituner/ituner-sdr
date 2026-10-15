@@ -36,6 +36,44 @@ def recolor_family(colors, keys, hue):
     return result
 
 
+def recolor_family_shades(colors, keys, hue, lightness, strength):
+    """Recolor a family together while retaining its shade order and alpha.
+
+    ``lightness`` and ``strength`` are normalized to the 0..1 range. Each
+    member receives the same lightness offset, so differently lit surfaces
+    remain ordered while the family shifts toward the requested average.
+    """
+    result = {key: list(value) for key, value in colors.items()}
+    samples = [
+        colorsys.rgb_to_hls(*(channel / 255 for channel in colors[key][:3]))[1]
+        for key in keys
+    ]
+    target = max(0.0, min(1.0, lightness))
+    requested_offset = target - sum(samples) / len(samples)
+    # Apply one bounded offset to the whole family. Independent per-key
+    # clipping can collapse close shades at either endpoint.
+    lower_bound, upper_bound = (
+        (0.0, 1.0) if max(samples) - min(samples) > 0.96
+        else (0.02, 0.98)
+    )
+    min_offset = max(lower_bound - sample for sample in samples)
+    max_offset = min(upper_bound - sample for sample in samples)
+    offset = max(min_offset, min(max_offset, requested_offset))
+    saturation = max(0.0, min(1.0, strength))
+    for key in keys:
+        old = colors[key]
+        old_light = colorsys.rgb_to_hls(
+            *(channel / 255 for channel in old[:3])
+        )[1]
+        new_light = old_light + offset
+        rgb = colorsys.hls_to_rgb(hue % 1.0, new_light, saturation)
+        result[key] = [
+            *(max(0, min(255, round(255 * channel))) for channel in rgb),
+            *old[3:],
+        ]
+    return result
+
+
 def transparency_percent(color):
     if len(color) != 4:
         raise ValueError("this color has no transparency channel")

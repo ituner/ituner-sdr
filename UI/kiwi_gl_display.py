@@ -9082,10 +9082,11 @@ def top_instrument_layout(text_cache, freq_khz, font_family=None):
     return frequency_text, radio_box
 
 
-def radio_toggle_box(text_cache, freq_khz):
+def radio_toggle_box(text_cache, freq_khz, show_compact_readouts=True):
     """Return the visible radio-mode control for the active layout."""
     if LCD_800_MODE:
-        return LCD_ANNUNCIATOR_BOX
+        x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
+        return x0, y0, x1, lcd_annunciator_surface_bottom(show_compact_readouts)
     return top_instrument_layout(text_cache, freq_khz)[1]
 
 
@@ -15693,6 +15694,45 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
+def theme_editor_captures_touch(editor, x, y):
+    """Editor ownership in canvas coordinates, without changing draft state."""
+    return editor.open and (
+        not getattr(editor, "view_app", False)
+        or contains(theme_screen_boxes(editor)["return_to_editor"], x, y)
+    )
+
+
+def theme_editor_touch_point(editor, x, y, relocate_sidebar, *, editor_owns_touch=None):
+    """Keep editor chrome fixed while mapping the live app's relocated rail."""
+    if editor_owns_touch is None:
+        editor_owns_touch = theme_editor_captures_touch(editor, x, y)
+    if relocate_sidebar and not editor_owns_touch:
+        x = theme_system.display_to_logical_x(x)
+    return x, y
+
+
+def drag_theme_editor(editor, start_x, start_y, x, y):
+    """A picker drag keeps the hue or tone control where the gesture began."""
+    boxes = theme_screen_boxes(editor)
+    for control in ("hue", "tone"):
+        if control in boxes and contains(boxes[control], start_x, start_y):
+            editor.drag(control, x, y)
+            return
+
+
+def draw_theme_editor_overlay(text_cache, editor):
+    """Draw after sidebar composition so RETURN remains centered on the screen."""
+    if not editor.open:
+        return
+    if getattr(editor, "view_app", False):
+        from theme_screen_render import GUIDED_CHROME_BUTTON_STYLE
+        draw_styled_text_button(text_cache,
+                                theme_screen_boxes(editor)["return_to_editor"],
+                                "RETURN TO EDITOR", style=GUIDED_CHROME_BUTTON_STYLE)
+    else:
+        draw_theme_panel(text_cache, editor)
+
+
 def draw_theme_panel(text_cache, editor):
     """Render the full-canvas Theme Library or live editor."""
     from theme_screen_render import draw_theme_screen
@@ -16618,8 +16658,32 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
 
 
 def draw_lcd_compact_smeter(text_cache, box, smeter_dbm, peak_dbm=None):
-    """Render the selected face in the Home rail, including its retained peak."""
-    draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
+    """Render the selected Home meter, retaining the original LED presentation."""
+    if theme_system.runtime_theme["smeter_style"] != "led":
+        draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
+        return
+    meter_x0, meter_y0, meter_x1, meter_y1 = box
+    meter_value = float(smeter_dbm) if isinstance(smeter_dbm, (int, float)) else SMETER_FLOOR_DBM
+    meter_level = smeter_segment_position(meter_value)
+    draw_logical_rect(meter_x0, meter_y0, meter_x1, meter_y1, APP_UI_STYLE.palette.section_surface)
+    draw_section_divider(meter_x0, meter_y0, meter_x1)
+    draw_text(text_cache, meter_x0 + 4, meter_y0 + 12, "S-METER", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, meter_x1 - 4, meter_y0 + 12, f"{meter_value:.0f} dBm", themed_instrument_color("smeter_dbm", (190, 218, 223)), 13, True, False, "rm", family="Liberation Sans")
+    meter_track_x0 = meter_x0 + ((meter_x1 - meter_x0) - (35 * 4.65 + 34 * 2)) / 2
+    meter_track_y = meter_y0 + 25
+    for index in range(35):
+        sx0 = meter_track_x0 + index * (4.65 + 2)
+        sx1 = sx0 + 4.65
+        active = index + 0.5 <= meter_level
+        color = APP_UI_STYLE.palette.meter_on if index < 28 else APP_UI_STYLE.palette.meter_hot
+        draw_logical_rect(
+            sx0, meter_track_y, sx1, meter_track_y + 26,
+            color if active else APP_UI_STYLE.palette.meter_off,
+        )
+    for label, position in (("S1", 0), ("S3", 7), ("S5", 14), ("S7", 21), ("S9", 28), ("+20", 34)):
+        lx = max(meter_x0 + 14, meter_track_x0 + (35 * 4.65 + 34 * 2) * position / 36.0)
+        color = APP_UI_STYLE.palette.smeter_hot[:3] if label in ("S9", "+20") else themed_instrument_color("smeter_dbm", (151, 183, 191))[:3]
+        draw_text(text_cache, lx, meter_y1 - 6, label, color, 9, True, False, "cm", family="Liberation Sans")
 
 
 def draw_home_mode_buttons(text_cache, buttons, mode, digital):
@@ -23346,7 +23410,7 @@ def main():
     parser.add_argument("--audio-rate", type=int, default=12000, help="Kiwi raw PCM rate for the local output stream")
     args = parser.parse_args()
     theme_editor = ThemeEditor(theme_system.ThemeLibrary(args.theme_file),
-                               notice_duration=args.zoom_osd_seconds)
+                                     notice_duration=args.zoom_osd_seconds)
     refresh_receiver_list_theme()
     remembered_radio_mode = None
     remembered_receiver_type = None
@@ -25258,7 +25322,7 @@ def main():
         nonlocal stations, search_open, radio_family_open, station_pending_server, station_connected_at
         kind, label = items[index]
         parent = navigation_parent(items, kind)
-        if kind != "theme":
+        if kind != "theme" and not getattr(theme_editor, "view_app", False):
             theme_editor.open = False
         if kind != "dual":
             dual_vfo_receiver_list_target = None
@@ -25352,8 +25416,11 @@ def main():
             settings_menu_open = False
             digital_menu_open = False
             theme_editor.open = True
-            theme_editor.mode = "browse"
-            theme_editor.selected_id = theme_editor.library.active_id
+            if getattr(theme_editor, "view_app", False):
+                theme_editor.view_app = False
+            else:
+                theme_editor.mode = "browse"
+                theme_editor.selected_id = theme_editor.library.active_id
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
             receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -25737,7 +25804,7 @@ def main():
     def rail_relocation_active():
         return (
             theme_system.runtime_theme["sidebar"] == "left"
-            and not theme_editor.open
+            and (not theme_editor.open or getattr(theme_editor, "view_app", False))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open) or globe_open)
         )
@@ -25749,8 +25816,10 @@ def main():
         ny = clamp(round(position[1] * NATIVE_H / max(1, window_h)), 0, NATIVE_H - 1)
         if DESKTOP_1280_MODE or DESKTOP_MODE:
             logical_x, logical_y = clamp(nx, 0, LOGICAL_W - 1), clamp(ny, 0, LOGICAL_H - 1)
-            if apply_theme and rail_relocation_active():
-                logical_x = theme_system.display_to_logical_x(logical_x)
+            if apply_theme:
+                logical_x, logical_y = theme_editor_touch_point(
+                    theme_editor, logical_x, logical_y, rail_relocation_active()
+                )
             return logical_x, logical_y
         if args.orientation == "normal":
             return clamp(ny, 0, LOGICAL_W - 1), clamp(ACTIVE_H - 1 - nx, 0, LOGICAL_H - 1)
@@ -25975,7 +26044,12 @@ def main():
                     press_x, press_y = desktop_logical_point(event.pos)
                     set_ui_press_point(press_x, press_y)
                     nav_index = desktop_navigation_item(event.pos)
-                    if nav_index == "annunciators":
+                    if theme_editor_captures_touch(
+                        theme_editor, *desktop_logical_point(event.pos, apply_theme=False)
+                    ):
+                        desktop_pointer_down = True
+                        emit_desktop_touch(event.pos, "down")
+                    elif nav_index == "annunciators":
                         activate_navigation_item(next(index for index, (kind, _label) in enumerate(MENU_ITEMS) if kind == "settings"))
                     elif nav_index is not None:
                         activate_navigation_item(nav_index)
@@ -26116,9 +26190,18 @@ def main():
                         mt_slots.clear()
                 elif event_type == kiwi.EV_SYN and code == kiwi.SYN_REPORT:
                     points = kiwi.touch_points(mt_slots, raw_x, raw_y, active, args)
+                    # Decide ownership in the displayed canvas before moving
+                    # the app's rail coordinates. Keep it for the whole gesture.
+                    theme_touch_owned = gesture == "theme" if touch_started else (
+                        bool(points) and theme_editor_captures_touch(
+                            theme_editor, *(points[0] if len(points) == 1 else kiwi.midpoint(points[:2]))
+                        )
+                    )
                     if rail_relocation_active():
                         points = tuple(
-                            (theme_system.display_to_logical_x(px), py) for px, py in points
+                            theme_editor_touch_point(
+                                theme_editor, px, py, True, editor_owns_touch=theme_touch_owned
+                            ) for px, py in points
                         )
                     is_active = bool(points)
                     if not is_active:
@@ -26131,7 +26214,9 @@ def main():
                         x, y = points[0] if len(points) == 1 else kiwi.midpoint(points[:2])
 
                     if rail_relocation_active() and not is_active and raw_x is not None:
-                        x = theme_system.display_to_logical_x(x)
+                        x, y = theme_editor_touch_point(
+                            theme_editor, x, y, True, editor_owns_touch=theme_touch_owned
+                        )
 
                     # Shared renderers read this point during the next frame
                     # to give every visible button immediate press feedback.
@@ -26178,7 +26263,7 @@ def main():
                                 LCD_800_MODE
                                 and 0 <= x < rf_canvas_width()
                                 and len(points) == 1
-                                and not theme_editor.open
+                                and not theme_touch_owned
                                 and not (
                                     picker_open or font_lab_open or network_password_open
                                     or dual_vfo_open or dual_vfo_mode_open
@@ -26251,7 +26336,7 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if theme_editor.open:
+                            if theme_touch_owned:
                                 gesture = "theme"
                             elif cw_workspace.open:
                                 gesture = "cw_workspace"
@@ -26605,7 +26690,7 @@ def main():
                             # placeholders. While either is open, that region
                             # must not fall through to the covered Home mode
                             # grid and pick a hidden mode.
-                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(radio_toggle_box(text_cache, display_freq, instrument_layout == "right"), x, y):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -26830,9 +26915,7 @@ def main():
                         elif gesture == "fan_minimum_slider":
                             adjust_fan_curve_slider(fan_curve, "minimum", x)
                         elif gesture == "theme":
-                            hue_box = theme_screen_boxes(theme_editor).get("hue")
-                            if hue_box and contains(hue_box, start_x, start_y):
-                                theme_editor.drag(x, y)
+                            drag_theme_editor(theme_editor, start_x, start_y, x, y)
                         elif gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
                             state.set_waterfall(
@@ -28423,8 +28506,11 @@ def main():
                                     elif kind == "theme":
                                         display_setup_open = False
                                         theme_editor.open = True
-                                        theme_editor.mode = "browse"
-                                        theme_editor.selected_id = theme_editor.library.active_id
+                                        if getattr(theme_editor, "view_app", False):
+                                            theme_editor.view_app = False
+                                        else:
+                                            theme_editor.mode = "browse"
+                                            theme_editor.selected_id = theme_editor.library.active_id
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -28547,10 +28633,9 @@ def main():
                                 if not theme_editor.open:
                                     restore_navigation_parent("display")
                             else:
-                                hue_box = theme_screen_boxes(theme_editor).get("hue")
-                                if hue_box and contains(hue_box, start_x, start_y):
-                                    theme_editor.drag(x, y)
-                                    refresh_receiver_list_theme()
+                                theme_editor.swipe(start_x, start_y, x, y)
+                                drag_theme_editor(theme_editor, start_x, start_y, x, y)
+                                refresh_receiver_list_theme()
                             wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -29225,7 +29310,7 @@ def main():
                 LCD_800_MODE
                 and now - drawer_last_interaction_at >= LCD_DRAWER_IDLE_CLOSE_SECONDS
                 and (settings_menu_open or digital_menu_open or radio_setup_open or display_setup_open or filter_drawer_open or frequency_drawer_open or compact_font_review_open or receiver_home_panel_open or fan_curve_panel_open or audio_panel_open)
-                and not theme_editor.open
+                and (not theme_editor.open or getattr(theme_editor, "view_app", False))
             ):
                 settings_menu_open = False
                 digital_menu_open = False
@@ -30504,18 +30589,18 @@ def main():
                 hell_workspace.draw(text_cache, wspr_receiver_choices())
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
-            if theme_editor.open:
-                draw_theme_panel(text_cache, theme_editor)
+            if rail_relocation_active():
+                if sidebar_composer is None:
+                    sidebar_composer = SidebarComposer()
+                sidebar_composer.compose_left()
+            draw_theme_editor_overlay(text_cache, theme_editor)
+            if theme_editor.open and not getattr(theme_editor, "view_app", False):
                 theme_notice_remaining = theme_editor.notice_until - now
                 if theme_notice_remaining > 0:
                     draw_theme_notice_osd(
                         text_cache, theme_editor.notice_action, theme_editor.notice_detail,
                         green_osd_alpha(theme_notice_remaining, args.zoom_osd_seconds),
                     )
-            if rail_relocation_active():
-                if sidebar_composer is None:
-                    sidebar_composer = SidebarComposer()
-                sidebar_composer.compose_left()
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

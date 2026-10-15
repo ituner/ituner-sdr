@@ -5,7 +5,7 @@ from copy import deepcopy
 import math
 import time
 
-from theme_colors import recolor_family, shade_grid, transparency_percent, with_transparency
+from theme_colors import recolor_family_shades, transparency_percent, with_transparency
 from smeter_styles import METER_STYLES
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX, apply_theme,
@@ -35,14 +35,20 @@ COLOR_GROUPS = (
                    "waterfall_ruler_minor", "waterfall_ruler_major", "waterfall_ruler_label")),
 )
 assert set(COLOR_NAMES) == {key for _family, keys in COLOR_GROUPS for key in keys}
+GUIDED_CATEGORIES = (
+    ("Surfaces", ("SURFACES", "FOOTER")),
+    ("Text", ("TEXT",)),
+    ("Buttons & states", ("BUTTONS", "STATES")),
+    ("S-meter & passband", ("S-METER", "PASSBAND", "SLIDERS")),
+    ("Spectrum & waterfall", ("SPECTRUM", "WATERFALL")),
+    ("Layout & sizing", ()),
+)
 NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "DONE")
 NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 BACK_BOX = (1034, 728, 1270, 792)
 SAVED_CARDS_PER_PAGE = 8
 METER_CARDS_PER_PAGE = 6
-EDITOR_PREVIEW_BOX = (24, 160, 820, 708)
-EDITOR_INSPECTOR_BOX = (836, 96, 1256, 728)
 
 
 def contains(box, x, y):
@@ -59,8 +65,8 @@ def _keypad_boxes(prefix, keys, *, columns, x0, y0, width, height, gap=8):
     return boxes
 
 
-def theme_screen_boxes(editor, *, ignore_overlay=False):
-    """The single source of visual and touch geometry."""
+def _library_overlay_boxes(editor, *, ignore_overlay=False):
+    """Library cards and shared keypads/confirmation geometry."""
     if editor.confirm_back and not ignore_overlay:
         return {
             "leave_save": (210, 430, 482, 494),
@@ -108,92 +114,77 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         boxes.update(_keypad_boxes("hex", HEX_KEYS, columns=4,
                                    x0=344, y0=204, width=592, height=64))
         return boxes
-    if editor.family_picker and not ignore_overlay:
-        for index, (name, _keys) in enumerate(COLOR_GROUPS):
-            col, row = index % 3, index // 3
-            x0, y0 = (440 if row == 3 else 32 + col * 408), 232 + row * 80
-            boxes[f"family:{index}"] = (x0, y0, x0 + 392, y0 + 64)
-        boxes["family_cancel"] = (450, 576, 830, 640)
-        return boxes
+    return boxes
 
-    boxes["theme_name"] = (24, 16, 412, 80)
-    boxes["panel:colors"] = (424, 16, 532, 80)
-    boxes["panel:layout"] = (540, 16, 648, 80)
-    boxes["panel:text"] = (656, 16, 764, 80)
-    boxes["panel:meters"] = (772, 16, 880, 80)
-    boxes["panel:advanced"] = (888, 16, 1000, 80)
-    boxes["save"] = (1034, 16, 1270, 80)
-    for index, scene in enumerate(("home", "browse", "popups")):
-        left = 24 + index * 136
-        boxes[f"scene:{scene}"] = (left, 96, left + 128, 144)
 
-    panel = "meters" if editor.section == "METERS" else editor.panel
-    if panel in ("colors", "advanced"):
-        boxes["family_open"] = (848, 96, 1256, 152)
-        keys = editor.family_keys
-        for slot in range(4):
-            index = editor.part_page * 4 + slot
-            if index >= len(keys):
-                continue
-            col, row = slot % 2, slot // 2
-            x0, y0 = 848 + col * 208, 160 + row * 64
-            boxes[f"part:{index}"] = (x0, y0, x0 + 200, y0 + 56)
-        boxes["part_previous"] = (848, 288, 980, 332)
-        boxes["part_next"] = (988, 288, 1120, 332)
-        if panel == "advanced":
-            boxes["hex_open"] = (1128, 288, 1256, 332)
-        boxes["hue"] = (848, 344, 1256, 392)
-        for index in range(16):
-            col, row = index % 4, index // 4
-            x0, y0 = 848 + col * 104, 400 + row * 52
-            boxes[f"shade:{index}"] = (x0, y0, x0 + 96, y0 + 44)
-        if len(editor.current_color) == 4:
-            boxes["alpha_open"] = (848, 608, 1256, 656)
-        boxes["apply_family"] = (848, 664, 1256, 712)
-    elif panel == "layout":
-        for index, name in enumerate(("straight", "rounded")):
-            x0 = 848 + index * 208
-            boxes[f"option:{name}"] = (x0, 178, x0 + 200, 242)
-        for index, name in enumerate(("left", "right")):
-            x0 = 848 + index * 208
-            boxes[f"option:{name}"] = (x0, 338, x0 + 200, 402)
-        for index, name in enumerate(("imperial", "metric")):
-            x0 = 848 + index * 208
-            boxes[f"option:{name}"] = (x0, 498, x0 + 200, 562)
-    elif panel == "text":
-        boxes["text:smaller"] = (848, 208, 1048, 272)
-        boxes["text:larger"] = (1056, 208, 1256, 272)
-        boxes["text:reset"] = (848, 288, 1256, 352)
-    elif panel == "meters":
+def theme_screen_boxes(editor, *, ignore_overlay=False):
+    """Shared touch/drawing geometry for the guided editor and its overlays."""
+    if editor.mode == "browse":
+        return _library_overlay_boxes(editor, ignore_overlay=ignore_overlay)
+    if not ignore_overlay and (editor.confirm_back or editor.confirm_delete_id
+                               or editor.name_open or editor.alpha_open
+                               or editor.hex_open):
+        return _library_overlay_boxes(editor)
+    if editor.view_app:
+        return {"return_to_editor": (522, 728, 758, 792)}
+    if editor.meter_gallery_open and not ignore_overlay:
+        boxes = {"meter_previous": (24, 648, 260, 712),
+                 "meter_next": (268, 648, 504, 712),
+                 "meter_close": (1020, 648, 1256, 712)}
         first = editor.meter_page * METER_CARDS_PER_PAGE
         for slot, identifier in enumerate(list(METER_STYLES)[first:first + METER_CARDS_PER_PAGE]):
-            left = 848 + (slot % 2) * 208
-            top = 100 + (slot // 2) * 184
-            boxes[f"meter:{identifier}"] = (left, top, left + 200, top + 172)
-        boxes["meter_previous"] = (848, 656, 1048, 712)
-        boxes["meter_next"] = (1056, 656, 1256, 712)
-
-    preview = EDITOR_PREVIEW_BOX
-    rail = ((24, 192) if editor.draft["sidebar"] == "left" else (652, 820))
-    main = ((192, 820) if editor.draft["sidebar"] == "left" else (24, 652))
-    if editor.scene == "home":
-        boxes["preview:frequency"] = (rail[0], 178, rail[1], 252)
-        boxes["preview:meter"] = (rail[0], 258, rail[1], 345)
-        boxes["preview:buttons"] = (rail[0], 360, rail[1], 526)
-        boxes["preview:passband"] = (main[0] + 8, 315, main[1] - 8, 630)
-        boxes["preview:footer"] = (main[0] + 8, 640, main[1] - 8, 698)
-    elif editor.scene == "browse":
-        boxes["preview:browse_categories"] = (rail[0], 210, rail[1], 500)
-        boxes["preview:browse_text"] = (main[0] + 20, 180, main[1] - 20, 215)
-        boxes["preview:browse_rows"] = (main[0] + 20, 220, main[1] - 20, 600)
+            left = 24 + (slot % 3) * 416
+            top = 120 + (slot // 3) * 264
+            boxes[f"meter:{identifier}"] = (left, top, left + 400, top + 248)
+        return boxes
+    boxes = {
+        "back": BACK_BOX,
+        "theme_name": (24, 16, 748, 80),
+        "previous": (24, 728, 260, 792),
+        "next": (268, 728, 504, 792),
+        "view_app": (512, 728, 748, 792),
+        "reset_category": (24, 648, 400, 712),
+    }
+    if editor.category_index == 5:
+        for top, names in ((156, ("straight", "rounded")),
+                           (292, ("left", "right")),
+                           (428, ("original", "imperial", "metric"))):
+            for index, name in enumerate(names):
+                left = 440 + index * 272
+                boxes[f"option:{name}"] = (left, top, left + 264, top + 64)
+        for index, name in enumerate(("smaller", "larger", "reset")):
+            left = 440 + index * 272
+            boxes[f"text:{name}"] = (left, 564, left + 264, 628)
+        return boxes
+    if editor.selected_family:
+        boxes.update({"hue": (440, 400, 1256, 448),
+                      "tone": (440, 476, 1256, 644)})
+    if editor.fine_tune:
+        for key in editor.family_keys[editor.part_page * 3:editor.part_page * 3 + 3]:
+            row = editor.family_keys.index(key) % 3
+            top = 120 + row * 72
+            boxes[f"key:{key}"] = (24, top, 1256, top + 64)
+        boxes.update({"key_previous": (24, 344, 204, 400),
+                      "key_next": (212, 344, 392, 400),
+                      "fine_tune_close": (24, 416, 400, 480),
+                      "hex_open": (24, 488, 400, 552)})
+        if len(editor.current_color) == 4:
+            boxes["alpha_open"] = (24, 560, 400, 624)
     else:
-        boxes["preview:notice"] = (main[0] + 24, 195, main[1] - 24, 266)
-        boxes["preview:popup_text"] = (main[0] + 40, 350, main[1] - 40, 410)
-        boxes["preview:popup"] = (main[0] + 24, 300, main[1] - 24, 520)
+        for row, family in enumerate(editor.visible_family_rows):
+            top = 120 + row * 72
+            boxes[f"family:{family}"] = (24, top, 1256, top + 64)
+        if editor.selected_family:
+            boxes["fine_tune"] = (24, 416, 400, 480)
+        if editor.category_index == 3:
+            boxes["fine_tune"] = (24, 344, 400, 408)
+            boxes["meter_gallery"] = (24, 416, 400, 640)
     return boxes
 
 
 class ThemeEditor:
+    """Theme Library, guided editing, and the live unsaved draft."""
+
     def __init__(self, library, notice_duration=2.5):
         self.library = library
         self.notice_duration = notice_duration
@@ -205,14 +196,10 @@ class ThemeEditor:
         self.draft = None
         self.baseline = None
         self.entry_theme = None
-        self.scene = "home"
-        self.panel = "colors"
-        self.section = "STYLE"
         self.color_group = 0
         self.part_page = 0
         self.color_key = COLOR_GROUPS[0][1][0]
         self.hue = 0.0
-        self.shade_index = 10
         self.name_open = False
         self.alpha_open = False
         self.alpha_value = ""
@@ -221,13 +208,20 @@ class ThemeEditor:
         self.hex_open = False
         self.hex_value = ""
         self.hex_pristine = False
-        self.family_picker = False
         self.confirm_back = False
         self.confirm_delete_id = None
         self.notice = ""
         self.notice_action = ""
         self.notice_detail = ""
         self.notice_until = 0.0
+        self.category_index = 0
+        self.selected_family = "SURFACES"
+        self.view_app = False
+        self.fine_tune = False
+        self.meter_gallery_open = False
+        self.family_source = None
+        self.lightness = 0.5
+        self.strength = 0.0
 
     @property
     def themes(self):
@@ -237,10 +231,6 @@ class ThemeEditor:
     @property
     def selected(self):
         return self.library.get(self.selected_id) or self.library.get(DEFAULT_THEME_ID)
-
-    @property
-    def preview(self):
-        return self.draft if self.mode == "edit" else self.selected
 
     @property
     def dirty(self):
@@ -260,11 +250,12 @@ class ThemeEditor:
 
     @property
     def can_previous(self):
-        return self.page > 0
+        return self.category_index > 0 if self.mode == "edit" else self.page > 0
 
     @property
     def can_next(self):
-        return self.page < self.page_count - 1
+        return (self.category_index < len(GUIDED_CATEGORIES) - 1
+                if self.mode == "edit" else self.page < self.page_count - 1)
 
     def card_item(self, slot):
         if slot < len(BUILTIN_THEME_IDS):
@@ -292,22 +283,25 @@ class ThemeEditor:
             self.draft = deepcopy(theme)
         self.baseline = deepcopy(self.draft)
         self.mode = "edit"
-        self.scene = "home"
-        self.panel = "colors"
-        self.section = "STYLE"
         self.meter_page = 0
         self.color_group = 0
         self.part_page = 0
         self.color_key = self.family_keys[0]
         self._sync_hue()
-        self.name_open = self.alpha_open = self.hex_open = self.family_picker = False
+        self.name_open = self.alpha_open = self.hex_open = False
         self.confirm_back = False
         self.confirm_delete_id = None
         apply_theme(self.draft)
+        self.category_index = 0
+        self.selected_family = "SURFACES"
+        self.view_app = False
+        self.fine_tune = False
+        self.meter_gallery_open = False
+        self._choose_family(0)
 
     def _apply_draft(self):
         # The name keypad may temporarily leave the draft blank. Appearance
-        # still previews live while save validation owns the final name.
+        # still applies live while save validation owns the final name.
         if self.draft["name"].strip():
             apply_theme(self.draft)
         else:
@@ -318,8 +312,12 @@ class ThemeEditor:
             apply_theme(self.entry_theme)
         self.mode = "browse"
         self.draft = self.baseline = self.entry_theme = None
-        self.name_open = self.alpha_open = self.hex_open = self.family_picker = False
+        self.name_open = self.alpha_open = self.hex_open = False
         self.confirm_back = False
+        self.view_app = False
+        self.fine_tune = False
+        self.meter_gallery_open = False
+        self.family_source = None
 
     def back(self):
         if self.mode == "browse":
@@ -350,24 +348,14 @@ class ThemeEditor:
             self.draft["colors"][self.color_key] = next_color
             self._apply_draft()
 
-    def set_hue(self, x):
-        box = theme_screen_boxes(self)["hue"]
-        self.hue = max(0.0, min(1.0, (x - box[0]) / (box[2] - box[0])))
-        self.set_color(shade_grid(self.hue)[self.shade_index])
-
-    def drag(self, x, y):
-        if self.mode != "edit" or self.panel not in ("colors", "advanced"):
-            return
-        if self.confirm_back or self.name_open or self.alpha_open or self.hex_open or self.family_picker:
-            return
-        self.set_hue(x)
-
     def _choose_family(self, index):
         self.color_group = index
         self.part_page = 0
         self.color_key = self.family_keys[0]
-        self.family_picker = False
         self._sync_hue()
+        self.selected_family = COLOR_GROUPS[index][0]
+        self.fine_tune = False
+        self._snapshot_family()
 
     def _alpha_key(self, value):
         if value == "CANCEL":
@@ -415,8 +403,9 @@ class ThemeEditor:
             except ValueError:
                 self.notify("ERROR", "INVALID HEX COLOR")
                 return
-            self.draft["colors"][self.color_key] = parsed
-            self._apply_draft()
+            if parsed != self.current_color:
+                self.draft["colors"][self.color_key] = parsed
+                self._apply_draft()
             self.hex_open = False
             self._sync_hue()
             return
@@ -443,7 +432,7 @@ class ThemeEditor:
         elif len(self.draft["name"]) < 32:
             self.draft["name"] += value
 
-    def tap(self, x, y):
+    def _tap_library_or_overlay(self, x, y):
         boxes = theme_screen_boxes(self)
         action = next((name for name, box in boxes.items() if contains(box, x, y)), None)
         if self.mode == "browse" and action and action.startswith("theme:"):
@@ -486,8 +475,8 @@ class ThemeEditor:
                 self.begin()
             elif action == "meters":
                 self.begin(self.selected)
-                self.panel = "meters"
-                self.section = "METERS"
+                self._select_category(3)
+                self._open_meter_gallery()
             elif action.startswith(("theme:", "edit:", "delete:")):
                 verb, slot_text = action.split(":")
                 item = self.card_item(int(slot_text))
@@ -519,83 +508,190 @@ class ThemeEditor:
             if action.startswith("hex:"):
                 self._hex_key(action.split(":")[1])
             return
-        if self.family_picker:
-            if action.startswith("family:"):
-                self._choose_family(int(action.split(":")[1]))
-            elif action == "family_cancel":
-                self.family_picker = False
-            return
 
-        if action == "save":
-            self.save()
+    @property
+    def category_families(self):
+        return GUIDED_CATEGORIES[self.category_index][1]
+
+    @property
+    def visible_family_rows(self):
+        return self.category_families[:3]
+
+    @property
+    def can_meter_previous(self):
+        return self.meter_page > 0
+
+    @property
+    def can_meter_next(self):
+        return self.meter_page < (len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE
+
+    def _page_meters(self, direction):
+        self.meter_page = max(0, min((len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE,
+                                     self.meter_page + direction))
+
+    def _open_meter_gallery(self):
+        self.meter_page = list(METER_STYLES).index(self.draft["smeter_style"]) // METER_CARDS_PER_PAGE
+        self.meter_gallery_open = True
+
+    def swipe(self, start_x, start_y, x, y):
+        """Page a gallery gesture without treating it as a face selection."""
+        if (not self.meter_gallery_open or self.view_app or self.mode != "edit"
+                or self.confirm_back or self.name_open or self.alpha_open or self.hex_open):
+            return False
+        if abs(x - start_x) < 60 or abs(x - start_x) <= abs(y - start_y):
+            return False
+        self._page_meters(1 if x < start_x else -1)
+        return True
+
+    def _select_category(self, index):
+        self.category_index = max(0, min(len(GUIDED_CATEGORIES) - 1, index))
+        self.fine_tune = False
+        self.meter_gallery_open = False
+        self.selected_family = self.category_families[0] if self.category_families else None
+        if self.selected_family is not None:
+            self._choose_family(next(index for index, (name, _keys) in enumerate(COLOR_GROUPS)
+                                     if name == self.selected_family))
+
+    def _snapshot_family(self):
+        self.family_source = deepcopy(self.draft["colors"])
+        self._sync_picker()
+
+    def _sync_picker(self):
+        self._sync_hue()
+        _hue, self.lightness, self.strength = colorsys.rgb_to_hls(
+            *(channel / 255 for channel in self.current_color[:3]))
+        if not self.fine_tune:
+            self.lightness = sum(colorsys.rgb_to_hls(
+                *(channel / 255 for channel in self.draft["colors"][key][:3]))[1]
+                for key in self.family_keys) / len(self.family_keys)
+
+    def drag(self, control, x, y):
+        if (self.mode != "edit" or self.view_app or self.selected_family is None
+                or self.confirm_back or self.confirm_delete_id or self.name_open
+                or self.alpha_open or self.hex_open
+                or self.meter_gallery_open or control not in ("hue", "tone")):
+            return
+        box = theme_screen_boxes(self)[control]
+        if control == "hue":
+            self.hue = max(0.0, min(1.0, (x - box[0]) / (box[2] - box[0])))
+        else:
+            self.strength = max(0.0, min(1.0, (x - box[0]) / (box[2] - box[0])))
+            self.lightness = 1.0 - max(0.0, min(1.0, (y - box[1]) / (box[3] - box[1])))
+        if self.fine_tune:
+            self.set_color([round(channel * 255) for channel in colorsys.hls_to_rgb(
+                self.hue % 1.0, self.lightness, self.strength)])
+        else:
+            updated = recolor_family_shades(self.family_source, self.family_keys,
+                                           self.hue, self.lightness, self.strength)
+            # A snapshot supplies stable shade relationships, while unrelated
+            # families retain any changes made since that snapshot was taken.
+            if any(updated[key] != self.draft["colors"][key] for key in self.family_keys):
+                for key in self.family_keys:
+                    self.draft["colors"][key] = updated[key]
+                self._apply_draft()
+
+    def reset_category(self):
+        keys = [key for family in self.category_families for key in dict(COLOR_GROUPS)[family]]
+        settings = {3: ("smeter_style",),
+                    5: ("radius", "sidebar", "units", "text_scale_percent")}.get(self.category_index, ())
+        changed = (any(self.draft["colors"][key] != self.baseline["colors"][key] for key in keys)
+                   or any(self.draft[key] != self.baseline[key] for key in settings))
+        for key in keys:
+            self.draft["colors"][key] = list(self.baseline["colors"][key])
+        for key in settings:
+            self.draft[key] = self.baseline[key]
+        if self.selected_family:
+            self._snapshot_family()
+        if changed:
+            self._apply_draft()
+
+    def tap(self, x, y):
+        if self.mode == "browse":
+            self._tap_library_or_overlay(x, y)
+            return
+        if (self.confirm_back or self.confirm_delete_id or self.name_open
+                or self.alpha_open or self.hex_open):
+            self._tap_library_or_overlay(x, y)
+            if self.mode == "edit" and not (self.name_open or self.alpha_open or self.hex_open):
+                self._sync_picker()
+            return
+        boxes = theme_screen_boxes(self)
+        action = next((name for name, box in boxes.items() if contains(box, x, y)), None)
+        if action == "meter_gallery":
+            self._open_meter_gallery()
+        elif action == "meter_close":
+            self.meter_gallery_open = False
+        elif action == "meter_previous":
+            self._page_meters(-1)
+        elif action == "meter_next":
+            self._page_meters(1)
+        elif action and action.startswith("meter:"):
+            choice = action.split(":", 1)[1]
+            if choice in METER_STYLES and self.draft["smeter_style"] != choice:
+                self.draft["smeter_style"] = choice
+                self._apply_draft()
+            self.meter_gallery_open = False
+        elif action and action.startswith("option:"):
+            choice = action.split(":", 1)[1]
+            options = {"straight": ("radius", 0), "rounded": ("radius", 8),
+                       "left": ("sidebar", "left"), "right": ("sidebar", "right"),
+                       "original": ("units", "original"), "imperial": ("units", "imperial"),
+                       "metric": ("units", "metric")}
+            if choice in options:
+                key, value = options[choice]
+                if self.draft[key] != value:
+                    self.draft[key] = value
+                    self._apply_draft()
+        elif action and action.startswith("text:"):
+            choice = action.split(":", 1)[1]
+            current = self.draft["text_scale_percent"]
+            values = {"smaller": max(TEXT_SCALE_MIN, current - 5),
+                      "larger": min(TEXT_SCALE_MAX, current + 5), "reset": 100}
+            if choice in values and current != values[choice]:
+                self.draft["text_scale_percent"] = values[choice]
+                self._apply_draft()
+        elif action == "previous":
+            if self.can_previous:
+                self._select_category(self.category_index - 1)
+        elif action == "next":
+            if self.can_next:
+                self._select_category(self.category_index + 1)
+        elif action == "view_app":
+            self.view_app = True
+        elif action == "return_to_editor":
+            self.view_app = False
+        elif action == "back":
+            self.back()
         elif action == "theme_name":
             self.name_open = True
-        elif action.startswith("panel:"):
-            self.panel = action.split(":")[1]
-            self.section = self.panel.upper()
-        elif action.startswith("scene:"):
-            self.scene = action.split(":")[1]
-        elif action == "family_open":
-            self.family_picker = True
-        elif action.startswith("family:"):
-            self._choose_family(int(action.split(":")[1]))
-        elif action.startswith("part:"):
-            self.color_key = self.family_keys[int(action.split(":")[1])]
-            self._sync_hue()
-        elif action == "part_previous":
+        elif action and action.startswith("family:"):
+            family = action.split(":", 1)[1]
+            self._choose_family(next(index for index, (name, _keys) in enumerate(COLOR_GROUPS)
+                                     if name == family))
+        elif action in ("hue", "tone"):
+            self.drag(action, x, y)
+        elif action == "fine_tune":
+            self.fine_tune = True
+            self.part_page = 0
+            self._sync_picker()
+        elif action == "fine_tune_close":
+            self.fine_tune = False
+            self._snapshot_family()
+        elif action and action.startswith("key:"):
+            self.color_key = action.split(":", 1)[1]
+            self._sync_picker()
+        elif action == "key_previous":
             self.part_page = max(0, self.part_page - 1)
-        elif action == "part_next":
-            self.part_page = min((len(self.family_keys) - 1) // 4, self.part_page + 1)
-        elif action == "hue":
-            self.set_hue(x)
-        elif action.startswith("shade:"):
-            self.shade_index = int(action.split(":")[1])
-            self.set_color(shade_grid(self.hue)[self.shade_index])
+        elif action == "key_next":
+            self.part_page = min((len(self.family_keys) - 1) // 3, self.part_page + 1)
         elif action == "alpha_open":
             self.alpha_value = str(transparency_percent(self.current_color))
             self.alpha_pristine = True
             self.alpha_original = list(self.current_color)
             self.alpha_open = True
-        elif action == "apply_family":
-            updated = recolor_family(self.draft["colors"], self.family_keys, self.hue)
-            if updated != self.draft["colors"]:
-                self.draft["colors"] = updated
-                self._apply_draft()
         elif action == "hex_open":
             self.hex_value = "".join(f"{value:02X}" for value in self.current_color)
             self.hex_pristine = True
             self.hex_open = True
-        elif action == "meter_previous":
-            self.meter_page = max(0, self.meter_page - 1)
-        elif action == "meter_next":
-            self.meter_page = min(
-                (len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE,
-                self.meter_page + 1,
-            )
-        elif action.startswith("meter:"):
-            self.draft["smeter_style"] = action.split(":", 1)[1]
-        elif action.startswith("option:"):
-            value = action.split(":")[1]
-            if value in ("rounded", "straight"):
-                self.draft["radius"] = 8 if value == "rounded" else 0
-            elif value in ("left", "right"):
-                self.draft["sidebar"] = value
-            else:
-                self.draft["units"] = value
-            self._apply_draft()
-        elif action.startswith("text:"):
-            value = action.split(":")[1]
-            current = self.draft["text_scale_percent"]
-            self.draft["text_scale_percent"] = (
-                100 if value == "reset"
-                else max(TEXT_SCALE_MIN, current - 5) if value == "smaller"
-                else min(TEXT_SCALE_MAX, current + 5)
-            )
-            self._apply_draft()
-        elif action.startswith("preview:"):
-            family = {"frequency": 1, "meter": 4, "buttons": 2,
-                      "passband": 5, "footer": 7, "browse_categories": 2,
-                      "browse_text": 1, "browse_rows": 0, "notice": 3,
-                      "popup_text": 1, "popup": 0}[action.split(":")[1]]
-            self._choose_family(family)
-            self.panel = "colors"
+        elif action == "reset_category":
+            self.reset_category()

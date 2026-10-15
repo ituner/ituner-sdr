@@ -32,29 +32,37 @@ class MeterTests(unittest.TestCase):
             self.assertNotEqual(needle_point(style, -121, (0, 0), 1),
                                 needle_point(style, -33, (0, 0), 1))
 
-    def test_chooser_persists_selection_without_changing_live_theme_before_save(self):
+    def test_category_gallery_applies_live_and_persists_saved_selection(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'themes.json'
             editor = ThemeEditor(ThemeLibrary(path))
             def tap(action):
                 a, b, c, d = theme_screen_boxes(editor)[action]
                 editor.tap((a + c) / 2, (b + d) / 2)
-            tap('meters')
-            self.assertEqual(editor.section, 'METERS')
-            tap('meter_next')
-            tap('meter_next')
-            tap('meter:aviation')
-            self.assertEqual(editor.preview['smeter_style'], 'aviation')
-            self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'led')
-            tap('save')
+            def choose(identifier):
+                for _ in range(3):
+                    tap('next')
+                self.assertEqual(editor.category_index, 3)
+                tap('meter_gallery')
+                while f'meter:{identifier}' not in theme_screen_boxes(editor):
+                    tap('meter_next' if editor.can_meter_next else 'meter_previous')
+                tap(f'meter:{identifier}')
+            tap('new')
+            choose('aviation')
+            self.assertEqual(editor.draft['smeter_style'], 'aviation')
+            self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'aviation')
+            self.assertEqual(editor.library.themes, [])
+            tap('back')
+            tap('leave_save')
             restarted = ThemeLibrary(path)
             self.assertEqual(restarted.get(restarted.active_id)['smeter_style'], 'aviation')
-            # Editing an existing custom theme changes it rather than duplicating it.
-            tap('meters')
-            tap('meter_next')
-            tap('meter:linear')
-            tap('save')
+            # Editing an existing custom theme updates the same saved entry.
+            tap('edit:4')
+            choose('linear')
+            tap('back')
+            tap('leave_save')
             self.assertEqual(len(editor.library.themes), 1)
+            self.assertEqual(ThemeLibrary(path).get(editor.selected_id)['smeter_style'], 'linear')
 
     def test_microvolts_are_rms_at_50_ohms_and_follow_power_ratio(self):
         self.assertAlmostEqual(dbm_to_microvolts(-73), 50.059326, places=5)
@@ -82,24 +90,31 @@ class MeterTests(unittest.TestCase):
                     self.assertGreaterEqual(y, bounds[1] - 1e-8)
                     self.assertLessEqual(y, bounds[3] + 1e-8)
 
-    def test_every_meter_is_reachable_and_pages_stop_at_end(self):
+    def test_category_gallery_exposes_every_meter_and_stops_at_end(self):
         with TemporaryDirectory() as directory:
             editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
             editor.begin()
-            editor.section = 'METERS'
+            def tap(action):
+                x0, y0, x1, y1 = theme_screen_boxes(editor)[action]
+                editor.tap((x0 + x1) / 2, (y0 + y1) / 2)
+            for _ in range(3):
+                tap('next')
+            tap('meter_gallery')
+            while editor.can_meter_previous:
+                tap('meter_previous')
             seen = set()
             for _ in range(5):
                 boxes = theme_screen_boxes(editor)
                 cards = [key.split(':')[1] for key in boxes if key.startswith('meter:')]
                 self.assertLessEqual(len(cards), 6)
                 seen.update(cards)
-                for key in [key for key in boxes if key.startswith('meter:')]:
-                    x0, y0, x1, y1 = boxes[key]
-                    self.assertLess(y1, boxes['meter_next'][1])
-                    editor.tap((x0 + x1) / 2, (y0 + y1) / 2)
-                    self.assertEqual(editor.draft['smeter_style'], key.split(':')[1])
-                box = boxes['meter_next']
-                editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                for identifier in cards:
+                    box = theme_screen_boxes(editor)[f'meter:{identifier}']
+                    self.assertLessEqual(box[3], boxes['meter_next'][1])
+                    tap(f'meter:{identifier}')
+                    self.assertEqual(editor.draft['smeter_style'], identifier)
+                    tap('meter_gallery')
+                tap('meter_next')
             self.assertEqual(seen, set(METER_STYLES))
             self.assertEqual(editor.meter_page, (len(METER_STYLES) - 1) // 6)
 
@@ -154,6 +169,32 @@ class MeterTests(unittest.TestCase):
                     elif style.height > 80:
                         meter_top = ui.lcd_home_bandwidth_box(False)[1]
                         self.assertLess(meter_top + style.height, volume[1])
+
+    def test_home_mode_touch_area_follows_each_meter_height(self):
+        ui.configure_output(True)
+        for identifier in METER_STYLES:
+            theme = new_theme()
+            theme['smeter_style'] = identifier
+            apply_theme(theme)
+            for compact in (True, False):
+                touch_box = ui.radio_toggle_box(None, 7075, compact)
+                for label, button in ui.lcd_home_mode_boxes(compact):
+                    with self.subTest(meter=identifier, compact=compact, mode=label):
+                        center_x = (button[0] + button[2]) / 2
+                        center_y = (button[1] + button[3]) / 2
+                        self.assertTrue(ui.contains(touch_box, center_x, center_y))
+
+    def test_default_home_meter_keeps_its_original_theme_background(self):
+        apply_theme(DEFAULT_THEME)
+        box = (1034, 104, 1270, 184)
+        with patch.object(ui, 'draw_logical_rect') as draw_rect, \
+                patch.object(ui, 'draw_section_divider'), \
+                patch.object(ui, 'draw_logical_line'), \
+                patch.object(ui, 'draw_logical_circle'), \
+                patch.object(ui, 'draw_text'):
+            ui.draw_lcd_compact_smeter(None, box, -85)
+        self.assertEqual(draw_rect.call_args_list[0].args,
+                         (*box, ui.APP_UI_STYLE.palette.section_surface))
 
 
 if __name__ == '__main__':
