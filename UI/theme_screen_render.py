@@ -132,7 +132,7 @@ def _preview(ui, cache, editor):
         ui.draw_selected_smeter(cache, (326 - w / 2, y, 326 + w / 2, y + h),
                                 -89 + 25 * math.sin(time.monotonic() * .7), -63,
                                 theme=theme, style_id=theme["smeter_style"])
-        _text(ui, cache, 326, 600, "Theme: " + theme["name"], MUTED, 15, "cm", 570)
+        _text(ui, cache, 326, 600, "Meter choice is separate from your theme", MUTED, 15, "cm", 570)
         _text(ui, cache, 326, 630, "Choose any meter to preview it here.", MUTED, 14, "cm")
     else:
         _home(ui, cache, theme, PREVIEW_BOX)

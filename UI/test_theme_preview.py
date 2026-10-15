@@ -37,6 +37,12 @@ class CapturedPreviewTests(unittest.TestCase):
                 self.assertEqual(actual.tobytes(), expected)
                 self.assertNotEqual(actual.tobytes(), captured.tobytes())
 
+    def test_meter_changes_do_not_change_builtin_frontend_colors(self):
+        for base in BUILTIN_THEMES.values():
+            theme = {**deepcopy(base), "smeter_style": "linear_orange"}
+            self.assertEqual(frontend_preview(theme, ui.themed_waterfall_pixels).tobytes(),
+                             frontend_preview(base, ui.themed_waterfall_pixels).tobytes())
+
     def test_building_previews_does_not_apply_a_theme(self):
         before = deepcopy(runtime_theme)
         for theme in BUILTIN_THEMES.values():

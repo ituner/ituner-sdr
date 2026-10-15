@@ -176,6 +176,11 @@ def new_theme(name="New Theme", source=None):
     return base
 
 
+def theme_appearance(theme):
+    """Meter choice is a display setting, never part of a saved theme."""
+    return {key: value for key, value in theme.items() if key != "smeter_style"}
+
+
 def apply_theme(theme):
     global runtime_revision
     normalized = normalize_theme(theme, allow_default=True)
@@ -226,12 +231,15 @@ class ThemeLibrary:
         self.path = Path(path).expanduser()
         self.themes = []
         self.active_id = DEFAULT_THEME_ID
+        self.smeter_style = DEFAULT_METER_STYLE
         self.load()
 
     def get(self, identifier):
         if is_builtin_theme_id(identifier):
-            return normalize_theme(BUILTIN_THEMES[identifier], allow_default=True)
-        return next((theme for theme in self.themes if theme["id"] == identifier), None)
+            theme = normalize_theme(BUILTIN_THEMES[identifier], allow_default=True)
+        else:
+            theme = next((theme for theme in self.themes if theme["id"] == identifier), None)
+        return {**theme, "smeter_style": self.smeter_style} if theme is not None else None
 
     def new_theme(self, source=None, *, name="New Theme"):
         """Give each new editor draft a name that can be saved immediately."""
@@ -243,7 +251,10 @@ class ThemeLibrary:
             ending = f" {suffix}"
             name = base[:32 - len(ending)] + ending
             suffix += 1
-        return new_theme(name, source=source)
+        draft = new_theme(name, source=source)
+        if source is None:
+            draft["smeter_style"] = self.smeter_style
+        return draft
 
     def load(self):
         try:
@@ -262,6 +273,9 @@ class ThemeLibrary:
             active_id = str(document.get("active_id") or DEFAULT_THEME_ID)
             active_id = REMOVED_THEME_MIGRATIONS.get(active_id, active_id)
             self.active_id = active_id if self.get(active_id) else DEFAULT_THEME_ID
+            legacy_active = next((theme for theme in themes if theme["id"] == self.active_id), {})
+            self.smeter_style = normalize_meter_style(document.get("smeter_style", legacy_active.get("smeter_style")))
+            self.themes = [theme_appearance(theme) for theme in themes]
         except (OSError, ValueError, TypeError, AttributeError):
             pass
         apply_theme(self.get(self.active_id))
@@ -269,28 +283,34 @@ class ThemeLibrary:
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(self.path.name + ".tmp")
-        document = {"version": 1, "active_id": self.active_id, "themes": self.themes}
+        document = {"version": 1, "active_id": self.active_id,
+                    "smeter_style": self.smeter_style, "themes": self.themes}
         temporary.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, self.path)
 
-    def _commit(self, themes, active_id):
-        previous_themes, previous_id = self.themes, self.active_id
+    def _commit(self, themes, active_id, *, smeter_style=None):
+        previous_themes, previous_id, previous_meter = self.themes, self.active_id, self.smeter_style
         self.themes, self.active_id = themes, active_id
+        if smeter_style is not None:
+            self.smeter_style = normalize_meter_style(smeter_style)
         try:
             self.save()
         except OSError:
-            self.themes, self.active_id = previous_themes, previous_id
+            self.themes, self.active_id, self.smeter_style = previous_themes, previous_id, previous_meter
             raise
         apply_theme(self.get(active_id))
 
-    def activate(self, identifier):
+    def activate(self, identifier, *, smeter_style=None):
         theme = self.get(identifier)
         if theme is None:
             raise ValueError("unknown theme")
-        self._commit(self.themes, identifier)
+        self._commit(self.themes, identifier, smeter_style=smeter_style)
 
-    def upsert(self, theme):
-        normalized = normalize_theme(theme)
+    def set_smeter_style(self, identifier):
+        self._commit(self.themes, self.active_id, smeter_style=identifier)
+
+    def upsert(self, theme, *, smeter_style=None):
+        normalized = theme_appearance(normalize_theme(theme))
         if normalized["name"].casefold() in {
             item["name"].casefold() for item in BUILTIN_THEMES.values()
         }:
@@ -300,7 +320,7 @@ class ThemeLibrary:
             raise ValueError("a theme with that name already exists")
         themes = [item for item in self.themes if item["id"] != normalized["id"]]
         themes.append(normalized)
-        self._commit(themes, normalized["id"])
+        self._commit(themes, normalized["id"], smeter_style=smeter_style)
 
     def delete(self, identifier):
         if is_builtin_theme_id(identifier):

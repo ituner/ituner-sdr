@@ -4,8 +4,9 @@ Open **Display → Themes → S-Meters**. Tap a meter for a large animated
 preview, then tap **Apply & Home** to save it and return directly to Home.
 **Cancel** discards the preview. Use **LED / Slider** to find the original
 **LED Bar**, **Analog** for needle meters, or **Magic Eye** for valve designs.
-Renaming or entering an editor is not required. Existing saved themes update
-in place; built-in themes receive an automatically named custom copy.
+Renaming or entering an editor is not required. Meter selection is saved
+separately: changing it never creates or modifies a theme, and switching themes
+keeps the selected meter.
 See [Themes](themes.md) for palette selection and optional customization.
 
 The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer
@@ -63,8 +64,10 @@ pivot, radius and angular sweep. Changing a dial's artwork alone is insufficient
 if those geometry or scale parameters differ. No new receiver connection or
 signal-processing worker is needed.
 
-Themes save `smeter_style` alongside their other appearance settings. Older
-themes and unknown style identifiers default to LED Bar. The normal installer
+The preferences file saves one top-level `smeter_style`, separately from the
+appearance-only theme entries. Existing files migrate the active theme's meter
+selection; inactive legacy themes cannot override it. Unknown style identifiers
+default to LED Bar. The normal installer
 copies the new Python module with the rest of the UI.
 
 ## Visual references

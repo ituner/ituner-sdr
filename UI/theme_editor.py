@@ -8,7 +8,7 @@ from smeter_styles import METER_STYLES
 from theme_colors import shade_grid, transparency_percent, with_transparency
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX, is_builtin_theme_id,
-                          normalize_theme)
+                          normalize_theme, theme_appearance)
 
 COLOR_GROUPS = (
     ("BASE", ("background", "sidebar", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
@@ -127,7 +127,8 @@ class ThemeEditor:
 
     @property
     def themes(self):
-        return [*(self.library.get(key) for key in BUILTIN_THEME_IDS), *self.library.themes]
+        return [self.library.get(key) for key in
+                (*BUILTIN_THEME_IDS, *(item["id"] for item in self.library.themes))]
 
     @property
     def selected(self):
@@ -210,23 +211,23 @@ class ThemeEditor:
         meter = self.draft["smeter_style"]
         self.selected_id = identifier
         self.draft = deepcopy(item)
-        if is_builtin_theme_id(identifier):
-            self.draft["smeter_style"] = meter
+        self.draft["smeter_style"] = meter
         self.error = ""
 
     def save(self):
         try:
             normalized = normalize_theme(self.draft, allow_default=is_builtin_theme_id(self.draft["id"]))
             existing = self.library.get(normalized["id"])
-            if existing == normalized:
-                self.library.activate(normalized["id"])
+            meter = normalized["smeter_style"]
+            if existing is not None and theme_appearance(existing) == theme_appearance(normalized):
+                self.library.activate(normalized["id"], smeter_style=meter)
             else:
                 if is_builtin_theme_id(normalized["id"]):
                     copy = self.library.new_theme(source=normalized, name=existing["name"] + " Custom")
                     if normalized["name"] != existing["name"]:
                         copy["name"] = normalized["name"]
                     normalized = copy
-                self.library.upsert(normalized)
+                self.library.upsert(normalized, smeter_style=meter)
         except (OSError, ValueError) as error:
             self.notify("ERROR", error)
             return False

@@ -40,7 +40,8 @@ def frontend_preview(theme, waterfall_mapping):
             rgb = Image.merge('RGB', tuple(gray.point(lut[index * 256:(index + 1) * 256]) for index in range(3)))
         scene = rgb.convert('RGBA')
     render_theme = theme
-    if theme_system.is_builtin_theme_id(theme['id']) and theme != theme_system.BUILTIN_THEMES[theme['id']]:
+    if (theme_system.is_builtin_theme_id(theme['id']) and
+            theme_system.theme_appearance(theme) != theme_system.theme_appearance(theme_system.BUILTIN_THEMES[theme['id']])):
         render_theme = {**theme, 'id': 'preview-custom'}
     # Read the actual captured waterfall, including its real signal patterns.
     waterfall_bounds = metadata['waterfall_box']

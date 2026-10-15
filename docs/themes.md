@@ -3,9 +3,9 @@
 Open **Display → Themes**. The current saved appearance is selected when the
 page opens. The page has three tabs and one common action bar:
 
-- **Themes** previews a built-in palette or a saved theme. Choosing a built-in
-  palette keeps the S-meter you have just chosen. Choosing a saved theme restores
-  that theme's complete appearance. Each card is a single touch target with its
+- **Themes** previews a built-in palette or a saved theme. Choosing any theme keeps
+  the S-meter you have just chosen. Themes store colors, text size and layout;
+  the meter is an independent display setting. Each card is a single touch target with its
   name and selection hint; the large preview shows the result.
 - **S-Meters** shows an enlarged, animated preview. Use All, LED / Slider, Analog,
   or Magic Eye to narrow the gallery. The original meter is **LED Bar**, under
@@ -27,7 +27,11 @@ Candidate themes recolor the captured pixels; no generated RF image is used.
 The enlarged S-meter uses a demonstration signal. Color controls preserve
 opacity when adjusting RGB.
 
-Changing a saved theme updates it in place. Customizing a built-in creates an
+Changing only the S-meter never creates, updates or renames a theme. Its selection
+is saved separately and stays selected when switching themes or restarting.
+
+Changing a saved theme's appearance updates it in place. Customizing a built-in's
+appearance creates an
 automatically named copy, such as **Default Custom**; further copies receive an
 unused suffix. **Make a Copy** preserves the original. Renaming is optional.
 Saved themes can be deleted only after confirmation; built-ins are protected.

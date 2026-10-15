@@ -52,12 +52,12 @@ class MeterTests(unittest.TestCase):
             tap('save')
             restarted = ThemeLibrary(path)
             self.assertEqual(restarted.get(restarted.active_id)['smeter_style'], 'aviation')
-            # Editing an existing custom theme changes it rather than duplicating it.
+            # Repeated meter changes never create themes.
             editor.show('meters')
             tap('filter:digital')
             tap('meter:linear')
             tap('save')
-            self.assertEqual(len(editor.library.themes), 1)
+            self.assertEqual(len(editor.library.themes), 0)
 
     def test_microvolts_are_rms_at_50_ohms_and_follow_power_ratio(self):
         self.assertAlmostEqual(dbm_to_microvolts(-73), 50.059326, places=5)

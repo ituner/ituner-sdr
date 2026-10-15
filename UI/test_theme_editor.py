@@ -21,6 +21,7 @@ class ThemeEditorTests(unittest.TestCase):
         self.original['colors']['frequency'] = [245, 180, 40]
         self.original['smeter_style'] = 'flex_vintage_hd_white'
         self.library.upsert(self.original)
+        self.library.set_smeter_style(self.original["smeter_style"])
         self.editor = ThemeEditor(self.library)
         self.editor.show()
         self.initial_bytes = self.path.read_bytes()
@@ -153,13 +154,14 @@ class ThemeEditorTests(unittest.TestCase):
         self.tap('theme:green')
         self.assertEqual(self.editor.preview['smeter_style'], 'led')
 
-    def test_saved_theme_card_restores_its_complete_saved_appearance(self):
+    def test_saved_theme_card_preserves_pending_meter_and_restores_appearance(self):
         self.meter('led')
         self.tap('tab:themes')
         self.tap('theme:' + self.original['id'])
-        self.assertEqual(self.editor.preview, self.library.get(self.original['id']))
+        expected = {**self.library.get(self.original['id']), 'smeter_style': 'led'}
+        self.assertEqual(self.editor.preview, expected)
 
-    def test_copying_builtin_with_existing_new_theme_never_requires_renaming(self):
+    def test_builtin_meter_change_with_existing_new_theme_creates_no_copy(self):
         self.library.upsert(new_theme())
         self.library.activate(DEFAULT_THEME_ID)
         self.editor.show('meters')
@@ -167,6 +169,8 @@ class ThemeEditorTests(unittest.TestCase):
         self.tap('meter:linear_orange')
         self.tap('save')
         self.assertFalse(self.editor.open, self.editor.error)
+        self.assertEqual(len(self.library.themes), 2)
+        self.assertEqual(self.library.active_id, DEFAULT_THEME_ID)
         names = [t['name'].casefold() for t in self.library.themes]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(self.library.get(self.library.active_id)['smeter_style'], 'linear_orange')
@@ -232,7 +236,11 @@ class ThemeEditorTests(unittest.TestCase):
         self.tap('tab:customize');self.tap('copy')
         self.meter('linear_orange');self.tap('save')
         self.assertFalse(self.editor.open)
-        self.assertEqual(self.library.get(self.original['id'])['smeter_style'], 'flex_vintage_hd_white')
+        original = next(t for t in self.library.themes if t['id'] == self.original['id'])
+        self.assertNotIn('smeter_style', original)
+        self.assertEqual(original['colors'], self.original['colors'])
+        self.assertNotEqual(self.library.active_id, self.original['id'])
+        self.assertEqual(self.library.smeter_style, 'linear_orange')
         self.assertEqual(len(self.library.themes), 2)
 
     def test_all_palette_parts_remain_editable(self):
