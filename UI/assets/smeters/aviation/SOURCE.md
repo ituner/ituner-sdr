@@ -23,3 +23,9 @@ receiver signal mapping and -130° to +130° sweep. Dial images are kept square
 in every preview size. Static print and housing are cached at native dimensions;
 changing RSSI only moves the pointer and updates the readout. Existing saved
 `aviation` and `heritage` selections automatically use the replacement faces.
+
+The Home versions now occupy the entire 236-pixel rail width, with square
+236 × 236 housings and readouts inside the lower dial window. The surplus gaps
+above/below the mode grid are reclaimed so its original touch targets and the
+complete Volume control remain clear of the navigation tiles. No extra outer
+frame, stretching, or housing crop is introduced.

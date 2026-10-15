@@ -228,7 +228,8 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           skin_needle_segment, skin_source_bounds, s_label, voltage_label,
                           meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal,
                           LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
-                          aviation_image_box, aviation_needle_segment, needle_point)
+                          aviation_image_box, aviation_needle_segment, needle_point,
+                          BAKELITE_CALIBRATION, bakelite_point, bakelite_needle_segment)
 from meter_artwork import linear_strip_image
 
 
@@ -15713,6 +15714,10 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     compact_cell_h = 31
     grid_y0 = (LCD_COMPACT_MODE_GRID_TOP + smeter_rail_extra_height()
                if show_compact_readouts else 28)
+    if show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].kind == "aircraft":
+        # Full-width square housings fit by reclaiming surplus gaps, preserving
+        # the same touch targets and the complete Volume block below them.
+        grid_y0 = LCD_COMPACT_SMETER_TOP + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height + 4
     return grid_y0, compact_cell_h, gap
 
 
@@ -15996,13 +16001,16 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
     if style.kind == "aircraft" and isinstance(text_cache, TextCache):
         draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
+    if style.kind == "vu_case" and isinstance(text_cache, TextCache):
+        draw_bakelite_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
+        return
     if style.kind in ("skin", "triple", "eye") and isinstance(text_cache, TextCache):
         draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
     backlit = identifier == "linear_orange" and isinstance(text_cache, TextCache)
     if backlit:
         draw_incandescent_meter_background(text_cache, box)
-    fallback = "precision" if style.kind in ("skin", "aircraft") else "led" if style.kind == "led_skin" else identifier
+    fallback = "precision" if style.kind in ("skin", "aircraft", "vu_case") else "led" if style.kind == "led_skin" else identifier
     draw_meter(fallback, box, dbm, peak_dbm,
                rect=draw_logical_rect, line=draw_logical_line,
                circle=draw_logical_circle, text=meter_text, palette=theme["colors"],
@@ -16046,13 +16054,113 @@ def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_te
               (245, 104, 89) if level > -73 else style.ink, "cm")
 
 
+def draw_bakelite_pointer(segment, unit, color):
+    """A thin painted needle, tapering to the same fine point as the references."""
+    x0, y0, x1, y1 = segment
+    length = max(.001, math.hypot(x1 - x0, y1 - y0))
+    dx, dy = -(y1 - y0) / length * .85 * unit, (x1 - x0) / length * .85 * unit
+    GL.glDisable(GL.GL_TEXTURE_2D)
+    for offset, shade in ((.7 * unit, (0, 0, 0, 65)), (0, color)):
+        GL.glColor4f(*rgba(shade))
+        GL.glBegin(GL.GL_TRIANGLES)
+        for x, y in ((x0 + dx, y0 + dy), (x0 - dx, y0 - dy), (x1, y1)):
+            GL.glVertex2f(*logical_to_native(x + offset, y + offset))
+        GL.glEnd()
+    GL.glEnable(GL.GL_TEXTURE_2D)
+    # The subpixel triangular tip alone can skip pixels on V3D. A one-pixel
+    # spine keeps the fine original-style pointer continuous at every angle.
+    draw_logical_line(*segment, color, max(1, .8 * unit))
+
+
+def draw_bakelite_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
+    """Reference VU typography, dots and red arc, regraduated for live RF RSSI."""
+    data = BAKELITE_CALIBRATION[identifier]
+    style = METER_STYLES[identifier]
+    a, b, c, d = aviation_image_box(box)
+    side, unit = c - a, (c - a) / 216
+    key = ("bakelite-face-v1", identifier, side)
+    cached = text_cache._cached_texture(("surface", key))
+    if cached is None:
+        try:
+            with PILImage.open(meter_asset_path(identifier)) as source:
+                image = source.convert("RGBA").resize((side, side), PILImage.Resampling.LANCZOS)
+        except (OSError, ValueError):
+            draw_selected_smeter(text_cache, box, dbm, peak_dbm, style_id="precision")
+            return
+        surface = pygame.image.fromstring(image.tobytes(), image.size, "RGBA")
+        factor = 3
+        layer = pygame.Surface((side * factor, side * factor), pygame.SRCALPHA)
+        local_box = (0, 0, side, side + side * 20 / 216)
+        def point(level, radius):
+            return tuple(round(v * factor) for v in bakelite_point(identifier, local_box, level, radius))
+        def printed(position, content, size, color, angle=0):
+            font = text_cache.font(max(1, round(size * unit * factor * 100 /
+                                              theme_system.runtime_theme["text_scale_percent"])),
+                                   bold=False, family="Liberation Sans Narrow")
+            text = font.render(content, True, color)
+            if angle:
+                text = pygame.transform.rotate(text, angle)
+            layer.blit(text, text.get_rect(center=position))
+        def tick(level, outer, inner, color, width=.95):
+            pygame.draw.line(layer, color, point(level, outer), point(level, inner),
+                             max(1, round(width * unit * factor)))
+        radius = data["arc_radius"]
+        ink, red = tuple(data["ink"]), tuple(data["red"])
+        for first, last, color, thickness in ((-121, -73, ink, 1.4), (-73, -33, red, 5.5)):
+            pygame.draw.lines(layer, color, False, [point(v, radius) for v in range(first, last + 1)],
+                              max(1, round(thickness * unit * factor)))
+        for level in range(-121, -72, 3):
+            tick(level, radius + .018, radius, ink, .7)
+        for level in (*range(-121, -72, 6), -63, -53, -43, -33):
+            tick(level, data["needle_radius"], radius, ink if level <= -73 else red)
+        for level, label in SCALE_LABELS:
+            # Slender, individually angled lettering follows the original VU arc.
+            angle = -(style.start + style.sweep * meter_fraction(level))
+            printed(point(level, data["label_radius"]), label, 15 if level <= -73 else 13,
+                    ink if level <= -73 else red, angle)
+        for level in (-121, -109, -97, -85, -73, -53, -33):
+            pygame.draw.circle(layer, ink, point(level, radius - .035), max(1, round(1.1 * unit * factor)))
+            printed(point(level, radius - .088), str(level), 8.5, ink)
+        printed((side * factor * .5, side * factor * .43), "dBm", 9, ink)
+        printed((side * factor * .73, side * factor * .57), "S", 24, ink)
+        printed((side * factor * .29, side * factor * .56), "50 Ω", 10, ink)
+        print_image = PILImage.frombytes("RGBA", layer.get_size(), pygame.image.tostring(layer, "RGBA"))
+        print_image = print_image.resize((side, side), PILImage.Resampling.LANCZOS)
+        surface.blit(pygame.image.fromstring(print_image.tobytes(), print_image.size, "RGBA"), (0, 0))
+        cached = text_cache.surface_texture(key, surface)
+    draw_textured_quad(cached[0], a, b, c, d, 0, 0, 1, 1)
+    valid = isinstance(dbm, (int, float)) and math.isfinite(dbm)
+    if (valid and isinstance(peak_dbm, (int, float)) and math.isfinite(peak_dbm)
+            and peak_dbm > dbm + .75):
+        draw_logical_line(*bakelite_needle_segment(identifier, box, peak_dbm), (108, 75, 42, 100), max(.6, .7 * unit))
+    draw_bakelite_pointer(bakelite_needle_segment(identifier, box, dbm), unit, style.needle)
+    if data["pivot_cap"]:
+        # The actual photographed pivot remains in front of the moving pointer.
+        bounds = tuple(round(v * side) for v in data["pivot_cap"])
+        key = ("bakelite-pivot-v1", identifier, side)
+        cap = text_cache._cached_texture(("surface", key))
+        if cap is None:
+            try:
+                with PILImage.open(meter_asset_path(identifier)) as source:
+                    image = source.convert("RGBA").resize((side, side), PILImage.Resampling.LANCZOS).crop(bounds)
+            except (OSError, ValueError):
+                draw_selected_smeter(text_cache, box, dbm, peak_dbm, style_id="precision")
+                return
+            cap = text_cache.surface_texture(key, pygame.image.fromstring(image.tobytes(), image.size, "RGBA"))
+        draw_textured_quad(cap[0], a + bounds[0], b + bounds[1], a + bounds[2], b + bounds[3], 0, 0, 1, 1)
+    reading = f"{dbm:.0f} dBm" if valid else "— dBm"
+    meter_text((box[0] + box[2]) / 2, d + (box[3] - d) / 2,
+               f"{s_label(dbm)}   {reading}   {voltage_label(dbm)}", style.ink,
+               max(7, round(11 * unit)), "cm")
+
+
 def draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
     """Photo-material housing, cached calibrated print, and an independent needle."""
     style = METER_STYLES[identifier]
-    a, b, c, d = aviation_image_box(box)
+    a, b, c, d = aviation_image_box(box, footer=False)
     side = c - a
     unit = side / 216
-    key = ("aviation-face-v1", identifier, side)
+    key = ("aviation-face-v2", identifier, side)
     cached = text_cache._cached_texture(("surface", key))
     if cached is None:
         try:
@@ -16089,7 +16197,6 @@ def draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
             text_at(point(level, .163), str(level), (177, 190, 180), 7)
         text_at((side * factor / 2, side * factor * .425), "S", style.ink, 11)
         text_at((side * factor / 2, side * factor * .605), "dBm", (177, 190, 180), 8)
-        text_at((side * factor / 2, side * factor * .735), "SIGNAL", style.ink, 8)
         printed = PILImage.frombytes("RGBA", print_layer.get_size(), pygame.image.tostring(print_layer, "RGBA"))
         printed = printed.resize((side, side), PILImage.Resampling.LANCZOS)
         surface.blit(pygame.image.fromstring(printed.tobytes(), printed.size, "RGBA"), (0, 0))
@@ -16123,9 +16230,11 @@ def draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
     left, top = round(cx - hub_size / 2), round(cy - hub_size / 2)
     draw_textured_quad(hub[0], left, top, left + hub_size, top + hub_size, 0, 0, 1, 1)
     reading = f"{dbm:.0f} dBm" if valid else "— dBm"
-    meter_text((box[0] + box[2]) / 2, d + (box[3] - d) / 2,
-               f"{s_label(dbm)}   {reading}   {voltage_label(dbm)}", style.ink,
+    meter_text((a + c) / 2, b + side * .72,
+               f"{s_label(dbm)}   {reading}", style.ink,
                max(7, round(11 * unit)), "cm")
+    meter_text((a + c) / 2, b + side * .785,
+               voltage_label(dbm) + " RMS", style.ink, max(7, round(9 * unit)), "cm")
 
 
 def incandescent_meter_backlight(size):
@@ -16292,7 +16401,8 @@ def lcd_home_volume_box(show_compact_readouts=True):
             pass_y1 = lcd_home_mode_grid_bottom(show_compact_readouts)
         else:
             pass_y1 = lcd_home_bandwidth_box(False)[1] + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
-    y0 = pass_y1 + 16
+    tight = show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].kind == "aircraft"
+    y0 = pass_y1 + (4 if tight else 16)
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 12, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
 

@@ -38,8 +38,8 @@ METER_STYLES = {
     "linear": MeterStyle("SLIDING POINTER", "linear", 80, (13, 20, 25), (204, 225, 230), (58, 69, 77), (255, 188, 79)),
     "classic": MeterStyle("CLASSIC IVORY", "radial", 160, (232, 223, 198), (45, 43, 38), (89, 92, 86), (155, 39, 28)),
     "precision": MeterStyle("PRECISION DARK", "radial", 160, (13, 22, 28), (212, 228, 229), (62, 77, 86), (255, 174, 61)),
-    "aviation": MeterStyle("AVIATION BLACK", "aircraft", 210, (10, 14, 15), (220, 231, 210), (56, 63, 66), (235, 239, 219), -130, 260, scales=("S", "dBm", "µV")),
-    "heritage": MeterStyle("AVIATION BRASS", "aircraft", 210, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260, scales=("S", "dBm", "µV")),
+    "aviation": MeterStyle("AVIATION BLACK", "aircraft", 236, (10, 14, 15), (220, 231, 210), (56, 63, 66), (235, 239, 219), -130, 260, scales=("S", "dBm", "µV")),
+    "heritage": MeterStyle("AVIATION BRASS", "aircraft", 236, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260, scales=("S", "dBm", "µV")),
 }
 DEFAULT_METER_STYLE = "led"
 REMOVED_METER_MIGRATIONS = {
@@ -85,30 +85,79 @@ METER_STYLES["magic_band_em84"] = MeterStyle(
     "MAGIC BAND EM84", "eye_linear", 80, (3, 10, 12), (198, 228, 220),
     (0, 0, 0), (94, 255, 185), scales=("S", "dBm", "µV"))
 
+BAKELITE_ASSET_DIR = SKIN_ASSET_DIR.parent / "bakelite"
+BAKELITE_CALIBRATION = json.loads((BAKELITE_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
+for identifier, artwork in BAKELITE_CALIBRATION.items():
+    METER_STYLES[identifier] = MeterStyle(
+        artwork["name"], "vu_case", 210, (12, 13, 12), (231, 214, 157),
+        (20, 21, 20), tuple(artwork["ink"]), artwork["start"], artwork["sweep"],
+        scales=("S", "dBm", "µV"))
 
 
-def aviation_image_box(box):
+
+def aviation_image_box(box, *, footer=True):
     """A round dial stays round in rail, wide instruments and small thumbnails."""
     x0, y0, x1, y1 = box
     unit = min((x1 - x0) / 236, (y1 - y0) / 236)
-    side = max(1, round(min(x1 - x0, y1 - y0 - 20 * unit)))
+    side = max(1, round(min(x1 - x0, y1 - y0 - (20 * unit if footer else 0))))
     left, top = round((x0 + x1 - side) / 2), round(y0)
     return left, top, left + side, top + side
 
 
 def aviation_needle_segment(identifier, box, dbm, radius=.315):
-    a, b, c, d = aviation_image_box(box)
+    a, b, c, d = aviation_image_box(box, footer=False)
     pivot = ((a + c) / 2, (b + d) / 2)
     return (*pivot, *needle_point(METER_STYLES[identifier], dbm, pivot, (c - a) * radius))
 
 
 def meter_asset_path(identifier):
     """Resolve preserved artwork from its own publisher collection."""
+    if identifier in BAKELITE_CALIBRATION:
+        return BAKELITE_ASSET_DIR / BAKELITE_CALIBRATION[identifier]["file"]
     if identifier in ("aviation", "heritage"):
         return AVIATION_ASSET_DIR / ("brass.png" if identifier == "heritage" else "black.png")
     artwork = COMMUNITY_ARTWORK.get(identifier) or SKIN_CALIBRATION[identifier]
     directory = COMMUNITY_ASSET_DIR if identifier in COMMUNITY_ARTWORK else SKIN_ASSET_DIR
     return directory / artwork["file"]
+
+
+def bakelite_point(identifier, box, dbm, radius):
+    """VU-style print and live pointer share the receiver's exact S/dBm map."""
+    a, b, c, d = aviation_image_box(box)
+    data = BAKELITE_CALIBRATION[identifier]
+    pivot = (a + data["pivot"][0] * (c - a), b + data["pivot"][1] * (d - b))
+    return needle_point(METER_STYLES[identifier], dbm, pivot, (c - a) * radius)
+
+
+def bakelite_front_edge(identifier, x):
+    """Top of the round case's curved cover, in source-normalized coordinates."""
+    points = BAKELITE_CALIBRATION[identifier]["front_lip"]
+    if not points:
+        return 1.0
+    for (left, y0), (right, y1) in zip(points, points[1:]):
+        if left <= x <= right:
+            return y0 + (y1 - y0) * (x - left) / (right - left)
+    return points[0][1] if x < points[0][0] else points[-1][1]
+
+
+def bakelite_needle_segment(identifier, box, dbm):
+    """Hide the moving pointer behind the round housing's raised front lip."""
+    data = BAKELITE_CALIBRATION[identifier]
+    radius = data["needle_radius"]
+    first = 0.0
+    if data["front_lip"]:
+        # Find its emergence from the physical cover before mapping to pixels.
+        low, high = 0.0, radius
+        for _ in range(24):
+            middle = (low + high) / 2
+            x, y = needle_point(METER_STYLES[identifier], dbm, tuple(data["pivot"]), middle)
+            if y >= bakelite_front_edge(identifier, x):
+                low = middle
+            else:
+                high = middle
+        first = min(radius, high + .003)
+    return (*bakelite_point(identifier, box, dbm, first),
+            *bakelite_point(identifier, box, dbm, radius))
 
 
 def eye_closure(dbm):

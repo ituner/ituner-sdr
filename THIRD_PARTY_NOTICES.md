@@ -67,3 +67,13 @@ photorealistic housings made with the built-in image generation tool. Museum
 research links, generation prompts and calibration details are recorded in
 that directory's `SOURCE.md` and `PROMPTS.md`. No museum photograph or historic
 manufacturer artwork is bundled or claimed as an amateur-radio contribution.
+
+## User-supplied vintage VU-meter references
+
+The Bakelite Square and Round S-meters in `UI/assets/smeters/bakelite/` are
+adaptations of two VU-meter photographs provided by the user. The built-in
+image generation tool prepared blank, transparent housings; original runtime
+print reproduces the VU typography/tick treatment with an accurately calibrated
+S/dBm scale and a live pointer. Manufacturer markings and fixed needles were
+removed. No author callsign or open-source licence is claimed for the supplied
+references. See that directory's `SOURCE.md`, `PROMPTS.md` and calibration data.

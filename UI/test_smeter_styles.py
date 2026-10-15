@@ -300,9 +300,10 @@ class MeterTests(unittest.TestCase):
     def test_aviation_dial_stays_square_and_needle_uses_printed_scale_geometry(self):
         for identifier in ('aviation', 'heritage'):
             self.assertTrue(meter_asset_path(identifier).is_file())
-            self.assertEqual(METER_STYLES[identifier].height, 210)
-            for box in ((1034, 104, 1270, 314), (0, 0, 400, 80), (701.5, 187, 858.5, 326.7)):
-                a, b, c, d = aviation_image_box(box)
+            self.assertEqual(METER_STYLES[identifier].height, 236)
+            self.assertEqual(aviation_image_box((1034, 104, 1270, 340), footer=False), (1034, 104, 1270, 340))
+            for box in ((1034, 104, 1270, 340), (0, 0, 400, 80), (701.5, 187, 858.5, 326.7)):
+                a, b, c, d = aviation_image_box(box, footer=False)
                 self.assertEqual(c-a, d-b)
                 self.assertTrue(all(isinstance(v, int) for v in (a, b, c, d)))
                 for level in (-200, -121, -97, -73, -53, -33, None, float('nan')):
@@ -339,6 +340,111 @@ class MeterTests(unittest.TestCase):
                 patch.object(ui, 'draw_selected_smeter') as fallback:
             ui.draw_aviation_smeter(cache, 'heritage', (0, 0, 236, 210), -73, None, Mock())
             self.assertEqual(fallback.call_args.kwargs['style_id'], 'precision')
+
+    def test_full_width_aviation_keeps_readouts_inside_and_volume_touch_targets_clear(self):
+        ui.configure_output(True)
+        for identifier in ('aviation', 'heritage'):
+            theme = new_theme(); theme.update(smeter_style=identifier, text_scale_percent=120)
+            apply_theme(theme)
+            box = ui.lcd_compact_smeter_box()
+            self.assertEqual(aviation_image_box(box, footer=False), box)
+            self.assertEqual((box[2]-box[0], box[3]-box[1]), (236, 236))
+            modes = list(ui.lcd_home_mode_boxes(True))
+            volume, mute, track = (fn(True) for fn in (ui.lcd_home_volume_box, ui.lcd_home_volume_mute_box, ui.lcd_home_volume_track_box))
+            self.assertLess(box[3], min(bounds[1] for _, bounds in modes))
+            self.assertLess(max(bounds[3] for _, bounds in modes), volume[1])
+            self.assertGreaterEqual(volume[3]-volume[1], 60)
+            self.assertGreaterEqual(mute[1], volume[1]+21)
+            self.assertLess(mute[2], track[0])
+            self.assertEqual(ui.home_volume_at_x(track[0], True), 0)
+            self.assertEqual(ui.home_volume_at_x(track[2], True), 1)
+            self.assertLess(volume[3], ui.lcd_nav_top())
+            cache = Mock(); cache._cached_texture.return_value = (1, 236, 236)
+            with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line'):
+                labels = Mock()
+                ui.draw_aviation_smeter(cache, identifier, box, -73, None, labels)
+                self.assertEqual(labels.call_count, 2)
+                for call in labels.call_args_list:
+                    x, y = call.args[:2]
+                    self.assertEqual(x, (box[0]+box[2])/2)
+                    self.assertGreater(y, box[1]+236*.68)
+                    self.assertLess(y, box[1]+236*.82)
+
+    def test_bakelite_reference_photos_keep_transparency_and_scales_on_paper(self):
+        from smeter_styles import BAKELITE_CALIBRATION, bakelite_point
+        for identifier, data in BAKELITE_CALIBRATION.items():
+            with ui.PILImage.open(meter_asset_path(identifier)) as image:
+                self.assertEqual(image.mode, 'RGBA')
+                self.assertEqual(image.getchannel('A').getextrema(), (0, 255))
+                self.assertEqual(image.getpixel((0, 0))[3], 0)
+                size = image.width
+                # Exclude the footer reservation from the source-coordinate box.
+                box = (0, 0, size, size * 236 / 216)
+                for level in (-121, -109, -97, -85, -73, -53, -33):
+                    for radius in (data['arc_radius'], data['label_radius']):
+                        x, y = bakelite_point(identifier, box, level, radius)
+                        r, g, b, alpha = image.getpixel((round(x), round(y)))
+                        self.assertGreater(r, 140, (identifier, level, radius))
+                        self.assertGreater(g, 100, (identifier, level, radius))
+                        self.assertGreaterEqual(alpha, 250)
+
+    def test_bakelite_live_pointer_matches_marks_and_emerges_above_front_cover(self):
+        from smeter_styles import BAKELITE_CALIBRATION, bakelite_point, bakelite_needle_segment, bakelite_front_edge
+        for identifier, data in BAKELITE_CALIBRATION.items():
+            for box in ((1034, 104, 1270, 314), (0, 0, 400, 80), (745, 474, 902, 614)):
+                a, b, c, d = aviation_image_box(box)
+                previous_angle = -200
+                for level in range(-127, -12):
+                    x, y, tx, ty = bakelite_needle_segment(identifier, box, level)
+                    self.assertEqual((tx, ty), bakelite_point(identifier, box, level, data['needle_radius']))
+                    px, py = bakelite_point(identifier, box, level, 0)
+                    angle = math.degrees(math.atan2(tx-px, py-ty))
+                    self.assertGreaterEqual(angle + 1e-8, previous_angle)
+                    previous_angle = angle
+                    if data['front_lip']:
+                        self.assertLess((y-b)/(d-b), bakelite_front_edge(identifier, (x-a)/(c-a)))
+                        self.assertLess(math.hypot(tx-x, ty-y), math.hypot(tx-px, ty-py))
+                    else:
+                        self.assertEqual((x, y), (px, py))
+                for missing in (None, float('nan'), float('inf')):
+                    self.assertEqual(bakelite_needle_segment(identifier, box, missing),
+                                     bakelite_needle_segment(identifier, box, -121))
+
+    def test_bakelite_vu_print_and_pivot_stay_cached_while_the_pointer_moves(self):
+        ui.pygame.font.init()
+        from smeter_styles import BAKELITE_CALIBRATION, bakelite_needle_segment
+        for identifier, data in BAKELITE_CALIBRATION.items():
+            cache = Mock(); textures = {}
+            cache._cached_texture.side_effect = textures.get
+            cache.font.side_effect = lambda size, **kwargs: ui.pygame.font.Font(None, size)
+            def retain(key, surface):
+                result = (len(textures)+1, *surface.get_size())
+                textures[('surface', key)] = result
+                if key[0] == 'bakelite-face-v1':
+                    self.assertEqual(surface.get_at((0, 0)).a, 0)
+                return result
+            cache.surface_texture.side_effect = retain
+            box = (0, 0, 236, 210)
+            with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line'), \
+                    patch.object(ui, 'draw_bakelite_pointer') as pointer:
+                for level in (-121, -85, -73, -33, None):
+                    ui.draw_bakelite_smeter(cache, identifier, box, level, -33, Mock())
+                    self.assertEqual(pointer.call_args.args[0], bakelite_needle_segment(identifier, box, level))
+                self.assertEqual(cache.surface_texture.call_count, 2 if data['pivot_cap'] else 1)
+                self.assertTrue(cache.font.call_args_list)
+                for call in cache.font.call_args_list:
+                    self.assertEqual(call.kwargs['family'], 'Liberation Sans Narrow')
+                    self.assertFalse(call.kwargs['bold'])
+
+    def test_missing_bakelite_face_or_uncached_pivot_falls_back_safely(self):
+        for cached_face in (None, (1, 192, 192)):
+            cache = Mock()
+            cache._cached_texture.side_effect = lambda key: cached_face if key[1][0] == 'bakelite-face-v1' else None
+            with patch.object(ui.PILImage, 'open', side_effect=OSError('Missing asset')), \
+                    patch.object(ui, 'draw_selected_smeter') as fallback, \
+                    patch.object(ui, 'draw_bakelite_pointer'), patch.object(ui, 'draw_textured_quad'):
+                ui.draw_bakelite_smeter(cache, 'bakelite_square', (0, 0, 236, 210), -73, None, Mock())
+                self.assertEqual(fallback.call_args.kwargs['style_id'], 'precision')
 
     def test_legacy_and_invalid_saved_styles_fall_back_to_led(self):
         for value in (None, 'unknown', [], {}):

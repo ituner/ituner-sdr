@@ -1,0 +1,102 @@
+{
+  "bakelite_square": {
+    "name": "BAKELITE SQUARE",
+    "file": "square.png",
+    "pivot": [
+      0.5,
+      0.626
+    ],
+    "arc_radius": 0.35,
+    "needle_radius": 0.393,
+    "label_radius": 0.43,
+    "start": -52,
+    "sweep": 104,
+    "ink": [
+      36,
+      32,
+      19
+    ],
+    "red": [
+      177,
+      57,
+      39
+    ],
+    "front_lip": [],
+    "pivot_cap": [
+      0.489,
+      0.612,
+      0.511,
+      0.635
+    ]
+  },
+  "bakelite_round": {
+    "name": "BAKELITE ROUND",
+    "file": "round.png",
+    "pivot": [
+      0.5,
+      0.65
+    ],
+    "arc_radius": 0.35,
+    "needle_radius": 0.393,
+    "label_radius": 0.43,
+    "start": -52,
+    "sweep": 104,
+    "ink": [
+      36,
+      29,
+      16
+    ],
+    "red": [
+      192,
+      51,
+      27
+    ],
+    "front_lip": [
+      [
+        0.1,
+        0.61
+      ],
+      [
+        0.2,
+        0.65
+      ],
+      [
+        0.28,
+        0.65
+      ],
+      [
+        0.36,
+        0.6
+      ],
+      [
+        0.43,
+        0.565
+      ],
+      [
+        0.5,
+        0.55
+      ],
+      [
+        0.57,
+        0.565
+      ],
+      [
+        0.64,
+        0.6
+      ],
+      [
+        0.72,
+        0.65
+      ],
+      [
+        0.8,
+        0.65
+      ],
+      [
+        0.9,
+        0.61
+      ]
+    ],
+    "pivot_cap": []
+  }
+}
