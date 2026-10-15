@@ -1020,6 +1020,16 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertEqual(selected,expected)
                 self.assertEqual(state.radio_snapshot()[0].upper(),expected)
 
+    def test_large_smeter_moves_mode_hit_region_with_visible_buttons(self):
+        ui.configure_output(True)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}):
+            mode_boxes = tuple(box for _label, box in ui.lcd_home_mode_boxes(True))
+            hit_box = ui.radio_toggle_box(None, 7075.0, True)
+            self.assertGreater(max(box[3] for box in mode_boxes), ui.LCD_ANNUNCIATOR_BOX[3])
+            for box in mode_boxes:
+                center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                self.assertTrue(ui.contains(hit_box, *center))
+
 
 class DualVfoHomeControlTests(unittest.TestCase):
     def test_receiver_list_selection_changes_only_the_requested_vfo(self):

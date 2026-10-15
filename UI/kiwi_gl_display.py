@@ -9090,10 +9090,17 @@ def top_instrument_layout(text_cache, freq_khz, font_family=None):
     return frequency_text, radio_box
 
 
-def radio_toggle_box(text_cache, freq_khz):
+def radio_toggle_box(text_cache, freq_khz, show_compact_readouts=True):
     """Return the visible radio-mode control for the active layout."""
     if LCD_800_MODE:
-        return LCD_ANNUNCIATOR_BOX
+        # Large S-meter faces move the Home mode grid below the original
+        # annunciator reservation. Follow the rendered buttons so their hit
+        # target moves with them instead of remaining stranded above them.
+        boxes = tuple(box for _label, box in lcd_home_mode_boxes(show_compact_readouts))
+        return (
+            min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes),
+        )
     return top_instrument_layout(text_cache, freq_khz)[1]
 
 
@@ -26947,7 +26954,13 @@ def main():
                             # placeholders. While either is open, that region
                             # must not fall through to the covered Home mode
                             # grid and pick a hidden mode.
-                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
+                                radio_toggle_box(
+                                    text_cache, display_freq,
+                                    instrument_layout == "right",
+                                ),
+                                x, y,
+                            ):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
