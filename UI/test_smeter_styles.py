@@ -133,11 +133,27 @@ class MeterTests(unittest.TestCase):
                 ui.draw_cached_smeter(cache, identifier, (0, 0, 236, 160), -73, None, Mock())
                 cache.surface_texture.assert_called_once()
 
-    def test_tr7_pointer_tracks_s_marks_vertically(self):
-        for dbm in (-127, -121, -73, -53, -13):
-            a, b, c, d = skin_needle_segment('ke9ns_tr7', (0, 0, 236, 160), dbm)
-            self.assertEqual(a, c)
-            self.assertGreater(b, d)
+    def test_removed_tr7_and_transparent_styles_use_led_without_creating_themes(self):
+        import json
+        from smeter_styles import COMMUNITY_ARTWORK, normalize_meter_style
+        for identifier, relative in (('ke9ns_tr7', 'community/ke9ns_tr7.jpg'), ('flex_transparent', 'flexible/flex_transparent.png')):
+            self.assertNotIn(identifier, METER_STYLES)
+            self.assertNotIn(identifier, SKIN_CALIBRATION)
+            self.assertNotIn(identifier, COMMUNITY_ARTWORK)
+            self.assertFalse((SKIN_ASSET_DIR.parent / relative).exists())
+            self.assertEqual(normalize_meter_style(identifier), 'led')
+            theme = new_theme(); theme['smeter_style'] = identifier
+            self.assertEqual(normalize_theme(theme)['colors'], theme['colors'])
+            with TemporaryDirectory() as directory:
+                path = Path(directory) / 'themes.json'
+                path.write_text(json.dumps({'version':1, 'active_id':'green', 'themes':[], 'smeter_style':identifier}))
+                library = ThemeLibrary(path)
+                self.assertEqual(library.smeter_style, 'led')
+                library.set_smeter_style('led')
+                saved = json.loads(path.read_text())
+                self.assertEqual(saved['smeter_style'], 'led')
+                self.assertEqual(saved['active_id'], 'green')
+                self.assertEqual(saved['themes'], [])
 
     def test_magic_eye_shadow_closes_monotonically_and_missing_signal_turns_it_off(self):
         values = [eye_closure(dbm) for dbm in range(-150, 0)]
@@ -172,15 +188,26 @@ class MeterTests(unittest.TestCase):
                 cache.surface_texture.assert_called_once()
                 self.assertEqual(signal.call_count, 2)
 
-    def test_transparent_skin_keeps_background_clear_and_printed_scale_visible(self):
-        cache = Mock()
-        cache._cached_texture.return_value = None
-        cache.surface_texture.return_value = (1, 236, 160)
-        with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line'):
-            ui.draw_cached_smeter(cache, 'flex_transparent', (0, 0, 236, 160), -73, None, Mock())
-            _, surface = cache.surface_texture.call_args.args
-            self.assertEqual(surface.get_at((118, 140)).a, 0)
-            self.assertGreater(ui.pygame.mask.from_surface(surface, 32).count(), 0)
+    def test_peppy_gas_uses_vfd_green_for_cells_readouts_scale_and_peak(self):
+        from meter_artwork import linear_strip_image
+        background = (3, 9, 12, 255)
+        for active in (False, True):
+            image = linear_strip_image('peppy_gas', (228, 30), active)
+            colors = [color for count, color in image.getcolors(228*30) if color != background]
+            self.assertTrue(colors)
+            for r, g, b, alpha in colors:
+                self.assertGreater(g, r)
+                self.assertGreater(g, b)
+                if active: self.assertGreaterEqual(g, 220)
+        cache = Mock(); cache._cached_texture.return_value = (1, 228, 30)
+        labels = Mock()
+        with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line') as peak:
+            ui.draw_linear_skin_smeter(cache, 'peppy_gas', (0, 0, 236, 80), -53, -33, labels)
+            for call in labels.call_args_list:
+                r, g, b = call.args[3]
+                self.assertGreater(g, max(r, b))
+            r, g, b = peak.call_args.args[-2]
+            self.assertGreater(g, max(r, b))
 
     def test_icom_fills_the_face_area_and_orange_keeps_its_approved_geometry(self):
         self.assertEqual(skin_image_box('flex_icom', (0, 0, 236, 160)), (0, 0, 236, 128))
@@ -215,7 +242,7 @@ class MeterTests(unittest.TestCase):
         from smeter_styles import REMOVED_METER_MIGRATIONS, normalize_meter_style
         import json
         self.assertEqual(set(EYE_ARTWORK), {'oe3ide_eye_plain'})
-        for identifier in REMOVED_METER_MIGRATIONS:
+        for identifier in (key for key in REMOVED_METER_MIGRATIONS if key.startswith('oe3ide_eye_')):
             self.assertNotIn(identifier, METER_STYLES)
             self.assertEqual(normalize_meter_style(identifier), 'oe3ide_eye_plain')
             self.assertFalse((SKIN_ASSET_DIR.parent/'community'/f'{identifier}.png').exists())

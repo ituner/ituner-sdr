@@ -12,7 +12,9 @@ Publisher: **project-owner**, PeppyMeter project on GitHub (no callsign claimed)
 The six PNGs retain their upstream bytes. `source.json` records source paths and
 SHA-256 checksums; `upstream-meters.txt` preserves the original configuration.
 The runtime uses pixel-aligned derivatives in `meter_artwork.py`, preserving
-Bar's cyan/red segments, Dash's green/red blocks and Gas's pink luminous grid.
+Bar's cyan/red segments and Dash's green/red blocks. Gas retains its crisp
+luminous grid, recoloured to neon-green VFD phosphor with a pale green core,
+dim green off-state, and matching green scale, readout and peak marker.
 Cells and dark gaps are drawn directly at final display dimensions rather than
 shrinking the originals' glow and fine grids, which became fuzzy at 228 × 30.
 The original PNGs remain unchanged for provenance; their recorded crop bounds

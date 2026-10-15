@@ -16026,7 +16026,7 @@ def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_te
     size = (max(1, b - a), max(1, bottom - top))
     textures = []
     for active in (False, True):
-        key = ("linear-meter-strip-crisp-v2", identifier, size, active)
+        key = ("linear-meter-strip-crisp-v3", identifier, size, active)
         cached = text_cache._cached_texture(("surface", key))
         if cached is None:
             artwork = linear_strip_image(identifier, size, active)
@@ -16043,7 +16043,8 @@ def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_te
     if (valid and isinstance(peak_dbm, (int, float)) and math.isfinite(peak_dbm)
             and peak_dbm > dbm + .75):
         x = a + (b - a) * meter_fraction(peak_dbm)
-        draw_logical_line(x, top - 2 * unit, x, bottom + 2 * unit, (247, 218, 132), max(1, unit))
+        draw_logical_line(x, top - 2 * unit, x, bottom + 2 * unit,
+                          style.needle if identifier == "peppy_gas" else (247, 218, 132), max(1, unit))
     def label(x, y, value, size=11, color=style.ink, anchor="lm"):
         meter_text(x, y0 + y * unit, value, color, max(7, round(size * unit)), anchor)
     label(x0 + 4 * unit, 11, "S-METER", 10)
@@ -16051,7 +16052,7 @@ def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_te
     for level, value in SCALE_LABELS:
         x = max(x0 + 12 * unit, min(x1 - 14 * unit, a + (b - a) * meter_fraction(level)))
         label(x, 69, "S" + value if value == "1" else value, 10,
-              (245, 104, 89) if level > -73 else style.ink, "cm")
+              (245, 104, 89) if level > -73 and identifier != "peppy_gas" else style.ink, "cm")
 
 
 def draw_bakelite_pointer(segment, unit, color):

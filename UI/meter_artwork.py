@@ -30,7 +30,7 @@ def linear_cell_boxes(identifier, size):
 def linear_strip_image(identifier, size, active):
     """Crisp final-size interpretations of the credited Bar/Dash/Gas artwork.
 
-    Preserve each source's colour zones, bar count/shape and light character,
+    Preserve source bar/grid shapes and light character; Gas uses green VFD phosphor,
     with deliberately restrained glow so adjacent cells remain distinguishable.
     """
     image = Image.new("RGBA", size, (3, 9, 12, 255))
@@ -39,7 +39,7 @@ def linear_strip_image(identifier, size, active):
     for left, top, right, bottom in linear_cell_boxes(identifier, size):
         red = (left + right) / (2 * width) >= .72
         if identifier == "peppy_gas":
-            fill, core = ((209, 57, 81), (255, 189, 174)) if active else ((48, 11, 17), (62, 15, 20))
+            fill, core = ((28, 222, 87), (146, 255, 166)) if active else ((5, 33, 15), (8, 46, 21))
         elif identifier == "peppy_bar":
             fill, core = (((231, 45, 35), (255, 95, 64)) if red else
                           ((71, 171, 178), (147, 234, 230))) if active else (

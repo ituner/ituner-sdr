@@ -46,6 +46,7 @@ REMOVED_METER_MIGRATIONS = {
     "oe3ide_eye_" + variant: "oe3ide_eye_plain"
     for variant in ("black", "brass", "silver", "aero", "retro")
 }
+REMOVED_METER_MIGRATIONS.update({"ke9ns_tr7": "led", "flex_transparent": "led"})
 SCALE_LABELS = ((-121, "1"), (-109, "3"), (-97, "5"), (-85, "7"),
                 (-73, "9"), (-53, "+20"), (-33, "+40"))
 SKIN_ASSET_DIR = Path(__file__).parent / "assets" / "smeters" / "flexible"
@@ -65,7 +66,6 @@ for identifier, artwork in COMMUNITY_ARTWORK.items():
 # Append additional faces after the original collection.
 for identifier, title, face, ink in (
         ("flex_vintage_hd", "VINTAGE HD ORANGE · HB9HSJ", (255, 154, 0), (28, 17, 8)),
-        ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240)),
         ("flex_vintage_hd_white", "VINTAGE HD WHITE · HB9HSJ", (236, 238, 225), (34, 43, 38))):
     METER_STYLES[identifier] = MeterStyle(
         title, "skin", 160, face, ink, (55, 65, 70),
@@ -79,8 +79,8 @@ LINEAR_ARTWORK = json.loads((LINEAR_ASSET_DIR / "calibration.json").read_text(en
 AVIATION_ASSET_DIR = SKIN_ASSET_DIR.parent / "aviation"
 for identifier, artwork in LINEAR_ARTWORK.items():
     METER_STYLES[identifier] = MeterStyle(
-        artwork["name"], "led_skin", 80, (3, 9, 12), (200, 225, 225),
-        (0, 0, 0), (255, 222, 124), scales=("S", "dBm"))
+        artwork["name"], "led_skin", 80, (3, 9, 12), tuple(artwork.get("ink", (200, 225, 225))),
+        (0, 0, 0), tuple(artwork.get("needle_color", (255, 222, 124))), scales=("S", "dBm"))
 METER_STYLES["magic_band_em84"] = MeterStyle(
     "MAGIC BAND EM84", "eye_linear", 80, (3, 10, 12), (198, 228, 220),
     (0, 0, 0), (94, 255, 185), scales=("S", "dBm", "µV"))
@@ -475,6 +475,8 @@ def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palett
     elif style_id == "linear_orange":
         if background:
             rect(*box, style.face)
+    elif style_id in ("classic", "precision"):
+        rect(*box, style.face)
     else:
         frame(box, style.metal)
         inset = max(2, 5 * unit)

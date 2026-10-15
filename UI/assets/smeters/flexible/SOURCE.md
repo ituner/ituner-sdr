@@ -27,8 +27,10 @@ final-size Lanczos resizing. Orange additionally receives a cached, procedural
 incandescent light field with a broad lamp hotspot, reflected glow and gentle
 diffuser irregularities. This colour treatment follows final-size filtering;
 no lettering or scale geometry is redrawn. White remains unchanged. Runtime
-crop bounds trim unused outer margins. Transparent retains its alpha channel
-over the current UI background.
+crop bounds trim unused outer margins. The Transparent option, calibration and
+PNG were removed on 2026-10-15 at the user's request. Legacy selections fall
+back to the original LED Bar. Its download link above is a historical source
+record; that skin is no longer shipped.
 The separately linked DX101 transparent-beta and ICOM transparent-v1.1 packages
 have byte-identical PNGs to the already installed bundle versions. The site
 currently publishes eight skin packages, including the two Vintage resolutions.

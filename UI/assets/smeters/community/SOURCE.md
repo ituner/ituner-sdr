@@ -33,16 +33,12 @@ S scale follows receiver RSSI; printed PO/SWR/ID/COMP/ALC/Vd scales are decorati
 source artwork. Cross-needle ZIPs were downloaded to the research record but
 are not RX S-meter choices because they depict forward/reflected power and SWR.
 
-## Darrin, KE9NS
+## Retired TR7 tribute
 
-Source: https://www.ke9ns.com/flexpage.html (PowerMate, RX Signal section).
-Download: https://ke9ns.com/PowerMate-SDR1.zip
-Original file: `PowerMate-SDR/Met2.jpg`, preserved as `ke9ns_tr7.jpg`.
-
-The publisher explicitly describes this meter image as his tribute to the TR7.
-Only its S Units / Decibels scale is driven; the printed watts scale is artwork.
-The pointer moves vertically along the horizontal scale. Bundled Windows
-executables were downloaded but are not executed or installed on the CM5.
+The previously imported KE9NS TR7 tribute (`ke9ns_tr7.jpg`) and its calibration
+were removed on 2026-10-15 at the user's request. Legacy selections fall back
+to the original LED Bar. The prior download remains only in the external
+research record and is not shipped with the application.
 
 ## License status
 

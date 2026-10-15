@@ -26,13 +26,12 @@ The author's calibration coordinates are retained in `calibration.json`.
 These bundles contain no separate license text; no license is inferred.
 See `UI/assets/smeters/flexible/SOURCE.md` for provenance and integration details.
 
-## OE3IDE and KE9NS meter artwork
+## OE3IDE meter artwork
 
 `UI/assets/smeters/community/` contains five analog S-meter backgrounds and the Plain Black
 Magic Eye glass/housing image published by Ernst, **OE3IDE**, in his
-[Thetis meter graphics collection](https://www.oe3ide.com/meter-graphics-thetis-2-9-0-8-and-newer/),
-and the TR7 tribute meter image explicitly credited to Darrin, **KE9NS**, on his
-[PowerSDR/PowerMate page](https://www.ke9ns.com/flexpage.html).
+[Thetis meter graphics collection](https://www.oe3ide.com/meter-graphics-thetis-2-9-0-8-and-newer/).
+The KE9NS TR7 tribute image and Flex Transparent skin have been removed.
 Images retain their original download bytes. Titles credit these callsigns;
 Flexible S-Meter titles additionally credit its publisher **HB9HSJ**, without
 claiming verified per-face authorship. The Magic Eye animation is original
