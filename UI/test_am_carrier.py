@@ -3,7 +3,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from am_carrier import CarrierSearch, carrier_available, carrier_peak
+from am_carrier import CarrierSearch, carrier_available, carrier_peak, rf_view_center_hz
 import kiwi_gl_display as ui
 
 
@@ -12,6 +12,7 @@ def rf_frame(center_khz, zoom, carrier_hz, sequence, cap=14, bandwidth=30000000,
     zoom = min(zoom, cap)
     bin_hz = bandwidth / (1024 * 2**zoom)
     start = max(0, round((center_khz*1000 - bin_hz*512) * (1024 * 2**14) / bandwidth))
+    start = min(start, (1024 << 14) - (1024 << (14-zoom)))
     first = start * bandwidth / (1024 * 2**14)
     rng = random.Random(sequence)
     row = []
@@ -97,6 +98,17 @@ class CarrierTests(unittest.TestCase):
             search.feed(rf_frame(10000, 11, 10000037, seq, bandwidth=32000000),
                         32000000, 14, 14, 1.2)
         self.assertEqual(len(search.rows), 4)
+
+    def test_search_and_restoration_respect_sampling_band_edges(self):
+        self.assertEqual(rf_view_center_hz(60000, 30000000, 0), 15000000)
+        self.assertEqual(rf_view_center_hz(29990000, 30000000, 6), 29765625)
+        self.assertEqual(rf_view_center_hz(10000000, 30000000, 6), 10000000)
+        for frequency in (1.0, 29999.0):
+            search = CarrierSearch()
+            search.start(frequency, 9800, (), 1)
+            found = complete(search, carrier_hz=frequency*1000+37)
+            self.assertIsNotNone(found)
+            self.assertLess(abs(found*1000 - frequency*1000 - 37), 2)
 
     def test_context_change_cancels_without_failure_notice(self):
         search = CarrierSearch()

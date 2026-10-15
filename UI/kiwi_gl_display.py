@@ -233,7 +233,7 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
                           LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
-from am_carrier import CarrierSearch, carrier_available
+from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
 from meter_artwork import linear_strip_image
 
 
@@ -4763,7 +4763,7 @@ def favorite_waterfall_box():
 def audio_jitter_status_box():
     """Touch target for the left-lane ``BUFFER Q…/T…`` annunciator.
 
-    The label is rendered at x=18 in the second status row. Its former
+    The label follows the UTC clock in the second status row. Its former
     middle-of-bar hitbox not only missed the visible text but overlapped the
     CPU control, making the transport graph effectively unreachable.
     """
@@ -14041,19 +14041,19 @@ def receiver_map_legend_visual(group, active, pressed=False):
     return APP_UI_STYLE.button.resolve(active=active, pressed=pressed)
 
 
-def receiver_map_legend_line_color(group, active):
+def receiver_map_legend_swatch_color(group, active):
     """Use the receiver dot colour only while its group is visible."""
     return (RECEIVER_MAP_GROUP_COLORS[group] if active
             else APP_UI_STYLE.palette.secondary_text)
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Full-width legend filters matching Receivers source buttons."""
+    """Compact Globe-only filters, aligned to the rail's right edge."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
-    width = LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN
+    width = 148
+    x0 = LOGICAL_W - RECEIVER_PICKER_MARGIN - width
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
@@ -14520,8 +14520,8 @@ def draw_receiver_map(
         family=APP_UI_STYLE.button.font_family,
     )
 
-    # The legend doubles as the visibility filter. Its underline matches the
-    # source dots when visible, and turns gray when the source is hidden.
+    # Compact visibility filters pair each source name with its dot colour.
+    # A hidden source keeps a gray square in the same position.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -14533,13 +14533,13 @@ def draw_receiver_map(
             visual.fill, visual.border, visual.border_width,
         )
         draw_text(
-            text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2,
+            text_cache, lx0 + 34, (ly0 + ly1) / 2,
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
-            APP_UI_STYLE.button.label_size, True, False, "cm", family=APP_UI_STYLE.button.font_family,
+            APP_UI_STYLE.button.label_size, True, False, "lm", family=APP_UI_STYLE.button.font_family,
         )
         draw_logical_rect(
-            lx0 + 16, ly1 - 12, lx1 - 16, ly1 - 10,
-            receiver_map_legend_line_color(legend_group, legend_active),
+            lx0 + 12, (ly0 + ly1) / 2 - 6, lx0 + 24, (ly0 + ly1) / 2 + 6,
+            receiver_map_legend_swatch_color(legend_group, legend_active),
         )
 
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
@@ -18484,7 +18484,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         status_x1 = DESKTOP_1280_MAIN_W
         footer_back = APP_UI_STYLE.palette.footer_background
         draw_logical_rect(0, y0, status_x1, y1, (*footer_back[:3], int(footer_back[3] * alpha)))
-        size = 13
+        size = 18
         first_y = y0 + 27
         second_y = y0 + 59
         used, total = station_capacity or (None, None)
@@ -18506,12 +18506,13 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
             draw_text(text_cache, capacity_x, first_y, capacity_label,
                       APP_UI_STYLE.palette.footer_live, size, True, False,
                       "lm", alpha, family="Liberation Sans")
-        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-        draw_text(text_cache, 18, second_y, buffer_label, APP_UI_STYLE.palette.footer_live, size,
-                  False, False, "lm", alpha, family="Liberation Sans")
-        buffer_width = text_cache.font(size, family="Liberation Sans").size(buffer_label)[0]
         clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
-        draw_text(text_cache, 18 + buffer_width + 16, second_y, clock_label,
+        draw_text(text_cache, 18, second_y, clock_label,
+                  APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
+                  family="Liberation Sans")
+        clock_width = text_cache.font(size, family="Liberation Sans").size(clock_label)[0]
+        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
+        draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
                   APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
                   family="Liberation Sans")
         ram_mb = read_process_ram_mb()
@@ -23755,7 +23756,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                             continue
                         first_hz = packet_start * wf_bandwidth_hz / (1024 * 2**wf_zoom_max)
                         span_hz = wf_bandwidth_hz / 2**packet_zoom
-                        if abs(first_hz + span_hz/2 - sent_freq_khz*1000) > max(3, span_hz/512):
+                        expected_center_hz = rf_view_center_hz(
+                            sent_freq_khz*1000, wf_bandwidth_hz, packet_zoom)
+                        if abs(first_hz + span_hz/2 - expected_center_hz) > max(3, span_hz/512):
                             continue
                         carrier_restoring = False
                     samples = message[16:]

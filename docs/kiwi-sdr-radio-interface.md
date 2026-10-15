@@ -326,9 +326,13 @@ The compact `VIEW` control on the map rail cycles the built-in styles:
 `ATLAS` (boundaries plus a restrained latitude/longitude grid), and `SAT`
 (NASA Blue Marble physical/satellite-style imagery with the political-boundary
 overlay). `SAT` uses a 2048x1024 texture on Pi and a 4096x2048 texture in the
-desktop simulator. It also applies a UTC-driven day/night terminator with a
-subtle twilight transition. The styles are native OpenGL layers and need no
-network tile service.
+desktop simulator. Both bundled textures use the same NASA GIBS Blue Marble
+Next Generation product as the regional HD tiles, keeping ocean colors
+consistent when a swipe exposes the background. The complete bundled globe
+works offline; optional regional detail loads asynchronously and is cached.
+New tile uploads pause during swipes to keep touch frames smooth. `SAT` also
+applies a UTC-driven day/night terminator with a subtle twilight transition.
+See `UI/assets/GLOBE-IMAGERY.md` for the imagery source and rebuild command.
 The map is only a visual receiver selector for now: signal comparison,
 heatmaps, and multiple neighboring receiver streams are deliberately separate
 later work.
