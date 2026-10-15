@@ -1833,7 +1833,9 @@ def configure_popup_layout():
         # Every titled section spans the same 236 px as BACK. Sections have
         # 16 px breathing room. RESET is the final utility action, anchored
         # directly above BACK with the shared 8 px control gap.
-        toggle_y0 = LCD_DRAWER_HEADER_H + 16
+        theme_y0 = LCD_DRAWER_HEADER_H + 16
+        DISPLAY_THEME_BOX = (inner_x0, theme_y0, inner_x1, theme_y0 + tile_h)
+        toggle_y0 = DISPLAY_THEME_BOX[3] + section_gap
         toggle_y1 = toggle_y0 + tile_h
         floor_y0 = toggle_y1 + section_gap
         floor_y1 = floor_y0 + adjust_h
@@ -1843,8 +1845,6 @@ def configure_popup_layout():
         palette_y1 = palette_y0 + small_h
         rate_y0 = palette_y1 + section_gap + 24
         layout_y0 = rate_y0 + small_h + section_gap + 24
-        theme_y0 = layout_y0 + small_h + section_gap
-        DISPLAY_THEME_BOX = (inner_x0, theme_y0, inner_x1, theme_y0 + tile_h)
         reset_y1 = back_box[1] - LCD_NAV_GAP
         reset_y0 = reset_y1 - tile_h
         DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y1)

@@ -647,8 +647,8 @@ class BoardLayoutTests(unittest.TestCase):
     def test_display_reset_sits_directly_above_back(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
-                         ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
+                         ui.DISPLAY_SPECTRUM_BOX[1])
         self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
                          ui.lcd_drawer_back_box()[1])
         self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
@@ -686,8 +686,8 @@ class BoardLayoutTests(unittest.TestCase):
                          - ui.DISPLAY_PALETTE_BOXES[0][1][3], 16)
         self.assertEqual(heading_y['FREQUENCY POSITION'] - 8
                          - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
-        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
-                         ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
+                         ui.DISPLAY_SPECTRUM_BOX[1])
         self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
                          ui.lcd_drawer_back_box()[1])
         self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
@@ -700,7 +700,7 @@ class BoardLayoutTests(unittest.TestCase):
         ui.configure_output(True)
         ui.configure_popup_layout()
         rail_bottom = ui.lcd_drawer_back_box()[1]
-        self.assertEqual(ui.DISPLAY_SPECTRUM_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
+        self.assertEqual(ui.DISPLAY_THEME_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
         self.assertEqual(ui.DISPLAY_AUTO_BOX[1], ui.DISPLAY_SPECTRUM_BOX[1])
         boxes = [ui.DISPLAY_THEME_BOX, ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
                  ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX]
@@ -747,7 +747,7 @@ class BoardLayoutTests(unittest.TestCase):
             self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
                                                   (box[1] + box[3]) / 2),
                              ('palette', palette))
-        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16, ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_SPECTRUM_BOX[1])
         self.assertEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], ui.LCD_NAV_GAP)
         self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         for earlier in boxes:
