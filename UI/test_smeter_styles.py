@@ -519,6 +519,58 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(normalized['colors'], theme['colors'])
         self.assertNotIn('flex_vintage', METER_STYLES)
 
+    def test_only_slim_meters_follow_frequency_out_of_the_home_rail(self):
+        ui.configure_output(True)
+        cache = Mock()
+        cache.font.return_value.size.return_value = (187, 36)
+        for sidebar in ('left', 'right'):
+            for identifier, style in METER_STYLES.items():
+                theme = new_theme()
+                theme.update(smeter_style=identifier, sidebar=sidebar)
+                apply_theme(theme)
+                slim = style.height <= 80
+                for position in ('right', 'left', 'middle'):
+                    with self.subTest(sidebar=sidebar, meter=identifier, position=position), ExitStack() as stack:
+                        for name in ('draw_logical_rect', 'draw_ruler', 'draw_lower_status',
+                                     'draw_waterfall_operating_controls', 'draw_connection_annunciator',
+                                     'draw_squelch_closed_annunciator', 'draw_lcd_navigation',
+                                     'draw_band_context_chip', 'draw_home_mode_buttons'):
+                            stack.enter_context(patch.object(ui, name))
+                        stack.enter_context(patch.object(ui, 'top_instrument_layout',
+                                                        return_value=('7.075.000', (0, 0, 1, 1))))
+                        frequency = stack.enter_context(patch.object(ui, 'draw_big_frequency'))
+                        top_meter = stack.enter_context(patch.object(ui, 'draw_smeter'))
+                        rail_meter = stack.enter_context(patch.object(ui, 'draw_selected_smeter'))
+                        volume = stack.enter_context(patch.object(ui, 'draw_lcd_home_volume_slider'))
+                        bandpass = stack.enter_context(patch.object(ui, 'draw_lcd_home_bandwidth'))
+                        ui.draw_ui(cache, 7075, 20, -95, -90, None, 'LSB', 'DIG', 100,
+                                   instrument_layout=position)
+                        in_rail = position == 'right'
+                        on_top = position != 'right' and slim
+                        self.assertEqual(ui.home_rail_has_meter(position), in_rail)
+                        self.assertEqual(rail_meter.call_count, int(in_rail))
+                        self.assertEqual(top_meter.call_count, int(on_top))
+                        frequency.assert_called_once()
+                        self.assertEqual(frequency.call_args.kwargs['anchor'],
+                                         'cm' if position == 'right' else
+                                         'cm' if position == 'middle' and not slim else
+                                         ('rm' if position == 'left' else 'lm') if sidebar == 'left' else
+                                         ('lm' if position == 'left' else 'rm'))
+                        if in_rail:
+                            self.assertEqual(rail_meter.call_args.args[1], ui.lcd_compact_smeter_box())
+                        self.assertEqual(volume.call_args.kwargs['show_compact_readouts'], in_rail)
+                        self.assertEqual(bandpass.call_count, int(slim))
+                        for _mode, box in ui.lcd_home_mode_boxes(in_rail):
+                            self.assertTrue(ui.is_home_mode_touch(
+                                (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, position))
+                        if in_rail:
+                            box = ui.lcd_compact_smeter_box()
+                            self.assertFalse(ui.is_home_mode_touch(
+                                (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, position))
+                        if slim:
+                            self.assertEqual(bandpass.call_args.kwargs['box'],
+                                             ui.lcd_home_bandwidth_box(position == 'right'))
+
     def test_tall_meters_reclaim_bandpass_space_and_keep_all_controls_clear(self):
         ui.configure_output(True)
         for sidebar in ('left', 'right'):
