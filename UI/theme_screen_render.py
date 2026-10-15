@@ -157,12 +157,9 @@ def _gallery(ui, cache, editor, boxes):
             active = item["id"] == editor.selected_id
             colors = item["colors"]
             ui.draw_logical_rounded_rect(*box, 8, colors["background"], ACCENT if active else BORDER)
-            _text(ui, cache, box[0] + 16, box[1] + 28, item["name"], colors["text"], 18, width=260)
-            _text(ui, cache, box[0] + 16, box[1] + 64, home_capture()[0]["frequency_label"], colors["frequency"], 22)
-            for index, key in enumerate(("surface", "active_surface", "pressed_surface", "selected_surface")):
-                x = box[0] + 16 + index * 66
-                ui.draw_logical_rounded_rect(x, box[1] + 91, x + 56, box[1] + 120, item["radius"],
-                                             colors[key], colors["border"])
+            _text(ui, cache, box[0] + 20, box[1] + 54, item["name"], colors["text"], 22, width=252)
+            _text(ui, cache, box[0] + 20, box[1] + 100,
+                  "Selected" if active else "Tap to preview", colors["secondary_text"], 14, width=252)
             if active:
                 ui.draw_logical_circle(box[2] - 16, box[1] + 18, 3, ACCENT)
         _pages(ui, cache, boxes, "theme", editor.page, editor.page_count)

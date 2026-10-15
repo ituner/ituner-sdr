@@ -5,7 +5,8 @@ page opens. The page has three tabs and one common action bar:
 
 - **Themes** previews a built-in palette or a saved theme. Choosing a built-in
   palette keeps the S-meter you have just chosen. Choosing a saved theme restores
-  that theme's complete appearance.
+  that theme's complete appearance. Each card is a single touch target with its
+  name and selection hint; the large preview shows the result.
 - **S-Meters** shows an enlarged, animated preview. Use All, LED / Slider, Analog,
   or Magic Eye to narrow the gallery. The original meter is **LED Bar**, under
   **LED / Slider**. Browsing pages and filters does not change the selection.
