@@ -16148,6 +16148,13 @@ def smeter_supports_top_instrument_strip(style_id=None):
     return identifier == "led" or style.kind in ("led", "linear", "led_skin", "eye_linear")
 
 
+def instrument_layout_after_theme_save(instrument_layout, style_id=None):
+    """Make a newly saved large meter visible instead of leaving it hidden."""
+    if LCD_800_MODE and not smeter_supports_top_instrument_strip(style_id):
+        return visible_frequency_position("right")
+    return instrument_layout
+
+
 def large_frequency_placement(instrument_layout):
     """Place a meterless MIDDLE readout at the physical 1280 px center."""
     if (LCD_800_MODE and instrument_layout == "middle"
@@ -29095,13 +29102,37 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 previous_sidebar = theme_system.runtime_theme["sidebar"]
+                                theme_action = next(
+                                    (name for name, box in theme_screen_boxes(theme_editor).items()
+                                     if contains(box, x, y)),
+                                    None,
+                                )
                                 theme_editor.tap(x, y)
+                                layout_changed = False
                                 if theme_system.runtime_theme["sidebar"] != previous_sidebar:
                                     # Preserve the operator's visible LEFT/RIGHT choice
                                     # while the rail itself moves to the opposite edge.
                                     instrument_layout = visible_frequency_position(
                                         instrument_layout, "left"
                                     )
+                                    layout_changed = True
+                                if (
+                                    theme_action == "save"
+                                    and not theme_editor.open
+                                    and not theme_editor.error
+                                ):
+                                    reconciled_layout = instrument_layout_after_theme_save(
+                                        instrument_layout,
+                                        theme_system.runtime_theme["smeter_style"],
+                                    )
+                                    if reconciled_layout != instrument_layout:
+                                        instrument_layout = reconciled_layout
+                                        layout_changed = True
+                                        print(
+                                            f"gl instruments {instrument_layout} for large S-meter",
+                                            flush=True,
+                                        )
+                                if layout_changed:
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
                                 refresh_receiver_list_theme()
