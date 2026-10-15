@@ -230,6 +230,7 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
+from am_carrier import CarrierSearch, carrier_available
 from meter_artwork import linear_strip_image
 
 
@@ -4721,6 +4722,18 @@ def stream_waterfall_box():
     return x0, y0, x1, y0 + height
 
 
+def carrier_waterfall_box():
+    """AM tuning tile below Favorite/Pause, clear of frequency and status."""
+    x0, _y0, _x1, y1 = favorite_waterfall_box()
+    return x0, y1 + 10, stream_waterfall_box()[2], y1 + 68
+
+
+def carrier_button_visible(state):
+    return (carrier_available(state.radio_snapshot()[0], state.receiver_type_snapshot())
+            and not state.external_waterfall_snapshot()
+            and not owrx.is_openwebrx_endpoint(state.snapshot()[0]))
+
+
 def favorite_waterfall_box():
     """A matching one-tap favorite target immediately left of Play/Pause."""
     x0, y0, _x1, y1 = stream_waterfall_box()
@@ -5114,6 +5127,8 @@ class SharedState:
         spectrum_enabled,
     ):
         self.lock = threading.Lock()
+        self.carrier_search = CarrierSearch()
+        self.carrier_tuned_khz = None
         self.server = server
         self.receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
         canonical_fmdx_server = fmdx.normalize_server_url(server)
@@ -5333,6 +5348,8 @@ class SharedState:
     def set_view(self, freq_khz=None, zoom=None, waterfall_center_khz=None):
         with self.lock:
             self.kiwi_landing.update(active=False, status="cancelled")
+            self.carrier_search.finish("", time.monotonic())
+            self.carrier_tuned_khz = None
             if freq_khz is not None:
                 self.freq_khz = (
                     fmdx.clamp_receiver_frequency(self.server, freq_khz)
@@ -5347,6 +5364,62 @@ class SharedState:
             self.spectrum_peak_history.clear()
             self.view_generation += 1
             return self.freq_khz, self.zoom, self.view_generation
+
+    def _carrier_context(self):
+        return (self.server_generation, self.view_generation, self.radio_generation,
+                self.receiver_type, self.external_waterfall, self.stream_paused,
+                bool(self.connection_streams.get("audio") and self.connection_streams.get("waterfall")))
+
+    def start_carrier_search(self):
+        with self.lock:
+            now = time.monotonic()
+            self.carrier_tuned_khz = None
+            if (not carrier_available(self.radio_mode, self.receiver_type)
+                    or self.external_waterfall or owrx.is_openwebrx_endpoint(self.server)):
+                return False
+            if self.stream_paused or not all(self.connection_streams.values()):
+                self.carrier_search.finish("NO CARRIER", now)
+                return False
+            self.kiwi_landing.update(active=False, status="cancelled")
+            self.carrier_search.start(self.freq_khz, self.high_cut-self.low_cut,
+                                      self._carrier_context(), now)
+            return True
+
+    def carrier_capture_request(self):
+        with self.lock:
+            search = self.carrier_search
+            if search.poll(self._carrier_context(), time.monotonic()):
+                return search.center_hz / 1000, search.zoom
+            return None
+
+    def carrier_status_snapshot(self):
+        with self.lock:
+            search = self.carrier_search
+            now = time.monotonic()
+            search.poll(self._carrier_context(), now)
+            return search.status if search.active or now < search.until else ""
+
+    def feed_carrier_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
+        with self.lock:
+            search = self.carrier_search
+            now = time.monotonic()
+            if not search.poll(self._carrier_context(), now):
+                return None
+            tuned = search.feed(message, bandwidth_hz, zoom_max, zoom_cap, now)
+            if tuned is not None:
+                # Keep the visible RF window and operator's cuts fixed. Only
+                # the VFO carrier changes, at 1 Hz rather than channel steps.
+                if self.wf_view_center_khz is None:
+                    self.wf_view_center_khz = self.freq_khz
+                self.freq_khz = clamp(tuned, 0, TUNING_MAX_KHZ)
+                self.view_generation += 1
+                self.carrier_tuned_khz = self.freq_khz
+            return tuned
+
+    def take_carrier_result(self):
+        with self.lock:
+            result, self.carrier_tuned_khz = self.carrier_tuned_khz, None
+            return result
 
     def waterfall_view_center_snapshot(self):
         with self.lock:
@@ -5371,6 +5444,8 @@ class SharedState:
         still connecting.
         """
         with self.lock:
+            self.carrier_search.finish("", time.monotonic())
+            self.carrier_tuned_khz = None
             selected_type = str(receiver_type or "").casefold()
             if selected_type not in RECEIVER_TYPES:
                 if fmdx.is_fmdx_server(server):
@@ -5446,6 +5521,8 @@ class SharedState:
         """Hard-stop or resume the paired Kiwi listener transports."""
         transports_to_abort = ()
         with self.lock:
+            self.carrier_search.finish("", time.monotonic())
+            self.carrier_tuned_khz = None
             paused = bool(paused)
             if paused == self.stream_paused:
                 return self.stream_paused
@@ -5665,6 +5742,8 @@ class SharedState:
             raise ValueError(f"unsupported Kiwi mode: {radio_mode}")
         with self.lock:
             self.kiwi_landing.update(active=False, status="cancelled")
+            self.carrier_search.finish("", time.monotonic())
+            self.carrier_tuned_khz = None
             self.radio_mode = radio_mode.lower()
             self.low_cut, self.high_cut = kiwi_mode_filter(self.radio_mode)
             self.radio_generation += 1
@@ -6084,6 +6163,8 @@ class SharedState:
                 low = clamp(low, -FILTER_LIMIT_HZ, FILTER_LIMIT_HZ - FILTER_SNAP_HZ)
                 high = clamp(high, low + FILTER_SNAP_HZ, FILTER_LIMIT_HZ)
             if (low, high) != (self.low_cut, self.high_cut):
+                self.carrier_search.finish("", time.monotonic())
+                self.carrier_tuned_khz = None
                 self.low_cut, self.high_cut = low, high
                 self.radio_generation += 1
             return self.low_cut, self.high_cut, self.radio_generation
@@ -8784,6 +8865,25 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
     else:
         draw_logical_line(cx - 10, cy - 15, cx - 10, cy + 15, icon_color, 4)
         draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
+
+
+def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
+    if alpha <= 0:
+        return
+    box = carrier_waterfall_box()
+    x0, y0, x1, y1 = box
+    active = status == "TUNING…"
+    pressed = ui_button_pressed(box)
+    visual = draw_styled_button_frame(
+        box, active=active, pressed=pressed,
+        fill_alpha=round(waterfall_button_fill_alpha(active, pressed) * alpha))
+    first, second = ("TUNE", "CARRIER") if not status else (status, "")
+    color = (*visual.text[:3], round(255 * alpha))
+    draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 - (10 if second else 0),
+              first, color, 17, True, False, "cm", family="Liberation Sans")
+    if second:
+        draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 + 12,
+                  second, color, 17, True, False, "cm", family="Liberation Sans")
 
 
 def draw_favorite_waterfall_button(favorited):
@@ -23448,6 +23548,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                 state.waterfall_view_center_snapshot(),
             )
             sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
+            carrier_view = None
+            carrier_restoring = False
+            wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap = 30000000, 14, 14
             authenticated = False
             configured = False
             last_keepalive = 0
@@ -23467,7 +23570,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     drain_queue(line_queue)
                     break
                 now_monotonic = time.monotonic()
-                if configured and generation != seen_generation and now_monotonic >= next_view_send_at:
+                if configured and carrier_view is None and generation != seen_generation and now_monotonic >= next_view_send_at:
                     seen_generation = generation
                     next_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
                     # Display zooms 15/16 are local crops of Kiwi zoom-14
@@ -23495,6 +23598,23 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                         ws.send_text(f"SET wf_speed={wf_speed}")
                     print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
 
+                capture = state.carrier_capture_request()
+                if configured:
+                    if capture is not None:
+                        desired_capture = (capture[0], min(capture[1], wf_zoom_cap))
+                        if carrier_view != desired_capture:
+                            kiwi.send_wf_setup(ws, desired_capture[0], desired_capture[1], 4)
+                            carrier_view = desired_capture
+                            carrier_restoring = False
+                    elif carrier_view is not None:
+                        waterfall_center_khz = receiver_waterfall_center(
+                            freq_khz, kiwi.zoom_source_span_khz(zoom), "kiwi",
+                            state.waterfall_view_center_snapshot())
+                        kiwi.send_wf_setup(ws, waterfall_center_khz, zoom, wf_speed)
+                        sent_freq_khz, sent_kiwi_zoom = waterfall_center_khz, kiwi.kiwi_zoom_level(zoom)
+                        carrier_view = None
+                        carrier_restoring = True
+
                 if time.monotonic() - last_frame_at > WATERFALL_STARTUP_TIMEOUT_SECONDS:
                     raise RuntimeError("waterfall startup timeout")
                 now = int(time.time())
@@ -23511,6 +23631,18 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                 if message[:3] == b"MSG":
                     params = kiwi.parse_msg_params(message)
                     kiwi.raise_for_kiwi_server_message(params)
+                    for name, default in (("bandwidth", wf_bandwidth_hz),
+                                          ("zoom_max", wf_zoom_max), ("zoom_cap", wf_zoom_cap)):
+                        try:
+                            value = int(params.get(name, default))
+                        except (TypeError, ValueError):
+                            continue
+                        if name == "bandwidth" and 1000000 <= value <= 100000000:
+                            wf_bandwidth_hz = value
+                        elif name == "zoom_max" and 8 <= value <= 14:
+                            wf_zoom_max = value
+                        elif name == "zoom_cap" and 0 <= value <= 14:
+                            wf_zoom_cap = value
                     if "badp" in params:
                         if str(params["badp"]) != "0":
                             raise RuntimeError(f"receiver authentication failed (badp={params['badp']})")
@@ -23535,6 +23667,19 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                         retry_outage_started_at = None
                     if state.connection_ready(seen_server_generation, "waterfall"):
                         persist_live_station_health(server, "waterfall", True)
+                    if carrier_view is not None:
+                        state.feed_carrier_frame(message, wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap)
+                        continue
+                    if carrier_restoring:
+                        packet_start, packet_zoom_flags = struct.unpack_from("<II", message, 4)
+                        packet_zoom = packet_zoom_flags & 0xffff
+                        if packet_zoom != min(sent_kiwi_zoom, wf_zoom_cap):
+                            continue
+                        first_hz = packet_start * wf_bandwidth_hz / (1024 * 2**wf_zoom_max)
+                        span_hz = wf_bandwidth_hz / 2**packet_zoom
+                        if abs(first_hz + span_hz/2 - sent_freq_khz*1000) > max(3, span_hz/512):
+                            continue
+                        carrier_restoring = False
                     samples = message[16:]
                     floor, ceiling = leveler.levels_for(samples)
                     line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
@@ -26817,6 +26962,8 @@ def main():
                                 gesture = "frequency_identity_tune"
                             elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
+                            elif carrier_button_visible(state) and contains(carrier_waterfall_box(), x, y):
+                                gesture = "carrier_tune"
                             elif contains(favorite_waterfall_box(), x, y):
                                 gesture = "favorite_toggle"
                             elif contains(stream_waterfall_box(), x, y):
@@ -29245,6 +29392,13 @@ def main():
                             target = next_overlay_lane(cpu_graph_anchor) if moved <= args.tap_px else overlay_anchor_at_y(y, waterfall_y0, waterfall_y1)
                             move_monitoring_graph_to_lane("cpu", target)
                             wake_controls()
+                        elif touch_started and gesture == "carrier_tune":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                inertia_velocity_khz_s = 0.0
+                                anim_start = 0.0
+                                state.start_carrier_search()
+                                print("gl AM carrier search requested", flush=True)
+                            wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -30091,6 +30245,14 @@ def main():
                 animate_to(landed_khz, kiwi.zoom_to_span_khz(zoom), 0.16)
                 remember_current_view()
                 print(f"gl Kiwi landing {landing_status} {landed_khz:.3f} kHz", flush=True)
+            carrier_tuned_khz = state.take_carrier_result()
+            if carrier_tuned_khz is not None:
+                _server, freq_khz, zoom, _smeter, _view_gen, _server_gen = state.snapshot()
+                display_freq = candidate_freq = carrier_tuned_khz
+                anim_start = 0.0
+                remember_current_view()
+                wake_controls()
+                print(f"gl AM carrier tuned {carrier_tuned_khz:.3f} kHz", flush=True)
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
@@ -30460,6 +30622,10 @@ def main():
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
+                if carrier_button_visible(state):
+                    status = state.carrier_status_snapshot()
+                    draw_carrier_waterfall_button(
+                        text_cache, status, 1.0 if status else controls_alpha(now))
             if waterfall_visible and audio_controls.get("mute", False) and not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or globe_open or dj_tune_open
