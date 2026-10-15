@@ -53,8 +53,17 @@ The upstream repository distributes them under GPL-3.0. Its complete license is
 included as `UI/assets/smeters/linear/LICENSE.txt`, with original configuration,
 source paths and SHA-256 checksums. See that directory's `SOURCE.md`.
 
-The integration crops one channel's display strip and renders an independent
-S/dBm scale. It does not display the source audio VU scale or pretend RSSI is an
+The integration draws pixel-aligned derivatives of each display strip at native
+size (preserving the original PNGs), with an independent S/dBm scale.
+It does not display the source audio VU scale or pretend RSSI is an
 audio level. No PeppyMeter application or signal-processing code is imported.
 The EM84-style Magic Band is original procedural application artwork; it uses
 no third-party photo, plugin binary or copied plugin source.
+
+## Original aviation instrument housings
+
+`UI/assets/smeters/aviation/black.png` and `brass.png` are original synthetic
+photorealistic housings made with the built-in image generation tool. Museum
+research links, generation prompts and calibration details are recorded in
+that directory's `SOURCE.md` and `PROMPTS.md`. No museum photograph or historic
+manufacturer artwork is bundled or claimed as an amateur-radio contribution.

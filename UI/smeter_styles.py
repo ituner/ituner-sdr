@@ -38,8 +38,8 @@ METER_STYLES = {
     "linear": MeterStyle("SLIDING POINTER", "linear", 80, (13, 20, 25), (204, 225, 230), (58, 69, 77), (255, 188, 79)),
     "classic": MeterStyle("CLASSIC IVORY", "radial", 160, (232, 223, 198), (45, 43, 38), (89, 92, 86), (155, 39, 28)),
     "precision": MeterStyle("PRECISION DARK", "radial", 160, (13, 22, 28), (212, 228, 229), (62, 77, 86), (255, 174, 61)),
-    "aviation": MeterStyle("AVIATION BLACK", "round", 210, (10, 14, 15), (220, 231, 210), (56, 63, 66), (235, 239, 219), -130, 260),
-    "heritage": MeterStyle("AVIATION BRASS", "round", 210, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260),
+    "aviation": MeterStyle("AVIATION BLACK", "aircraft", 210, (10, 14, 15), (220, 231, 210), (56, 63, 66), (235, 239, 219), -130, 260, scales=("S", "dBm", "µV")),
+    "heritage": MeterStyle("AVIATION BRASS", "aircraft", 210, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260, scales=("S", "dBm", "µV")),
 }
 DEFAULT_METER_STYLE = "led"
 REMOVED_METER_MIGRATIONS = {
@@ -76,6 +76,7 @@ METER_STYLES["linear_orange"] = MeterStyle(
 
 LINEAR_ASSET_DIR = SKIN_ASSET_DIR.parent / "linear"
 LINEAR_ARTWORK = json.loads((LINEAR_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
+AVIATION_ASSET_DIR = SKIN_ASSET_DIR.parent / "aviation"
 for identifier, artwork in LINEAR_ARTWORK.items():
     METER_STYLES[identifier] = MeterStyle(
         artwork["name"], "led_skin", 80, (3, 9, 12), (200, 225, 225),
@@ -86,8 +87,25 @@ METER_STYLES["magic_band_em84"] = MeterStyle(
 
 
 
+def aviation_image_box(box):
+    """A round dial stays round in rail, wide instruments and small thumbnails."""
+    x0, y0, x1, y1 = box
+    unit = min((x1 - x0) / 236, (y1 - y0) / 236)
+    side = max(1, round(min(x1 - x0, y1 - y0 - 20 * unit)))
+    left, top = round((x0 + x1 - side) / 2), round(y0)
+    return left, top, left + side, top + side
+
+
+def aviation_needle_segment(identifier, box, dbm, radius=.315):
+    a, b, c, d = aviation_image_box(box)
+    pivot = ((a + c) / 2, (b + d) / 2)
+    return (*pivot, *needle_point(METER_STYLES[identifier], dbm, pivot, (c - a) * radius))
+
+
 def meter_asset_path(identifier):
     """Resolve preserved artwork from its own publisher collection."""
+    if identifier in ("aviation", "heritage"):
+        return AVIATION_ASSET_DIR / ("brass.png" if identifier == "heritage" else "black.png")
     artwork = COMMUNITY_ARTWORK.get(identifier) or SKIN_CALIBRATION[identifier]
     directory = COMMUNITY_ASSET_DIR if identifier in COMMUNITY_ARTWORK else SKIN_ASSET_DIR
     return directory / artwork["file"]

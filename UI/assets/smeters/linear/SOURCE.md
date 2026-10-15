@@ -11,10 +11,14 @@ Publisher: **project-owner**, PeppyMeter project on GitHub (no callsign claimed)
 
 The six PNGs retain their upstream bytes. `source.json` records source paths and
 SHA-256 checksums; `upstream-meters.txt` preserves the original configuration.
-The runtime crops one channel from each background, caches that off-state and
-the indicator at final pixel dimensions, and reveals the indicator in proportion
-to receiver RSSI. Our S1–S9/+20/+40 and dBm readouts replace the source audio VU
-labels. Crop bounds are in `calibration.json`. No second/stereo receiver channel
+The runtime uses pixel-aligned derivatives in `meter_artwork.py`, preserving
+Bar's cyan/red segments, Dash's green/red blocks and Gas's pink luminous grid.
+Cells and dark gaps are drawn directly at final display dimensions rather than
+shrinking the originals' glow and fine grids, which became fuzzy at 228 × 30.
+The original PNGs remain unchanged for provenance; their recorded crop bounds
+are in `calibration.json`. Off/on states are cached at the same dimensions and
+the active strip is revealed in proportion to receiver RSSI. Our S1–S9/+20/+40
+and dBm readouts replace the audio VU labels. No second/stereo receiver channel
 or audio level is implied, and no application code is imported from PeppyMeter.
 
 # Original Magic Band EM84

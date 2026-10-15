@@ -227,7 +227,9 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
                           skin_needle_segment, skin_source_bounds, s_label, voltage_label,
                           meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal,
-                          LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction)
+                          LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
+                          aviation_image_box, aviation_needle_segment, needle_point)
+from meter_artwork import linear_strip_image
 
 
 LCD_NATIVE_W = 800
@@ -15991,13 +15993,16 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
     if style.kind == "led_skin" and isinstance(text_cache, TextCache):
         draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
+    if style.kind == "aircraft" and isinstance(text_cache, TextCache):
+        draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
+        return
     if style.kind in ("skin", "triple", "eye") and isinstance(text_cache, TextCache):
         draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
     backlit = identifier == "linear_orange" and isinstance(text_cache, TextCache)
     if backlit:
         draw_incandescent_meter_background(text_cache, box)
-    fallback = "precision" if style.kind == "skin" else "led" if style.kind == "led_skin" else identifier
+    fallback = "precision" if style.kind in ("skin", "aircraft") else "led" if style.kind == "led_skin" else identifier
     draw_meter(fallback, box, dbm, peak_dbm,
                rect=draw_logical_rect, line=draw_logical_line,
                circle=draw_logical_circle, text=meter_text, palette=theme["colors"],
@@ -16005,25 +16010,19 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
 
 
 def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
-    """Use original PeppyMeter strips with an RX-calibrated S/dBm scale."""
+    """Draw credited Peppy designs on a native pixel grid with an RX scale."""
     x0, y0, x1, y1 = box
     unit = min((x1 - x0) / 236, (y1 - y0) / 80)
     a, b = round(x0 + 4 * unit), round(x1 - 4 * unit)
     top, bottom = round(y0 + 25 * unit), round(y0 + 55 * unit)
     size = (max(1, b - a), max(1, bottom - top))
-    source = LINEAR_ARTWORK[identifier]
     textures = []
     for active in (False, True):
-        key = ("linear-meter-strip-v1", identifier, size, active)
+        key = ("linear-meter-strip-crisp-v2", identifier, size, active)
         cached = text_cache._cached_texture(("surface", key))
         if cached is None:
-            filename = source["indicator"] if active else source["background"]
-            with PILImage.open(LINEAR_ASSET_DIR / filename) as image:
-                artwork = image.convert("RGBA")
-                if not active:
-                    artwork = artwork.crop(source["crop"])
-                artwork = artwork.resize(size, PILImage.Resampling.LANCZOS)
-                surface = pygame.image.fromstring(artwork.tobytes(), size, "RGBA")
+            artwork = linear_strip_image(identifier, size, active)
+            surface = pygame.image.fromstring(artwork.tobytes(), size, "RGBA")
             cached = text_cache.surface_texture(key, surface)
         textures.append(cached[0])
     style = METER_STYLES[identifier]
@@ -16045,6 +16044,88 @@ def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_te
         x = max(x0 + 12 * unit, min(x1 - 14 * unit, a + (b - a) * meter_fraction(level)))
         label(x, 69, "S" + value if value == "1" else value, 10,
               (245, 104, 89) if level > -73 else style.ink, "cm")
+
+
+def draw_aviation_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
+    """Photo-material housing, cached calibrated print, and an independent needle."""
+    style = METER_STYLES[identifier]
+    a, b, c, d = aviation_image_box(box)
+    side = c - a
+    unit = side / 216
+    key = ("aviation-face-v1", identifier, side)
+    cached = text_cache._cached_texture(("surface", key))
+    if cached is None:
+        try:
+            with PILImage.open(meter_asset_path(identifier)) as original:
+                artwork = original.convert("RGBA").resize((side, side), PILImage.Resampling.LANCZOS)
+        except (OSError, ValueError):
+            draw_selected_smeter(text_cache, box, dbm, peak_dbm, style_id="precision")
+            return
+        surface = pygame.image.fromstring(artwork.tobytes(), artwork.size, "RGBA")
+        # Supersample only the new scale print, then composite at native size.
+        # The photographic housing itself is filtered exactly once.
+        factor = 3
+        print_layer = pygame.Surface((side * factor, side * factor), pygame.SRCALPHA)
+        pivot = (side / 2, side / 2)
+        def point(level, radius):
+            return tuple(round(v * factor) for v in needle_point(style, level, pivot, side * radius))
+        def tick(level, outer, inner, color, width):
+            pygame.draw.line(print_layer, color, point(level, outer), point(level, inner),
+                             max(1, round(width * unit * factor)))
+        def text_at(position, content, color, size):
+            font = text_cache.font(max(1, round(size * unit * factor * 100 /
+                                              theme_system.runtime_theme["text_scale_percent"])),
+                                   bold=True, family="Liberation Sans")
+            rendered = font.render(content, True, color)
+            print_layer.blit(rendered, rendered.get_rect(center=position))
+        for level in range(-121, -32, 2):
+            tick(level, .315, .302, style.ink if level <= -73 else (215, 106, 72), .65)
+        for level in (-121, -115, -109, -103, -97, -91, -85, -79, -73, -63, -53, -43, -33):
+            tick(level, .315, .285, style.ink if level <= -73 else (239, 136, 86), 1)
+        for level, label in SCALE_LABELS:
+            text_at(point(level, .252), label, style.ink if level <= -73 else (246, 158, 105), 11)
+        for level in (-121, -97, -73, -53, -33):
+            tick(level, .206, .196, (150, 167, 159), .55)
+            text_at(point(level, .163), str(level), (177, 190, 180), 7)
+        text_at((side * factor / 2, side * factor * .425), "S", style.ink, 11)
+        text_at((side * factor / 2, side * factor * .605), "dBm", (177, 190, 180), 8)
+        text_at((side * factor / 2, side * factor * .735), "SIGNAL", style.ink, 8)
+        printed = PILImage.frombytes("RGBA", print_layer.get_size(), pygame.image.tostring(print_layer, "RGBA"))
+        printed = printed.resize((side, side), PILImage.Resampling.LANCZOS)
+        surface.blit(pygame.image.fromstring(printed.tobytes(), printed.size, "RGBA"), (0, 0))
+        cached = text_cache.surface_texture(key, surface)
+    draw_textured_quad(cached[0], a, b, c, d, 0, 0, 1, 1)
+    cx, cy, tx, ty = aviation_needle_segment(identifier, box, dbm)
+    valid = isinstance(dbm, (int, float)) and math.isfinite(dbm)
+    if (valid and isinstance(peak_dbm, (int, float)) and math.isfinite(peak_dbm)
+            and peak_dbm > dbm + .75):
+        draw_logical_line(*aviation_needle_segment(identifier, box, peak_dbm), (173, 169, 139, 110), max(.7, unit))
+    # The shadow, painted pointer and highlight share the scale's exact geometry.
+    tail_x, tail_y = cx - (tx - cx) * .14, cy - (ty - cy) * .14
+    draw_logical_line(tail_x + unit, tail_y + unit, tx + unit, ty + unit, (0, 0, 0, 180), max(2, 3 * unit))
+    draw_logical_line(tail_x, tail_y, tx, ty, style.needle, max(1, 2 * unit))
+    draw_logical_line(cx, cy, tx, ty, (255, 250, 217), max(.6, .7 * unit))
+    hub_key = ("aviation-hub-v1", identifier, side)
+    hub = text_cache._cached_texture(("surface", hub_key))
+    hub_size = max(5, round(13 * unit))
+    if hub is None:
+        face = pygame.Surface((hub_size * 3, hub_size * 3), pygame.SRCALPHA)
+        centre = hub_size * 3 // 2
+        radius = centre
+        for r in range(radius, 0, -1):
+            light = 1 - r / radius
+            color = tuple(round(v * (.50 + .70 * light)) for v in
+                          ((165, 133, 73) if identifier == "heritage" else (96, 100, 91)))
+            pygame.draw.circle(face, color, (centre, centre), r)
+        image = PILImage.frombytes("RGBA", face.get_size(), pygame.image.tostring(face, "RGBA"))
+        image = image.resize((hub_size, hub_size), PILImage.Resampling.LANCZOS)
+        hub = text_cache.surface_texture(hub_key, pygame.image.fromstring(image.tobytes(), image.size, "RGBA"))
+    left, top = round(cx - hub_size / 2), round(cy - hub_size / 2)
+    draw_textured_quad(hub[0], left, top, left + hub_size, top + hub_size, 0, 0, 1, 1)
+    reading = f"{dbm:.0f} dBm" if valid else "— dBm"
+    meter_text((box[0] + box[2]) / 2, d + (box[3] - d) / 2,
+               f"{s_label(dbm)}   {reading}   {voltage_label(dbm)}", style.ink,
+               max(7, round(11 * unit)), "cm")
 
 
 def incandescent_meter_backlight(size):
@@ -16206,7 +16287,9 @@ def lcd_home_volume_box(show_compact_readouts=True):
     _pass_x0, _pass_y0, _pass_x1, pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)
     if not home_bandpass_visible():
         if show_compact_readouts:
-            pass_y1 = lcd_home_bandwidth_box(show_compact_readouts)[1]
+            # The hidden passband's leading gap must also be reclaimed. Keeping
+            # it squeezed Volume's heading underneath its speaker button.
+            pass_y1 = lcd_home_mode_grid_bottom(show_compact_readouts)
         else:
             pass_y1 = lcd_home_bandwidth_box(False)[1] + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
     y0 = pass_y1 + 16

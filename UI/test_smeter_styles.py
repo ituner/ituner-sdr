@@ -8,7 +8,8 @@ from unittest.mock import Mock, patch
 import kiwi_gl_display as ui
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           dbm_to_microvolts, meter_fraction, needle_point,
-                          skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip, meter_fraction)
+                          skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip,
+                          aviation_image_box, aviation_needle_segment)
 from smeter_styles import EYE_ARTWORK, meter_asset_path, eye_closure, eye_image_box, draw_eye_signal
 from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE, PREVIEW_BOX
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
@@ -275,6 +276,70 @@ class MeterTests(unittest.TestCase):
         reading=next(c.args[0] for c in labels.call_args_list if c.args[2]=='-73 dBm')
         self.assertEqual(reading,396)
 
+    def test_peppy_native_cells_keep_dark_gaps_in_both_states(self):
+        from meter_artwork import linear_cell_boxes, linear_strip_image
+        for identifier in ('peppy_bar', 'peppy_dash', 'peppy_gas'):
+            for size in ((228, 30), (392, 30), (157, 21)):
+                cells = linear_cell_boxes(identifier, size)
+                mask = ui.PILImage.new('1', size)
+                from PIL import ImageDraw
+                draw = ImageDraw.Draw(mask)
+                for cell in cells:
+                    self.assertTrue(all(isinstance(v, int) for v in cell))
+                    draw.rectangle(cell, fill=1)
+                for active in (False, True):
+                    image = linear_strip_image(identifier, size, active)
+                    self.assertEqual(image.size, size)
+                    # Off and on states share exactly the same black pixel gaps.
+                    for position, pixel in enumerate(image.getdata()):
+                        expected_cell = mask.getpixel((position % size[0], position // size[0]))
+                        self.assertEqual(pixel != (3, 9, 12, 255), bool(expected_cell))
+                    # No resampling halos or blurry intermediate grid colours.
+                    self.assertLessEqual(len(image.getcolors(size[0] * size[1])), 5)
+
+    def test_aviation_dial_stays_square_and_needle_uses_printed_scale_geometry(self):
+        for identifier in ('aviation', 'heritage'):
+            self.assertTrue(meter_asset_path(identifier).is_file())
+            self.assertEqual(METER_STYLES[identifier].height, 210)
+            for box in ((1034, 104, 1270, 314), (0, 0, 400, 80), (701.5, 187, 858.5, 326.7)):
+                a, b, c, d = aviation_image_box(box)
+                self.assertEqual(c-a, d-b)
+                self.assertTrue(all(isinstance(v, int) for v in (a, b, c, d)))
+                for level in (-200, -121, -97, -73, -53, -33, None, float('nan')):
+                    px, py, tx, ty = aviation_needle_segment(identifier, box, level)
+                    self.assertEqual((tx, ty), needle_point(METER_STYLES[identifier], level,
+                                                         (px, py), (c-a)*.315))
+                    self.assertLessEqual(math.hypot(tx-px, ty-py), (c-a)*.34)
+
+    def test_aviation_signal_changes_reuse_face_and_hub_but_move_live_needle(self):
+        ui.pygame.font.init()
+        for identifier in ('aviation', 'heritage'):
+            cache = Mock(); textures = {}
+            cache._cached_texture.side_effect = textures.get
+            cache.font.side_effect = lambda size, **kwargs: ui.pygame.font.Font(None, size)
+            def retain(key, surface):
+                result = (len(textures)+1, *surface.get_size())
+                textures[('surface', key)] = result
+                return result
+            cache.surface_texture.side_effect = retain
+            with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line') as line:
+                box = (0, 0, 236, 210)
+                ui.draw_aviation_smeter(cache, identifier, box, -109, None, Mock())
+                first_tip = line.call_args.args[2:4]
+                line.reset_mock()
+                ui.draw_aviation_smeter(cache, identifier, box, -73, -53, Mock())
+                self.assertNotEqual(first_tip, line.call_args.args[2:4])
+                self.assertEqual(line.call_args.args[:4], aviation_needle_segment(identifier, box, -73))
+                # Only one static face and one centre cap are ever rasterized.
+                self.assertEqual(cache.surface_texture.call_count, 2)
+
+    def test_missing_aviation_artwork_falls_back_without_interrupting_receiver(self):
+        cache = Mock(); cache._cached_texture.return_value = None
+        with patch.object(ui.PILImage, 'open', side_effect=OSError('Missing asset')), \
+                patch.object(ui, 'draw_selected_smeter') as fallback:
+            ui.draw_aviation_smeter(cache, 'heritage', (0, 0, 236, 210), -73, None, Mock())
+            self.assertEqual(fallback.call_args.kwargs['style_id'], 'precision')
+
     def test_legacy_and_invalid_saved_styles_fall_back_to_led(self):
         for value in (None, 'unknown', [], {}):
             theme = new_theme()
@@ -303,6 +368,8 @@ class MeterTests(unittest.TestCase):
                     self.assertLessEqual(max(box[3] for _, box in modes), volume[1])
                     self.assertLess(volume[3], ui.lcd_nav_top())
                     if compact:
+                        mute = ui.lcd_home_volume_mute_box(compact)
+                        self.assertGreaterEqual(mute[1], volume[1] + 21)
                         meter = ui.lcd_compact_smeter_box()
                         self.assertEqual(meter[3] - meter[1], style.height)
                         self.assertLess(meter[3], min(box[1] for _, box in modes))
