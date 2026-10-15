@@ -223,7 +223,7 @@ import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
-from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
+from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
                           skin_needle_segment, skin_source_bounds, s_label, voltage_label,
                           meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal,
@@ -2300,8 +2300,10 @@ def dual_vfo_squelch_level_at_x(x, box, maximum):
 
 
 def draw_dual_vfo_smeter(text_cache, box, smeter_dbm):
-    """Draw the same 236 px meter used on HOME, at this VFO's level."""
-    draw_lcd_compact_smeter(text_cache, box, smeter_dbm)
+    """Keep Dual RX on the compact default face regardless of Home choice."""
+    draw_selected_smeter(
+        text_cache, box, smeter_dbm, style_id=DEFAULT_METER_STYLE,
+    )
 
 
 def draw_dual_vfo_audio_mixer(text_cache, box, mix):

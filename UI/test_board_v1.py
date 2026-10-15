@@ -1127,13 +1127,17 @@ class DualVfoHomeControlTests(unittest.TestCase):
             self.assertEqual(min(box[1] for _label, box in modes), layout[f'mode_{vfo.lower()}'][1])
             self.assertEqual(max(box[3] for _label, box in modes), layout[f'mode_{vfo.lower()}'][3])
 
-    def test_dual_meter_uses_home_renderer_and_mode_change_is_isolated(self):
+    def test_dual_meter_forces_default_compact_face_and_mode_change_is_isolated(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         meter = ui.dual_vfo_layout()['smeter_a']
-        with patch.object(ui, 'draw_lcd_compact_smeter') as draw_meter:
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}), \
+                patch.object(ui, 'draw_selected_smeter') as draw_meter:
             ui.draw_dual_vfo_smeter(None, meter, -95)
-        draw_meter.assert_called_once_with(None, meter, -95)
+            self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'bakelite_square')
+        draw_meter.assert_called_once_with(
+            None, meter, -95, style_id=ui.DEFAULT_METER_STYLE,
+        )
 
         primary = ui.SharedState('http://a.test', 7075, 7, -95, 142, 245, 4, 'am', True)
         secondary = ui.SharedState('http://b.test', 7075, 7, -95, 142, 245, 4, 'lsb', True)
