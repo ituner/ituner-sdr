@@ -27,11 +27,12 @@ assert set(COLOR_NAMES) == {key for _, keys in COLOR_GROUPS for key in keys}
 NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
-CARDS_PER_PAGE = METER_CARDS_PER_PAGE = 6
+CARDS_PER_PAGE = 4
+METER_CARDS_PER_PAGE = 1
 METER_FILTERS = (("all", "ALL"), ("digital", "LED / SLIDER"), ("analog", "ANALOG"), ("eye", "MAGIC EYE"))
-BACK_BOX = (24, 728, 196, 792)
-APPLY_BOX = (984, 728, 1256, 792)
-PREVIEW_BOX = (24, 164, 628, 542)
+BACK_BOX = (1034, 750, 1270, 794)
+APPLY_BOX = (1034, 696, 1270, 742)
+PREVIEW_BOX = (0, 0, 1024, 800)
 
 
 def contains(box, x, y):
@@ -52,23 +53,24 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
                                       left + (index % columns) * (cell + 8) + cell, 312 + (index // columns) * 68)
                 for index, key in enumerate(keys)}
     boxes = {"back": BACK_BOX, "save": APPLY_BOX}
-    for index, tab in enumerate(("themes", "meters", "customize")):
-        boxes[f"tab:{tab}"] = (660 + index * 200, 24, 852 + index * 200, 88)
+    boxes.update({"tab:themes": (1034, 52, 1148, 102),
+                  "tab:meters": (1156, 52, 1270, 102),
+                  "tab:customize": (1034, 112, 1270, 156)})
     if editor.tab in ("themes", "meters"):
-        top = 152 if editor.tab == "themes" else 210
-        height = 150 if editor.tab == "themes" else 132
         items = editor.themes if editor.tab == "themes" else editor.meter_ids
         page = editor.page if editor.tab == "themes" else editor.meter_page
-        for slot, item in enumerate(items[page * 6:page * 6 + 6]):
+        count = CARDS_PER_PAGE if editor.tab == "themes" else METER_CARDS_PER_PAGE
+        for slot, item in enumerate(items[page * count:page * count + count]):
             identifier = item["id"] if editor.tab == "themes" else item
-            x, y = 660 + (slot % 2) * 304, top + (slot // 2) * (height + 12)
-            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (x, y, x + 292, y + height)
+            y = 202 + slot * 98 if editor.tab == "themes" else 332
+            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (1034, y, 1270, y + (88 if editor.tab == "themes" else 258))
         prefix = "theme" if editor.tab == "themes" else "meter"
-        boxes[f"{prefix}_previous"] = (660, 656, 852, 712)
-        boxes[f"{prefix}_next"] = (1064, 656, 1256, 712)
+        boxes[f"{prefix}_previous"] = (1034, 606, 1148, 658)
+        boxes[f"{prefix}_next"] = (1156, 606, 1270, 658)
         if editor.tab == "meters":
             for index, (name, _label) in enumerate(METER_FILTERS):
-                boxes[f"filter:{name}"] = (660 + index * 152, 144, 804 + index * 152, 194)
+                x, y = 1034 + (index % 2) * 122, 214 + (index // 2) * 54
+                boxes[f"filter:{name}"] = (x, y, x + 114, y + 46)
     elif editor.colors_open:
         boxes.update({"appearance": (660, 112, 856, 164),
                       "group_previous": (660, 184, 724, 240), "group_next": (1192, 184, 1256, 240),
@@ -98,6 +100,10 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             boxes[f"option:{value}"] = (852 + index * 136, 464, 980 + index * 136, 520)
         if not is_builtin_theme_id(editor.selected_id) and editor.library.get(editor.selected_id):
             boxes["delete"] = (964, 636, 1256, 700)
+    if editor.tab == "customize":
+        for name, box in tuple(boxes.items()):
+            if name not in ("back", "save") and not name.startswith("tab:"):
+                boxes[name] = (box[0] - 256, box[1], box[2] - 256, box[3])
     return boxes
 
 
@@ -159,11 +165,11 @@ class ThemeEditor:
 
     @property
     def page_count(self):
-        return max(1, math.ceil(len(self.themes) / 6))
+        return max(1, math.ceil(len(self.themes) / CARDS_PER_PAGE))
 
     @property
     def meter_page_count(self):
-        return max(1, math.ceil(len(self.meter_ids) / 6))
+        return max(1, math.ceil(len(self.meter_ids) / METER_CARDS_PER_PAGE))
 
     def show(self, tab="themes"):
         self.entry_theme = deepcopy(self.library.get(self.library.active_id))
@@ -172,8 +178,8 @@ class ThemeEditor:
         self.open, self.mode = True, "preview"
         self.tab, self.section = tab, tab.upper()
         self.meter_filter = "all"
-        self.page = next(index // 6 for index, item in enumerate(self.themes) if item["id"] == self.selected_id)
-        self.meter_page = list(METER_STYLES).index(self.draft["smeter_style"]) // 6
+        self.page = next(index // CARDS_PER_PAGE for index, item in enumerate(self.themes) if item["id"] == self.selected_id)
+        self.meter_page = list(METER_STYLES).index(self.draft["smeter_style"]) // METER_CARDS_PER_PAGE
         self.overlay = None
         self.colors_open = False
         self.error = self.status = ""
@@ -316,18 +322,21 @@ class ThemeEditor:
             self.section = self.tab.upper()
             self.colors_open = False
             if self.tab == "meters" and self.draft["smeter_style"] in self.meter_ids:
-                self.meter_page = self.meter_ids.index(self.draft["smeter_style"]) // 6
+                self.meter_page = self.meter_ids.index(self.draft["smeter_style"]) // METER_CARDS_PER_PAGE
         elif action.startswith("theme:"):
             self.select_theme(action.split(":", 1)[1])
         elif action.startswith("meter:"):
             self.draft["smeter_style"] = action.split(":", 1)[1]
         elif action.startswith("filter:"):
             self.meter_filter = action.split(":")[1]
-            self.meter_page = 0
+            self.meter_page = (self.meter_ids.index(self.draft["smeter_style"])
+                               if self.draft["smeter_style"] in self.meter_ids else 0)
+            self.draft["smeter_style"] = self.meter_ids[self.meter_page]
         elif action in ("theme_previous", "theme_next"):
             self.page = max(0, min(self.page_count - 1, self.page + (-1 if action.endswith("previous") else 1)))
         elif action in ("meter_previous", "meter_next"):
             self.meter_page = max(0, min(self.meter_page_count - 1, self.meter_page + (-1 if action.endswith("previous") else 1)))
+            self.draft["smeter_style"] = self.meter_ids[self.meter_page]
         elif action == "theme_name":
             self.overlay, self.buffer, self.pristine = "name", self.draft["name"], True
         elif action == "copy":

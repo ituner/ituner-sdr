@@ -1,7 +1,7 @@
 # S-meter designs
 
-Open **Display → Themes → S-Meters**. Tap a meter for a large animated
-preview, then tap **Apply & Home** to save it and return directly to Home.
+Open **Display → Themes → S-Meters**. Use the right-sidebar picker to preview a meter at its
+actual Home size, then tap **Apply & Home** to save it and return directly to Home.
 **Cancel** discards the preview. Use **LED / Slider** to find the original
 **LED Bar**, **Analog** for needle meters, or **Magic Eye** for valve designs.
 Renaming or entering an editor is not required. Meter selection is saved
@@ -17,8 +17,10 @@ LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The expanded gallery has 30 designs across five pages. **Next** and
-**Previous** navigate without changing the selected preview or theme.
+The picker has 30 designs, shown one at a time beside the full-size SDR scene.
+**Next** and **Previous** immediately preview a different meter. Category filters
+keep the current meter when it belongs to that category; otherwise they preview
+the category's first design. These actions do not save settings or modify themes.
 Eight entries use the actual PNG backgrounds from the Flexible S-Meter download
 bundles: DX101, ICOM, Orange, Dark, Neon, Transparent, Vintage HD White and Vintage HD Orange. Their background files are retained
 unchanged and credited in `UI/assets/smeters/flexible/SOURCE.md` and the third-party

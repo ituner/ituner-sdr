@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from smeter_styles import METER_STYLES
-from theme_editor import ThemeEditor, theme_screen_boxes, COLOR_GROUPS
+from theme_editor import ThemeEditor, theme_screen_boxes, COLOR_GROUPS, CARDS_PER_PAGE, METER_CARDS_PER_PAGE
 from theme_system import (BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID,
                           ThemeLibrary, apply_theme, new_theme, runtime_theme)
 
@@ -32,6 +32,14 @@ class ThemeEditorTests(unittest.TestCase):
         self.directory.cleanup()
 
     def tap(self, action):
+        if action.startswith(('theme:', 'meter:')):
+            prefix, identifier = action.split(':', 1)
+            items = [t['id'] for t in self.editor.themes] if prefix == 'theme' else self.editor.meter_ids
+            count = CARDS_PER_PAGE if prefix == 'theme' else METER_CARDS_PER_PAGE
+            target = items.index(identifier) // count
+            current = lambda: self.editor.page if prefix == 'theme' else self.editor.meter_page
+            while current() != target:
+                self.tap(prefix + ('_next' if current() < target else '_previous'))
         boxes = theme_screen_boxes(self.editor)
         self.assertIn(action, boxes)
         box = boxes[action]
@@ -40,12 +48,7 @@ class ThemeEditorTests(unittest.TestCase):
     def meter(self, identifier):
         self.tap('tab:meters')
         self.tap('filter:all')
-        for _ in range(self.editor.meter_page_count):
-            if 'meter:' + identifier in theme_screen_boxes(self.editor):
-                self.tap('meter:' + identifier)
-                return
-            self.tap('meter_next')
-        self.fail(identifier)
+        self.tap('meter:' + identifier)
 
     def test_open_shows_actual_saved_theme_and_selected_meter(self):
         self.assertEqual(self.editor.preview, self.library.get(self.library.active_id))
@@ -104,7 +107,7 @@ class ThemeEditorTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), self.initial_bytes)
         self.assertEqual(runtime_theme, self.initial_runtime)
 
-    def test_filtering_and_paging_never_changes_selected_meter(self):
+    def test_filtering_and_arrows_preview_without_saving_or_changing_live_settings(self):
         self.tap('tab:meters')
         for category in ('digital', 'analog', 'eye', 'all'):
             self.tap('filter:' + category)
@@ -112,8 +115,9 @@ class ThemeEditorTests(unittest.TestCase):
             self.assertEqual(self.editor.meter_page, self.editor.meter_page_count - 1)
             for _ in range(self.editor.meter_page_count + 2):self.tap('meter_previous')
             self.assertEqual(self.editor.meter_page, 0)
-            self.assertEqual(self.editor.preview['smeter_style'], self.original['smeter_style'])
+            self.assertEqual(self.editor.preview['smeter_style'], self.editor.meter_ids[0])
         self.assertEqual(self.path.read_bytes(), self.initial_bytes)
+        self.assertEqual(runtime_theme, self.initial_runtime)
 
     def test_filters_cover_every_meter_once_and_make_original_led_easy_to_find(self):
         self.tap('tab:meters')
@@ -125,12 +129,14 @@ class ThemeEditorTests(unittest.TestCase):
         self.assertFalse(categories[0] & categories[1] | categories[1] & categories[2] | categories[0] & categories[2])
         self.tap('filter:digital')
         self.assertIn('meter:led', theme_screen_boxes(self.editor))
-        self.assertIn('meter:linear_orange', theme_screen_boxes(self.editor))
+        self.tap('meter:linear_orange')
+        self.assertEqual(self.editor.preview['smeter_style'], 'linear_orange')
 
     def test_all_meter_cards_are_reachable_without_changing_palette(self):
         self.tap('tab:meters')
         self.tap('filter:all')
         colors = deepcopy(self.editor.preview['colors'])
+        for _ in range(self.editor.meter_page):self.tap('meter_previous')
         seen = set()
         for _ in range(self.editor.meter_page_count):
             for action in theme_screen_boxes(self.editor):

@@ -28,12 +28,10 @@ class ThemeSaveTests(unittest.TestCase):
         editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
     def choose_meter(self, editor, identifier):
-        for _ in range((len(METER_STYLES) + 5) // 6):
-            if f"meter:{identifier}" in theme_screen_boxes(editor):
-                self.tap(editor, f"meter:{identifier}")
-                return
-            self.tap(editor, "meter_next")
-        self.fail(f"Meter unavailable: {identifier}")
+        target = editor.meter_ids.index(identifier)
+        while editor.meter_page != target:
+            self.tap(editor, "meter_next" if editor.meter_page < target else "meter_previous")
+        self.tap(editor, "meter:" + identifier)
 
     def test_meter_changes_from_every_builtin_preserve_all_saved_themes(self):
         original = new_theme()

@@ -1,17 +1,21 @@
 # Themes
 
 Open **Display → Themes**. The current saved appearance is selected when the
-page opens. The page has three tabs and one common action bar:
+page opens. The captured SDR frontend fills its native 1024 × 800 Home viewport.
+A fixed 256-pixel right sidebar holds navigation, selection, Apply & Home and
+Cancel, matching Home's proportions. The three sections are:
 
 - **Themes** previews a built-in palette or a saved theme. Choosing any theme keeps
   the S-meter you have just chosen. Themes store colors, text size and layout;
   the meter is an independent display setting. Each card is a single touch target with its
-  name and selection hint; the large preview shows the result.
-- **S-Meters** shows an enlarged, animated preview. Use All, LED / Slider, Analog,
-  or Magic Eye to narrow the gallery. The original meter is **LED Bar**, under
-  **LED / Slider**. Browsing pages and filters does not change the selection.
+  name and selection hint; the full-size preview shows the result.
+- **S-Meters** previews one animated meter in the right sidebar, at the same
+  236-pixel width and height it uses on Home. Previous and Next immediately
+  preview another design. All, LED / Slider, Analog and Magic Eye narrow the
+  choices. The original meter is **LED Bar**, first under **LED / Slider**.
+  Browsing changes only the draft until Apply & Home.
 - **Customize** contains optional name, sidebar, corners, text size, units, and
-  color controls. These are not required to choose a theme or meter.
+  color controls in a panel over the SDR scene. These are optional.
 
 **Apply & Home** saves the preview, applies it, and returns directly to Home.
 It works from every tab. **Cancel** discards the preview and returns to Home.
@@ -19,20 +23,19 @@ There is no second Save screen or nested Back sequence. Neither choosing a card
 nor browsing the gallery changes saved settings or the active UI. Save failures
 stay on the page with an inline error and retain the preview for retry.
 
-The preview uses the selected palette, sidebar side, text size and actual
-S-meter renderer. Tall meters hide the Bandpass area as they do on Home.
+The preview uses the selected palette and actual S-meter renderer. Meter
+artwork is shown only in the picker, without a duplicate enlarged face.
 The Home preview uses an unchanged capture of the user's actual CM5 SDR
 frontend at 17.6832 MHz, including the spectrum, ruler, waterfall and footer.
 Candidate themes recolor the captured pixels; no generated RF image is used.
-The enlarged S-meter uses a demonstration signal. Color controls preserve
+The picker meter uses a demonstration signal. Color controls preserve
 opacity when adjusting RGB.
 
 Changing only the S-meter never creates, updates or renames a theme. Its selection
 is saved separately and stays selected when switching themes or restarting.
 
 Changing a saved theme's appearance updates it in place. Customizing a built-in's
-appearance creates an
-automatically named copy, such as **Default Custom**; further copies receive an
+appearance creates an automatically named copy, such as **Default Custom**; further copies receive an
 unused suffix. **Make a Copy** preserves the original. Renaming is optional.
 Saved themes can be deleted only after confirmation; built-ins are protected.
 
