@@ -89,7 +89,7 @@ BAKELITE_ASSET_DIR = SKIN_ASSET_DIR.parent / "bakelite"
 BAKELITE_CALIBRATION = json.loads((BAKELITE_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
 for identifier, artwork in BAKELITE_CALIBRATION.items():
     METER_STYLES[identifier] = MeterStyle(
-        artwork["name"], "vu_case", 210, (12, 13, 12), (231, 214, 157),
+        artwork["name"], "vu_case", artwork.get("height", 210), (12, 13, 12), (231, 214, 157),
         (20, 21, 20), tuple(artwork["ink"]), artwork["start"], artwork["sweep"],
         scales=("S", "dBm", "µV"))
 
@@ -121,9 +121,13 @@ def meter_asset_path(identifier):
     return directory / artwork["file"]
 
 
+def bakelite_image_box(identifier, box):
+    return aviation_image_box(box, footer=not BAKELITE_CALIBRATION[identifier].get("embedded_readout", False))
+
+
 def bakelite_point(identifier, box, dbm, radius):
     """VU-style print and live pointer share the receiver's exact S/dBm map."""
-    a, b, c, d = aviation_image_box(box)
+    a, b, c, d = bakelite_image_box(identifier, box)
     data = BAKELITE_CALIBRATION[identifier]
     pivot = (a + data["pivot"][0] * (c - a), b + data["pivot"][1] * (d - b))
     return needle_point(METER_STYLES[identifier], dbm, pivot, (c - a) * radius)

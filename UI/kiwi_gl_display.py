@@ -229,7 +229,7 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal,
                           LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction,
                           aviation_image_box, aviation_needle_segment, needle_point,
-                          BAKELITE_CALIBRATION, bakelite_point, bakelite_needle_segment)
+                          BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
 from meter_artwork import linear_strip_image
 
 
@@ -15714,7 +15714,7 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     compact_cell_h = 31
     grid_y0 = (LCD_COMPACT_MODE_GRID_TOP + smeter_rail_extra_height()
                if show_compact_readouts else 28)
-    if show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].kind == "aircraft":
+    if show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
         # Full-width square housings fit by reclaiming surplus gaps, preserving
         # the same touch targets and the complete Volume block below them.
         grid_y0 = LCD_COMPACT_SMETER_TOP + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height + 4
@@ -16077,7 +16077,7 @@ def draw_bakelite_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
     """Reference VU typography, dots and red arc, regraduated for live RF RSSI."""
     data = BAKELITE_CALIBRATION[identifier]
     style = METER_STYLES[identifier]
-    a, b, c, d = aviation_image_box(box)
+    a, b, c, d = bakelite_image_box(identifier, box)
     side, unit = c - a, (c - a) / 216
     key = ("bakelite-face-v1", identifier, side)
     cached = text_cache._cached_texture(("surface", key))
@@ -16150,7 +16150,14 @@ def draw_bakelite_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
             cap = text_cache.surface_texture(key, pygame.image.fromstring(image.tobytes(), image.size, "RGBA"))
         draw_textured_quad(cap[0], a + bounds[0], b + bounds[1], a + bounds[2], b + bounds[3], 0, 0, 1, 1)
     reading = f"{dbm:.0f} dBm" if valid else "— dBm"
-    meter_text((box[0] + box[2]) / 2, d + (box[3] - d) / 2,
+    readout_y = d + (box[3] - d) / 2
+    if data.get("embedded_readout"):
+        # A subtle dark label below the adjustment screw keeps the live reading
+        # clear of its glossy ribs, without reserving room outside the housing.
+        draw_logical_rect(a + side * .09, b + side * .915, c - side * .09,
+                          b + side * .98, (8, 9, 8, 235))
+        readout_y = b + side * .947
+    meter_text((box[0] + box[2]) / 2, readout_y,
                f"{s_label(dbm)}   {reading}   {voltage_label(dbm)}", style.ink,
                max(7, round(11 * unit)), "cm")
 
@@ -16402,7 +16409,7 @@ def lcd_home_volume_box(show_compact_readouts=True):
             pass_y1 = lcd_home_mode_grid_bottom(show_compact_readouts)
         else:
             pass_y1 = lcd_home_bandwidth_box(False)[1] + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
-    tight = show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].kind == "aircraft"
+    tight = show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236
     y0 = pass_y1 + (4 if tight else 16)
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 12, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)

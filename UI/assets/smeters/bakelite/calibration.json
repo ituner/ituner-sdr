@@ -27,7 +27,9 @@
       0.612,
       0.511,
       0.635
-    ]
+    ],
+    "height": 236,
+    "embedded_readout": true
   },
   "bakelite_round": {
     "name": "BAKELITE ROUND",

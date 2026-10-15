@@ -416,10 +416,13 @@ class MeterTests(unittest.TestCase):
                         self.assertGreaterEqual(alpha, 250)
 
     def test_bakelite_live_pointer_matches_marks_and_emerges_above_front_cover(self):
-        from smeter_styles import BAKELITE_CALIBRATION, bakelite_point, bakelite_needle_segment, bakelite_front_edge
+        from smeter_styles import BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment, bakelite_front_edge
         for identifier, data in BAKELITE_CALIBRATION.items():
-            for box in ((1034, 104, 1270, 314), (0, 0, 400, 80), (745, 474, 902, 614)):
-                a, b, c, d = aviation_image_box(box)
+            if identifier == 'bakelite_square':
+                self.assertEqual(METER_STYLES[identifier].height, 236)
+                self.assertEqual(bakelite_image_box(identifier, (1034, 104, 1270, 340)), (1034, 104, 1270, 340))
+            for box in ((1034, 104, 1270, 340), (0, 0, 400, 80), (745, 474, 902, 614)):
+                a, b, c, d = bakelite_image_box(identifier, box)
                 previous_angle = -200
                 for level in range(-127, -12):
                     x, y, tx, ty = bakelite_needle_segment(identifier, box, level)
@@ -453,7 +456,7 @@ class MeterTests(unittest.TestCase):
             cache.surface_texture.side_effect = retain
             box = (0, 0, 236, 210)
             with patch.object(ui, 'draw_textured_quad'), patch.object(ui, 'draw_logical_line'), \
-                    patch.object(ui, 'draw_bakelite_pointer') as pointer:
+                    patch.object(ui, 'draw_bakelite_pointer') as pointer, patch.object(ui, 'draw_logical_rect'):
                 for level in (-121, -85, -73, -33, None):
                     ui.draw_bakelite_smeter(cache, identifier, box, level, -33, Mock())
                     self.assertEqual(pointer.call_args.args[0], bakelite_needle_segment(identifier, box, level))

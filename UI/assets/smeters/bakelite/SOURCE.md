@@ -27,3 +27,9 @@ front edge. The pointer emerges from behind that cover; the square face's
 photographed pivot cap stays in front of its live needle. Static print is
 supersampled separately, composited once at native dimensions and cached.
 Signal updates move the pointer without reloading or repainting the housing.
+
+Bakelite Square now fills the full 236 × 236 Home rail width. Its live reading
+sits on a subtle dark label below the adjustment screw, inside the housing.
+The mode-grid gaps are reclaimed using the existing full-width case layout,
+preserving the mode and Volume touch targets. Bakelite Round retains its
+previous dimensions and separate readout.
