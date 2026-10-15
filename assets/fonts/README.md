@@ -3,6 +3,13 @@
 These are unmodified font files supplied for the Python UI. Each family keeps
 its original license in its own directory.
 
+Install the `.ttf` files from these folders into your operating system **before
+opening the desktop app**. The files are under `assets/fonts/oxanium/`,
+`assets/fonts/roboto/`, `assets/fonts/liberation/`, and `assets/fonts/dejavu/`.
+Follow the [macOS, Windows, or Linux desktop setup](../../README.md#test-the-application-on-macos-windows-or-linux)
+for installation steps. If the app is already open, quit and restart it after
+installing the fonts.
+
 | Family | Files | UI use |
 | --- | --- | --- |
 | Oxanium | Variable font | Frequency readout; already bundled |
