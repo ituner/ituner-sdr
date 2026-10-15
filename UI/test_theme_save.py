@@ -7,7 +7,7 @@ import unittest
 import json
 from unittest.mock import patch
 
-from theme_editor import ThemeEditor, theme_screen_boxes
+from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE
 from theme_system import BUILTIN_THEME_IDS, DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, theme_appearance, runtime_theme
 from smeter_styles import METER_STYLES
 
@@ -28,7 +28,7 @@ class ThemeSaveTests(unittest.TestCase):
         editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
     def choose_meter(self, editor, identifier):
-        target = editor.meter_ids.index(identifier)
+        target = editor.meter_ids.index(identifier) // METER_CARDS_PER_PAGE
         while editor.meter_page != target:
             self.tap(editor, "meter_next" if editor.meter_page < target else "meter_previous")
         self.tap(editor, "meter:" + identifier)

@@ -115,7 +115,7 @@ class ThemeEditorTests(unittest.TestCase):
             self.assertEqual(self.editor.meter_page, self.editor.meter_page_count - 1)
             for _ in range(self.editor.meter_page_count + 2):self.tap('meter_previous')
             self.assertEqual(self.editor.meter_page, 0)
-            self.assertEqual(self.editor.preview['smeter_style'], self.editor.meter_ids[0])
+            self.assertIn(self.editor.preview['smeter_style'], self.editor.meter_ids[:METER_CARDS_PER_PAGE])
         self.assertEqual(self.path.read_bytes(), self.initial_bytes)
         self.assertEqual(runtime_theme, self.initial_runtime)
 
@@ -305,6 +305,42 @@ class ThemeEditorTests(unittest.TestCase):
         for overlay in ('hex_open', 'alpha_open'):
             self.tap(overlay);check();self.editor.overlay = None
         self.tap('appearance');self.tap('theme_name');check()
+
+    def test_fullscreen_continue_and_hide_controls_preserve_unsaved_draft(self):
+        self.meter('flex_vintage_hd')
+        draft = deepcopy(self.editor.preview)
+        self.tap('fullscreen')
+        self.assertTrue(self.editor.fullscreen)
+        self.editor.tap(100, 100)
+        self.assertFalse(self.editor.fullscreen_controls)
+        self.assertEqual(theme_screen_boxes(self.editor), {})
+        self.editor.tap(100, 100)
+        self.assertTrue(self.editor.fullscreen_controls)
+        self.tap('continue')
+        self.assertFalse(self.editor.fullscreen)
+        self.assertEqual(self.editor.preview, draft)
+        self.assertEqual(self.path.read_bytes(), self.initial_bytes)
+        self.assertEqual(runtime_theme, self.initial_runtime)
+        self.tap('back')
+        self.assertEqual(self.path.read_bytes(), self.initial_bytes)
+
+    def test_fullscreen_save_returns_home_and_keeps_meter_independent(self):
+        self.meter('linear_orange')
+        self.tap('preview_image')
+        self.tap('save')
+        self.assertFalse(self.editor.open)
+        self.assertEqual(self.editor.exit_surface, 'home')
+        self.assertEqual(self.library.smeter_style, 'linear_orange')
+        self.assertEqual(len(self.library.themes), 1)
+
+    def test_back_from_fullscreen_continues_choosing_without_cancelling(self):
+        self.meter('linear_orange')
+        self.tap('fullscreen')
+        self.editor.back()
+        self.assertTrue(self.editor.open)
+        self.assertFalse(self.editor.fullscreen)
+        self.assertEqual(self.editor.preview['smeter_style'], 'linear_orange')
+        self.assertEqual(self.path.read_bytes(), self.initial_bytes)
 
     def test_main_touch_handler_uses_explicit_home_destination(self):
         import kiwi_gl_display as ui

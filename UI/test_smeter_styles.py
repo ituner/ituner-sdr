@@ -10,7 +10,7 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           dbm_to_microvolts, meter_fraction, needle_point,
                           skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip)
 from smeter_styles import EYE_ARTWORK, meter_asset_path, eye_closure, eye_image_box, draw_eye_signal
-from theme_editor import ThemeEditor, theme_screen_boxes
+from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE, PREVIEW_BOX
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
 
 
@@ -95,7 +95,7 @@ class MeterTests(unittest.TestCase):
             for _ in range(editor.meter_page_count + 1):
                 boxes = theme_screen_boxes(editor)
                 cards = [key.split(':')[1] for key in boxes if key.startswith('meter:')]
-                self.assertEqual(len(cards), 1)
+                self.assertLessEqual(len(cards), METER_CARDS_PER_PAGE)
                 seen.update(cards)
                 for key in [key for key in boxes if key.startswith('meter:')]:
                     x0, y0, x1, y1 = boxes[key]
@@ -105,7 +105,7 @@ class MeterTests(unittest.TestCase):
                 box = boxes['meter_next']
                 editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             self.assertEqual(seen, set(METER_STYLES))
-            self.assertEqual(editor.meter_page, len(METER_STYLES) - 1)
+            self.assertEqual(editor.meter_page, (len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE)
 
     def test_flex_faces_use_full_rail_width_and_integer_pixel_bounds(self):
         box = (1034, 104, 1270, 264)
@@ -188,11 +188,12 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(skin_image_box('flex_orange', (0, 0, 236, 160)), (0, 10, 236, 129))
         self.assertEqual(skin_source_bounds('flex_orange'), (0, 0, 397, 200))
 
-    def test_right_picker_draws_only_one_meter_at_actual_home_size(self):
+    def test_picker_uses_complete_home_frame_beside_meter_thumbnails(self):
         with TemporaryDirectory() as directory:
             editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
             editor.show('meters')
-            editor.meter_page = list(METER_STYLES).index('flex_icom')
+            editor.meter_page = list(METER_STYLES).index('flex_icom') // METER_CARDS_PER_PAGE
+            editor.live_frame = Mock()
             editor.draft['smeter_style'] = 'flex_icom'
             with ExitStack() as stack:
                 mocks = {name: stack.enter_context(patch.object(ui, name)) for name in (
@@ -201,9 +202,11 @@ class MeterTests(unittest.TestCase):
                     'draw_styled_text_button', 'draw_styled_button_frame', 'draw_selected_smeter')}
                 ui.draw_theme_panel(None, editor)
                 mocks['draw_styled_button_frame'].assert_not_called()
-                mocks['draw_selected_smeter'].assert_called_once()
-                box = mocks['draw_selected_smeter'].call_args.args[1]
-                self.assertEqual(box, (1034, 376, 1270, 536))
+                editor.live_frame.draw.assert_called_once_with(PREVIEW_BOX)
+                self.assertEqual(mocks['draw_selected_smeter'].call_count, METER_CARDS_PER_PAGE)
+                icom = next(c for c in mocks['draw_selected_smeter'].call_args_list if c.kwargs['style_id']=='flex_icom')
+                box = icom.args[1]
+                self.assertEqual((box[2]-box[0],box[3]-box[1]),(236,160))
                 labels = [call.args for call in mocks['draw_text'].call_args_list]
                 self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name.split(' · ')[0]
                                     and call[4] == __import__('theme_screen_render').ACCENT for call in labels))

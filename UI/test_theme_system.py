@@ -473,6 +473,46 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(self.library.themes, [])
         self.assertEqual(runtime_theme["sidebar"], "right")
 
+    def test_live_preview_context_restores_runtime_and_style_after_failure(self):
+        import theme_system
+        from copy import deepcopy
+        before, revision = deepcopy(runtime_theme), theme_system.runtime_revision
+        palette = APP_UI_STYLE.palette
+        with self.assertRaisesRegex(RuntimeError, 'Render failed'):
+            with theme_system.preview_theme({**self.library.get('green'), 'smeter_style': 'flex_vintage_hd'}):
+                self.assertEqual(runtime_theme['smeter_style'], 'flex_vintage_hd')
+                self.assertNotEqual(APP_UI_STYLE.palette, palette)
+                raise RuntimeError('Render failed')
+        self.assertEqual(runtime_theme, before)
+        self.assertEqual(APP_UI_STYLE.palette, palette)
+        self.assertEqual(theme_system.runtime_revision, revision)
+        self.assertFalse(self.path.exists())
+
+    def test_live_preview_revision_is_stable_between_frames_and_changes_with_draft(self):
+        import theme_system
+        revisions = []
+        for identifier in ('green', 'green', 'black-white'):
+            with theme_system.preview_theme(self.library.get(identifier)):
+                revisions.append(theme_system.runtime_revision)
+        self.assertEqual(revisions[0], revisions[1])
+        self.assertNotEqual(revisions[0], revisions[2])
+        self.assertFalse(self.path.exists())
+
+    def test_live_frame_copies_gpu_and_preserves_rotated_complete_screen(self):
+        from theme_live_preview import LiveHomeFrame
+        with patch.object(ui, 'GL') as gl, patch.object(ui, 'NATIVE_W', 800), \
+                patch.object(ui, 'NATIVE_H', 1280), patch.object(ui, 'DESKTOP_MODE', False), \
+                patch.object(ui, 'DISPLAY_ORIENTATION', 'normal'):
+            frame = LiveHomeFrame(ui)
+            frame.capture()
+            frame.draw((24, 156, 704, 581))
+            gl.glReadPixels.assert_not_called()
+            gl.glCopyTexSubImage2D.assert_called_once_with(gl.GL_TEXTURE_2D,0,0,0,0,0,800,1280)
+            self.assertEqual([c.args for c in gl.glTexCoord2f.call_args_list],
+                             [(1.0,1.0),(1.0,0.0),(0.0,0.0),(0.0,1.0)])
+            frame.close()
+            gl.glDeleteTextures.assert_called_once()
+
     def test_imperial_axis_uses_miles_without_rounding_to_zero_thousand(self):
         custom = new_theme("Miles")
         self.library.upsert(custom)

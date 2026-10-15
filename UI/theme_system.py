@@ -1,6 +1,9 @@
 """Persistent, versioned appearance profiles for the Pygame interface."""
 
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import fields
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -192,6 +195,26 @@ def apply_theme(theme):
     apply_ui_style(palette, radius=normalized["radius"])
     runtime_revision += 1
     return normalized
+
+
+@contextmanager
+def preview_theme(theme):
+    """Render a draft for one frame without changing saved or active settings."""
+    global runtime_revision
+    saved, revision = deepcopy(runtime_theme), runtime_revision
+    candidate = normalize_theme(theme, allow_default=True)
+    if (is_builtin_theme_id(candidate["id"]) and
+            theme_appearance(candidate) != theme_appearance(BUILTIN_THEMES[candidate["id"]])):
+        candidate["id"] = "preview-custom"
+    try:
+        apply_theme(candidate)
+        # Reuse cached artwork between frames, invalidating it only for a new draft.
+        signature = json.dumps(candidate, sort_keys=True).encode()
+        runtime_revision = -1 - int(hashlib.sha256(signature).hexdigest()[:16], 16)
+        yield
+    finally:
+        apply_theme(saved)
+        runtime_revision = revision
 
 
 def scaled_text_size(size, theme=None):

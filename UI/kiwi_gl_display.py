@@ -23468,6 +23468,9 @@ def main():
     set_display_orientation(args.orientation)
     setup_gl(args.desktop)
     sidebar_composer = None
+    theme_live_frame = None
+    theme_frame_context = None
+    theme_frame_layout = None
     print(
         "OpenGL:",
         GL.glGetString(GL.GL_VENDOR).decode(),
@@ -29842,6 +29845,13 @@ def main():
                 temp_c = read_cpu_temp_c()
                 input_power_ok = read_input_power_ok()
 
+            if theme_editor.open:
+                theme_frame_context = theme_system.preview_theme(theme_editor.preview)
+                theme_frame_context.__enter__()
+                theme_frame_layout = instrument_layout
+                if theme_editor.preview["sidebar"] != theme_editor.entry_theme["sidebar"]:
+                    instrument_layout = visible_frequency_position(instrument_layout, "left")
+
             _server, _frequency, _zoom, _smeter, view_generation, server_generation = state.snapshot()
             _floor, _ceiling, presentation_speed, _auto, _palette, _wf_generation = state.waterfall_snapshot()
             receiver_type = state.receiver_type_snapshot(server_generation)
@@ -30563,6 +30573,21 @@ def main():
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if theme_editor.open:
+                # Capture the complete Home render, including its actual live meter
+                # and sidebar, before drawing any appearance-picker controls.
+                if theme_editor.preview["sidebar"] == "left":
+                    if sidebar_composer is None:
+                        sidebar_composer = SidebarComposer()
+                    sidebar_composer.compose_left()
+                if theme_live_frame is None:
+                    from theme_live_preview import LiveHomeFrame
+                    theme_live_frame = LiveHomeFrame(sys.modules[__name__])
+                theme_live_frame.capture()
+                theme_frame_context.__exit__(None, None, None)
+                theme_frame_context = None
+                instrument_layout = theme_frame_layout
+                theme_frame_layout = None
+                theme_editor.live_frame = theme_live_frame
                 draw_theme_panel(text_cache, theme_editor)
                 theme_notice_remaining = theme_editor.notice_until - now
                 if theme_notice_remaining > 0:
@@ -30602,6 +30627,11 @@ def main():
             )
             clock.tick(globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
     finally:
+        if theme_frame_context is not None:
+            theme_frame_context.__exit__(None, None, None)
+            instrument_layout = theme_frame_layout
+        if theme_live_frame is not None:
+            theme_live_frame.close()
         MAIN_RADIO_VISUALS_HIDDEN.clear()
         # An orderly exit commits a genuine last-minute adjustment, including
         # the current frequency, once. Unchanged state produces no write.

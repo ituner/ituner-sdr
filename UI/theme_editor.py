@@ -27,12 +27,15 @@ assert set(COLOR_NAMES) == {key for _, keys in COLOR_GROUPS for key in keys}
 NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
-CARDS_PER_PAGE = 4
-METER_CARDS_PER_PAGE = 1
+CARDS_PER_PAGE = 6
+METER_CARDS_PER_PAGE = 4
 METER_FILTERS = (("all", "ALL"), ("digital", "LED / SLIDER"), ("analog", "ANALOG"), ("eye", "MAGIC EYE"))
-BACK_BOX = (1034, 750, 1270, 794)
-APPLY_BOX = (1034, 696, 1270, 742)
-PREVIEW_BOX = (0, 0, 1024, 800)
+BACK_BOX = (24, 728, 196, 792)
+APPLY_BOX = (984, 728, 1256, 792)
+PREVIEW_BOX = (24, 156, 704, 581)
+FULLSCREEN_BOX = (24, 630, 704, 690)
+CONTINUE_BOX = (336, 724, 632, 784)
+FULLSCREEN_SAVE_BOX = (648, 724, 944, 784)
 
 
 def contains(box, x, y):
@@ -52,25 +55,28 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         return {f"{prefix}:{key}": (left + (index % columns) * (cell + 8), 252 + (index // columns) * 68,
                                       left + (index % columns) * (cell + 8) + cell, 312 + (index // columns) * 68)
                 for index, key in enumerate(keys)}
-    boxes = {"back": BACK_BOX, "save": APPLY_BOX}
-    boxes.update({"tab:themes": (1034, 52, 1148, 102),
-                  "tab:meters": (1156, 52, 1270, 102),
-                  "tab:customize": (1034, 112, 1270, 156)})
+    if editor.fullscreen:
+        return {"continue": CONTINUE_BOX, "save": FULLSCREEN_SAVE_BOX} if editor.fullscreen_controls else {}
+    boxes = {"back": BACK_BOX, "save": APPLY_BOX, "fullscreen": FULLSCREEN_BOX,
+             "preview_image": PREVIEW_BOX}
+    for index, tab in enumerate(("themes", "meters", "customize")):
+        boxes[f"tab:{tab}"] = (736 + index * 176, 24, 904 + index * 176, 88)
     if editor.tab in ("themes", "meters"):
         items = editor.themes if editor.tab == "themes" else editor.meter_ids
         page = editor.page if editor.tab == "themes" else editor.meter_page
         count = CARDS_PER_PAGE if editor.tab == "themes" else METER_CARDS_PER_PAGE
         for slot, item in enumerate(items[page * count:page * count + count]):
             identifier = item["id"] if editor.tab == "themes" else item
-            y = 202 + slot * 98 if editor.tab == "themes" else 332
-            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (1034, y, 1270, y + (88 if editor.tab == "themes" else 258))
+            x = 736 + (slot % 2) * 266
+            y = (152 + (slot // 2) * 156) if editor.tab == "themes" else (194 + (slot // 2) * 228)
+            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (x, y, x + 254, y + (144 if editor.tab == "themes" else 216))
         prefix = "theme" if editor.tab == "themes" else "meter"
-        boxes[f"{prefix}_previous"] = (1034, 606, 1148, 658)
-        boxes[f"{prefix}_next"] = (1156, 606, 1270, 658)
+        boxes[f"{prefix}_previous"] = (736, 662, 904, 714)
+        boxes[f"{prefix}_next"] = (1088, 662, 1256, 714)
         if editor.tab == "meters":
             for index, (name, _label) in enumerate(METER_FILTERS):
-                x, y = 1034 + (index % 2) * 122, 214 + (index // 2) * 54
-                boxes[f"filter:{name}"] = (x, y, x + 114, y + 46)
+                x = 736 + index * 132
+                boxes[f"filter:{name}"] = (x, 126, x + 124, 176)
     elif editor.colors_open:
         boxes.update({"appearance": (660, 112, 856, 164),
                       "group_previous": (660, 184, 724, 240), "group_next": (1192, 184, 1256, 240),
@@ -102,8 +108,9 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             boxes["delete"] = (964, 636, 1256, 700)
     if editor.tab == "customize":
         for name, box in tuple(boxes.items()):
-            if name not in ("back", "save") and not name.startswith("tab:"):
-                boxes[name] = (box[0] - 256, box[1], box[2] - 256, box[3])
+            if name not in ("back", "save", "fullscreen", "preview_image") and not name.startswith("tab:"):
+                boxes[name] = (736 + (box[0] - 660) * 520 / 596, box[1],
+                               736 + (box[2] - 660) * 520 / 596, box[3])
     return boxes
 
 
@@ -112,6 +119,9 @@ class ThemeEditor:
         self.library = library
         self.notice_duration = notice_duration
         self.open = False
+        self.fullscreen = False
+        self.fullscreen_controls = True
+        self.live_frame = None
         self.mode = "browse"
         self.tab = "themes"
         self.section = "THEMES"
@@ -176,6 +186,7 @@ class ThemeEditor:
         self.draft = deepcopy(self.entry_theme)
         self.selected_id = self.entry_theme["id"]
         self.open, self.mode = True, "preview"
+        self.fullscreen, self.fullscreen_controls = False, True
         self.tab, self.section = tab, tab.upper()
         self.meter_filter = "all"
         self.page = next(index // CARDS_PER_PAGE for index, item in enumerate(self.themes) if item["id"] == self.selected_id)
@@ -203,6 +214,8 @@ class ThemeEditor:
     def back(self):
         if self.overlay:
             self.overlay = None
+        elif self.fullscreen:
+            self.fullscreen = False
         else:
             self.open = False
             self.exit_surface = "home"
@@ -296,6 +309,14 @@ class ThemeEditor:
 
     def tap(self, x, y):
         action = next((name for name, box in theme_screen_boxes(self).items() if contains(box, x, y)), None)
+        if self.fullscreen:
+            if action == "continue":
+                self.fullscreen = False
+            elif action == "save":
+                self.save()
+            else:
+                self.fullscreen_controls = not self.fullscreen_controls
+            return
         if action is None:
             return
         if self.overlay:
@@ -313,7 +334,9 @@ class ThemeEditor:
                 self._key(action.split(":", 1)[1])
             return
         self.error = ""
-        if action == "back":
+        if action in ("fullscreen", "preview_image"):
+            self.fullscreen, self.fullscreen_controls = True, True
+        elif action == "back":
             self.back()
         elif action == "save":
             self.save()
@@ -329,14 +352,18 @@ class ThemeEditor:
             self.draft["smeter_style"] = action.split(":", 1)[1]
         elif action.startswith("filter:"):
             self.meter_filter = action.split(":")[1]
-            self.meter_page = (self.meter_ids.index(self.draft["smeter_style"])
+            selected = self.draft["smeter_style"]
+            self.meter_page = (self.meter_ids.index(self.draft["smeter_style"]) // METER_CARDS_PER_PAGE
                                if self.draft["smeter_style"] in self.meter_ids else 0)
-            self.draft["smeter_style"] = self.meter_ids[self.meter_page]
+            if selected not in self.meter_ids:
+                self.draft["smeter_style"] = self.meter_ids[0]
         elif action in ("theme_previous", "theme_next"):
             self.page = max(0, min(self.page_count - 1, self.page + (-1 if action.endswith("previous") else 1)))
         elif action in ("meter_previous", "meter_next"):
+            previous = self.meter_page
             self.meter_page = max(0, min(self.meter_page_count - 1, self.meter_page + (-1 if action.endswith("previous") else 1)))
-            self.draft["smeter_style"] = self.meter_ids[self.meter_page]
+            if previous != self.meter_page:
+                self.draft["smeter_style"] = self.meter_ids[self.meter_page * METER_CARDS_PER_PAGE]
         elif action == "theme_name":
             self.overlay, self.buffer, self.pristine = "name", self.draft["name"], True
         elif action == "copy":

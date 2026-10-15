@@ -1,26 +1,27 @@
 # S-meter designs
 
-Open **Display → Themes → S-Meters**. Use the right-sidebar picker to preview a meter at its
-actual Home size, then tap **Apply & Home** to save it and return directly to Home.
-**Cancel** discards the preview. Use **LED / Slider** to find the original
-**LED Bar**, **Analog** for needle meters, or **Magic Eye** for valve designs.
-Renaming or entering an editor is not required. Meter selection is saved
-separately: changing it never creates or modifies a theme, and switching themes
-keeps the selected meter.
-See [Themes](themes.md) for palette selection and optional customization.
+Open **Display → Themes → S-Meters**. Choose a thumbnail to see that meter
+inside a complete, live Home preview. **Full-screen Preview** shows all of Home
+at normal size; **Continue Choosing** returns without saving. **Save & Home**
+saves the choice and returns directly to Home. **Cancel** discards the draft.
+Use **LED / Slider** for the original **LED Bar**, Analog for needles, or Magic
+Eye for valve designs. Meter choice is saved separately from themes, and theme
+switching preserves it. See [Themes](themes.md) for the complete flow.
 
 The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer
 moving horizontally), Classic Ivory, Precision Dark, Aviation Black and Aviation
 Brass. The aviation designs use round dials inside rectangular metal housings.
-The gallery shows a moving demonstration signal, independent of the receiver.
+Gallery thumbnails use a demonstration signal, independent of the receiver.
 LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The picker has 30 designs, shown one at a time beside the full-size SDR scene.
-**Next** and **Previous** immediately preview a different meter. Category filters
-keep the current meter when it belongs to that category; otherwise they preview
-the category's first design. These actions do not save settings or modify themes.
+The gallery has 30 designs, up to four thumbnails per page. Next and Previous
+browse pages, and tapping a thumbnail previews it in the real Home layout.
+Category filters retain a selected meter that belongs to that category;
+otherwise they preview its first design. These actions do not save settings or
+modify themes. The live meter in Home uses actual receiver readings; thumbnail
+signals are illustrative.
 Eight entries use the actual PNG backgrounds from the Flexible S-Meter download
 bundles: DX101, ICOM, Orange, Dark, Neon, Transparent, Vintage HD White and Vintage HD Orange. Their background files are retained
 unchanged and credited in `UI/assets/smeters/flexible/SOURCE.md` and the third-party

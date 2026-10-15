@@ -1,44 +1,38 @@
-# Themes
+# Themes and S-meters
 
-Open **Display → Themes**. The current saved appearance is selected when the
-page opens. The captured SDR frontend fills its native 1024 × 800 Home viewport.
-A fixed 256-pixel right sidebar holds navigation, selection, Apply & Home and
-Cancel, matching Home's proportions. The three sections are:
+Open **Display → Themes**. The chooser shows a reduced view of the complete,
+real-time Home screen: waterfall, spectrum, frequency, S-meter, mode controls,
+volume and navigation. The wider gallery beside it has **Themes**, **S-Meters**
+and **Customize** tabs. Selecting a candidate updates the whole preview.
 
-- **Themes** previews a built-in palette or a saved theme. Choosing any theme keeps
-  the S-meter you have just chosen. Themes store colors, text size and layout;
-  the meter is an independent display setting. Each card is a single touch target with its
-  name and selection hint; the full-size preview shows the result.
-- **S-Meters** previews one animated meter in the right sidebar, at the same
-  236-pixel width and height it uses on Home. Previous and Next immediately
-  preview another design. All, LED / Slider, Analog and Magic Eye narrow the
-  choices. The original meter is **LED Bar**, first under **LED / Slider**.
-  Browsing changes only the draft until Apply & Home.
-- **Customize** contains optional name, sidebar, corners, text size, units, and
-  color controls in a panel over the SDR scene. These are optional.
+Tap **Full-screen Preview**, or the preview image, to inspect that same complete
+Home screen at its normal size. The picker disappears. The two actions are:
 
-**Apply & Home** saves the preview, applies it, and returns directly to Home.
-It works from every tab. **Cancel** discards the preview and returns to Home.
-There is no second Save screen or nested Back sequence. Neither choosing a card
-nor browsing the gallery changes saved settings or the active UI. Save failures
-stay on the page with an inline error and retain the preview for retry.
+- **Continue Choosing** returns to the gallery with the draft intact.
+- **Save & Home** saves the choice and returns directly to Home.
 
-The preview uses the selected palette and actual S-meter renderer. Meter
-artwork is shown only in the picker, without a duplicate enlarged face.
-The Home preview uses an unchanged capture of the user's actual CM5 SDR
-frontend at 17.6832 MHz, including the spectrum, ruler, waterfall and footer.
-Candidate themes recolor the captured pixels; no generated RF image is used.
-The picker meter uses a demonstration signal. Color controls preserve
-opacity when adjusting RGB.
+Tap elsewhere in full-screen preview to hide or show these controls, so every
+part of Home can be inspected. Back returns to the chooser. No radio tuning or
+volume controls are active during preview.
 
-Changing only the S-meter never creates, updates or renames a theme. Its selection
-is saved separately and stays selected when switching themes or restarting.
+The chooser also has **Save & Home** and **Cancel**. Cancel discards every
+unsaved preview change. Save failures retain the draft and show an inline error.
 
-Changing a saved theme's appearance updates it in place. Customizing a built-in's
-appearance creates an automatically named copy, such as **Default Custom**; further copies receive an
-unused suffix. **Make a Copy** preserves the original. Renaming is optional.
-Saved themes can be deleted only after confirmation; built-ins are protected.
+Themes contain colors, text size and layout. The S-meter is an independent
+setting: changing it never creates or modifies a theme, and changing themes
+keeps the chosen meter. **LED Bar**, under **LED / Slider**, is the original
+meter. Other filters are All, Analog and Magic Eye. Meter thumbnails retain
+callsign credits. There is no additional enlarged meter outside the Home preview.
 
-Paint and touch targets come from `theme_screen_boxes`. Gallery controls use a
-stable appearance and size while candidate themes stay inside the preview.
-The theme page disables global sidebar input relocation until it closes.
+Customize provides name, sidebar side, corners, text size, units and colors.
+Changes render in the real Home preview, including a left sidebar and the
+space tall meters take from Bandpass. Editing a built-in's appearance creates
+an automatically named copy; saved themes update in place. Make a Copy is
+explicit, and deletion requires confirmation. Built-ins are protected.
+
+The renderer temporarily uses the candidate for each Home frame, then restores
+the active runtime theme before processing user input. Preview never writes
+preferences, starts another receiver connection or changes the radio. A GPU
+copy supplies the miniature and full-screen views; the Home UI is not rebuilt
+from mock controls or screenshot text. Waterfall history keeps its original
+pixels so Cancel can restore their active-theme rendering without clearing it.
