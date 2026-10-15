@@ -15983,8 +15983,24 @@ def smeter_rail_extra_height():
     return METER_STYLES[theme_system.runtime_theme["smeter_style"]].height - LCD_COMPACT_SMETER_HEIGHT
 
 
+def smeter_is_slim():
+    """Only bar-height meters can travel beside the top frequency."""
+    return METER_STYLES[theme_system.runtime_theme["smeter_style"]].height <= LCD_COMPACT_SMETER_HEIGHT
+
+
+def home_rail_has_meter(instrument_layout):
+    """Large meters keep their Home rail position when the frequency moves."""
+    return instrument_layout == "right" or not smeter_is_slim()
+
+
+def is_home_mode_touch(x, y, instrument_layout):
+    """Hit the displayed grid, including rows below a large meter."""
+    return any(contains(box, x, y) for _label, box in
+               lcd_home_mode_boxes(home_rail_has_meter(instrument_layout)))
+
+
 def home_bandpass_visible():
-    return smeter_rail_extra_height() == 0
+    return smeter_is_slim()
 
 
 def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, style_id=None):
@@ -16950,8 +16966,10 @@ def draw_home_mode_buttons(text_cache, buttons, mode, digital):
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
                                show_compact_readouts=True,
                                compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
-                               peak_dbm=None):
-    """Show Home-rail modes, optionally with the compact VFO instruments."""
+                               peak_dbm=None, show_compact_frequency=None):
+    """Lay out the rail meter independently of the frequency readout."""
+    if show_compact_frequency is None:
+        show_compact_frequency = show_compact_readouts
     x0, y0, x1, y1 = LCD_ANNUNCIATOR_BOX
     # The expanded surface stops just under the mode buttons instead of
     # filling the whole reserved block, so the rail has no empty panel.
@@ -16960,7 +16978,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
     # background peeking out around the rounded mode controls.
     draw_logical_rect(x0, y0, x1, surface_bottom, APP_UI_STYLE.palette.sidebar)
 
-    if show_compact_readouts:
+    if show_compact_frequency:
         # Compact mode makes this the primary frequency readout. The SDR is
         # frequency-centric, so do not waste this narrow rail on a repeated
         # MHz unit: give the digits the entire available width instead.
@@ -16977,6 +16995,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             text_cache, compact_band_context_touch_box(), freq_khz, mode, compact=True
         )
 
+    if show_compact_readouts:
         # Give the Home meter enough physical weight to read as an instrument,
         # rather than a thin status decoration beside the VFO.
         # Reserve quiet air around the meter so it reads as its own small
@@ -19075,17 +19094,18 @@ def draw_ui(
             anchor=("rm" if left_instruments else "lm") if mirrored_instruments
                    else ("lm" if left_instruments else "rm"),
         )
-        if left_instruments:
-            trace_x = left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family)
-            draw_smeter(
-                text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
-                meter_x0=(mirror_smeter_trace_x(trace_x) if mirrored_instruments else trace_x),
-            )
-        else:
-            trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
-            draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
-                        meter_x0=(mirror_smeter_trace_x(trace_x, 6)
-                                  if mirrored_instruments else None))
+        if not LCD_800_MODE or smeter_is_slim():
+            if left_instruments:
+                trace_x = left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family)
+                draw_smeter(
+                    text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                    meter_x0=(mirror_smeter_trace_x(trace_x) if mirrored_instruments else trace_x),
+                )
+            else:
+                trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
+                draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                            meter_x0=(mirror_smeter_trace_x(trace_x, 6)
+                                      if mirrored_instruments else None))
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
         text_cache,
@@ -19162,10 +19182,11 @@ def draw_ui(
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
     if LCD_800_MODE and not (sidebar_open or settings_menu_open or digital_menu_open):
-        show_compact_readouts = instrument_layout == "right"
+        show_compact_readouts = home_rail_has_meter(instrument_layout)
         draw_lcd_mode_annunciators(
             text_cache, mode, digital, freq_khz, smeter_dbm,
             show_compact_readouts=show_compact_readouts,
+            show_compact_frequency=instrument_layout == "right",
             compact_frequency_font_family=compact_frequency_font_family,
             peak_dbm=smeter_peak_dbm,
         )
@@ -19176,11 +19197,6 @@ def draw_ui(
                 text_cache, filter_low_hz, filter_high_hz,
                 box=lcd_home_bandwidth_box(show_compact_readouts),
             )
-        elif not show_compact_readouts:
-            bx0, by0, bx1, _by1 = lcd_home_bandwidth_box(False)
-            draw_selected_smeter(text_cache,
-                                 (bx0, by0, bx1, by0 + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height),
-                                 smeter_dbm, smeter_peak_dbm)
         draw_lcd_home_volume_slider(
             text_cache, audio_volume, audio_muted,
             show_compact_readouts=show_compact_readouts,
@@ -26901,15 +26917,15 @@ def main():
                                 else:
                                     gesture = "lcd_filter_drawer"
                             elif LCD_800_MODE and home_bandpass_visible() and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_bandwidth_box(instrument_layout == "right"), x, y
+                                lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
                                 gesture = "home_passband"
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_mute_box(instrument_layout == "right"), x, y
+                                lcd_home_volume_mute_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
                                 gesture = "home_volume_mute"
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_box(instrument_layout == "right"), x, y
+                                lcd_home_volume_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
                                 gesture = "home_volume"
                             # Settings and MODES are full right-rail pages whose
@@ -26917,7 +26933,10 @@ def main():
                             # placeholders. While either is open, that region
                             # must not fall through to the covered Home mode
                             # grid and pick a hidden mode.
-                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(radio_toggle_box(text_cache, display_freq), x, y):
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and (
+                                is_home_mode_touch(x, y, instrument_layout) if LCD_800_MODE
+                                else contains(radio_toggle_box(text_cache, display_freq), x, y)
+                            ):
                                 gesture = "radio_toggle"
                             elif audio_panel_open and contains(AUDIO_VOLUME_BOX, x, y):
                                 gesture = "audio_volume"
@@ -27050,7 +27069,7 @@ def main():
                             elif not picker_open and is_waterfall_tune_touch(
                                 x, y, instrument_layout,
                                 left_smeter_box(text_cache, display_freq, compact_frequency_font_family)
-                                if LCD_800_MODE and instrument_layout == "left" else None,
+                                if LCD_800_MODE and instrument_layout == "left" and smeter_is_slim() else None,
                             ):
                                 gesture = "waterfall"
                             else:
@@ -27113,7 +27132,7 @@ def main():
                             desired_volume = volume_at_x(
                                 x,
                                 AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box(
-                                    instrument_layout == "right"
+                                    home_rail_has_meter(instrument_layout)
                                 ),
                             )
                             if (audio_volume is None or abs(desired_volume - audio_volume) >= 0.01) and time.monotonic() - audio_volume_last_apply >= 0.10:
@@ -27701,7 +27720,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 wake_controls()
-                                compact_layout = instrument_layout == "right"
+                                compact_layout = home_rail_has_meter(instrument_layout)
                                 # The annunciator block is taller than the mode
                                 # grid. Its empty space is not a control, so a
                                 # blank tap must not open the MODES drawer.
@@ -27739,7 +27758,7 @@ def main():
                             apply_main_volume(audio_volume_at_x(x))
                             wake_controls()
                         elif touch_started and gesture == "home_volume":
-                            apply_main_volume(home_volume_at_x(x, instrument_layout == "right"))
+                            apply_main_volume(home_volume_at_x(x, home_rail_has_meter(instrument_layout)))
                             wake_controls()
                         elif touch_started and gesture == "home_volume_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
