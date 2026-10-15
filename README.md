@@ -24,13 +24,63 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
+### Update, validate and run on the CM5
+
+Run the following on the CM5 from its repository checkout. The compile check
+and unit suite finish before the running application is replaced:
+
+```sh
+cd ~/ituner-sdr
+git switch main
+git pull --ff-only origin main
+python3 -m compileall -q UI
+python3 -m unittest discover -s UI -p 'test_*.py'
+sudo ./scripts/install.sh --cm5-existing-display
+```
+
+The application-only installer copies the current UI and assets to
+`/opt/ituner-sdr`, records the installed Git commit, and restarts the two CM5
+services. It does not install an LCD module, overlay, kernel, orientation, or
+touch mapping. Check the deployed revision and follow the live log with:
+
+```sh
+cat /var/lib/ituner-sdr/installed-commit
+systemctl status ituner-sdr-touch-ready.service ituner-sdr.service
+sudo journalctl -u ituner-sdr-touch-ready.service -u ituner-sdr.service -f
+```
+
+Useful service controls are:
+
+```sh
+sudo systemctl restart ituner-sdr.service
+sudo systemctl stop ituner-sdr.service
+sudo systemctl start ituner-sdr.service
+```
+
+The current CM5 interface uses the native **1280 × 800** landscape workspace
+on the portrait 800 × 1280 JD9365DA-H3 panel and reads the GT911/Goodix touch
+device directly. The same layout is used by desktop test mode. Current shared
+features include the receiver list and full-width Globe, KiwiSDR, OpenWebRX,
+LAN and FM-DX sources, retained sharp Globe tiles while dragging, editable
+themes and S-meter selection, the three-column frequency keypad, and Dual RX.
+Large square S-meters are hidden when the frequency is placed Left or Middle;
+Middle is centered across the complete 1280-pixel display, and Dual RX always
+uses the compact default meter so its controls remain visible.
+
 Both installation paths use bounded local KiwiSDR name discovery for the main
 radio and digital decoders, without HTTP status probes. If multicast discovery
 fails, select a reserved LAN IP; stale cached addresses are not reused without
 identity verification. See [local receiver discovery](docs/local-receivers.md).
 
 For the custom CM5 carrier's **ES8316 codec / Class-D speaker amplifier**, add
-`--cm5-audio` to that command. This opt-in profile includes the verified audio
+`--cm5-audio` explicitly:
+
+```sh
+sudo ./scripts/install.sh --cm5-existing-display --cm5-audio
+sudo reboot
+```
+
+This opt-in profile includes the verified audio
 driver/overlay setup, high-quality sample-rate conversion, volume/mute controls
 and automatic speaker shutdown when headphones are inserted. It preserves the
 working display/touch drivers. See [CM5 audio setup and required board repairs](docs/cm5-audio.md).
@@ -110,48 +160,114 @@ Optional settings:
 sudo ituner-sdr-configure --frequency-khz 7075.794 --orientation flipped
 ```
 
-## Run Locally on macOS
+## Test the application on macOS, Windows or Linux
 
-The active OpenGL radio can run directly on a Mac for UI development and receiver testing. Desktop modes use a fixed-size, borderless window with no macOS title bar or native close/minimize/fullscreen buttons. They do not need the Pi, DSI display, or touch controller.
+Desktop test mode runs the active OpenGL application in the same fixed
+**1280 × 800** layout used on the CM5. It does not require the Pi, LCD driver,
+touch controller, root access, or system service. Python **3.10–3.12** is
+recommended; Python 3.12 retains the `audioop` module used by desktop volume
+control. Run every command from the repository root.
 
-Use Python 3.9 through 3.12:
+The minimum desktop packages exercise the UI, live receiver, waterfall and
+local audio. NumPy and SciPy enable the Python decoder paths. FFmpeg is needed
+for FM-DX MP3 audio.
+
+### macOS
+
+Install Python and the native audio/decoder tools with Homebrew, then create a
+repository-local environment:
 
 ```bash
+brew install python@3.12 portaudio ffmpeg
+git clone https://github.com/ituner/ituner-sdr.git
+cd ituner-sdr
+python3.12 -m venv UI/.venv
+source UI/.venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+python UI/kiwi_gl_display.py --desktop --fps 30
+```
+
+For a clean test that ignores the previously selected receiver:
+
+```bash
+python UI/kiwi_gl_display.py --desktop --fps 30 \
+  --server http://21662.proxy2.kiwisdr.com:8073 \
+  --no-remember-receiver
+```
+
+### Windows 10/11 (PowerShell)
+
+Install 64-bit Python 3.12 from python.org, open PowerShell in the repository,
+and run:
+
+```powershell
+git clone https://github.com/ituner/ituner-sdr.git
+Set-Location ituner-sdr
+py -3.12 -m venv UI\.venv
+Set-ExecutionPolicy -Scope Process Bypass
+UI\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+python UI\kiwi_gl_display.py --desktop --fps 30
+```
+
+Install FFmpeg before testing FM-DX streams:
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+Open a new PowerShell after that installation so `ffmpeg` is on `PATH`.
+
+### Linux desktop (Debian/Ubuntu)
+
+Install the native OpenGL, audio and FFmpeg libraries, then create the virtual
+environment:
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv python3-pip libgl1 libportaudio2 ffmpeg
 git clone https://github.com/ituner/ituner-sdr.git
 cd ituner-sdr
 python3 -m venv UI/.venv
 source UI/.venv/bin/activate
-python -m pip install pygame PyOpenGL sounddevice Pillow
+python -m pip install --upgrade pip
+python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+SDL_VIDEODRIVER=wayland python UI/kiwi_gl_display.py --desktop --fps 30
 ```
 
-On macOS where Anaconda shadows the desired interpreter, use the system Python explicitly:
+For an X11 session, replace the last command with:
 
 ```bash
-/usr/bin/python3 -m venv UI/.venv
+SDL_VIDEODRIVER=x11 python UI/kiwi_gl_display.py --desktop --fps 30
 ```
 
-Available output modes, run from the repository root:
+The explicit SDL backend prevents the Linux desktop run from selecting the
+Pi's fullscreen KMS/DRM backend.
 
-| Output | Command | Layout |
-| --- | --- | --- |
-| Standard macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop --fps 30` | `960x320` SDR canvas |
-| Wide macOS desktop | `UI/.venv/bin/python UI/kiwi_gl_display.py --desktop-1280 --fps 30` | `1024x480` SDR canvas plus a `256x480` navigation rail (`1280x480` total) |
-| Raspberry Pi display | `UI/.venv/bin/python UI/kiwi_gl_display.py` | Fullscreen rotated `400x960` KMS/DRM framebuffer |
+### Desktop test controls and diagnostics
 
-The Raspberry Pi command requires its KMS/DRM display and touch environment and is normally started by `ituner-sdr.service` rather than launched from macOS.
+- Left-click and drag operates the touch UI, tuning, passband and Globe.
+- Mouse wheel zooms the waterfall or Globe under the pointer.
+- Command-left-drag on macOS, Windows-key-left-drag on Windows, or
+  Super-left-drag on Linux moves the borderless window.
+- `Esc` or `q` exits; the window intentionally has no native title bar.
+- Add `--no-audio` to test rendering without opening an audio device.
+- Add `--duration 60` for a one-minute smoke test.
+- Add `--server URL --no-remember-receiver` to start from a specific receiver
+  instead of the locally remembered one.
 
-Desktop controls:
+Before opening the UI, a quick source and unit-test check is:
 
-- Left-click and drag: touch-style tuning, menus, filter, and passband controls.
-- Right-click and drag: does not move the window.
-- Command-left-drag anywhere: move the borderless window.
-- Mouse wheel: zoom.
-- `Esc` or `q`: close the application.
-- `--no-audio`: run without CoreAudio output.
+```bash
+python -m compileall -q UI
+python -m unittest discover -s UI -p 'test_*.py'
+```
 
-Because desktop windows are borderless, use `Esc` or `q` instead of a macOS close button.
-
-The receiver is a live public KiwiSDR connection. If the remembered receiver does not provide a waterfall, choose another from `Home -> RX`. Desktop mode is a development/runtime option only; it leaves the Pi's rotated framebuffer output untouched.
+The receiver is a live remote service. A silent stream or missing waterfall can
+mean that the selected server is full or blocks external clients; choose another
+receiver before treating it as a local build failure.
 
 ### FM-DX receivers
 
@@ -203,11 +319,11 @@ sudo systemctl restart ituner-sdr.service
 
 ## Receivers
 
-The receiver browser is one catalog of KiwiSDR, OpenWebRX, local, and FM-DX
-receivers with a single source segment row (`KIWI`, `OPENWEBRX`, `LOCAL`,
+The receiver browser is one catalog of KiwiSDR, OpenWebRX, LAN, and FM-DX
+receivers with a single source segment row (`KIWI`, `OPENWEBRX`, `LAN`,
 `FM-DX`, `ALL`). KiwiSDR is the default and most complete receiver type.
 OpenWebRX uses the same browser and adapts its controls to the active server
-profile. Local receivers show only controls implemented by the connected
+profile. LAN receivers show only controls implemented by the connected
 hardware. FM-DX servers use a shared tuner: iTuner listens without retuning by
 default, and any shared frequency control requires an explicit acknowledgement
 for the current session only. See the [board_v1 changelog](docs/board-v1-changelog.md)
@@ -244,9 +360,11 @@ Display → Themes → S-Meters offers 30 designs with moving previews, includin
 white and orange Vintage HD, Sliding Pointer Orange, OE3IDE and KE9NS faces,
 six animated Magic Eye styles, and black, amber and copper instruments with
 S, dBm and µV scales.
-Tall meters reclaim the Home Bandpass panel's space.
+Tall square meters use the Home Bandpass panel's space only when the frequency
+is on the right. They are hidden for Left and Middle frequency positions, and
+Dual RX always uses the compact default meter.
 Themes now has a preview-first gallery with a separate S-meter tab and quick
-filters. **Apply & Home** saves and returns directly to Home; **Cancel** leaves
+filters. **Save & Home** saves and returns directly to Home; **Cancel** leaves
 saved settings untouched. Optional layout, text and color edits live under
 Customize. See [Themes](docs/themes.md).
 Flexible faces fill the rail width and use sharper resizing without an added
