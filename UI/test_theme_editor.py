@@ -95,7 +95,7 @@ class ThemeEditorTests(unittest.TestCase):
         self.assertEqual(self.library.active_id, self.original['id'])
 
     def test_cancel_discards_all_preview_changes_in_one_tap(self):
-        self.meter('oe3ide_eye_retro')
+        self.meter('oe3ide_eye_plain')
         self.tap('tab:themes')
         self.tap('theme:straight-inverted')
         self.tap('tab:customize')

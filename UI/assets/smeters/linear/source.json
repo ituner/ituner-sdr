@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/project-owner/PeppyMeter",
+  "commit": "2a64eb5156296b51c3baf403d92dacbe0aebde23",
+  "files": {
+    "LICENSE": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2",
+    "800x480/meters.txt": "aba8668250ce20379ff60a35c010f99135c4787522bb429d77178a4b057e6318",
+    "800x480/bar-bgr.png": "08784faedb56d3b22e680b13329e2d88e099ea3b20118da70039d8d4abb19a8c",
+    "800x480/bar-indicator.png": "598039fca45b1cdacbb9a35c2a666fd0b92fe091cbb9612435f71671f3152574",
+    "800x480/dash-bgr.png": "e6ff20686ef05e1f8f879304b08eb08294d89cc2b3b9600ba8a4392738df0b7e",
+    "800x480/dash-indicator.png": "93c72e944cd57cab9285828911bfeb8e92490053c83efd02fc5bfe486c72821d",
+    "800x480/gas-bgr.png": "e717e03a3f41aa5a249567980a131f7866bedca1c71bef6260b4d4450e367927",
+    "800x480/gas-indicator.png": "c3e0be4d78945742aee9674519f9672b8e4e86d80d6ca08e01ab29322dfcbcca"
+  }
+}

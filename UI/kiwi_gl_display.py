@@ -226,7 +226,8 @@ from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
                           skin_needle_segment, skin_source_bounds, s_label, voltage_label,
-                          meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal)
+                          meter_asset_path, EYE_ARTWORK, eye_image_box, draw_eye_signal,
+                          LINEAR_ARTWORK, LINEAR_ASSET_DIR, SCALE_LABELS, meter_fraction)
 
 
 LCD_NATIVE_W = 800
@@ -15987,16 +15988,63 @@ def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, sty
         # Fixed dial typography must fit its face even at 120% app text size.
         size = max(1, round(size * 100 / theme_system.runtime_theme["text_scale_percent"]))
         draw_text(text_cache, x, y, content, color, size, True, False, anchor, family="Liberation Sans")
+    if style.kind == "led_skin" and isinstance(text_cache, TextCache):
+        draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
+        return
     if style.kind in ("skin", "triple", "eye") and isinstance(text_cache, TextCache):
         draw_cached_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text)
         return
     backlit = identifier == "linear_orange" and isinstance(text_cache, TextCache)
     if backlit:
         draw_incandescent_meter_background(text_cache, box)
-    draw_meter("precision" if style.kind == "skin" else identifier, box, dbm, peak_dbm,
+    fallback = "precision" if style.kind == "skin" else "led" if style.kind == "led_skin" else identifier
+    draw_meter(fallback, box, dbm, peak_dbm,
                rect=draw_logical_rect, line=draw_logical_line,
                circle=draw_logical_circle, text=meter_text, palette=theme["colors"],
                background=not backlit)
+
+
+def draw_linear_skin_smeter(text_cache, identifier, box, dbm, peak_dbm, meter_text):
+    """Use original PeppyMeter strips with an RX-calibrated S/dBm scale."""
+    x0, y0, x1, y1 = box
+    unit = min((x1 - x0) / 236, (y1 - y0) / 80)
+    a, b = round(x0 + 4 * unit), round(x1 - 4 * unit)
+    top, bottom = round(y0 + 25 * unit), round(y0 + 55 * unit)
+    size = (max(1, b - a), max(1, bottom - top))
+    source = LINEAR_ARTWORK[identifier]
+    textures = []
+    for active in (False, True):
+        key = ("linear-meter-strip-v1", identifier, size, active)
+        cached = text_cache._cached_texture(("surface", key))
+        if cached is None:
+            filename = source["indicator"] if active else source["background"]
+            with PILImage.open(LINEAR_ASSET_DIR / filename) as image:
+                artwork = image.convert("RGBA")
+                if not active:
+                    artwork = artwork.crop(source["crop"])
+                artwork = artwork.resize(size, PILImage.Resampling.LANCZOS)
+                surface = pygame.image.fromstring(artwork.tobytes(), size, "RGBA")
+            cached = text_cache.surface_texture(key, surface)
+        textures.append(cached[0])
+    style = METER_STYLES[identifier]
+    draw_logical_rect(*box, style.face)
+    draw_textured_quad(textures[0], a, top, b, bottom, 0, 0, 1, 1)
+    valid = isinstance(dbm, (int, float)) and math.isfinite(dbm)
+    lit = round(size[0] * meter_fraction(dbm)) if valid else 0
+    if lit:
+        draw_textured_quad(textures[1], a, top, a + lit, bottom, 0, 0, lit / size[0], 1)
+    if (valid and isinstance(peak_dbm, (int, float)) and math.isfinite(peak_dbm)
+            and peak_dbm > dbm + .75):
+        x = a + (b - a) * meter_fraction(peak_dbm)
+        draw_logical_line(x, top - 2 * unit, x, bottom + 2 * unit, (247, 218, 132), max(1, unit))
+    def label(x, y, value, size=11, color=style.ink, anchor="lm"):
+        meter_text(x, y0 + y * unit, value, color, max(7, round(size * unit)), anchor)
+    label(x0 + 4 * unit, 11, "S-METER", 10)
+    label(x1 - 4 * unit, 11, f"{dbm:.0f} dBm" if valid else "— dBm", 12, anchor="rm")
+    for level, value in SCALE_LABELS:
+        x = max(x0 + 12 * unit, min(x1 - 14 * unit, a + (b - a) * meter_fraction(level)))
+        label(x, 69, "S" + value if value == "1" else value, 10,
+              (245, 104, 89) if level > -73 else style.ink, "cm")
 
 
 def incandescent_meter_backlight(size):

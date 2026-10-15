@@ -16,7 +16,7 @@ LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The gallery has 30 designs, up to four thumbnails per page. Next and Previous
+The gallery has 29 designs, up to four thumbnails per page. Next and Previous
 browse pages, and tapping a thumbnail previews it in the real Home layout.
 Category filters retain a selected meter that belongs to that category;
 otherwise they preview its first design. These actions do not save settings or
@@ -90,9 +90,10 @@ record, with runtime geometry in `calibration.json`.
 
 ## Community faces and Magic Eye
 
-Twelve additional designs use unchanged source images from the OE3IDE and KE9NS
+Seven designs use unchanged source images from the OE3IDE and KE9NS
 downloads: FTDX-5000, FTDX-9000, Matrix, Star Trek, High Vis and Drake TR7, plus
-Magic Eye Black, Brass, Silver, Plain Black, Aero and Retro. Gallery titles
+Magic Eye Plain Black. The other five round-eye variants were removed; old
+selections migrate to Plain Black. Gallery titles
 include **OE3IDE** or **KE9NS** credits. Flexible titles credit **HB9HSJ** as their
 collection publisher; individual artists for those faces have not been verified.
 Titles shrink as needed to keep the callsign visible.
@@ -106,14 +107,14 @@ brightens above S9. Missing signal turns the phosphor off and displays missing
 readings. Original transparent glass is cached above the dynamic glow. All
 bitmap faces are filtered once with Lanczos at final resolution.
 
-Magic Eye styles reclaim the Bandpass area like other tall meters. Their
+The tall round Eye Plain reclaims the Bandpass area like other tall meters. Their
 phosphor follows the receiver's existing smoothed RSSI; numeric S, dBm and 50 Ω
 RMS voltage readouts use the same signal. The source transmit-power/SWR
 cross-needle faces are retained in the download record, rather than shown as
 S-meters without corresponding telemetry. Artwork source and license status
 are documented in `UI/assets/smeters/community/SOURCE.md`.
 
-Vintage HD White and Vintage HD Orange are on the fifth gallery page alongside
+Vintage HD White and Vintage HD Orange remain separate choices alongside
 Transparent and Sliding Pointer Orange. Both HD versions share the publisher's
 1920 × 1110 source and calibration: White shows the original face; Orange uses
 a palette matching Flex Orange (255, 154, 0), with dark ink and preserved scale
@@ -140,3 +141,23 @@ creator and includes an older ICOM download and a VU-meter photograph shared
 by NI0K. The photograph retains a fixed needle and VU markings and is not
 bundled as an S-meter. Exact forum messages and sources are recorded in the
 Flexible collection's SOURCE.md.
+
+
+## Horizontal Magic Band and linear LED faces
+
+**Magic Eye** contains the retained **Eye Plain · OE3IDE** and a new original
+**Magic Band EM84**. The latter is a horizontal, pill-shaped glass window with
+two green phosphor bands closing toward the centre. It reaches closure at S9
+and brightens further above S9. Missing signal leaves only dark glass. S levels,
+dBm and 50-ohm RMS voltage come from the same receiver measurement.
+
+**LED / Slider** adds **Peppy Bar**, **Peppy Dash** and **Peppy Gas**, credited to
+the PeppyMeter publisher **PROJECT-OWNER**. These use real upstream display
+strips with a new S/dBm scale, not the original stereo/audio VU labels. Two
+textures per size are cached; signal changes reveal the active strip without
+rebaking artwork. All four new horizontal faces are 80 pixels tall on Home,
+so Bandpass remains available. The original LED Bar is unchanged.
+
+PeppyMeter sources, license and image checksums are retained in
+`UI/assets/smeters/linear/`. Reference tube documentation and the investigated
+SDR# plugin are linked in that directory's `SOURCE.md`.

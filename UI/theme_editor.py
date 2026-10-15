@@ -169,9 +169,9 @@ class ThemeEditor:
     @property
     def meter_ids(self):
         return [key for key, style in METER_STYLES.items() if self.meter_filter == "all"
-                or self.meter_filter == "digital" and style.kind in ("led", "linear")
+                or self.meter_filter == "digital" and style.kind in ("led", "linear", "led_skin")
                 or self.meter_filter == "analog" and style.kind in ("skin", "triple", "radial", "round")
-                or self.meter_filter == "eye" and style.kind == "eye"]
+                or self.meter_filter == "eye" and style.kind in ("eye", "eye_linear")]
 
     @property
     def page_count(self):

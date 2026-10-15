@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import kiwi_gl_display as ui
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           dbm_to_microvolts, meter_fraction, needle_point,
-                          skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip)
+                          skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip, meter_fraction)
 from smeter_styles import EYE_ARTWORK, meter_asset_path, eye_closure, eye_image_box, draw_eye_signal
 from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE, PREVIEW_BOX
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
@@ -55,7 +55,6 @@ class MeterTests(unittest.TestCase):
             # Repeated meter changes never create themes.
             editor.show('meters')
             tap('filter:digital')
-            tap('meter_next')
             tap('meter:linear')
             tap('save')
             self.assertEqual(len(editor.library.themes), 0)
@@ -210,6 +209,71 @@ class MeterTests(unittest.TestCase):
                 labels = [call.args for call in mocks['draw_text'].call_args_list]
                 self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name.split(' · ')[0]
                                     and call[4] == __import__('theme_screen_render').ACCENT for call in labels))
+
+    def test_retired_round_eyes_migrate_to_plain_without_reappearing(self):
+        from smeter_styles import REMOVED_METER_MIGRATIONS, normalize_meter_style
+        import json
+        self.assertEqual(set(EYE_ARTWORK), {'oe3ide_eye_plain'})
+        for identifier in REMOVED_METER_MIGRATIONS:
+            self.assertNotIn(identifier, METER_STYLES)
+            self.assertEqual(normalize_meter_style(identifier), 'oe3ide_eye_plain')
+            self.assertFalse((SKIN_ASSET_DIR.parent/'community'/f'{identifier}.png').exists())
+            with TemporaryDirectory() as directory:
+                path = Path(directory)/'themes.json'
+                path.write_text(json.dumps({'version':1,'active_id':'default','themes':[], 'smeter_style':identifier}))
+                library=ThemeLibrary(path)
+                self.assertEqual(library.smeter_style,'oe3ide_eye_plain')
+                library.activate('green')
+                self.assertEqual(json.loads(path.read_text())['smeter_style'],'oe3ide_eye_plain')
+                self.assertEqual(library.themes,[])
+
+    def test_magic_band_closes_symmetrically_and_missing_signal_has_no_phosphor(self):
+        from smeter_styles import magic_band_geometry, draw_magic_band
+        previous = float('inf')
+        for dbm in range(-127,-12):
+            a,left,right,b=magic_band_geometry((0,0,236,80),dbm)
+            self.assertLessEqual(a,left)
+            self.assertLessEqual(left,right)
+            self.assertLessEqual(right,b)
+            self.assertAlmostEqual(left-a,b-right)
+            self.assertLessEqual(right-left,previous)
+            previous=right-left
+        self.assertEqual(previous,0)
+        colors=[]
+        draw_magic_band((0,0,236,80),None,rect=lambda *args:colors.append(args[-1]),circle=lambda *args:colors.append(args[-1]),text=Mock())
+        self.assertFalse(any(g>150 for r,g,b in colors))
+        self.assertEqual(METER_STYLES['magic_band_em84'].height,80)
+
+    def test_peppy_strips_are_cached_and_clipped_to_the_rx_scale(self):
+        from smeter_styles import LINEAR_ARTWORK
+        for identifier in LINEAR_ARTWORK:
+            cache=Mock();textures={}
+            cache._cached_texture.side_effect=textures.get
+            def retain(key,surface):
+                result=(len(textures)+1,*surface.get_size())
+                textures[('surface',key)]=result
+                return result
+            cache.surface_texture.side_effect=retain
+            with patch.object(ui,'draw_textured_quad') as quad, patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'):
+                ui.draw_linear_skin_smeter(cache,identifier,(0,0,236,80),-73,None,Mock())
+                self.assertEqual(cache.surface_texture.call_count,2)
+                self.assertEqual(quad.call_args.args[3],4+round(228*meter_fraction(-73)))
+                for value in (-121,-53,None,float('nan'),float('inf')):
+                    quad.reset_mock()
+                    ui.draw_linear_skin_smeter(cache,identifier,(0,0,236,80),value,None,Mock())
+                    if value is None or not math.isfinite(value):self.assertEqual(quad.call_count,1)
+                self.assertEqual(cache.surface_texture.call_count,2)
+
+    def test_linear_skin_scale_aligns_with_signal_in_wide_top_instrument(self):
+        cache=Mock();cache._cached_texture.return_value=(1,400,30)
+        labels=Mock()
+        with patch.object(ui,'draw_textured_quad') as quad, patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'):
+            ui.draw_linear_skin_smeter(cache,'peppy_bar',(0,0,400,80),-73,None,labels)
+        s9=next(c.args[0] for c in labels.call_args_list if c.args[2]=='9')
+        self.assertAlmostEqual(s9,4+392*meter_fraction(-73))
+        self.assertAlmostEqual(quad.call_args.args[3],s9,delta=.5)
+        reading=next(c.args[0] for c in labels.call_args_list if c.args[2]=='-73 dBm')
+        self.assertEqual(reading,396)
 
     def test_legacy_and_invalid_saved_styles_fall_back_to_led(self):
         for value in (None, 'unknown', [], {}):

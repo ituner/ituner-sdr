@@ -42,6 +42,10 @@ METER_STYLES = {
     "heritage": MeterStyle("AVIATION BRASS", "round", 210, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260),
 }
 DEFAULT_METER_STYLE = "led"
+REMOVED_METER_MIGRATIONS = {
+    "oe3ide_eye_" + variant: "oe3ide_eye_plain"
+    for variant in ("black", "brass", "silver", "aero", "retro")
+}
 SCALE_LABELS = ((-121, "1"), (-109, "3"), (-97, "5"), (-85, "7"),
                 (-73, "9"), (-53, "+20"), (-33, "+40"))
 SKIN_ASSET_DIR = Path(__file__).parent / "assets" / "smeters" / "flexible"
@@ -58,7 +62,7 @@ for identifier, artwork in COMMUNITY_ARTWORK.items():
     if artwork["kind"] == "skin":
         SKIN_CALIBRATION[identifier] = artwork
 
-# Keep existing gallery positions stable, including LED BAR on page two.
+# Append additional faces after the original collection.
 for identifier, title, face, ink in (
         ("flex_vintage_hd", "VINTAGE HD ORANGE · HB9HSJ", (255, 154, 0), (28, 17, 8)),
         ("flex_transparent", "FLEX TRANSPARENT · HB9HSJ", (0, 0, 0), (223, 235, 240)),
@@ -69,6 +73,17 @@ for identifier, title, face, ink in (
 METER_STYLES["linear_orange"] = MeterStyle(
     "SLIDING POINTER ORANGE", "linear", 80, (255, 154, 0), (28, 17, 8),
     (140, 82, 16), (135, 24, 12))
+
+LINEAR_ASSET_DIR = SKIN_ASSET_DIR.parent / "linear"
+LINEAR_ARTWORK = json.loads((LINEAR_ASSET_DIR / "calibration.json").read_text(encoding="utf-8"))
+for identifier, artwork in LINEAR_ARTWORK.items():
+    METER_STYLES[identifier] = MeterStyle(
+        artwork["name"], "led_skin", 80, (3, 9, 12), (200, 225, 225),
+        (0, 0, 0), (255, 222, 124), scales=("S", "dBm"))
+METER_STYLES["magic_band_em84"] = MeterStyle(
+    "MAGIC BAND EM84", "eye_linear", 80, (3, 10, 12), (198, 228, 220),
+    (0, 0, 0), (94, 255, 185), scales=("S", "dBm", "µV"))
+
 
 
 def meter_asset_path(identifier):
@@ -277,9 +292,12 @@ def draw_triple_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text,
 
 
 def normalize_meter_style(value):
+    if not isinstance(value, str):
+        return DEFAULT_METER_STYLE
     if value == "flex_vintage":
         return "flex_vintage_hd"
-    return value if isinstance(value, str) and value in METER_STYLES else DEFAULT_METER_STYLE
+    value = REMOVED_METER_MIGRATIONS.get(value, value)
+    return value if value in METER_STYLES else DEFAULT_METER_STYLE
 
 
 def meter_fraction(dbm):
@@ -302,8 +320,58 @@ def needle_point(style, dbm, pivot, radius):
     return pivot[0] + math.sin(angle) * radius, pivot[1] - math.cos(angle) * radius
 
 
+def magic_band_geometry(box, dbm):
+    """EM84 phosphor grows from both ends, meeting at S9."""
+    x0, y0, x1, y1 = box
+    unit = min((x1 - x0) / 236, (y1 - y0) / 80)
+    a, b = x0 + 11 * unit, x1 - 11 * unit
+    midpoint = (a + b) / 2
+    gap = (b - a) * .90 * (1 - eye_closure(dbm))
+    return a, midpoint - gap / 2, midpoint + gap / 2, b
+
+
+def draw_magic_band(box, dbm, *, rect, circle, text):
+    x0, y0, x1, y1 = box
+    unit = min((x1 - x0) / 236, (y1 - y0) / 80)
+    valid = isinstance(dbm, (int, float)) and math.isfinite(dbm)
+    def capsule(a, b, c, d, color):
+        radius = min((c - a) / 2, (d - b) / 2)
+        if radius <= 0:
+            return
+        rect(a + radius, b, c - radius, d, color)
+        rect(a, b + radius, c, d - radius, color)
+        for cx in dict.fromkeys((a + radius, c - radius)):
+            for cy in dict.fromkeys((b + radius, d - radius)):
+                circle(cx, cy, radius, color)
+    rect(*box, (3, 10, 12))
+    capsule(x0 + 4 * unit, y0 + 23 * unit, x1 - 4 * unit, y0 + 55 * unit, (25, 47, 45))
+    capsule(x0 + 6 * unit, y0 + 25 * unit, x1 - 6 * unit, y0 + 53 * unit, (3, 16, 16))
+    a, left_end, right_start, b = magic_band_geometry(box, dbm)
+    capsule(a, y0 + 29 * unit, b, y0 + 49 * unit, (7, 37, 28))
+    if valid:
+        boost = max(0, min(1, (dbm + 73) / 40))
+        for inset, rgb in ((0, (12, 85, 53)), (1, (21, 145, 93)),
+                           (2.5, (49, 224, 142)), (4, (101, 255, 187)),
+                           (7, (168, 255, 211))):
+            color = tuple(min(255, round(c * (1 + .16 * boost))) for c in rgb)
+            capsule(a, y0 + (29 + inset) * unit, b, y0 + (49 - inset) * unit, color)
+        if right_start > left_end:
+            rect(left_end, y0 + 29 * unit, right_start, y0 + 49 * unit, (7, 37, 28))
+    # A faint fixed reflection gives the long glass window its curved surface.
+    capsule(a + 6 * unit, y0 + 26 * unit, b - 6 * unit, y0 + 28 * unit, (45, 81, 72))
+    def label(x, y, content, size=11, anchor="lm", color=(198, 228, 220)):
+        text(x0 + x * (x1 - x0) / 236, y0 + y * unit, content, color, max(7, round(size * unit)), anchor)
+    label(4, 11, "MAGIC BAND", 10)
+    label(232, 11, f"{dbm:.0f} dBm" if valid else "— dBm", 12, "rm")
+    label(4, 69, s_label(dbm), 12)
+    label(118, 69, voltage_label(dbm), 10, "cm")
+    label(232, 69, "EM84", 9, "rm", (111, 153, 139))
+
+
 def draw_meter(style_id, box, dbm, peak_dbm, *, rect, line, circle, text, palette, background=True):
     style = METER_STYLES[normalize_meter_style(style_id)]
+    if style.kind == "eye_linear":
+        return draw_magic_band(box, dbm, rect=rect, circle=circle, text=text)
     if style.kind == "triple":
         return draw_triple_meter(style_id, box, dbm, peak_dbm,
                                  rect=rect, line=line, circle=circle, text=text)

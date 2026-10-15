@@ -22,12 +22,7 @@ artwork. Imported faces:
 | FTDX-5000 | 3038 | ananMM-dark-large.png |
 | FTDX-9000 | 3042 | ananMM-dark-large.png |
 | High Vis | 3259 | ananMM-large.png |
-| Magic Eye Silver | 3046 | eye-bezel.png |
-| Magic Eye Black | 3050 | eye-bezel.png |
-| Magic Eye Brass | 3053 | eye-bezel.png |
 | Magic Eye Plain Black | 3056 | eye-bezel.png |
-| Magic Eye Aero | 3059 | eye-bezel.png |
-| Magic Eye Retro | 3062 | eye-bezel.png |
 
 Download URLs use `https://www.oe3ide.com/?sdm_process_download=1&download_id=ID`.
 Analog S-scale reference coordinates were checked against the published
@@ -54,3 +49,7 @@ executables were downloaded but are not executed or installed on the CM5.
 The downloaded artwork archives contain no separate license text. Source and
 callsign attribution are recorded; no permission or open-source artwork license
 is inferred from a free download or from the license of the host software.
+
+On 2026-10-15 the Silver, Black, Brass, Aero and Retro round-eye faces were
+removed from the gallery and shipped assets at the user's request. Only Plain
+Black remains. Legacy selections migrate to `oe3ide_eye_plain`.

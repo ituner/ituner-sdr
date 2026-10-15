@@ -1,0 +1,35 @@
+{
+  "peppy_bar": {
+    "name": "PEPPY BAR \u00b7 PROJECT-OWNER",
+    "background": "bar-bgr.png",
+    "indicator": "bar-indicator.png",
+    "crop": [
+      195,
+      145,
+      724,
+      217
+    ]
+  },
+  "peppy_dash": {
+    "name": "PEPPY DASH \u00b7 PROJECT-OWNER",
+    "background": "dash-bgr.png",
+    "indicator": "dash-indicator.png",
+    "crop": [
+      49,
+      197,
+      773,
+      216
+    ]
+  },
+  "peppy_gas": {
+    "name": "PEPPY GAS \u00b7 PROJECT-OWNER",
+    "background": "gas-bgr.png",
+    "indicator": "gas-indicator.png",
+    "crop": [
+      76,
+      195,
+      724,
+      228
+    ]
+  }
+}
