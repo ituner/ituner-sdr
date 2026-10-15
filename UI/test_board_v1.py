@@ -644,11 +644,17 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
-    def test_display_reset_follows_frequency_layout(self):
+    def test_display_reset_sits_directly_above_back(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
-                         ui.DISPLAY_RESET_BOX[1])
+                         ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
+                         ui.lcd_drawer_back_box()[1])
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
+        self.assertEqual(ui.DISPLAY_THEME_BOX[2] - ui.DISPLAY_THEME_BOX[0], 236)
+        self.assertEqual(ui.display_option_at(1150, (ui.DISPLAY_THEME_BOX[1] + ui.DISPLAY_THEME_BOX[3]) / 2),
+                         ('theme', None))
 
     def test_display_drawer_draws_layout_and_speed_without_scope(self):
         ui.configure_output(True)
@@ -664,6 +670,7 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_lcd_drawer_heading') as headings:
             ui.draw_display_setup_panel(None, -95, -20, 1, False, 'kiwi', True)
         self.assertIn((ui.DISPLAY_RESET_BOX, 'RESET DISPLAY'), seen)
+        self.assertIn((ui.DISPLAY_THEME_BOX, 'THEMES'), seen)
         self.assertIn('LEFT', [entry.args[2] for entry in controls.call_args_list])
         self.assertIn('MIDDLE', [entry.args[2] for entry in controls.call_args_list])
         self.assertIn('RIGHT', [entry.args[2] for entry in controls.call_args_list])
@@ -680,7 +687,10 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(heading_y['FREQUENCY POSITION'] - 8
                          - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16,
-                         ui.DISPLAY_RESET_BOX[1])
+                         ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
+                         ui.lcd_drawer_back_box()[1])
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         states = {entry.args[2]: entry.args[3] for entry in controls.call_args_list}
         self.assertFalse(states['LEFT'])
         self.assertTrue(states['MIDDLE'])
@@ -692,7 +702,7 @@ class BoardLayoutTests(unittest.TestCase):
         rail_bottom = ui.lcd_drawer_back_box()[1]
         self.assertEqual(ui.DISPLAY_SPECTRUM_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
         self.assertEqual(ui.DISPLAY_AUTO_BOX[1], ui.DISPLAY_SPECTRUM_BOX[1])
-        boxes = [ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
+        boxes = [ui.DISPLAY_THEME_BOX, ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
                  ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX]
         boxes.extend(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES)
         boxes.extend(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES)
@@ -737,8 +747,9 @@ class BoardLayoutTests(unittest.TestCase):
             self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
                                                   (box[1] + box[3]) / 2),
                              ('palette', palette))
-        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16, ui.DISPLAY_RESET_BOX[1])
-        self.assertGreaterEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], 16)
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][3] + 16, ui.DISPLAY_THEME_BOX[1])
+        self.assertEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], ui.LCD_NAV_GAP)
+        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
         for earlier in boxes:
             if earlier != ui.DISPLAY_RESET_BOX:
                 self.assertFalse(earlier[0] < ui.DISPLAY_RESET_BOX[2]

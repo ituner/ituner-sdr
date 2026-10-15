@@ -245,6 +245,10 @@ white and orange Vintage HD, Sliding Pointer Orange, OE3IDE and KE9NS faces,
 six animated Magic Eye styles, and black, amber and copper instruments with
 S, dBm and µV scales.
 Tall meters reclaim the Home Bandpass panel's space.
+Themes now has a preview-first gallery with a separate S-meter tab and quick
+filters. **Apply & Home** saves and returns directly to Home; **Cancel** leaves
+saved settings untouched. Optional layout, text and color edits live under
+Customize. See [Themes](docs/themes.md).
 Flexible faces fill the rail width and use sharper resizing without an added
 grey border. See [meter selection, calibration and artwork sources](docs/s-meters.md).
 

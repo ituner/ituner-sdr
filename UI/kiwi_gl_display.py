@@ -1775,7 +1775,7 @@ def configure_popup_layout():
     global DISPLAY_PANEL_BOX, DISPLAY_SPECTRUM_BOX, DISPLAY_AUTO_BOX
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
-    global DISPLAY_RESET_BOX, DISPLAY_LAYOUT_BOXES
+    global DISPLAY_RESET_BOX, DISPLAY_THEME_BOX, DISPLAY_LAYOUT_BOXES
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1813,6 +1813,7 @@ def configure_popup_layout():
     DISPLAY_CEIL_MINUS_BOX = popup_shift_box(DISPLAY_CEIL_MINUS_BOX, dy)
     DISPLAY_CEIL_PLUS_BOX = popup_shift_box(DISPLAY_CEIL_PLUS_BOX, dy)
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
+    DISPLAY_THEME_BOX = (0, 0, 0, 0)
     DISPLAY_LAYOUT_BOXES = ()
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
@@ -1826,7 +1827,8 @@ def configure_popup_layout():
         inner_x0, inner_x1 = back_box[0], back_box[2]
         column_gap, section_gap, tile_h, adjust_h, small_h = 8, 16, 64, 56, 31
         # Every titled section spans the same 236 px as BACK. Sections have
-        # 16 px breathing room; RESET follows the final section.
+        # 16 px breathing room. RESET is the final utility action, anchored
+        # directly above BACK with the shared 8 px control gap.
         toggle_y0 = LCD_DRAWER_HEADER_H + 16
         toggle_y1 = toggle_y0 + tile_h
         floor_y0 = toggle_y1 + section_gap
@@ -1837,8 +1839,11 @@ def configure_popup_layout():
         palette_y1 = palette_y0 + small_h
         rate_y0 = palette_y1 + section_gap + 24
         layout_y0 = rate_y0 + small_h + section_gap + 24
-        reset_y0 = layout_y0 + small_h + section_gap
-        DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y0 + tile_h)
+        theme_y0 = layout_y0 + small_h + section_gap
+        DISPLAY_THEME_BOX = (inner_x0, theme_y0, inner_x1, theme_y0 + tile_h)
+        reset_y1 = back_box[1] - LCD_NAV_GAP
+        reset_y0 = reset_y1 - tile_h
+        DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y1)
         half_w = (inner_x1 - inner_x0 - column_gap) / 2
         DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
         DISPLAY_AUTO_BOX = (inner_x0 + half_w + column_gap, toggle_y0, inner_x1, toggle_y1)
@@ -2505,7 +2510,6 @@ SETTINGS_MENU_ITEMS = (
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
-    ("theme", "THEME"),
     ("settings_back", "BACK"),
 )
 DIGITAL_MENU_ITEMS = (
@@ -2523,7 +2527,6 @@ SETTINGS_MENU_SUBTITLES = {
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
     "system": "LOCATION & FAN",
-    "theme": "COLORS",
 }
 
 
@@ -6823,7 +6826,8 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     if identifier == theme_system.DEFAULT_THEME_ID:
         return bytes(data)
     if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
-                           theme_system.GREEN_THEME_ID)
+                           theme_system.GREEN_THEME_ID,
+                           theme_system.BLACK_WHITE_THEME_ID)
             and tuple(palette.waterfall_low) == (0, 0, 0)
             and tuple(palette.waterfall_high) == (255, 255, 255)):
         return bytes(data)
@@ -6867,6 +6871,22 @@ def waterfall_empty_background_color():
     return (*themed_instrument_color("waterfall_low", (4, 7, 11))[:3], 255)
 
 
+def waterfall_theme_signature():
+    """Only changes to waterfall mapping require a whole-texture upload."""
+    identifier = theme_system.runtime_theme["id"]
+    palette = APP_UI_STYLE.palette
+    low, high = tuple(palette.waterfall_low), tuple(palette.waterfall_high)
+    identity = (identifier == theme_system.DEFAULT_THEME_ID or
+                (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
+                                    theme_system.GREEN_THEME_ID,
+                                    theme_system.BLACK_WHITE_THEME_ID)
+                 and low == (0, 0, 0) and high == (255, 255, 255)))
+    mapping = ("identity" if identity else
+               "inverted" if identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
+               else "mapped")
+    return mapping, low, high
+
+
 class WaterfallTexture:
     def __init__(self):
         self.tex = GL.glGenTextures(1)
@@ -6874,7 +6894,7 @@ class WaterfallTexture:
         self.row_center_khz = [None] * WF_TEX_H
         self.row_span_khz = [None] * WF_TEX_H
         self.base_pixels = bytearray(WF_TEX_W * WF_TEX_H * 4)
-        self.theme_revision = theme_system.runtime_revision
+        self.theme_revision = waterfall_theme_signature()
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
@@ -6897,7 +6917,7 @@ class WaterfallTexture:
         self.row_center_khz = [None] * WF_TEX_H
         self.row_span_khz = [None] * WF_TEX_H
         self.base_pixels = bytearray(WF_TEX_W * WF_TEX_H * 4)
-        self.theme_revision = theme_system.runtime_revision
+        self.theme_revision = waterfall_theme_signature()
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glTexImage2D(
             GL.GL_TEXTURE_2D,
@@ -6912,13 +6932,14 @@ class WaterfallTexture:
         )
 
     def ensure_theme(self):
-        if self.theme_revision == theme_system.runtime_revision:
+        signature = waterfall_theme_signature()
+        if self.theme_revision == signature:
             return
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, WF_TEX_W, WF_TEX_H,
                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
                            themed_waterfall_pixels(self.base_pixels))
-        self.theme_revision = theme_system.runtime_revision
+        self.theme_revision = signature
 
     def push_line(self, line, center_khz=None, span_khz=None):
         self.row = (self.row - 1) % WF_TEX_H
@@ -9573,8 +9594,8 @@ def display_option_at(x, y):
         return "close", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
-    if LCD_800_MODE and contains(lcd_display_themes_box(), x, y):
-        return "themes", None
+    if LCD_800_MODE and contains(DISPLAY_THEME_BOX, x, y):
+        return "theme", None
     if LCD_800_MODE:
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
@@ -14671,7 +14692,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
-        draw_lcd_audio_tile(text_cache, lcd_display_themes_box(), "THEMES", "COLORS & S-METERS")
+        draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "COLORS & S-METERS")
         draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
                                 DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
                                 "FREQUENCY POSITION")
@@ -15644,211 +15665,9 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
 
 
 def draw_theme_panel(text_cache, editor):
-    """Touch-friendly two-column theme browser and live editor."""
-    theme = editor.preview
-    colors = theme["colors"]
-    active_colors = APP_UI_STYLE.palette
-    meter_gallery = editor.mode == "edit" and editor.section == "METERS"
-    preview_dbm = -89 + 31 * math.sin(time.monotonic() * .9) if meter_gallery else -85
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, active_colors.background)
-    draw_logical_rect(512, 0, 1024, LOGICAL_H, active_colors.section_surface)
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, active_colors.sidebar)
-    draw_sidebar_header(text_cache, "THEME")
-    draw_text(text_cache, 536, 42, "SAVED THEMES" if editor.mode == "browse" else theme["name"],
-              active_colors.text, 24, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, 24, 42, "LIVE PREVIEW", active_colors.section_heading,
-              20, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-    boxes = theme_screen_boxes(editor)
-    for action, box in boxes.items():
-        if action == "back":
-            draw_styled_text_button(text_cache, box, "BACK")
-        elif action in ("new", "meters", "save", "previous", "next", "meter_previous", "meter_next"):
-            label = {"new": "NEW THEME", "meters": "S-METERS", "save": "SAVE THEME",
-                     "previous": "PREVIOUS", "next": "NEXT",
-                     "meter_previous": "PREVIOUS DESIGNS", "meter_next": "MORE DESIGNS"}[action]
-            draw_styled_text_button(text_cache, box, label)
-        elif action.startswith("section:"):
-            name = action.split(":")[1]
-            label = {"METERS": "S-METER DESIGN", "UNITS": "UNITS & TEXT SIZE", "SIDEBAR": "SIDEBAR POSITION"}.get(name, name)
-            draw_styled_text_button(text_cache, box, label, active=editor.section == name)
-        elif action.startswith("theme:"):
-            index = editor.page * 7 + int(action.split(":")[1])
-            if index < len(editor.themes):
-                item = editor.themes[index]
-                visual = draw_styled_button_frame(box, active=item["id"] == editor.library.active_id)
-                draw_text(text_cache, box[0] + 12, (box[1] + box[3]) / 2,
-                          button_label_for_box(text_cache, item["name"], box),
-                          visual.text, 13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-        elif action.startswith(("edit:", "delete:")):
-            index = editor.page * 7 + int(action.split(":")[1])
-            if index < len(editor.themes):
-                deleting = action.startswith("delete:")
-                draw_styled_text_button(
-                    text_cache, box, "DELETE" if deleting else "EDIT",
-                    danger=deleting and editor.confirm_delete_id == editor.themes[index]["id"],
-                )
-        elif action.startswith("meter:"):
-            identifier = action.split(":")[1]
-            selected = theme["smeter_style"] == identifier
-            # A coloured title/lamp indicates selection without surrounding
-            # the meter with the grey frame used by ordinary theme buttons.
-            draw_logical_rect(*box, active_colors.background)
-            title = METER_STYLES[identifier].name
-            title_size = (navigation_label_size(text_cache, title, box[2] - box[0] - 24, 12)
-                          if isinstance(text_cache, TextCache) else 12)
-            draw_text(text_cache, (box[0] + box[2]) / 2, box[1] + 17,
-                      title,
-                      active_colors.ready if selected else active_colors.text, title_size, True, False, "cm")
-            if selected:
-                draw_logical_circle(box[0] + 9, box[1] + 17, 3, active_colors.ready)
-            face_box = ((box[0], box[1] + 32, box[2], box[3])
-                        if identifier != "flex_orange" and METER_STYLES[identifier].kind in ("skin", "triple", "eye")
-                        else (box[0] + 8, box[1] + 34, box[2] - 8, box[3] - 10))
-            draw_selected_smeter(text_cache, face_box,
-                                 preview_dbm, theme=theme, style_id=identifier)
-        elif action.startswith("option:"):
-            name = action.split(":")[1]
-            selected = (name == theme["sidebar"] or name == theme["units"]
-                        or name == ("rounded" if theme["radius"] else "straight"))
-            label = {"straight": "STRAIGHT CORNERS", "rounded": "ROUND CORNERS"}.get(name, name)
-            draw_styled_text_button(text_cache, box, label, active=selected)
-        elif action.startswith("group:"):
-            index = int(action.split(":")[1])
-            draw_styled_text_button(text_cache, box, COLOR_GROUPS[index][0], active=editor.color_group == index)
-        elif action.startswith("color:"):
-            index = int(action.split(":")[1])
-            key = COLOR_GROUPS[editor.color_group][1][index]
-            draw_styled_button_frame(box)
-            draw_text(text_cache, box[0] + 12, box[1] + 20, key.replace("_", " ").upper(),
-                      active_colors.text, 13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-            swatch = tuple(theme["colors"][key])
-            draw_logical_rounded_rect(box[2] - 68, box[1] + 8, box[2] - 12, box[3] - 8,
-                                      4, (*swatch[:3], 255), active_colors.border)
-            draw_text(text_cache, box[0] + 12, box[1] + 45,
-                      theme_system.color_hex(swatch), active_colors.secondary_text,
-                      13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-        elif action.startswith(("hex:", "name:")):
-            draw_styled_text_button(text_cache, box, action.split(":")[1])
-        elif action.startswith("text:"):
-            label = {"text:smaller": "SMALLER", "text:larger": "LARGER",
-                     "text:reset": "RESET TEXT SIZE TO 100%"}[action]
-            draw_styled_text_button(text_cache, box, label)
-        elif action.startswith("swatch:"):
-            swatches = ((255, 255, 255), (0, 0, 0), (160, 160, 160), (115, 255, 177))
-            rgb = swatches[int(action.split(":")[1])]
-            draw_logical_rounded_rect(*box, 8, (*rgb, 255), active_colors.border)
-    if editor.mode == "edit":
-        if editor.section == "STYLE":
-            draw_text(text_cache, 536, 96, "BUTTON CORNERS", active_colors.section_heading,
-                      13, True, False, "lm")
-        elif editor.section == "SIDEBAR":
-            draw_text(text_cache, 536, 96, "SIDEBAR POSITION", active_colors.section_heading,
-                      13, True, False, "lm")
-        elif editor.section == "UNITS":
-            draw_text(text_cache, 536, 96, "DISTANCE AND TEMPERATURE", active_colors.section_heading,
-                      13, True, False, "lm")
-            draw_text(text_cache, 536, 270, "ALL APP TEXT", active_colors.section_heading,
-                      13, True, False, "lm")
-            draw_text(text_cache, 768, 305, f"{theme['text_scale_percent']}%",
-                      active_colors.text, 24, True, False, "cm")
-            draw_text(text_cache, 1000, 270, "80–120%", active_colors.secondary_text,
-                      13, True, False, "rm")
-        elif editor.section == "COLORS" and editor.color_key:
-            draw_text(text_cache, 536, 100, editor.color_key.replace("_", " ").upper(),
-                      active_colors.section_heading, 13, True, False, "lm")
-            draw_text(text_cache, 536, 132, "#" + editor.hex_value, active_colors.text,
-                      22, True, True, "lm")
-            current_color = theme["colors"][editor.color_key]
-            draw_logical_rounded_rect(916, 116, 1000, 160, 4,
-                                      (*current_color[:3], 255), active_colors.border)
-        elif editor.section == "NAME":
-            draw_text(text_cache, 536, 102, "NAME: " + theme["name"], active_colors.text,
-                      18, True, False, "lm")
-    # Representative live instruments use the draft palette without changing
-    # the operating receiver until SAVE THEME is tapped.
-    px0, px1 = 24, 488
-    def preview_size(size):
-        return max(1, round(size * theme["text_scale_percent"] /
-                            theme_system.runtime_theme["text_scale_percent"]))
-    draw_logical_rect(px0, 82, px1, 742, colors["sidebar"])
-    draw_text(text_cache, (px0 + px1) / 2, 139, "1.088.900", colors["frequency"],
-              preview_size(36), True, False, "cm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, (px0 + px1) / 2, 177, "MW  AM", colors["secondary_text"],
-              preview_size(13), True, False, "cm")
-    if meter_gallery:
-        meter_height = METER_STYLES[theme["smeter_style"]].height * 1.5
-        draw_selected_smeter(text_cache, (76, 210, 436, 210 + meter_height),
-                             preview_dbm, theme=theme)
-        draw_text(text_cache, 256, 568, METER_STYLES[theme["smeter_style"]].name,
-                  colors["text"], 20, True, False, "cm")
-        detail = ("ORIGINAL FLEXIBLE S-METER FACE" if METER_STYLES[theme["smeter_style"]].kind == "skin"
-                  else "S · dBm · µV RMS / 50 Ω" if METER_STYLES[theme["smeter_style"]].kind == "triple"
-                  else "MOVING SIGNAL PREVIEW")
-        draw_text(text_cache, 256, 608, detail, colors["section_heading"],
-                  13, True, False, "cm")
-        footnote = ("RX NEEDLE DRIVES THE S SCALE" if METER_STYLES[theme["smeter_style"]].kind == "skin"
-                    else "TALL DIALS HIDE THE BANDPASS PANEL")
-        draw_text(text_cache, 256, 645, footnote,
-                  colors["secondary_text"], 12, False, False, "cm")
-        draw_text(text_cache, 256, 683, "SAVE THEME TO APPLY", colors["secondary_text"],
-                  13, True, False, "cm")
-        draw_text(text_cache, 768, 65,
-                  f"DESIGNS {editor.meter_page + 1} / {(len(METER_STYLES) + 5) // 6}",
-                  active_colors.secondary_text, 12, False, False, "cm")
-        return
-    draw_selected_smeter(text_cache, (px0 + 16, 198, px1 - 16, 314),
-                         -85, -73, theme=theme)
-    for index, (label, fill_key, border_key) in enumerate((
-        ("NORMAL", "surface", "border"),
-        ("ACTIVE", "active_surface", "active_border"),
-        ("SELECTED", "selected_surface", "selected_border"),
-        ("PRESSED", "pressed_surface", "pressed_border"),
-    )):
-        left = px0 + 24 + index * 106
-        draw_logical_rounded_rect(left, 330, left + 98, 394,
-                                  theme["radius"], colors[fill_key], colors[border_key])
-        draw_text(text_cache, left + 49, 350, label, colors["text"],
-                  preview_size(11 if len(label) > 6 else 13), True, False, "cm")
-        draw_text(text_cache, left + 49, 373, "SUBTITLE", colors["secondary_text"],
-                  preview_size(11), True, False, "cm")
-    draw_logical_rect(px0 + 24, 414, px1 - 24, 478, colors["background"])
-    draw_logical_rect(px0 + 183, 414, px0 + 272, 478, colors["passband_fill"])
-    draw_logical_line(px0 + 183, 414, px0 + 183, 478, colors["passband_border"], 1)
-    draw_logical_line(px0 + 272, 414, px0 + 272, 478, colors["passband_border"], 1)
-    draw_logical_line(px0 + 227, 414, px0 + 227, 478, colors["passband_center"], 1)
-    draw_text(text_cache, px0 + 24, 530, "ZOOM  24x", colors["notice"],
-              preview_size(22), True, True, "lm")
-    draw_text(text_cache, px1 - 24, 530,
-              theme_system.display_distance(100, theme) + "   " + theme_system.display_temperature(40, theme),
-              colors["secondary_text"], preview_size(16), True, False, "rm")
-    mini_x0, mini_x1 = px0 + 24, px1 - 24
-    mini_y0, mini_y1 = 584, 726
-    rail_preview = (
-        (mini_x0, mini_y0, mini_x0 + 104, mini_y1)
-        if theme["sidebar"] == "left"
-        else (mini_x1 - 104, mini_y0, mini_x1, mini_y1)
-    )
-    draw_logical_rect(mini_x0, mini_y0, mini_x1, mini_y1, colors["background"])
-    draw_logical_rect(*rail_preview, colors["sidebar"])
-    for x0, y0, x1, y1 in (
-        (mini_x0, mini_y0, mini_x1, mini_y0),
-        (mini_x0, mini_y1, mini_x1, mini_y1),
-        (mini_x0, mini_y0, mini_x0, mini_y1),
-        (mini_x1, mini_y0, mini_x1, mini_y1),
-    ):
-        draw_logical_line(x0, y0, x1, y1, colors["section_border"], 1)
-    for x0, y0, x1, y1 in (
-        (rail_preview[0], rail_preview[1], rail_preview[2], rail_preview[1]),
-        (rail_preview[0], rail_preview[3], rail_preview[2], rail_preview[3]),
-        (rail_preview[0], rail_preview[1], rail_preview[0], rail_preview[3]),
-        (rail_preview[2], rail_preview[1], rail_preview[2], rail_preview[3]),
-    ):
-        draw_logical_line(x0, y0, x1, y1, colors["section_border"], 1)
-    draw_text(text_cache, (rail_preview[0] + rail_preview[2]) / 2, (mini_y0 + mini_y1) / 2,
-              "RAIL", colors["text"], preview_size(12), True, False, "cm")
-    screen_center = (mini_x0 + mini_x1 + (104 if theme["sidebar"] == "left" else -104)) / 2
-    draw_text(text_cache, screen_center, (mini_y0 + mini_y1) / 2, "SCREEN", colors["secondary_text"],
-              preview_size(12), True, False, "cm")
+    """Render the full-canvas Theme Library or live editor."""
+    from theme_screen_render import draw_theme_screen
+    return draw_theme_screen(text_cache, editor, sys.modules[__name__])
 
 
 def lcd_radio_drawer_close_box():
@@ -16437,6 +16256,7 @@ def navigation_parent(items, kind):
 NAVIGATION_SURFACES = frozenset({
     "home",
     "settings",
+    "display",
     "receivers",
     "info",
     "apps",
@@ -25465,11 +25285,12 @@ def main():
 
     def restore_navigation_parent(parent):
         """Close a leaf and restore the screen that opened it."""
-        nonlocal settings_menu_open, digital_menu_open
+        nonlocal settings_menu_open, digital_menu_open, display_setup_open
         nonlocal picker_open, picker_map_open, receiver_home_panel_open, tests_panel_open
         nonlocal audio_panel_open, frequency_drawer_open, radio_setup_open, wspr_panel_open
         target = navigation_back_surface(parent)
         settings_menu_open = target == "settings"
+        display_setup_open = target == "display"
         digital_menu_open = False
         picker_open = target == "receivers"
         if picker_open:
@@ -25589,9 +25410,7 @@ def main():
         elif kind == "theme":
             settings_menu_open = False
             digital_menu_open = False
-            theme_editor.open = True
-            theme_editor.mode = "browse"
-            theme_editor.selected_id = theme_editor.library.active_id
+            theme_editor.show()
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
             receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -25975,6 +25794,7 @@ def main():
     def rail_relocation_active():
         return (
             theme_system.runtime_theme["sidebar"] == "left"
+            and not theme_editor.open
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open) or globe_open)
         )
@@ -27066,6 +26886,10 @@ def main():
                             adjust_fan_curve_slider(fan_curve, "full", x)
                         elif gesture == "fan_minimum_slider":
                             adjust_fan_curve_slider(fan_curve, "minimum", x)
+                        elif gesture == "theme":
+                            hue_box = theme_screen_boxes(theme_editor).get("hue")
+                            if hue_box and contains(hue_box, start_x, start_y):
+                                theme_editor.drag(x, y)
                         elif gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
                             state.set_waterfall(
@@ -28652,8 +28476,9 @@ def main():
                                     if kind == "close":
                                         display_setup_open = False
                                         restore_navigation_parent(display_parent)
-                                    elif kind == "themes":
-                                        activate_navigation_item(0, (("theme", "THEME"),))
+                                    elif kind == "theme":
+                                        display_setup_open = False
+                                        theme_editor.show()
                                     else:
                                         floor, ceiling, speed, auto, palette, _generation = state.waterfall_snapshot()
                                         reset_display = kind == "reset"
@@ -28774,7 +28599,12 @@ def main():
                                     write_remembered_view(force=True)
                                 refresh_receiver_list_theme()
                                 if not theme_editor.open:
-                                    restore_navigation_parent("settings")
+                                    restore_navigation_parent(theme_editor.exit_surface)
+                            else:
+                                hue_box = theme_screen_boxes(theme_editor).get("hue")
+                                if hue_box and contains(hue_box, start_x, start_y):
+                                    theme_editor.drag(x, y)
+                                    refresh_receiver_list_theme()
                             wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -30180,8 +30010,9 @@ def main():
                     "",
                 )
             )
-            # Read occupancy from the existing Kiwi WebSocket and directory
-            # cache. This never opens an HTTP /status request.
+            # One compact HTTP status request every 20 seconds keeps the
+            # `used/max USERS` annunciator factual without touching the audio
+            # or waterfall sockets.
             if not owrx.is_openwebrx_endpoint(server):
                 main_receiver_capacity.refresh(server)
             selected_station_capacity = None if owrx.is_openwebrx_endpoint(server) else main_receiver_capacity.snapshot(server)
@@ -30729,6 +30560,7 @@ def main():
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if theme_editor.open:
+                theme_editor.preview_palette = state.waterfall_snapshot()[4]
                 draw_theme_panel(text_cache, theme_editor)
                 theme_notice_remaining = theme_editor.notice_until - now
                 if theme_notice_remaining > 0:

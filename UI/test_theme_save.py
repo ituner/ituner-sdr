@@ -42,7 +42,8 @@ class ThemeSaveTests(unittest.TestCase):
             with self.subTest(builtin=builtin):
                 self.library.activate(builtin)
                 editor = ThemeEditor(self.library)
-                self.tap(editor, "meters")
+                editor.show("meters")
+                self.tap(editor, "filter:all")
                 identifier = designs[index % len(designs)]
                 self.choose_meter(editor, identifier)
                 self.tap(editor, "save")
@@ -58,7 +59,8 @@ class ThemeSaveTests(unittest.TestCase):
         self.library.upsert(original)
         editor = ThemeEditor(self.library)
         for identifier in ("flex_icom", "linear_orange"):
-            self.tap(editor, "meters")
+            editor.show("meters")
+            self.tap(editor, "filter:all")
             self.choose_meter(editor, identifier)
             self.tap(editor, "save")
             self.assertEqual(editor.mode, "browse", editor.notice)
@@ -71,11 +73,9 @@ class ThemeSaveTests(unittest.TestCase):
     def test_new_draft_skips_existing_names_case_insensitively(self):
         for name in ("NEW THEME", "new theme 2", "New Theme 4"):
             self.library.upsert(new_theme(name))
-        editor = ThemeEditor(self.library)
-        self.tap(editor, "new")
-        self.assertEqual(editor.draft["name"], "New Theme 3")
-        self.tap(editor, "save")
-        self.assertEqual(editor.mode, "browse", editor.notice)
+        draft = self.library.new_theme()
+        self.assertEqual(draft["name"], "New Theme 3")
+        self.library.upsert(draft)
         saved = ThemeLibrary(self.path)
         self.assertEqual(saved.get(saved.active_id)["name"], "New Theme 3")
         self.assertEqual(len(saved.themes), 4)

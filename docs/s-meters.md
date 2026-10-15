@@ -1,10 +1,12 @@
 # S-meter designs
 
-Open Display → Themes → S-Meters, or edit a theme and choose **S-Meter Design**.
-Select a preview and tap **Save Theme** to apply it. Editing a built-in theme
-creates a custom theme with an unused name (New Theme, New Theme 2, etc.);
-you can rename it in the Name section. An existing custom theme
-is updated in place. Leaving without saving discards the meter selection.
+Open **Display → Themes → S-Meters**. Tap a meter for a large animated
+preview, then tap **Apply & Home** to save it and return directly to Home.
+**Cancel** discards the preview. Use **LED / Slider** to find the original
+**LED Bar**, **Analog** for needle meters, or **Magic Eye** for valve designs.
+Renaming or entering an editor is not required. Existing saved themes update
+in place; built-in themes receive an automatically named custom copy.
+See [Themes](themes.md) for palette selection and optional customization.
 
 The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer
 moving horizontally), Classic Ivory, Precision Dark, Aviation Black and Aviation
@@ -14,8 +16,8 @@ LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The expanded gallery has 30 designs across five pages. **More Designs** and
-**Previous Designs** navigate without changing the selected preview or theme.
+The expanded gallery has 30 designs across five pages. **Next** and
+**Previous** navigate without changing the selected preview or theme.
 Eight entries use the actual PNG backgrounds from the Flexible S-Meter download
 bundles: DX101, ICOM, Orange, Dark, Neon, Transparent, Vintage HD White and Vintage HD Orange. Their background files are retained
 unchanged and credited in `UI/assets/smeters/flexible/SOURCE.md` and the third-party

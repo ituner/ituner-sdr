@@ -13,6 +13,7 @@ from smeter_styles import DEFAULT_METER_STYLE, normalize_meter_style
 DEFAULT_THEME_ID = "default"
 STRAIGHT_INVERTED_THEME_ID = "straight-inverted"
 GREEN_THEME_ID = "green"
+BLACK_WHITE_THEME_ID = "black-white"
 REMOVED_THEME_MIGRATIONS = {
     "default-straight": DEFAULT_THEME_ID,
     "rounded-inverted": STRAIGHT_INVERTED_THEME_ID,
@@ -73,14 +74,35 @@ def green_colors(colors):
     return result
 
 
+def black_white_colors(colors):
+    """Use neutral grays throughout the palette while retaining transparency."""
+    result = {}
+    for name, value in colors.items():
+        gray = round(0.2126 * value[0] + 0.7152 * value[1] + 0.0722 * value[2])
+        result[name] = [gray, gray, gray, *value[3:]]
+    # Keep inactive borders as quiet as Default while giving active states
+    # clear neutral edges and preserving a readable live trace.
+    for name, gray in (("background", 0), ("section_surface", 24),
+                       ("section_border", 205),
+                       ("active_border", 255), ("selected_border", 225),
+                       ("section_heading", 240), ("frequency", 255),
+                       ("smeter_active", 225), ("smeter_hot", 255),
+                       ("smeter_marker", 245)):
+        result[name][:3] = [gray] * 3
+    return result
+
+
 INVERTED_COLORS = invert_colors(DEFAULT_THEME["colors"])
 STRAIGHT_INVERTED_THEME = {**DEFAULT_THEME, "id": STRAIGHT_INVERTED_THEME_ID,
                            "name": "Default Inverted", "colors": INVERTED_COLORS}
 GREEN_THEME = {**DEFAULT_THEME, "id": GREEN_THEME_ID, "name": "Green",
                "colors": green_colors(DEFAULT_THEME["colors"])}
+BLACK_WHITE_THEME = {**DEFAULT_THEME, "id": BLACK_WHITE_THEME_ID,
+                     "name": "Black & White",
+                     "colors": black_white_colors(DEFAULT_THEME["colors"])}
 BUILTIN_THEMES = {
     theme["id"]: theme for theme in (
-        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME,
+        DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME, BLACK_WHITE_THEME,
     )
 }
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)
@@ -211,13 +233,15 @@ class ThemeLibrary:
             return normalize_theme(BUILTIN_THEMES[identifier], allow_default=True)
         return next((theme for theme in self.themes if theme["id"] == identifier), None)
 
-    def new_theme(self, source=None):
+    def new_theme(self, source=None, *, name="New Theme"):
         """Give each new editor draft a name that can be saved immediately."""
         used_names = {item["name"].casefold()
                       for item in (*BUILTIN_THEMES.values(), *self.themes)}
-        name, suffix = "New Theme", 2
+        base = str(name).strip()[:32] or "New Theme"
+        name, suffix = base, 2
         while name.casefold() in used_names:
-            name = f"New Theme {suffix}"
+            ending = f" {suffix}"
+            name = base[:32 - len(ending)] + ending
             suffix += 1
         return new_theme(name, source=source)
 

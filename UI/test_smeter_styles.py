@@ -41,10 +41,11 @@ class MeterTests(unittest.TestCase):
             def tap(action):
                 a, b, c, d = theme_screen_boxes(editor)[action]
                 editor.tap((a + c) / 2, (b + d) / 2)
-            tap('meters')
+            editor.show('meters')
             self.assertEqual(editor.section, 'METERS')
-            tap('meter_next')
-            tap('meter_next')
+            for _ in range(5):
+                if 'meter:aviation' in theme_screen_boxes(editor):break
+                tap('meter_next')
             tap('meter:aviation')
             self.assertEqual(editor.preview['smeter_style'], 'aviation')
             self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'led')
@@ -52,8 +53,8 @@ class MeterTests(unittest.TestCase):
             restarted = ThemeLibrary(path)
             self.assertEqual(restarted.get(restarted.active_id)['smeter_style'], 'aviation')
             # Editing an existing custom theme changes it rather than duplicating it.
-            tap('meters')
-            tap('meter_next')
+            editor.show('meters')
+            tap('filter:digital')
             tap('meter:linear')
             tap('save')
             self.assertEqual(len(editor.library.themes), 1)
@@ -87,8 +88,8 @@ class MeterTests(unittest.TestCase):
     def test_every_meter_is_reachable_and_pages_stop_at_end(self):
         with TemporaryDirectory() as directory:
             editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
-            editor.begin()
-            editor.section = 'METERS'
+            editor.show('meters')
+            editor.meter_page = 0
             seen = set()
             for _ in range((len(METER_STYLES) + 5) // 6 + 1):
                 boxes = theme_screen_boxes(editor)
@@ -189,8 +190,8 @@ class MeterTests(unittest.TestCase):
     def test_meter_gallery_has_no_card_frames_and_uses_title_selection_lamp(self):
         with TemporaryDirectory() as directory:
             editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
-            editor.begin()
-            editor.section = 'METERS'
+            editor.show('meters')
+            editor.meter_page = 0
             editor.draft['smeter_style'] = 'flex_icom'
             with ExitStack() as stack:
                 mocks = {name: stack.enter_context(patch.object(ui, name)) for name in (
@@ -202,7 +203,7 @@ class MeterTests(unittest.TestCase):
                 mocks['draw_logical_circle'].assert_called_once()
                 labels = [call.args for call in mocks['draw_text'].call_args_list]
                 self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name
-                                    and call[4] == ui.APP_UI_STYLE.palette.ready for call in labels))
+                                    and call[4] == __import__('theme_screen_render').ACCENT for call in labels))
 
     def test_legacy_and_invalid_saved_styles_fall_back_to_led(self):
         for value in (None, 'unknown', [], {}):

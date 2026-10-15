@@ -1,114 +1,103 @@
-"""Touch-first state and hit targets for the two-column theme editor."""
-
+"""One preview session for choosing a theme, meter and optional customizations."""
+from copy import deepcopy
+import colorsys
+import math
 import time
 
 from smeter_styles import METER_STYLES
-
+from theme_colors import shade_grid, transparency_percent, with_transparency
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
-                          TEXT_SCALE_MIN, TEXT_SCALE_MAX,
-                          color_hex, is_builtin_theme_id)
-
+                          TEXT_SCALE_MIN, TEXT_SCALE_MAX, is_builtin_theme_id,
+                          normalize_theme)
 
 COLOR_GROUPS = (
     ("BASE", ("background", "sidebar", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
     ("TEXT", ("text", "secondary_text", "section_heading", "sidebar_title", "frequency", "focus_text", "untested_text")),
-    ("BUTTON", ("surface", "border", "active_surface", "active_border", "selected_surface",
-                "selected_border", "pressed_surface", "pressed_border")),
-    ("STATES", ("ready", "waiting", "danger", "danger_border", "untested")),
-    ("RADIO", ("meter_on", "meter_hot", "meter_off", "notice")),
-    ("BAND", ("passband_fill", "passband_border", "passband_center",
-              "home_passband_fill", "home_passband_border", "home_passband_center")),
+    ("BUTTON", ("surface", "border", "active_surface", "active_border", "selected_surface", "selected_border", "pressed_surface", "pressed_border")),
+    ("STATES", ("ready", "waiting", "danger", "danger_border", "untested", "notice")),
+    ("RADIO", ("meter_on", "meter_hot", "meter_off")),
+    ("BAND", ("passband_fill", "passband_border", "passband_center", "home_passband_fill", "home_passband_border", "home_passband_center")),
     ("SLIDERS", ("slider_track", "slider_fill", "slider_thumb", "slider_marker")),
     ("FOOTER", ("footer_background", "footer_primary", "footer_live")),
-    ("S-METER", ("smeter_scale", "smeter_hot", "smeter_rail", "smeter_tick", "smeter_minor",
-                 "smeter_active", "smeter_dbm", "smeter_marker", "smeter_peak")),
-    ("SPECTRUM", ("spectrum_field", "spectrum_grid", "spectrum_axis", "spectrum_tick",
-                  "spectrum_label", "spectrum_peak_fill", "spectrum_peak_line",
-                  "spectrum_fill", "spectrum_line")),
-    ("WATERFALL", ("waterfall_low", "waterfall_high", "waterfall_ruler_background",
-                   "waterfall_ruler_minor", "waterfall_ruler_major", "waterfall_ruler_label")),
+    ("S-METER", ("smeter_scale", "smeter_hot", "smeter_rail", "smeter_tick", "smeter_minor", "smeter_active", "smeter_dbm", "smeter_marker", "smeter_peak")),
+    ("SPECTRUM", ("spectrum_field", "spectrum_grid", "spectrum_axis", "spectrum_tick", "spectrum_label", "spectrum_peak_fill", "spectrum_peak_line", "spectrum_fill", "spectrum_line")),
+    ("WATERFALL", ("waterfall_low", "waterfall_high", "waterfall_ruler_background", "waterfall_ruler_minor", "waterfall_ruler_major", "waterfall_ruler_label")),
 )
-NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "DONE")
-HEX_KEYS = tuple("0123456789ABCDEF")
+assert set(COLOR_NAMES) == {key for _, keys in COLOR_GROUPS for key in keys}
+NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "CANCEL", "DONE")
+HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
+NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
+CARDS_PER_PAGE = METER_CARDS_PER_PAGE = 6
+METER_FILTERS = (("all", "ALL"), ("digital", "LED / SLIDER"), ("analog", "ANALOG"), ("eye", "MAGIC EYE"))
+BACK_BOX = (24, 728, 196, 792)
+APPLY_BOX = (984, 728, 1256, 792)
+PREVIEW_BOX = (24, 164, 628, 542)
 
 
 def contains(box, x, y):
     return box[0] <= x < box[2] and box[1] <= y < box[3]
 
 
-def theme_screen_boxes(editor):
-    """Return exactly the boxes used by both paint and touch dispatch."""
-    rail_left, rail_right = 1034, 1270
-    editor_left, editor_right = 536, 1000
-    boxes = {"back": (rail_left, 728, rail_right, 792)}
-    if editor.mode == "browse":
-        boxes.update({
-            "new": (rail_left, 104, rail_right, 168),
-            "meters": (rail_left, 176, rail_right, 240),
-            "previous": (editor_left, 676, 764, 732),
-            "next": (772, 676, editor_right, 732),
-        })
-        for index in range(7):
-            top = 100 + index * 76
-            boxes[f"theme:{index}"] = (editor_left, top, editor_left + 220, top + 64)
-            boxes[f"edit:{index}"] = (editor_left + 232, top, editor_left + 342, top + 64)
-            boxes[f"delete:{index}"] = (editor_left + 354, top, editor_right, top + 64)
+def theme_screen_boxes(editor, *, ignore_overlay=False):
+    """Paint and touch use the same non-overlapping targets."""
+    if editor.overlay and not ignore_overlay:
+        if editor.overlay == "delete":
+            return {"delete_cancel": (360, 446, 624, 510), "delete_confirm": (648, 446, 912, 510)}
+        prefix, keys, columns = ("name", NAME_KEYS, 10) if editor.overlay == "name" else (
+            ("hex", HEX_KEYS, 4) if editor.overlay == "hex" else ("alpha", NUMBER_KEYS, 3))
+        width = 1080 if prefix == "name" else 584
+        left = (1280 - width) / 2
+        cell = (width - (columns - 1) * 8) / columns
+        return {f"{prefix}:{key}": (left + (index % columns) * (cell + 8), 252 + (index // columns) * 68,
+                                      left + (index % columns) * (cell + 8) + cell, 312 + (index // columns) * 68)
+                for index, key in enumerate(keys)}
+    boxes = {"back": BACK_BOX, "save": APPLY_BOX}
+    for index, tab in enumerate(("themes", "meters", "customize")):
+        boxes[f"tab:{tab}"] = (660 + index * 200, 24, 852 + index * 200, 88)
+    if editor.tab in ("themes", "meters"):
+        top = 152 if editor.tab == "themes" else 210
+        height = 150 if editor.tab == "themes" else 132
+        items = editor.themes if editor.tab == "themes" else editor.meter_ids
+        page = editor.page if editor.tab == "themes" else editor.meter_page
+        for slot, item in enumerate(items[page * 6:page * 6 + 6]):
+            identifier = item["id"] if editor.tab == "themes" else item
+            x, y = 660 + (slot % 2) * 304, top + (slot // 2) * (height + 12)
+            boxes[f"{'theme' if editor.tab == 'themes' else 'meter'}:{identifier}"] = (x, y, x + 292, y + height)
+        prefix = "theme" if editor.tab == "themes" else "meter"
+        boxes[f"{prefix}_previous"] = (660, 656, 852, 712)
+        boxes[f"{prefix}_next"] = (1064, 656, 1256, 712)
+        if editor.tab == "meters":
+            for index, (name, _label) in enumerate(METER_FILTERS):
+                boxes[f"filter:{name}"] = (660 + index * 152, 144, 804 + index * 152, 194)
+    elif editor.colors_open:
+        boxes.update({"appearance": (660, 112, 856, 164),
+                      "group_previous": (660, 184, 724, 240), "group_next": (1192, 184, 1256, 240),
+                      "part_previous": (660, 396, 852, 440), "part_next": (1064, 396, 1256, 440),
+                      "hue": (660, 472, 1256, 520),
+                      "hex_open": (660, 656, 952, 712)})
+        keys = editor.family_keys
+        for slot in range(4):
+            index = editor.part_page * 4 + slot
+            if index < len(keys):
+                x, y = 660 + (slot % 2) * 304, 260 + (slot // 2) * 64
+                boxes[f"part:{index}"] = (x, y, x + 292, y + 56)
+        for index in range(16):
+            x, y = 660 + (index % 8) * 76, 540 + (index // 8) * 52
+            boxes[f"shade:{index}"] = (x, y, x + 64, y + 44)
+        if len(editor.current_color) == 4:
+            boxes["alpha_open"] = (964, 656, 1256, 712)
     else:
-        for index, name in enumerate(("STYLE", "UNITS", "COLORS", "NAME", "SIDEBAR", "METERS")):
-            boxes[f"section:{name}"] = (rail_left, 104 + index * 72, rail_right, 168 + index * 72)
-        boxes["save"] = (rail_left, 656, rail_right, 720)
-        if editor.section == "STYLE":
-            for index, name in enumerate(("straight", "rounded")):
-                boxes[f"option:{name}"] = (editor_left + index * 236, 126,
-                                            editor_left + 228 + index * 236, 198)
-        elif editor.section == "METERS":
-            boxes["meter_previous"] = (editor_left, 676, 764, 732)
-            boxes["meter_next"] = (772, 676, editor_right, 732)
-            styles = list(METER_STYLES)[editor.meter_page * 6:editor.meter_page * 6 + 6]
-            for index, identifier in enumerate(styles):
-                left = editor_left + index % 2 * 236
-                top = 100 + index // 2 * 188
-                boxes[f"meter:{identifier}"] = (left, top, left + 228, top + 176)
-        elif editor.section == "SIDEBAR":
-            for index, name in enumerate(("left", "right")):
-                boxes[f"option:{name}"] = (editor_left + index * 236, 126,
-                                            editor_left + 228 + index * 236, 198)
-        elif editor.section == "UNITS":
-            for index, name in enumerate(("imperial", "metric")):
-                boxes[f"option:{name}"] = (editor_left + index * 236, 126,
-                                            editor_left + 228 + index * 236, 198)
-            boxes["text:smaller"] = (editor_left, 330, editor_left + 228, 394)
-            boxes["text:larger"] = (editor_left + 236, 330, editor_right, 394)
-            boxes["text:reset"] = (editor_left, 408, editor_right, 472)
-        elif editor.section == "COLORS":
-            if editor.color_key:
-                for index, key in enumerate(HEX_KEYS):
-                    boxes[f"hex:{key}"] = (
-                        editor_left + index % 4 * 118, 256 + index // 4 * 62,
-                        editor_left + 110 + index % 4 * 118, 310 + index // 4 * 62,
-                    )
-                boxes["hex:BACK"] = (editor_left, 524, editor_left + 228, 580)
-                boxes["hex:CLEAR"] = (editor_left + 236, 524, editor_right, 580)
-                boxes["hex:APPLY"] = (editor_left, 592, editor_left + 228, 648)
-                boxes["hex:CANCEL"] = (editor_left + 236, 592, editor_right, 648)
-                for index in range(4):
-                    boxes[f"swatch:{index}"] = (editor_left + index * 118, 174,
-                                                editor_left + 110 + index * 118, 230)
-            else:
-                for index in range(len(COLOR_GROUPS)):
-                    column, row = index % 4, index // 4
-                    boxes[f"group:{index}"] = (editor_left + column * 118, 110 + row * 46,
-                                                editor_left + 110 + column * 118, 148 + row * 46)
-                keys = COLOR_GROUPS[editor.color_group][1]
-                for index, _key in enumerate(keys):
-                    boxes[f"color:{index}"] = (editor_left, 252 + index * 52,
-                                                editor_right, 298 + index * 52)
-        elif editor.section == "NAME":
-            for index, key in enumerate(NAME_KEYS):
-                boxes[f"name:{key}"] = (
-                    editor_left + index % 4 * 118, 144 + index // 4 * 56,
-                    editor_left + 110 + index % 4 * 118, 194 + index // 4 * 56,
-                )
+        boxes["theme_name"] = (660, 156, 1256, 220)
+        for row, options in enumerate((("left", "right"), ("straight", "rounded"))):
+            for index, value in enumerate(options):
+                boxes[f"option:{value}"] = (852 + index * 204, 248 + row * 72, 1048 + index * 204, 304 + row * 72)
+        boxes.update({"text:smaller": (852, 392, 944, 448), "text:larger": (1160, 392, 1256, 448),
+                      "text:reset": (952, 392, 1152, 448), "colors": (660, 548, 1256, 608),
+                      "copy": (660, 636, 952, 700)})
+        for index, value in enumerate(("original", "metric", "imperial")):
+            boxes[f"option:{value}"] = (852 + index * 136, 464, 980 + index * 136, 520)
+        if not is_builtin_theme_id(editor.selected_id) and editor.library.get(editor.selected_id):
+            boxes["delete"] = (964, 636, 1256, 700)
     return boxes
 
 
@@ -118,224 +107,265 @@ class ThemeEditor:
         self.notice_duration = notice_duration
         self.open = False
         self.mode = "browse"
+        self.tab = "themes"
+        self.section = "THEMES"
+        self.page = self.meter_page = 0
+        self.meter_filter = "all"
+        self.colors_open = False
+        self.color_group = self.part_page = 0
+        self.color_key = COLOR_GROUPS[0][1][0]
+        self.overlay = None
+        self.buffer = ""
+        self.pristine = True
+        self.error = self.status = ""
+        self.notice = self.notice_action = self.notice_detail = ""
+        self.notice_until = 0
+        self.exit_surface = "home"
         self.selected_id = library.active_id
-        self.page = 0
-        self.meter_page = 0
-        self.draft = None
-        self.section = "STYLE"
-        self.color_group = 0
-        self.color_key = None
-        self.hex_value = ""
-        self.hex_pristine = False
-        self.color_original = None
-        self.confirm_delete_id = None
-        self.notice = ""
-        self.notice_action = ""
-        self.notice_detail = ""
-        self.notice_until = 0.0
+        self.entry_theme = deepcopy(library.get(library.active_id))
+        self.draft = deepcopy(self.entry_theme)
 
     @property
     def themes(self):
-        return [*(self.library.get(identifier) for identifier in BUILTIN_THEME_IDS),
-                *self.library.themes]
+        return [*(self.library.get(key) for key in BUILTIN_THEME_IDS), *self.library.themes]
 
     @property
     def selected(self):
-        return self.library.get(self.selected_id) or self.library.get(DEFAULT_THEME_ID)
+        return self.library.get(self.selected_id) or self.entry_theme
 
     @property
     def preview(self):
-        return self.draft if self.mode == "edit" else self.selected
+        return self.draft
 
-    def notify(self, action, detail=""):
-        self.notice_action = str(action).upper()
-        self.notice_detail = str(detail).upper()
-        self.notice = f"{self.notice_detail} {self.notice_action}".strip()
-        self.notice_until = time.monotonic() + self.notice_duration
+    @property
+    def dirty(self):
+        return self.draft != self.entry_theme
+
+    @property
+    def family_keys(self):
+        return COLOR_GROUPS[self.color_group][1]
+
+    @property
+    def current_color(self):
+        return self.draft["colors"][self.color_key]
+
+    @property
+    def meter_ids(self):
+        return [key for key, style in METER_STYLES.items() if self.meter_filter == "all"
+                or self.meter_filter == "digital" and style.kind in ("led", "linear")
+                or self.meter_filter == "analog" and style.kind in ("skin", "triple", "radial", "round")
+                or self.meter_filter == "eye" and style.kind == "eye"]
+
+    @property
+    def page_count(self):
+        return max(1, math.ceil(len(self.themes) / 6))
+
+    @property
+    def meter_page_count(self):
+        return max(1, math.ceil(len(self.meter_ids) / 6))
+
+    def show(self, tab="themes"):
+        self.entry_theme = deepcopy(self.library.get(self.library.active_id))
+        self.draft = deepcopy(self.entry_theme)
+        self.selected_id = self.entry_theme["id"]
+        self.open, self.mode = True, "preview"
+        self.tab, self.section = tab, tab.upper()
+        self.meter_filter = "all"
+        self.page = next(index // 6 for index, item in enumerate(self.themes) if item["id"] == self.selected_id)
+        self.meter_page = list(METER_STYLES).index(self.draft["smeter_style"]) // 6
+        self.overlay = None
+        self.colors_open = False
+        self.error = self.status = ""
+        self.notice_until = 0
 
     def begin(self, theme=None):
-        self.draft = self.library.new_theme(source=theme) if theme is None else {
-            **theme, "colors": {key: list(value) for key, value in theme["colors"].items()},
-        }
-        self.mode = "edit"
-        self.meter_page = 0
-        self.section = "STYLE"
-        self.color_key = None
-        self.color_original = None
-        self.confirm_delete_id = None
-        self.notice = ""
-        self.notice_until = 0.0
+        self.show("customize")
+        self.draft = (self.library.new_theme(source=theme or self.entry_theme)
+                      if theme is None or is_builtin_theme_id(theme["id"]) else deepcopy(theme))
+        self.selected_id = self.draft["id"]
 
-    def cancel_color_edit(self):
-        if self.color_key and self.color_original is not None:
-            self.draft["colors"][self.color_key] = self.color_original
-        self.color_key = None
-        self.color_original = None
-
-    def preview_hex_color(self):
-        if len(self.hex_value) not in (6, 8):
-            return False
-        try:
-            parsed = list(bytes.fromhex(self.hex_value))
-        except ValueError:
-            return False
-        if len(parsed) == 3:
-            parsed += self.color_original[3:]
-        self.draft["colors"][self.color_key] = parsed
-        return True
+    def notify(self, action, detail=""):
+        self.notice_action, self.notice_detail = str(action).upper(), str(detail)
+        self.notice = f"{detail} {action}".strip()
+        self.notice_until = 0  # Inline feedback leaves the preview visible.
+        if action.upper() == "ERROR":
+            self.error = str(detail)
+        else:
+            self.status = str(detail)
 
     def back(self):
-        if self.color_key:
-            self.cancel_color_edit()
-        elif self.mode == "edit":
-            self.mode = "browse"
-            self.draft = None
+        if self.overlay:
+            self.overlay = None
         else:
-            self.confirm_delete_id = None
             self.open = False
+            self.exit_surface = "home"
+            self.draft = deepcopy(self.entry_theme)
+            self.colors_open = False
+            self.error = ""
+
+    def select_theme(self, identifier):
+        item = self.library.get(identifier)
+        if item is None:
+            return
+        meter = self.draft["smeter_style"]
+        self.selected_id = identifier
+        self.draft = deepcopy(item)
+        if is_builtin_theme_id(identifier):
+            self.draft["smeter_style"] = meter
+        self.error = ""
+
+    def save(self):
+        try:
+            normalized = normalize_theme(self.draft, allow_default=is_builtin_theme_id(self.draft["id"]))
+            existing = self.library.get(normalized["id"])
+            if existing == normalized:
+                self.library.activate(normalized["id"])
+            else:
+                if is_builtin_theme_id(normalized["id"]):
+                    copy = self.library.new_theme(source=normalized, name=existing["name"] + " Custom")
+                    if normalized["name"] != existing["name"]:
+                        copy["name"] = normalized["name"]
+                    normalized = copy
+                self.library.upsert(normalized)
+        except (OSError, ValueError) as error:
+            self.notify("ERROR", error)
+            return False
+        self.selected_id = self.library.active_id
+        self.draft = deepcopy(self.library.get(self.selected_id))
+        self.entry_theme = deepcopy(self.draft)
+        self.error = ""
+        self.open = False
+        self.mode = "browse"
+        self.exit_surface = "home"
+        return True
+
+    def _sync_hue(self):
+        self.hue = colorsys.rgb_to_hsv(*(value / 255 for value in self.current_color[:3]))[0]
+
+    def set_hue(self, x):
+        box = theme_screen_boxes(self).get("hue")
+        if box:
+            self.hue = max(0, min(1, (x - box[0]) / (box[2] - box[0])))
+            self.draft["colors"][self.color_key] = [*shade_grid(self.hue)[10], *self.current_color[3:]]
+
+    def drag(self, x, y):
+        if self.open and self.colors_open and not self.overlay:
+            self.set_hue(x)
+
+    def _key(self, value):
+        if value == "CANCEL":
+            self.overlay = None
+            self.error = ""
+            return
+        if value in ("DONE", "APPLY"):
+            try:
+                if self.overlay == "name":
+                    if not self.buffer.strip() or len(self.buffer.strip()) > 32:
+                        raise ValueError("Enter a name of 1–32 characters")
+                    self.draft["name"] = self.buffer.strip()
+                elif self.overlay == "hex":
+                    if len(self.buffer) not in (6, 8):
+                        raise ValueError("Enter 6 or 8 hex digits")
+                    rgb = list(bytes.fromhex(self.buffer))
+                    self.draft["colors"][self.color_key] = rgb + self.current_color[3:] if len(rgb) == 3 else rgb[:len(self.current_color)]
+                else:
+                    self.draft["colors"][self.color_key] = with_transparency(self.current_color, int(self.buffer))
+            except ValueError as error:
+                self.error = str(error)
+                return
+            self.overlay = None
+            self.error = ""
+            return
+        if value == "CLEAR":
+            self.buffer = ""
+        elif value == "DEL":
+            self.buffer = self.buffer[:-1]
+        else:
+            if self.pristine:
+                self.buffer = ""
+            limit = 32 if self.overlay == "name" else 8 if self.overlay == "hex" else 3
+            self.buffer = (self.buffer + (" " if value == "SPACE" else value))[:limit]
+        self.pristine = False
 
     def tap(self, x, y):
-        boxes = theme_screen_boxes(self)
-        action = next((key for key, box in boxes.items() if contains(box, x, y)), None)
+        action = next((name for name, box in theme_screen_boxes(self).items() if contains(box, x, y)), None)
         if action is None:
             return
+        if self.overlay:
+            if self.overlay == "delete":
+                if action == "delete_confirm":
+                    try:
+                        self.library.delete(self.selected_id)
+                    except (ValueError, OSError) as error:
+                        self.notify("ERROR", error)
+                    else:
+                        self.show()
+                else:
+                    self.overlay = None
+            else:
+                self._key(action.split(":", 1)[1])
+            return
+        self.error = ""
         if action == "back":
             self.back()
-            return
-        if self.mode == "browse":
-            if action.startswith(("theme:", "edit:", "delete:")):
-                index = self.page * 7 + int(action.split(":")[1])
-                if index < len(self.themes):
-                    item = self.themes[index]
-                    identifier = item["id"]
-                    if action.startswith("theme:"):
-                        try:
-                            self.library.activate(identifier)
-                        except OSError as error:
-                            self.notify("ERROR", error)
-                        else:
-                            self.selected_id = identifier
-                            self.notify("APPLIED", item["name"])
-                            self.confirm_delete_id = None
-                    elif action.startswith("edit:"):
-                        self.confirm_delete_id = None
-                        self.begin(self.library.new_theme(source=item) if is_builtin_theme_id(identifier) else item)
-                    elif is_builtin_theme_id(identifier):
-                        self.confirm_delete_id = None
-                        self.notify("LOCKED", "BUILT-IN THEME")
-                    elif self.confirm_delete_id == identifier:
-                        try:
-                            self.library.delete(identifier)
-                        except OSError as error:
-                            self.notify("ERROR", error)
-                        else:
-                            self.selected_id = self.library.active_id
-                            self.page = min(self.page, (len(self.themes) - 1) // 7)
-                            self.notify("DELETED", item["name"])
-                        self.confirm_delete_id = None
-                    else:
-                        self.confirm_delete_id = identifier
-                        self.notify("CONFIRM", f"DELETE {item['name']}")
-            elif action == "meters":
-                self.begin(self.library.new_theme(source=self.selected) if is_builtin_theme_id(self.selected_id) else self.selected)
-                self.section = "METERS"
-            elif action == "new":
-                self.begin()
-            elif action == "previous":
-                self.confirm_delete_id = None
-                self.page = max(0, self.page - 1)
-            elif action == "next":
-                self.confirm_delete_id = None
-                self.page = min((len(self.themes) - 1) // 7, self.page + 1)
-            return
-        if action.startswith("section:"):
-            self.cancel_color_edit()
-            self.section = action.split(":")[1]
-        elif action == "meter_previous":
-            self.meter_page = max(0, self.meter_page - 1)
-        elif action == "meter_next":
-            self.meter_page = min((len(METER_STYLES) - 1) // 6, self.meter_page + 1)
         elif action == "save":
-            if self.color_key:
-                if not self.preview_hex_color():
-                    self.notify("ERROR", "ENTER 6 OR 8 HEX DIGITS")
-                    return
-                self.color_key = None
-                self.color_original = None
-            try:
-                self.library.upsert(self.draft)
-            except (ValueError, OSError) as error:
-                self.notify("ERROR", error)
-            else:
-                self.selected_id = self.draft["id"]
-                self.mode = "browse"
-                self.draft = None
-                self.page = (len(self.themes) - 1) // 7
-                self.notify("APPLIED", self.selected["name"])
+            self.save()
+        elif action.startswith("tab:"):
+            self.tab = action.split(":")[1]
+            self.section = self.tab.upper()
+            self.colors_open = False
+            if self.tab == "meters" and self.draft["smeter_style"] in self.meter_ids:
+                self.meter_page = self.meter_ids.index(self.draft["smeter_style"]) // 6
+        elif action.startswith("theme:"):
+            self.select_theme(action.split(":", 1)[1])
         elif action.startswith("meter:"):
-            self.draft["smeter_style"] = action.split(":")[1]
+            self.draft["smeter_style"] = action.split(":", 1)[1]
+        elif action.startswith("filter:"):
+            self.meter_filter = action.split(":")[1]
+            self.meter_page = 0
+        elif action in ("theme_previous", "theme_next"):
+            self.page = max(0, min(self.page_count - 1, self.page + (-1 if action.endswith("previous") else 1)))
+        elif action in ("meter_previous", "meter_next"):
+            self.meter_page = max(0, min(self.meter_page_count - 1, self.meter_page + (-1 if action.endswith("previous") else 1)))
+        elif action == "theme_name":
+            self.overlay, self.buffer, self.pristine = "name", self.draft["name"], True
+        elif action == "copy":
+            self.draft = self.library.new_theme(source=self.draft, name=self.draft["name"][:24] + " Copy")
+            self.selected_id = self.draft["id"]
+            self.status = "Copy ready to preview"
+        elif action == "delete":
+            self.overlay = "delete"
+        elif action == "colors":
+            self.colors_open = True
+            self._sync_hue()
+        elif action == "appearance":
+            self.colors_open = False
+        elif action in ("group_previous", "group_next"):
+            self.color_group = (self.color_group + (-1 if action.endswith("previous") else 1)) % len(COLOR_GROUPS)
+            self.color_key, self.part_page = self.family_keys[0], 0
+            self._sync_hue()
+        elif action.startswith("part:"):
+            self.color_key = self.family_keys[int(action.split(":")[1])]
+            self._sync_hue()
+        elif action in ("part_previous", "part_next"):
+            self.part_page = max(0, min((len(self.family_keys) - 1) // 4, self.part_page + (-1 if action.endswith("previous") else 1)))
+        elif action == "hue":
+            self.set_hue(x)
+        elif action.startswith("shade:"):
+            self.draft["colors"][self.color_key] = [*shade_grid(self.hue)[int(action.split(":")[1])], *self.current_color[3:]]
+        elif action == "hex_open":
+            self.overlay, self.buffer, self.pristine = "hex", "".join(f"{v:02X}" for v in self.current_color), True
+        elif action == "alpha_open":
+            self.overlay, self.buffer, self.pristine = "alpha", str(transparency_percent(self.current_color)), True
         elif action.startswith("option:"):
             value = action.split(":")[1]
-            if value in ("rounded", "straight"):
-                self.draft["radius"] = 8 if value == "rounded" else 0
-            elif value in ("left", "right"):
+            if value in ("left", "right"):
                 self.draft["sidebar"] = value
+            elif value in ("straight", "rounded"):
+                self.draft["radius"] = 0 if value == "straight" else 8
             else:
                 self.draft["units"] = value
         elif action.startswith("text:"):
-            choice = action.split(":")[1]
-            current = self.draft["text_scale_percent"]
-            self.draft["text_scale_percent"] = (
-                100 if choice == "reset" else
-                max(TEXT_SCALE_MIN, current - 5) if choice == "smaller"
-                else min(TEXT_SCALE_MAX, current + 5)
-            )
-        elif action.startswith("group:"):
-            self.color_group = int(action.split(":")[1])
-        elif action.startswith("color:"):
-            index = int(action.split(":")[1])
-            self.color_key = COLOR_GROUPS[self.color_group][1][index]
-            self.color_original = list(self.draft["colors"][self.color_key])
-            self.hex_value = color_hex(self.draft["colors"][self.color_key])[1:]
-            self.hex_pristine = True
-        elif action.startswith("swatch:"):
-            swatches = ((255, 255, 255), (0, 0, 0), (160, 160, 160), (115, 255, 177))
-            base = self.draft["colors"][self.color_key]
-            self.hex_value = color_hex((*swatches[int(action.split(":")[1])], *base[3:]))[1:]
-            self.hex_pristine = True
-            self.preview_hex_color()
-        elif action.startswith("hex:"):
-            value = action.split(":")[1]
-            if value == "BACK":
-                self.hex_value = self.hex_value[:-1]
-                self.hex_pristine = False
-            elif value == "CLEAR":
-                self.hex_value = ""
-                self.hex_pristine = False
-            elif value == "CANCEL":
-                self.cancel_color_edit()
-            elif value == "APPLY":
-                if self.preview_hex_color():
-                    self.color_key = None
-                    self.color_original = None
-                else:
-                    self.notify("ERROR", "ENTER 6 OR 8 HEX DIGITS")
-            elif self.hex_pristine:
-                self.hex_value = value
-                self.hex_pristine = False
-            elif len(self.hex_value) < 8:
-                self.hex_value += value
-            if self.color_key and value not in ("CANCEL", "APPLY"):
-                self.preview_hex_color()
-        elif action.startswith("name:"):
-            value = action.split(":")[1]
-            if value == "DEL":
-                self.draft["name"] = self.draft["name"][:-1]
-            elif value == "CLEAR":
-                self.draft["name"] = ""
-            elif value == "SPACE":
-                self.draft["name"] += " " if len(self.draft["name"]) < 32 else ""
-            elif value == "DONE":
-                self.section = "STYLE"
-            elif len(self.draft["name"]) < 32:
-                self.draft["name"] += value
+            action = action.split(":")[1]
+            self.draft["text_scale_percent"] = (100 if action == "reset" else max(TEXT_SCALE_MIN, min(TEXT_SCALE_MAX,
+                self.draft["text_scale_percent"] + (-5 if action == "smaller" else 5))))
