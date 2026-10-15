@@ -88,6 +88,17 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertFalse(ui.smeter_supports_top_instrument_strip('aviation'))
         self.assertFalse(ui.smeter_supports_top_instrument_strip('oe3ide_eye_plain'))
 
+    def test_meterless_middle_frequency_is_forced_to_the_1280_screen_center(self):
+        ui.configure_output(True)
+        text_cache = Mock()
+        text_cache.font.return_value.size.return_value = (300, 58)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'bakelite_square'}):
+            self.assertEqual(ui.large_frequency_placement('middle'), (640, 'cm'))
+            box = ui.frequency_display_box(text_cache, 7075, position='middle')
+            self.assertEqual((box[0] + box[2]) / 2, 640)
+        with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'linear_orange'}):
+            self.assertEqual(ui.large_frequency_placement('middle')[1], 'rm')
+
     def test_old_frequency_positions_keep_their_screen_locations(self):
         self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
         self.assertEqual(ui.normalize_frequency_position('expanded'), 'middle')

@@ -11,7 +11,7 @@ from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           normalize_theme, theme_appearance)
 
 COLOR_GROUPS = (
-    ("BASE", ("background", "sidebar", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
+    ("BASE", ("background", "sidebar", "sidebar_header", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
     ("TEXT", ("text", "secondary_text", "section_heading", "sidebar_title", "frequency", "focus_text", "untested_text")),
     ("BUTTON", ("surface", "border", "active_surface", "active_border", "selected_surface", "selected_border", "pressed_surface", "pressed_border")),
     ("STATES", ("ready", "waiting", "danger", "danger_border", "untested", "notice")),

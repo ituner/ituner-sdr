@@ -1053,7 +1053,13 @@ class BigFrequencyStyleTests(unittest.TestCase):
         self.assertEqual(calls[2][1]["display_text"], "0")
         self.assertEqual(calls[3][1]["display_text"], "1")
         self.assertIn(
-            mock.call(*ui.frequency_drawer_boxes()["readout"], (35, 13, 16, 255)),
+            mock.call(*ui.frequency_drawer_boxes()["readout"],
+                      ui.APP_UI_STYLE.palette.top_instrument_band),
+            rect.call_args_list,
+        )
+        self.assertIn(
+            mock.call(*ui.frequency_drawer_boxes()["readout"],
+                      ui.APP_UI_STYLE.palette.danger),
             rect.call_args_list,
         )
 

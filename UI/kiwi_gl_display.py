@@ -2225,11 +2225,11 @@ def dual_vfo_action_at(x, y):
 def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, receiver_name, status="LIVE", best=False):
     """One compact VFO instrument strip above an unscaled RF pane."""
     x0, y0, x1, y1 = box
-    active_accent = themed_instrument_color("ready", (90, 222, 245, 255))
-    muted = themed_instrument_color("secondary_text", (102, 126, 134, 255))
-    # Keep the header completely open to the waterfall. The brighter VFO
-    # name alone communicates focus without introducing any perimeter or
-    # side marker into either RF pane.
+    palette = APP_UI_STYLE.palette
+    active_accent = palette.ready
+    muted = palette.secondary_text
+    draw_logical_rect(x0, y0, x1, y1, palette.sidebar_header)
+    draw_section_divider(x0, y1, x1)
     draw_text(
         text_cache, x0 + 18, (y0 + y1) / 2, f"VFO {vfo}",
         active_accent if active else muted, 25, True, False, "lm", family="Liberation Sans",
@@ -2240,32 +2240,32 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
         text_cache, receiver_name or "CURRENT RECEIVER", change_x0 - rx0 - 14,
         16, True, False, family=VFO_FONT_FAMILY,
     )
-    draw_text(text_cache, rx0, (ry0 + ry1) / 2, name, themed_instrument_color("text", (224, 240, 241)), 16, True, False, "lm", family=VFO_FONT_FAMILY)
-    draw_logical_rect(change_x0, ry0, rx1, ry1, (18, 42, 50, 204))
-    draw_logical_line(change_x0, ry0, rx1, ry0, (90, 164, 176, 176), 1)
-    draw_logical_line(change_x0, ry1, rx1, ry1, (45, 86, 97, 178), 1)
-    draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", themed_instrument_color("text", (221, 241, 243)), 14, True, False, "cm", family="Liberation Sans")
+    draw_text(text_cache, rx0, (ry0 + ry1) / 2, name, palette.text, 16, True, False, "lm", family=VFO_FONT_FAMILY)
+    draw_logical_rect(change_x0, ry0, rx1, ry1, palette.surface)
+    draw_logical_line(change_x0, ry0, rx1, ry0, palette.border, 1)
+    draw_logical_line(change_x0, ry1, rx1, ry1, palette.divider, 1)
+    draw_text(text_cache, (change_x0 + rx1) / 2, (ry0 + ry1) / 2, "CHANGE", palette.text, 14, True, False, "cm", family="Liberation Sans")
     detail = status.upper()
     badge_x0 = None
     if detail.startswith("MATCH "):
-        detail_color = themed_instrument_color("ready", (119, 244, 177))
+        detail_color = palette.ready
         detail_size = 25
         badge_x0 = max(x0 + 260, x1 - 178)
-        draw_logical_rect(badge_x0, y0 + 4, x1 - 12, y1 - 4, (20, 91, 65, 172))
-        draw_logical_line(badge_x0, y0 + 4, x1 - 12, y0 + 4, (119, 244, 177, 225), 1)
+        draw_logical_rect(badge_x0, y0 + 4, x1 - 12, y1 - 4, palette.active_surface)
+        draw_logical_line(badge_x0, y0 + 4, x1 - 12, y0 + 4, palette.ready, 1)
     elif detail.startswith("SCORE "):
-        detail_color = themed_instrument_color("waiting", (124, 215, 239))
+        detail_color = palette.waiting
         detail_size = 21
         badge_x0 = max(x0 + 260, x1 - 166)
-        draw_logical_rect(badge_x0, y0 + 5, x1 - 12, y1 - 5, (20, 62, 79, 166))
+        draw_logical_rect(badge_x0, y0 + 5, x1 - 12, y1 - 5, palette.selected_surface)
     elif detail.startswith("MATCHING"):
-        detail_color = themed_instrument_color("waiting", (124, 215, 239))
+        detail_color = palette.waiting
         detail_size = 16
     elif detail in ("LIVE", "WAITING AUDIO"):
-        detail_color = themed_instrument_color("ready", (126, 230, 188))
+        detail_color = palette.ready
         detail_size = 15
     else:
-        detail_color = themed_instrument_color("secondary_text", (165, 177, 178))
+        detail_color = palette.secondary_text
         detail_size = 14
     if best:
         # Keep reception quality with the programme-match conclusion rather
@@ -2273,9 +2273,9 @@ def draw_dual_vfo_header(text_cache, box, vfo, frequency_khz, mode, active, rece
         # MATCH xx% + the source judged clearer.
         best_x1 = (badge_x0 - 8) if badge_x0 is not None else (x1 - 146)
         best_x0 = best_x1 - 54
-        draw_logical_rect(best_x0, y0 + 9, best_x1, y1 - 9, (23, 112, 74, 214))
-        draw_logical_line(best_x0, y0 + 9, best_x1, y0 + 9, (126, 252, 181, 244), 1)
-        draw_text(text_cache, (best_x0 + best_x1) / 2, (y0 + y1) / 2, "BEST", themed_instrument_color("text", (220, 255, 235)), 12, True, False, "cm", family="Liberation Sans")
+        draw_logical_rect(best_x0, y0 + 9, best_x1, y1 - 9, palette.active_surface)
+        draw_logical_line(best_x0, y0 + 9, best_x1, y0 + 9, palette.ready, 1)
+        draw_text(text_cache, (best_x0 + best_x1) / 2, (y0 + y1) / 2, "BEST", palette.text, 12, True, False, "cm", family="Liberation Sans")
     draw_text(text_cache, x1 - 18, (y0 + y1) / 2 + 1, detail, detail_color, detail_size, True, False, "rm", family="Liberation Sans")
 
 
@@ -2330,7 +2330,8 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
     frequency_font_family = frequency_font_family or "Oxanium"
     boxes = dual_vfo_layout()
     rf_w = boxes["rf_w"]
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 255))
+    palette = APP_UI_STYLE.palette
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, palette.background)
     source_a = sources.get("A", {})
     source_b = sources.get("B", {})
     profile_a = profiles.get("A", {})
@@ -2343,7 +2344,8 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
         pane_freq = float(profile.get("freq_khz", frequency_khz))
         pane_span = kiwi.zoom_to_span_khz(int(profile.get("zoom", 0))) if profile else span_khz
         texture.draw(x0, y0, x1, y1, center_khz=waterfall_view_center_khz(pane_freq, pane_span), span_khz=pane_span)
-        draw_logical_rect(x0, y0, x1, y1, (0, 6, 14, 28 if key == "a_waterfall" else 58))
+        draw_logical_rect(x0, y0, x1, y1,
+                          (*palette.background[:3], 28 if key == "a_waterfall" else 58))
 
     draw_dual_vfo_header(text_cache, boxes["a_header"], "A", profile_a.get("freq_khz", frequency_khz), profile_a.get("mode", mode), active_vfo == "A", source_a.get("name", "CURRENT RECEIVER"), best=best_vfo == "A")
     draw_dual_vfo_header(text_cache, boxes["b_header"], "B", profile_b.get("freq_khz", frequency_khz), profile_b.get("mode", mode), active_vfo == "B", source_b.get("name", "CURRENT RECEIVER"), status=b_status, best=best_vfo == "B")
@@ -2352,7 +2354,7 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
 
     rx0, ry0, rx1, ry1 = boxes["rail"]
     draw_logical_rect(rx0, ry0, rx1, ry1, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(rx0, ry0, rx0, ry1, (105, 139, 150, 175), 1)
+    draw_logical_line(rx0, ry0, rx0, ry1, palette.sidebar_rule, 1)
     draw_sidebar_header(text_cache, "DUAL VFO")
     draw_radio_close_button(text_cache, boxes["home"])
 
@@ -2365,7 +2367,7 @@ def draw_dual_vfo_workspace(text_cache, wf_texture_a, wf_texture_b, frequency_kh
 
     # Each VFO keeps the same compact Home instrument order: frequency, mode,
     # and calibrated S-meter. The shared fader is drawn separately below.
-    for vfo, accent, source, profile in (("A", (90, 222, 245), source_a, profile_a), ("B", (90, 222, 245), source_b, profile_b)):
+    for vfo, source, profile in (("A", source_a, profile_a), ("B", source_b, profile_b)):
         suffix = vfo.lower()
         freq_box = boxes[f"freq_{suffix}"]
         fx0, fy0, fx1, fy1 = freq_box
@@ -9082,6 +9084,9 @@ def frequency_display_box(text_cache, freq_khz, font_family=None, position="midd
     width = big_frequency_rendered_width(text_cache, freq_khz, font_family)
     if position == "left":
         box = (LEFT_FREQUENCY_X - 8, 4, LEFT_FREQUENCY_X + width + 8, 70)
+    elif LCD_800_MODE and not smeter_supports_top_instrument_strip():
+        center = LOGICAL_W / 2
+        return (center - width / 2 - 8, 4, center + width / 2 + 8, 70)
     else:
         box = (frequency_right_x() - width - 8, 4, frequency_right_x() + 8, 70)
     return mirror_rf_box(box) if (mirror_top_instruments() if mirrored is None else mirrored) else box
@@ -11275,7 +11280,7 @@ def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92
 
 
 def draw_sidebar_header(text_cache, title):
-    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar)
+    draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LCD_DRAWER_HEADER_H, APP_UI_STYLE.palette.sidebar_header)
     draw_text(text_cache, (LCD_NAV_X0 + LOGICAL_W) / 2, 32, title, APP_UI_STYLE.palette.sidebar_title,
               15, True, False, "cm", family="Liberation Sans")
     draw_section_divider(LCD_NAV_X0 + 10, LCD_DRAWER_HEADER_H, LOGICAL_W - 10)
@@ -16038,6 +16043,20 @@ def smeter_supports_top_instrument_strip(style_id=None):
     return identifier == "led" or style.kind in ("led", "linear", "led_skin", "eye_linear")
 
 
+def large_frequency_placement(instrument_layout):
+    """Place a meterless MIDDLE readout at the physical 1280 px center."""
+    if (LCD_800_MODE and instrument_layout == "middle"
+            and not smeter_supports_top_instrument_strip()):
+        return LOGICAL_W / 2, "cm"
+    left_instruments = LCD_800_MODE and instrument_layout == "left"
+    mirrored = mirror_top_instruments()
+    base_x = LEFT_FREQUENCY_X if left_instruments else frequency_right_x()
+    x = rf_canvas_width() - base_x if mirrored else base_x
+    anchor = (("rm" if left_instruments else "lm") if mirrored
+              else ("lm" if left_instruments else "rm"))
+    return x, anchor
+
+
 def home_bandpass_visible():
     return smeter_rail_extra_height() == 0
 
@@ -17493,7 +17512,8 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     rx0, ry0, rx1, ry1 = boxes["readout"]
     draw_logical_rect(
         rx0, ry0, rx1, ry1,
-        (35, 13, 16, 255) if entry_invalid else (3, 10, 15, 255),
+        APP_UI_STYLE.palette.danger if entry_invalid
+        else APP_UI_STYLE.palette.top_instrument_band,
     )
     # The rail readout uses the same big-frequency face/size/colour as the top
     # instrument strip, so the instrument looks identical wherever it appears.
@@ -19114,6 +19134,7 @@ def draw_ui(
     if show_large_instruments:
         left_instruments = LCD_800_MODE and instrument_layout == "left"
         mirrored_instruments = mirror_top_instruments()
+        frequency_x, frequency_anchor = large_frequency_placement(instrument_layout)
         if LCD_800_MODE:
             draw_band_context_chip(
                 text_cache, main_band_context_box(
@@ -19122,13 +19143,10 @@ def draw_ui(
             )
         draw_big_frequency(
             text_cache, freq_khz,
-            (rf_canvas_width() - (LEFT_FREQUENCY_X if left_instruments else frequency_right_x())
-             if mirrored_instruments else
-             (LEFT_FREQUENCY_X if left_instruments else frequency_right_x())),
+            frequency_x,
             LCD_TOP_INSTRUMENT_CENTER_Y if LCD_800_MODE else 39,
             330.0, family=compact_frequency_font_family,
-            anchor=("rm" if left_instruments else "lm") if mirrored_instruments
-                   else ("lm" if left_instruments else "rm"),
+            anchor=frequency_anchor,
         )
         if smeter_supports_top_instrument_strip():
             if left_instruments:

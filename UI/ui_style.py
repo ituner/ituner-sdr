@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 class UIPalette:
     background: tuple = (18, 18, 18, 255)
     sidebar: tuple = (0, 0, 0, 255)
+    sidebar_header: tuple = (0, 0, 0, 255)
     surface: tuple = (0, 0, 0, 255)
     active_surface: tuple = (42, 42, 42, 255)
     active_border: tuple = (160, 160, 160, 255)

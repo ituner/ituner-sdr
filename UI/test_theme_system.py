@@ -94,6 +94,7 @@ class ThemeSystemTests(unittest.TestCase):
         custom["colors"]["secondary_text"] = [31, 229, 247]
         custom["colors"]["section_heading"] = [237, 208, 41]
         custom["colors"]["ready"] = [37, 244, 68, 255]
+        custom["colors"]["sidebar_header"] = [19, 29, 39, 255]
         apply_theme(custom)
         with patch.object(ui, "draw_logical_rect") as rectangles, patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_styled_text_button"), patch.object(ui, "draw_settings_leaf_sidebar"), \
@@ -113,7 +114,10 @@ class ThemeSystemTests(unittest.TestCase):
             ui.draw_vosc_live_popup_frame(None, (20, 40, 800, 200))
             self.assertEqual(rectangles.call_args.args[-1][-1], 190)
             text.reset_mock()
+            rectangles.reset_mock()
             ui.draw_dual_vfo_header(None, (0, 0, 800, 60), "A", 7000, "USB", True, "Receiver")
+            self.assertIn(call(0, 0, 800, 60, tuple(custom["colors"]["sidebar_header"])),
+                          rectangles.call_args_list)
             self.assertIn(("Receiver", tuple(custom["colors"]["text"])),
                           [(item.args[3], tuple(item.args[4])) for item in text.call_args_list])
             text.reset_mock()
@@ -124,6 +128,29 @@ class ThemeSystemTests(unittest.TestCase):
             text.reset_mock()
             SSTVWorkspace(ui, MagicMock()).text(None, 10, 10, "Decoder status")
             self.assertEqual(tuple(text.call_args.args[4]), tuple(custom["colors"]["text"]))
+
+    def test_frequency_drawer_readout_and_header_use_theme_roles(self):
+        custom = new_theme("Frequency surfaces")
+        custom["colors"]["top_instrument_band"] = [13, 23, 33, 211]
+        custom["colors"]["sidebar_header"] = [43, 53, 63, 255]
+        custom["colors"]["sidebar_title"] = [173, 183, 193]
+        apply_theme(custom)
+        with patch.object(ui, "draw_logical_rect") as rectangles, \
+                patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_big_frequency"), \
+                patch.object(ui, "draw_styled_text_button"), \
+                patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_radio_close_button"), \
+                patch.object(ui, "draw_text") as text:
+            ui.draw_frequency_drawer(None, 7075, 100, "Oxanium")
+        readout = ui.frequency_drawer_boxes()["readout"]
+        self.assertIn(call(*readout, tuple(custom["colors"]["top_instrument_band"])),
+                      rectangles.call_args_list)
+        self.assertIn(call(ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LCD_DRAWER_HEADER_H,
+                           tuple(custom["colors"]["sidebar_header"])),
+                      rectangles.call_args_list)
+        self.assertIn(("FREQUENCY", tuple(custom["colors"]["sidebar_title"])),
+                      [(item.args[3], tuple(item.args[4])) for item in text.call_args_list])
 
     def test_startup_connection_message_uses_active_theme(self):
         custom = new_theme("Connection colors")
