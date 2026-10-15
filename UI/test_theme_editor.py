@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from smeter_styles import METER_STYLES
-from theme_editor import ThemeEditor, theme_screen_boxes, COLOR_GROUPS, CARDS_PER_PAGE, METER_CARDS_PER_PAGE
+from theme_editor import (ThemeEditor, theme_screen_boxes, COLOR_GROUPS, CARDS_PER_PAGE,
+                          METER_CARDS_PER_PAGE, FULLSCREEN_BOX)
 from theme_system import (BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID,
                           ThemeLibrary, apply_theme, new_theme, runtime_theme)
 
@@ -305,6 +306,19 @@ class ThemeEditorTests(unittest.TestCase):
         for overlay in ('hex_open', 'alpha_open'):
             self.tap(overlay);check();self.editor.overlay = None
         self.tap('appearance');self.tap('theme_name');check()
+
+    def test_theme_cards_are_compact_and_paging_aligns_with_fullscreen_preview(self):
+        boxes = theme_screen_boxes(self.editor)
+        cards = [box for name, box in boxes.items() if name.startswith('theme:')]
+        self.assertTrue(cards)
+        self.assertTrue(all(box[3] - box[1] == 72 for box in cards))
+        for name in ('theme_previous', 'theme_next'):
+            self.assertEqual(boxes[name][1:4:2], FULLSCREEN_BOX[1:4:2])
+
+        self.tap('tab:meters')
+        boxes = theme_screen_boxes(self.editor)
+        meter_bottom = max(box[3] for name, box in boxes.items() if name.startswith('meter:'))
+        self.assertLess(meter_bottom, boxes['meter_previous'][1])
 
     def test_fullscreen_continue_and_hide_controls_preserve_unsaved_draft(self):
         self.meter('flex_vintage_hd')

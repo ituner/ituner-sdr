@@ -1,9 +1,10 @@
 import math
+from copy import deepcopy
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import kiwi_gl_display as ui
 from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
@@ -236,7 +237,35 @@ class MeterTests(unittest.TestCase):
                 self.assertEqual((box[2]-box[0],box[3]-box[1]),(236,160))
                 labels = [call.args for call in mocks['draw_text'].call_args_list]
                 self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name.split(' · ')[0]
-                                    and call[4] == __import__('theme_screen_render').ACCENT for call in labels))
+                                    and call[4] == tuple(editor.preview['colors']['focus']) for call in labels))
+
+    def test_theme_editor_controls_use_the_unsaved_theme_palette_and_corners(self):
+        with TemporaryDirectory() as directory:
+            editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
+            editor.show()
+            editor.draft['radius'] = 0
+            editor.draft['colors']['background'] = [9, 19, 29, 255]
+            editor.draft['colors']['surface'] = [11, 21, 31, 255]
+            editor.draft['colors']['border'] = [41, 51, 61, 255]
+            editor.draft['colors']['focus'] = [71, 81, 91, 255]
+            editor.draft['colors']['active_surface'] = [12, 22, 32, 255]
+            editor.draft['colors']['active_border'] = [42, 52, 62, 255]
+            saved_runtime = deepcopy(ui.theme_system.runtime_theme)
+            with patch.object(ui, 'draw_logical_rect') as rect, \
+                 patch.object(ui, 'draw_logical_line') as line, \
+                 patch.object(ui, 'draw_logical_circle'), \
+                 patch.object(ui, 'draw_logical_rounded_rect') as rounded, \
+                 patch.object(ui, 'draw_text'):
+                ui.draw_theme_panel(None, editor)
+            self.assertIn(call(0, 0, 1280, 800, (9, 19, 29, 255)), rect.call_args_list)
+            tab = theme_screen_boxes(editor)['tab:themes']
+            self.assertIn(call(*tab, 0, (12, 22, 32, 255), (42, 52, 62, 255), 2),
+                          rounded.call_args_list)
+            self.assertTrue(rounded.call_args_list)
+            self.assertTrue(all(item.args[4] == 0 for item in rounded.call_args_list))
+            self.assertFalse(any(item.args[:4] == (24, 718, 1256, 718)
+                                 for item in line.call_args_list))
+            self.assertEqual(ui.theme_system.runtime_theme, saved_runtime)
 
     def test_retired_round_eyes_migrate_to_plain_without_reappearing(self):
         from smeter_styles import REMOVED_METER_MIGRATIONS, normalize_meter_style

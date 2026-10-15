@@ -515,7 +515,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.frequency_drawer_key_boxes()[0][1][1] - boxes["down"][3], 16)
         self.assertEqual(
             boxes["step_heading"][1] - max(box[3] for _key, box in ui.frequency_drawer_key_boxes()),
-            32,
+            16,
         )
         self.assertEqual(ui.frequency_drawer_step_boxes()[0][1][1] - boxes["step_heading"][3], 8)
         self.assertNotIn("entry", boxes)
@@ -547,9 +547,12 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
                             for _step, box in kiwi))
         keys = ui.frequency_drawer_key_boxes()
-        self.assertEqual(len(keys), 16)
-        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+        self.assertEqual(len(keys), 15)
+        self.assertEqual([len(row) for row in ui.FREQUENCY_KEY_LABELS], [3] * 5)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (72, 48)
                             for _key, box in keys))
+        row_tops = sorted({box[1] for _key, box in keys})
+        self.assertEqual([b - a for a, b in zip(row_tops, row_tops[1:])], [56] * 4)
         for key, box in keys:
             self.assertEqual(ui.frequency_drawer_action_at(*self._center(box)), f"key_{key}")
 

@@ -81,6 +81,13 @@ class AudioJitterBufferTests(unittest.TestCase):
         self.assertEqual(player.target_packets, 7)
 
 class BoardLayoutTests(unittest.TestCase):
+    def test_only_horizontal_smeters_share_the_top_frequency_strip(self):
+        self.assertTrue(ui.smeter_supports_top_instrument_strip('led'))
+        self.assertTrue(ui.smeter_supports_top_instrument_strip('linear_orange'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('bakelite_square'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('aviation'))
+        self.assertFalse(ui.smeter_supports_top_instrument_strip('oe3ide_eye_plain'))
+
     def test_old_frequency_positions_keep_their_screen_locations(self):
         self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
         self.assertEqual(ui.normalize_frequency_position('expanded'), 'middle')

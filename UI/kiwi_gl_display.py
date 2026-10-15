@@ -4319,11 +4319,15 @@ def frequency_entry_action_at(x, y):
 FREQUENCY_SMALL_BUTTON_W = 55
 FREQUENCY_SMALL_BUTTON_H = 31
 FREQUENCY_SMALL_BUTTON_GAP = 4
+FREQUENCY_KEY_BUTTON_W = 72
+FREQUENCY_KEY_BUTTON_H = 48
+FREQUENCY_KEY_BUTTON_GAP = 8
 FREQUENCY_KEY_LABELS = (
-    ("1", "2", "3", "DEL"),
-    ("4", "5", "6", "CLR"),
-    ("7", "8", "9", "."),
-    ("0", "00", "000", "OK"),
+    ("1", "2", "3"),
+    ("4", "5", "6"),
+    ("7", "8", "9"),
+    (".", "0", "DEL"),
+    ("CLR", "00", "OK"),
 )
 
 
@@ -4335,8 +4339,12 @@ def frequency_drawer_boxes():
     readout_bottom = 160
     arrow_top = readout_bottom + 16
     arrow_bottom = arrow_top + APP_UI_STYLE.button.height
-    keypad_bottom = arrow_bottom + 16 + (len(FREQUENCY_KEY_LABELS) - 1) * 39 + FREQUENCY_SMALL_BUTTON_H
-    step_heading_top = keypad_bottom + 32
+    keypad_bottom = (
+        arrow_bottom + 16
+        + (len(FREQUENCY_KEY_LABELS) - 1) * (FREQUENCY_KEY_BUTTON_H + FREQUENCY_KEY_BUTTON_GAP)
+        + FREQUENCY_KEY_BUTTON_H
+    )
+    step_heading_top = keypad_bottom + 16
     return {
         "panel": (x0, 0, x1, lcd_rail_bottom()),
         "readout": (left, 76, right, readout_bottom),
@@ -4369,15 +4377,15 @@ def frequency_drawer_step_boxes(receiver_type="kiwi"):
 
 
 def frequency_drawer_key_boxes():
-    """Four 55×31 px keys per row, matching the Home mode controls."""
-    group_width = 4 * FREQUENCY_SMALL_BUTTON_W + 3 * FREQUENCY_SMALL_BUTTON_GAP
+    """Three tall touch keys per row with generous vertical padding."""
+    group_width = 3 * FREQUENCY_KEY_BUTTON_W + 2 * FREQUENCY_KEY_BUTTON_GAP
     left = (LCD_NAV_X0 + LOGICAL_W - group_width) / 2
     first_row_top = frequency_drawer_boxes()["down"][3] + 16
     return tuple(
-        (label, (left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP),
-                 first_row_top + row * 39,
-                 left + column * (FREQUENCY_SMALL_BUTTON_W + FREQUENCY_SMALL_BUTTON_GAP) + FREQUENCY_SMALL_BUTTON_W,
-                 first_row_top + row * 39 + FREQUENCY_SMALL_BUTTON_H))
+        (label, (left + column * (FREQUENCY_KEY_BUTTON_W + FREQUENCY_KEY_BUTTON_GAP),
+                 first_row_top + row * (FREQUENCY_KEY_BUTTON_H + FREQUENCY_KEY_BUTTON_GAP),
+                 left + column * (FREQUENCY_KEY_BUTTON_W + FREQUENCY_KEY_BUTTON_GAP) + FREQUENCY_KEY_BUTTON_W,
+                 first_row_top + row * (FREQUENCY_KEY_BUTTON_H + FREQUENCY_KEY_BUTTON_GAP) + FREQUENCY_KEY_BUTTON_H))
         for row, labels in enumerate(FREQUENCY_KEY_LABELS)
         for column, label in enumerate(labels)
     )
@@ -15711,7 +15719,10 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
 def draw_theme_panel(text_cache, editor):
     """Render the full-canvas Theme Library or live editor."""
     from theme_screen_render import draw_theme_screen
-    return draw_theme_screen(text_cache, editor, sys.modules[__name__])
+    # The editor is itself a live preview: its controls, surfaces, corners, and
+    # text must follow the unsaved draft just like the Home preview does.
+    with theme_system.preview_theme(editor.preview):
+        return draw_theme_screen(text_cache, editor, sys.modules[__name__])
 
 
 def lcd_radio_drawer_close_box():
@@ -16018,6 +16029,13 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
 
 def smeter_rail_extra_height():
     return METER_STYLES[theme_system.runtime_theme["smeter_style"]].height - LCD_COMPACT_SMETER_HEIGHT
+
+
+def smeter_supports_top_instrument_strip(style_id=None):
+    """Only compact horizontal meters belong beside a LEFT/MIDDLE VFO."""
+    identifier = style_id or theme_system.runtime_theme["smeter_style"]
+    style = METER_STYLES[identifier]
+    return identifier == "led" or style.kind in ("led", "linear", "led_skin", "eye_linear")
 
 
 def home_bandpass_visible():
@@ -19112,17 +19130,18 @@ def draw_ui(
             anchor=("rm" if left_instruments else "lm") if mirrored_instruments
                    else ("lm" if left_instruments else "rm"),
         )
-        if left_instruments:
-            trace_x = left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family)
-            draw_smeter(
-                text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
-                meter_x0=(mirror_smeter_trace_x(trace_x) if mirrored_instruments else trace_x),
-            )
-        else:
-            trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
-            draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
-                        meter_x0=(mirror_smeter_trace_x(trace_x, 6)
-                                  if mirrored_instruments else None))
+        if smeter_supports_top_instrument_strip():
+            if left_instruments:
+                trace_x = left_smeter_trace_x(text_cache, freq_khz, compact_frequency_font_family)
+                draw_smeter(
+                    text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                    meter_x0=(mirror_smeter_trace_x(trace_x) if mirrored_instruments else trace_x),
+                )
+            else:
+                trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
+                draw_smeter(text_cache, smeter_dbm, spectrum_enabled, smeter_peak_dbm,
+                            meter_x0=(mirror_smeter_trace_x(trace_x, 6)
+                                      if mirrored_instruments else None))
     instrument_alpha = 1.0 - clamp(focus_progress, 0.0, 1.0)
     draw_ruler(
         text_cache,
