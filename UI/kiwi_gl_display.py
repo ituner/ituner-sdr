@@ -14038,19 +14038,19 @@ def receiver_map_legend_visual(group, active, pressed=False):
     return APP_UI_STYLE.button.resolve(active=active, pressed=pressed)
 
 
-def receiver_map_legend_line_color(group, active):
+def receiver_map_legend_swatch_color(group, active):
     """Use the receiver dot colour only while its group is visible."""
     return (RECEIVER_MAP_GROUP_COLORS[group] if active
             else APP_UI_STYLE.palette.secondary_text)
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Full-width legend filters matching Receivers source buttons."""
+    """Compact Globe-only filters, aligned to the rail's right edge."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    x0 = LCD_NAV_X0 + RECEIVER_PICKER_MARGIN
-    width = LOGICAL_W - LCD_NAV_X0 - 2 * RECEIVER_PICKER_MARGIN
+    width = 148
+    x0 = LOGICAL_W - RECEIVER_PICKER_MARGIN - width
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
@@ -14517,8 +14517,8 @@ def draw_receiver_map(
         family=APP_UI_STYLE.button.font_family,
     )
 
-    # The legend doubles as the visibility filter. Its underline matches the
-    # source dots when visible, and turns gray when the source is hidden.
+    # Compact visibility filters pair each source name with its dot colour.
+    # A hidden source keeps a gray square in the same position.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -14530,13 +14530,13 @@ def draw_receiver_map(
             visual.fill, visual.border, visual.border_width,
         )
         draw_text(
-            text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2,
+            text_cache, lx0 + 34, (ly0 + ly1) / 2,
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
-            APP_UI_STYLE.button.label_size, True, False, "cm", family=APP_UI_STYLE.button.font_family,
+            APP_UI_STYLE.button.label_size, True, False, "lm", family=APP_UI_STYLE.button.font_family,
         )
         draw_logical_rect(
-            lx0 + 16, ly1 - 12, lx1 - 16, ly1 - 10,
-            receiver_map_legend_line_color(legend_group, legend_active),
+            lx0 + 12, (ly0 + ly1) / 2 - 6, lx0 + 24, (ly0 + ly1) / 2 + 6,
+            receiver_map_legend_swatch_color(legend_group, legend_active),
         )
 
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")

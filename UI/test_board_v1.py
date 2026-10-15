@@ -1533,14 +1533,14 @@ class ReceiverMapLegendTests(unittest.TestCase):
         pressed = ui.receiver_map_legend_visual('openwebrx', False, pressed=True)
         self.assertEqual(pressed, ui.APP_UI_STYLE.button.resolve(pressed=True))
 
-    def test_legend_underline_follows_receiver_dot_visibility(self):
+    def test_legend_square_follows_receiver_dot_visibility(self):
         for group in ('kiwi', 'openwebrx', 'fmdx'):
-            self.assertEqual(ui.receiver_map_legend_line_color(group, True),
+            self.assertEqual(ui.receiver_map_legend_swatch_color(group, True),
                              ui.RECEIVER_MAP_GROUP_COLORS[group])
-            self.assertEqual(ui.receiver_map_legend_line_color(group, False),
+            self.assertEqual(ui.receiver_map_legend_swatch_color(group, False),
                              ui.APP_UI_STYLE.palette.secondary_text)
 
-    def test_legend_draws_two_pixel_lines_across_full_button_width(self):
+    def test_legend_draws_small_color_squares_before_labels(self):
         receivers = self.receivers()
         ui.receiver_map_toggle_group('fmdx')
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
@@ -1558,10 +1558,10 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ui.draw_receiver_map(None, receivers, 0.0, 0.0, 1.0,
                                  '', None, 'idle', {}, map_view='satellite_only')
         calls = [call.args for call in rectangles.call_args_list]
-        for group, (x0, _y0, x1, y1) in ui.receiver_map_legend_boxes(receivers):
+        for group, (x0, y0, x1, y1) in ui.receiver_map_legend_boxes(receivers):
             color = (ui.APP_UI_STYLE.palette.secondary_text if group == 'fmdx'
                      else ui.RECEIVER_MAP_GROUP_COLORS[group])
-            self.assertIn((x0 + 16, y1 - 12, x1 - 16, y1 - 10, color), calls)
+            self.assertIn((x0 + 12, (y0+y1)/2 - 6, x0 + 24, (y0+y1)/2 + 6, color), calls)
 
     def test_globe_zoom_reaches_1200x_and_uses_home_osd_panel(self):
         self.assertEqual(ui.RADIOGARDEN_ZOOM_MAX, 1200.0)
@@ -1692,7 +1692,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         self.assertTrue(sizes)
         self.assertTrue(all(size == ui.RECEIVER_LIST_THEME.label_size for size in sizes))
 
-    def test_legend_text_is_centered_in_its_button(self):
+    def test_legend_text_is_left_aligned_after_its_color_square(self):
         labels = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
@@ -1718,8 +1718,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             if group not in legend_boxes:
                 continue
             call = next(args for args in labels if args[3] == label)
-            self.assertEqual(call[8], 'cm')
-            self.assertEqual(call[1], (legend_boxes[group][0] + legend_boxes[group][2]) / 2)
+            self.assertEqual(call[8], 'lm')
+            self.assertEqual(call[1], legend_boxes[group][0] + 34)
 
     def _draw_dots(self, scale):
         drawn = []
@@ -1824,7 +1824,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual(box[2] - box[0], 236)
+            self.assertEqual(box[2] - box[0], 148)
+            self.assertEqual(box[2], ui.LOGICAL_W - ui.RECEIVER_PICKER_MARGIN)
             self.assertEqual(box[3] - box[1], ui.RECEIVER_PICKER_CATEGORY_HEIGHT)
             self.assertEqual(box[1], ui.RECEIVER_MAP_LEGEND_RAIL_TOP +
                              list(ui.RECEIVER_MAP_GROUP_ORDER).index(group) *
