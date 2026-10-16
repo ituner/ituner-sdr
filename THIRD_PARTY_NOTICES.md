@@ -76,3 +76,15 @@ print reproduces the VU typography/tick treatment with an accurately calibrated
 S/dBm scale and a live pointer. Manufacturer markings and fixed needles were
 removed. No author callsign or open-source licence is claimed for the supplied
 references. See that directory's `SOURCE.md`, `PROMPTS.md` and calibration data.
+
+## Optional local ADS-B decoder
+
+`scripts/install-adsb.sh` installs wiedehopf/readsb (GPL, see installed
+`readsb.LICENSE`), wiedehopf/tar1090 (GPL-3.0, see `tar1090.LICENSE`), and its
+aircraft database into `/opt/ituner-sdr/decoders/adsb/`. Source checkouts and exact
+revisions are retained on the target; see [ADS-B setup](docs/adsb.md). This
+optional package is downloaded by the installer rather than bundled in the UI.
+
+## VHF/UHF decoder engines
+
+The optional VHF/UHF installer uses [AIS-catcher](https://github.com/jvde-github/AIS-catcher) (GPL-3.0), [Dire Wolf](https://github.com/wb2osz/direwolf) (GPL-2.0), [rtl_433](https://github.com/merbanan/rtl_433) (GPL-2.0), [SatDump](https://github.com/SatDump/SatDump) (GPL-3.0), [gr-satellites](https://github.com/daniestevez/gr-satellites) (GPL-3.0-or-later), [GNU Radio](https://github.com/gnuradio/gnuradio) (GPL-3.0-or-later), [RS1729](https://github.com/rs1729/RS) (GPL-3.0), [SoapySDR](https://github.com/pothosware/SoapySDR) and [SoapyRTLSDR](https://github.com/pothosware/SoapyRTLSDR) (Boost Software License / MIT respectively). Debian package copyright files are installed under `/usr/share/doc/<package>/copyright`; source-built licenses and versions are retained in `/opt/ituner-sdr/decoders/vhf/`. No upstream source is relicensed. Satellite pass calculations use PyEphem and public CelesTrak orbital elements. The application uses the existing bundled GLOBE data notices.
