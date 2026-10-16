@@ -91,6 +91,16 @@ the available satellite-image detail: cached imagery is enlarged while aircraft
 and trail coordinates remain precisely positioned. The browser scale bar switches
 to metres for close views. A manual zoom stays selected when a new aircraft arrives.
 
+The CM5 touchscreen uses a native full-screen Airspace dashboard, styled like
+its browser counterpart: 1090/978 receiver cards, map telemetry, floating touch
+controls, an aircraft instrument card, sortable contacts and dedicated Logs /
+Receiver views. Tap a map icon or contact to inspect it, then Follow or Locate;
+Clear removes the selection. Labels can be toggled, and overlapping labels are
+suppressed. Fit Traffic includes saved trail endpoints when no live position is
+available. Grey endpoints remain historical and cannot initiate Follow.
+On restart, an enabled ADS-B receiver reopens Airspace unless the Meteor
+workspace is active.
+
 Open `http://cm5.local:8090/` on the LAN for Airspace. Its traffic list supports
 callsign/ICAO search and sorting by recency, altitude or callsign. Selected targets
 use gold, lower-altitude targets cyan and cruise-altitude targets blue. Satellite,

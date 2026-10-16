@@ -24723,7 +24723,8 @@ def main():
         vhf_workspace.show('meteor')
         vhf_workspace.view = 'products'
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
-    adsb_workspace.open = args.adsb_preview
+    # Resume the active decoder workspace, matching Meteor startup behavior.
+    adsb_workspace.open = args.adsb_preview or (adsb_manager.enabled and not vhf_workspace.open)
     if sstv_manager.web:
         from log_search_workspace import install_search
         log_search_service = sstv_manager.web.search_history()

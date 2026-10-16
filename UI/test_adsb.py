@@ -1,5 +1,6 @@
 """Receiver allocation, stale data, process recovery and HTTP control boundaries."""
 import json
+import math
 import gzip
 from pathlib import Path
 import tempfile
@@ -150,6 +151,74 @@ class HTTPTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def dashboard(self, aircraft=None):
+        from adsb_workspace import ADSBWorkspace
+        ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
+        ui.logical_to_native.side_effect=lambda x,y:(x,y)
+        ui.radiogarden_project.return_value=(400,350,1)
+        ui.NATIVE_H=800;ui.GL.GL_SCISSOR_BIT=1;ui.GL.GL_ENABLE_BIT=2
+        ui.contains.side_effect=lambda box,x,y:box[0]<=x<=box[2] and box[1]<=y<=box[3]
+        state=dict(enabled=True,status='RECEIVING',aircraft=aircraft or [],messages=100,detail='',port=8090,devices=[],selection='auto',started_at=time.time()-100)
+        manager=Mock();manager.snapshot.return_value=state;manager.track_snapshot.return_value={}
+        manager.log_snapshot.return_value=dict(lines=[],entries=[])
+        return ADSBWorkspace(ui,manager),ui,manager,state
+
+    @staticmethod
+    def press(workspace, action):
+        box=next(box for box,item in workspace.actions if item==action)
+        workspace.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
+
+    def test_dashboard_actions_select_follow_sort_and_clear_without_restarting_receiver(self):
+        planes=[dict(hex='abc',flight='TEST',lat=44,lon=26,seen_pos=0,alt_baro=3000),dict(hex='def',flight='OTHER',seen=2,alt_baro=9000)]
+        workspace,ui,manager,state=self.dashboard(planes)
+        workspace.draw(Mock());self.press(workspace,('select','abc'))
+        workspace.draw(Mock());self.press(workspace,('follow',None))
+        self.assertTrue(workspace.following)
+        for expected in ('altitude','callsign','recent'):
+            workspace.draw(Mock());self.press(workspace,('sort',None))
+            self.assertEqual(workspace.traffic_sort,expected)
+        workspace.draw(Mock());self.press(workspace,('clear',None))
+        self.assertIsNone(workspace.selected);self.assertIsNone(workspace.selected_plane);self.assertFalse(workspace.following)
+        manager.control.assert_not_called()
+
+    def test_dashboard_saved_target_can_be_located_but_cannot_start_follow(self):
+        workspace,ui,manager,state=self.dashboard()
+        manager.track_snapshot.return_value={'old':[dict(time=time.time()-60,lat=44.5,lon=26.2,alt=4000)]}
+        workspace.selected='old';workspace.draw(Mock())
+        self.assertTrue(workspace.selected_plane['historical'])
+        self.assertNotIn(('follow',None),[action for _,action in workspace.actions])
+        workspace.yaw=workspace.pitch=0
+        self.press(workspace,('locate',None))
+        self.assertAlmostEqual(workspace.yaw,math.radians(26.2))
+        self.assertAlmostEqual(workspace.pitch,math.radians(44.5))
+        self.assertFalse(workspace.following);manager.control.assert_not_called()
+        labels=[str(call.args[3]) for call in ui.draw_text.call_args_list]
+        self.assertTrue(any('LAST KNOWN' in label for label in labels))
+
+    def test_dashboard_controls_do_not_overlap_or_intercept_other_targets(self):
+        workspace,ui,manager,state=self.dashboard()
+        for drawer in (None,'usb_open','logs_open','traffic_open'):
+            workspace.usb_open=workspace.logs_open=workspace.traffic_open=False
+            if drawer:setattr(workspace,drawer,True)
+            workspace.draw(Mock())
+            boxes=[box for box,_ in workspace.actions]
+            for i,box in enumerate(boxes):
+                self.assertGreaterEqual(box[0],0);self.assertGreaterEqual(box[1],0)
+                self.assertLessEqual(box[2],1280);self.assertLessEqual(box[3],800)
+                self.assertGreaterEqual(box[3]-box[1],34)
+                for other in boxes[i+1:]:
+                    self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(box,other))
+
+    def test_dashboard_hud_does_not_select_or_drag_an_aircraft_behind_it(self):
+        workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen_pos=0)])
+        ui.radiogarden_project.return_value=(50,200,1)
+        workspace.draw(Mock());workspace.tap(50,200)
+        self.assertIsNone(workspace.selected)
+        workspace.drag_begin(50,200);workspace.drag_move(50,200,100,210)
+        ui.radiogarden_pan_angles.assert_not_called()
+        workspace.traffic_open=True;workspace.draw(Mock())
+        self.assertEqual(workspace.points,[])
+
     def test_saved_endpoint_is_visible_selectable_and_not_followable(self):
         from adsb_workspace import ADSBWorkspace
         ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
