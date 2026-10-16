@@ -36,6 +36,9 @@ class Cm5ApplianceBootTests(unittest.TestCase):
     def test_installer_replaces_desktop_with_matching_wayland_splash(self):
         source = (ROOT / "scripts/install-cm5-app-only.sh").read_text()
         self.assertIn("swaybg -i /usr/local/share/ituner-sdr/boot-splash.png", source)
+        self.assertIn("labwc-system-autostart.before-appliance", source)
+        self.assertNotIn("/usr/bin/lwrespawn /usr/bin/pcmanfm-pi", source)
+        self.assertNotIn("/usr/bin/lwrespawn /usr/bin/wf-panel-pi", source)
         self.assertIn("plymouth-set-default-theme -R ituner-sdr", source)
         self.assertIn("vt.global_cursor_default=0", source)
         self.assertIn("disable_splash=1", source)

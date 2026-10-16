@@ -118,9 +118,21 @@ RestartSec=5
 WantedBy=graphical.target
 EOF
 
-# Continue the branded Plymouth screen as a matching Wayland background. A
-# user autostart overrides Raspberry Pi OS's panel/desktop launch, so there is
-# no desktop or taskbar flash while Python imports and creates its first frame.
+# Continue the branded Plymouth screen as a matching Wayland background.
+# Raspberry Pi OS launches Labwc with merge mode, which executes both system
+# and user autostarts. Replace and back up both levels so pcmanfm/wf-panel
+# cannot cover the splash while Python creates its first frame.
+system_labwc_autostart=/etc/xdg/labwc/autostart
+if [[ -f "$system_labwc_autostart" && ! -f /var/lib/ituner-sdr/labwc-system-autostart.before-appliance ]]; then
+    cp -a "$system_labwc_autostart" /var/lib/ituner-sdr/labwc-system-autostart.before-appliance
+fi
+cat > "$system_labwc_autostart" <<'EOF'
+#!/bin/sh
+/usr/bin/swaybg -i /usr/local/share/ituner-sdr/boot-splash.png -m stretch &
+/usr/bin/kanshi &
+EOF
+chmod 0755 "$system_labwc_autostart"
+
 labwc_dir="$app_home/.config/labwc"
 install -d -o "$app_user" -g "$app_user" "$labwc_dir"
 if [[ -f "$labwc_dir/autostart" && ! -f /var/lib/ituner-sdr/labwc-autostart.before-appliance ]]; then
@@ -128,8 +140,8 @@ if [[ -f "$labwc_dir/autostart" && ! -f /var/lib/ituner-sdr/labwc-autostart.befo
 fi
 cat > "$labwc_dir/autostart" <<'EOF'
 #!/bin/sh
-/usr/bin/swaybg -i /usr/local/share/ituner-sdr/boot-splash.png -m stretch &
-/usr/bin/kanshi &
+# Managed by the iTuner SDR CM5 appliance installer. The system Labwc
+# autostart owns the single splash background and output configuration.
 EOF
 chown "$app_user:$app_user" "$labwc_dir/autostart"
 chmod 0755 "$labwc_dir/autostart"
@@ -187,6 +199,7 @@ Existing JD9365 driver, CM5 overlays, labwc and kanshi settings are preserved.
 Application renders at native 800x1280 through the existing Wayland desktop.
 Application-only launcher swaps touch axes for the landscape interface.
 The branded Plymouth and Wayland splash hides the desktop until the first UI frame.
+Raspberry Pi OS panel and PCManFM desktop autostarts are disabled for appliance boot.
 The cloned upstream repository remains unchanged.
 EOF
 systemd-analyze verify /etc/systemd/system/ituner-sdr.service /etc/systemd/system/ituner-sdr-touch-ready.service
