@@ -49,7 +49,9 @@ sudo ./scripts/install.sh --cm5-existing-display
 The application-only installer copies the current UI and assets to
 `/opt/ituner-sdr`, records the installed Git commit, and restarts the two CM5
 services. It does not install an LCD module, overlay, kernel, orientation, or
-touch mapping. Check the deployed revision and follow the live log with:
+touch mapping. Its only boot-file edits are the reversible presentation flags
+and firmware-logo suppression described below. Check the deployed revision and
+follow the live log with:
 
 ```sh
 cat /var/lib/ituner-sdr/installed-commit
@@ -64,6 +66,21 @@ sudo systemctl restart ituner-sdr.service
 sudo systemctl stop ituner-sdr.service
 sudo systemctl start ituner-sdr.service
 ```
+
+The CM5 installation also configures an appliance-style boot presentation. A
+native iTuner SDR Plymouth screen replaces Raspberry Pi boot messages, and the
+same image continues as the Wayland background until the OpenGL application
+presents its first frame. The panel, desktop and mouse pointer therefore do not
+flash between boot and the radio interface. Receiver networking connects in
+the background instead of delaying the interface on `network-online.target`.
+The renderer publishes `/run/ituner-sdr/ready` after its first displayed frame.
+
+The original boot command line and any pre-existing user Labwc autostart are
+saved once as `/var/lib/ituner-sdr/cmdline.before-appliance` and
+`/var/lib/ituner-sdr/labwc-autostart.before-appliance`. The pre-change
+`config.txt` is saved as `/var/lib/ituner-sdr/config.before-appliance` when the
+installer needs to suppress the firmware rainbow screen. The Plymouth and boot
+presentation changes take effect after the next reboot.
 
 The current CM5 interface uses the native **1280 × 800** landscape workspace
 on the portrait 800 × 1280 JD9365DA-H3 panel and reads the GT911/Goodix touch
