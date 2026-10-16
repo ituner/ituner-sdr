@@ -85,6 +85,12 @@ state. **FIT ALL** (Center in the browser) fits current positioned traffic. The 
 an antenna location or create aircraft. Aircraft lacking a fresh position can
 be decoded/logged without a map marker.
 
+Tracking maps support digital zoom up to 12,000×, including the touchscreen
+buttons and browser buttons, wheel and pinch gestures. Zoom continues beyond
+the available satellite-image detail: cached imagery is enlarged while aircraft
+and trail coordinates remain precisely positioned. The browser scale bar switches
+to metres for close views. A manual zoom stays selected when a new aircraft arrives.
+
 Open `http://cm5.local:8090/` on the LAN for Airspace. Its traffic list supports
 callsign/ICAO search and sorting by recency, altitude or callsign. Selected targets
 use gold, lower-altitude targets cyan and cruise-altitude targets blue. Satellite,
@@ -193,3 +199,5 @@ installed.
 
 - https://www.dynonavionics.com/adsb-dual-band-receiver-472.php/1000
 - https://github.com/wiedehopf/tar1090
+
+Aircraft with stale positions remain as grey, selectable icons at their saved trail endpoints. Labels and selection details show the position age; they are excluded from live counts and cannot start Follow. They follow the selected trail duration (up to 24 hours), and disappear when trails are off. Live positions replace the historical icon. No position is extrapolated from speed reports. Callsign, heading and speed are saved with new trail points; older history uses the ICAO identifier.

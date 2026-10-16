@@ -6,6 +6,9 @@ import math
 
 TRAIL_RETENTION = 24*60*60
 TRAIL_WINDOWS = (0, 300, 900, 1800, 3600, 10800, 21600, 43200, TRAIL_RETENTION)
+MAP_ZOOM_MIN = .55
+# Tracking stays useful well beyond the imagery's native resolution.
+MAP_ZOOM_MAX = 12000.0
 
 
 def trail_label(seconds):
@@ -23,6 +26,39 @@ def reception_summary(state, now):
         seconds=max(0,int(now-stamp))
         return 'now' if seconds<1 else f'{seconds}s ago' if seconds<60 else f'{seconds//60}m ago' if seconds<3600 else f'{seconds//3600}h ago'
     return 'Last message: '+age(state.get('last_message_at'))+' · Last position: '+age(state.get('last_position_at'))
+
+
+def position_age(seconds):
+    seconds=max(0,int(seconds))
+    return f'{seconds}s ago' if seconds<60 else f'{seconds//60}m ago' if seconds<3600 else f'{seconds//3600}h ago'
+
+
+def historical_aircraft(tracks, live, window, now):
+    """Saved endpoints are selectable history, never fresh receiver targets."""
+    if not window:return []
+    current={p['hex'] for p in live}
+    result=[]
+    for key, points in tracks.items():
+        if key in current or not points:continue
+        point=points[-1];at=point.get('time')
+        lat,lon=point.get('lat'),point.get('lon')
+        if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in (at,lat,lon)):continue
+        age=now-at
+        if not 15<=age<=min(window,TRAIL_RETENTION) or not -90<=lat<=90 or not -180<=lon<=180:continue
+        result.append(dict(hex=key,lat=lat,lon=lon,alt_baro=point.get('alt'),
+                           flight=point.get('flight'),track=point.get('track'),gs=point.get('gs'),
+                           baro_rate=point.get('baro_rate'),seen_pos=age,
+                           last_position_at=at,historical=True))
+    return result
+
+
+def point_metadata(plane):
+    result={}
+    if isinstance(plane.get('flight'),str):result['flight']=plane['flight'][:32]
+    for key in ('track','gs','baro_rate'):
+        value=plane.get(key)
+        if isinstance(value,(int,float)) and math.isfinite(value):result[key]=value
+    return result
 
 BANDS = (
     dict(id='1090', name='1090 ES', frequency_mhz=1090, installed=True, description='ADS-B / Mode S'),
@@ -59,7 +95,7 @@ class TrafficHistory:
             if track and at-track[-1]['time'] < 4: continue
             altitude=plane.get('alt_baro')
             if not isinstance(altitude,(int,float)) or not math.isfinite(altitude):altitude=None
-            track.append(dict(lat=lat, lon=lon, time=at, alt=altitude))
+            track.append(dict(lat=lat, lon=lon, time=at, alt=altitude, **point_metadata(plane)))
             self.tracks.move_to_end(plane['hex'])
         self.prune(stamp)
 
@@ -115,7 +151,7 @@ class TrafficHistory:
                     if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in (at,lat,lon)):continue
                     if not stamp-self.retention<=at<=stamp or not -90<=lat<=90 or not -180<=lon<=180:continue
                     if track and at<=track[-1]['time']:continue
-                    track.append(dict(time=at,lat=lat,lon=lon,alt=point.get('alt')))
+                    track.append(dict(time=at,lat=lat,lon=lon,alt=point.get('alt'),**point_metadata(point)))
                 if track:self.tracks[key]=track
             self.tracks=OrderedDict(sorted(self.tracks.items(),key=lambda item:item[1][-1]['time']))
             self.prune(stamp)

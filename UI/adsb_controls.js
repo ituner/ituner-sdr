@@ -1,12 +1,12 @@
-import {ADSBGlobe,startupNoticeVisible,receptionSummary} from './adsb_globe.js';
+import {ADSBGlobe,startupNoticeVisible,receptionSummary,positionAge} from './adsb_globe.js';
 const $=id=>document.getElementById(id),fmt=(value,digits=0)=>typeof value==='number'?value.toLocaleString(undefined,{maximumFractionDigits:digits}):value==='ground'?'GROUND':'—';
 let token='',state=null,editing=false,logKind='flights',selected=null,selectedAt=0,lastCount=null,lastTime=0,logBusy=false,refreshBusy=false,noticeTimer;
 const error=message=>{$('error').textContent=message||'';};
 let globe;
-try {globe=new ADSBGlobe($('globe'),plane=>{if(plane){selected=plane;selectedAt=Date.now();}renderDetails(plane);},error);globe.setStyle('both');globe.trailSeconds=Number($('trails').value);globe.onFollowChange=()=>renderDetails(currentPlane());} catch(e){error('The globe could not start: '+e.message);}
+try {globe=new ADSBGlobe($('globe'),plane=>{if(plane){selected=plane;selectedAt=Date.now();}renderDetails(plane);},error);globe.historicalMarkers=true;globe.setStyle('both');globe.trailSeconds=Number($('trails').value);globe.onFollowChange=()=>renderDetails(currentPlane());} catch(e){error('The globe could not start: '+e.message);}
 $('usb').onchange=()=>editing=true;
 const positioned=p=>Number.isFinite(p?.lat)&&Number.isFinite(p?.lon)&&(p.seen_pos??100)<15;
-function currentPlane(){return state?.aircraft.find(p=>p.hex===selected?.hex)||null;}
+function currentPlane(){return globe?.mapAircraft().find(p=>p.hex===selected?.hex)||state?.aircraft.find(p=>p.hex===selected?.hex)||null;}
 function renderReception(){
   if(!state)return;
   const now=Date.now()/1000,startup=startupNoticeVisible(state,now),offline=state.status==='OFFLINE';
@@ -25,10 +25,10 @@ function renderDetails(live){
   const id=document.createElement('p');id.textContent='ICAO '+p.hex.toUpperCase()+(p.squawk?' · SQUAWK '+p.squawk:'');card.append(id);
   const grid=document.createElement('div');grid.className='instrument-grid';grid.append(detailField('ALTITUDE',fmt(p.alt_baro),'ft'),detailField('GROUND SPEED',fmt(p.gs),'kt'),detailField('HEADING',fmt(p.track),'°'),detailField('VERTICAL RATE',fmt(p.baro_rate),'ft/min'));card.append(grid);
   const position=document.createElement('div');position.className='position-line';
-  position.textContent=positioned(live)?`${fmt(p.lat,4)}°, ${fmt(p.lon,4)}°\nRSSI ${fmt(p.rssi,1)} dBFS · seen ${fmt(p.seen,1)}s ago`:live?'Position unavailable · radio contact active':`Signal lost · last contact ${Math.floor((Date.now()-selectedAt)/1000+(p.seen||0))}s ago`;
+  position.textContent=p.historical?`LAST KNOWN POSITION · ${positionAge(Date.now()/1000-p.last_position_at)} · ${fmt(p.lat,4)}°, ${fmt(p.lon,4)}°`:positioned(live)?`${fmt(p.lat,4)}°, ${fmt(p.lon,4)}°\nRSSI ${fmt(p.rssi,1)} dBFS · seen ${fmt(p.seen,1)}s ago`:live?'Position unavailable · radio contact active':`Signal lost · last contact ${Math.floor((Date.now()-selectedAt)/1000+(p.seen||0))}s ago`;
   card.append(position);const controls=document.createElement('div');controls.className='button-row';
   const follow=document.createElement('button');follow.textContent=globe?.following?'FOLLOWING':'FOLLOW';follow.disabled=!positioned(live)&&!globe?.following;follow.className=globe?.following?'follow-active':'';follow.onclick=()=>{globe?.followSelected(!globe.following);renderDetails(currentPlane());};
-  const center=document.createElement('button');center.textContent='LOCATE';center.disabled=!positioned(live);center.onclick=()=>globe?.locate(live);
+  const center=document.createElement('button');center.textContent='LOCATE';center.disabled=!Number.isFinite(p.lat)||!Number.isFinite(p.lon);center.onclick=()=>globe?.locate(p);
   const clear=document.createElement('button');clear.textContent='CLEAR';clear.onclick=()=>{selected=null;$('follow-banner').hidden=true;if(globe){globe.selected=null;globe.followSelected(false);globe.render();}card.classList.remove('selected');card.replaceChildren();const h=document.createElement('h3');h.textContent='Select an aircraft';card.append(h);renderTraffic();};
   controls.append(follow,center,clear);card.append(controls);
   $('follow-banner').hidden=!globe?.following;$('follow-banner').textContent=(positioned(live)?'FOLLOWING ':'WAITING FOR ')+(p.flight||p.hex).trim();

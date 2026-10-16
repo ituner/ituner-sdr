@@ -78,7 +78,7 @@ class VHFWorkspace(SSTVWorkspace):
                     elif len(self.number)<14:self.number+=value
                 elif action=='continuous':self.session.control('configure',continuous=not self.session.settings.get('continuous'));
                 elif action=='save_site':self.manager.control(self.mode,'location',position=self.station_edit);self.overlay=None
-                elif action=='zoom':self.map.scale=max(.55,min(120,self.map.scale*value))
+                elif action=='zoom':self.map.zoom(value)
                 elif action=='fit':self.map.centered=False;self.map.following=False
                 elif action=='follow':
                     if self.map.selected:self.map.following=not self.map.following

@@ -3,7 +3,7 @@ import math
 import textwrap
 import time
 from sstv_workspace import SSTVWorkspace
-from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, trail_label, startup_notice_visible, reception_summary
+from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
 
 class ADSBWorkspace(SSTVWorkspace):
@@ -41,6 +41,10 @@ class ADSBWorkspace(SSTVWorkspace):
         self.rate = 0
 
     def show(self, *args): self.open = True
+
+    def zoom(self, factor):
+        self.scale=max(MAP_ZOOM_MIN,min(MAP_ZOOM_MAX,self.scale*factor))
+        self.centered=True
 
     def locate(self, plane):
         if self.positioned(plane):
@@ -84,7 +88,7 @@ class ADSBWorkspace(SSTVWorkspace):
                 field='log_page' if self.logs_open else 'traffic_page' if self.traffic_open else 'usb_page'
                 setattr(self,field,max(0,getattr(self,field)+value))
             elif kind=='log_kind': self.log_kind=value;self.log_page=0
-            elif kind=='zoom': self.scale=max(.55,min(120,self.scale*value))
+            elif kind=='zoom': self.zoom(value)
             elif kind=='style': self.map_style={'both':'satellite','satellite':'borders','borders':'both'}[self.map_style]
             elif kind=='trails': self.trail_seconds=TRAIL_WINDOWS[(TRAIL_WINDOWS.index(self.trail_seconds)+1)%len(TRAIL_WINDOWS)]
             elif kind=='rings':
@@ -170,17 +174,22 @@ class ADSBWorkspace(SSTVWorkspace):
                             points=[]
                         previous_time=item.get('time',0)
                         p=ui.radiogarden_project(item,self.yaw,self.pitch,self.MAP,self.scale)
-                        if p and ui.contains(self.MAP,*p[:2]): points.append(p[:2])
+                        # The map scissor clips segments crossing the viewport;
+                        # their endpoints need not both be inside a close view.
+                        if p: points.append(p[:2])
                         elif points:
                             if len(points)>1: ui.draw_logical_polyline(points,(*color,150),2)
                             points=[]
                     if len(points)>1: ui.draw_logical_polyline(points,(*color,150),2)
             self.points=[]
-            for plane in valid:
+            historical=historical_aircraft(self.tracks,valid,self.trail_seconds,time.time()) if 'empty_title' not in state else []
+            selected_history=next((p for p in historical if p['hex']==self.selected),None)
+            if selected_history:self.selected_plane=selected_history
+            for plane in valid+historical:
                 point=ui.radiogarden_project(plane,self.yaw,self.pitch,self.MAP,self.scale)
                 if not point or not ui.contains(self.MAP,*point[:2]): continue
                 x,y=point[:2];self.points.append((x,y,plane))
-                color=self.GOLD if plane['hex']==self.selected else (120,184,255) if isinstance(plane.get('alt_baro'),(int,float)) and plane['alt_baro']>20000 else self.CYAN
+                color=self.GOLD if plane['hex']==self.selected else self.MUTED if plane.get('historical') else (120,184,255) if isinstance(plane.get('alt_baro'),(int,float)) and plane['alt_baro']>20000 else self.CYAN
                 angle=math.radians(plane.get('track') or 0)
                 def vertex(dx,dy): return x+dx*math.cos(angle)-dy*math.sin(angle),y+dx*math.sin(angle)+dy*math.cos(angle)
                 if plane.get('kind')=='ship':
@@ -191,9 +200,11 @@ class ADSBWorkspace(SSTVWorkspace):
                     ui.draw_logical_polyline([vertex(0,-11),vertex(0,10)],(*color,255),3)
                     ui.draw_logical_polyline([vertex(-10,3),vertex(0,-4),vertex(10,3)],(*color,255),2)
                     ui.draw_logical_polyline([vertex(-5,9),vertex(0,6),vertex(5,9)],(*color,255),2)
-                if x<870 and y>105: self.text(cache,x+14,y-10,(plane.get('flight') or plane['hex']).strip(),14,color)
+                label=(plane.get('flight') or plane['hex']).strip()
+                if plane.get('historical'):label+=' · '+position_age(plane['seen_pos'])
+                if x<870 and y>105: self.text(cache,x+14,y-10,label,14,color)
         finally: ui.GL.glPopAttrib()
-        self.panel((16,96,390,128));self.text(cache,28,112,'NORTH UP · GLOBE · '+{'both':'SAT + BORDERS','satellite':'SATELLITE','borders':'BORDERS'}[self.map_style],12,self.MUTED)
+        self.panel((16,96,448,128));self.text(cache,28,112,'NORTH UP · GLOBE · '+{'both':'SAT + BORDERS','satellite':'SATELLITE','borders':'BORDERS'}[self.map_style]+f' · {self.scale:g}×',12,self.MUTED)
         if not valid and ('empty_title' in state or not state['enabled'] or startup_notice_visible(state,time.time())):
             self.panel((264,350,760,444));self.text(cache,288,380,state.get('empty_title', 'LISTENING FOR AIRCRAFT' if state['enabled'] else 'RECEIVER STOPPED'),23)
             self.text(cache,288,416,state.get('empty_detail','Waiting for fresh position messages.'),17,self.MUTED)
@@ -279,6 +290,7 @@ class ADSBWorkspace(SSTVWorkspace):
             self.text(cache,1038,485,'ICAO '+plane['hex'].upper(),14,self.MUTED)
             for x,y,label,value,unit in ((1038,518,'ALTITUDE',plane.get('alt_baro'),'FT'),(1158,518,'SPEED',plane.get('gs'),'KT'),(1038,584,'HEADING',plane.get('track'),'DEG'),(1158,584,'V/S',plane.get('baro_rate'),'FPM')):
                 self.text(cache,x,y,label,10,self.MUTED);self.text(cache,x,y+26,self.value(value),19);self.text(cache,x,y+45,unit,9,self.MUTED)
+            if plane.get('historical'):self.text(cache,1038,644,'LAST KNOWN · '+position_age(time.time()-plane['last_position_at']),11,self.MUTED)
         else:
             self.text(cache,1038,462,'SELECT A TARGET',16,self.MUTED)
             self.text(cache,1038,492,'Tap an aircraft or',14,self.MUTED);self.text(cache,1038,516,'open Traffic.',14,self.MUTED)

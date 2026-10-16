@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import threading
 import globe_tiles
+from adsb_traffic import MAP_ZOOM_MIN, MAP_ZOOM_MAX
 
 
 class GlobeAssets:
@@ -43,7 +44,7 @@ class GlobeAssets:
             return value
         yaw = number('yaw', 25, -180, 180)
         pitch = number('pitch', 45, -82, 82)
-        scale = number('scale', 5, .55, 120)
+        scale = number('scale', 5, MAP_ZOOM_MIN, MAP_ZOOM_MAX)
         width = number('width', 1024, 1, 4096)
         height = number('height', 624, 1, 4096)
         keys = globe_tiles.visible_tiles(math.radians(yaw), math.radians(pitch), (0,0,width,height),

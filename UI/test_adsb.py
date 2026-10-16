@@ -150,6 +150,72 @@ class HTTPTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_saved_endpoint_is_visible_selectable_and_not_followable(self):
+        from adsb_workspace import ADSBWorkspace
+        ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
+        ui.logical_to_native.side_effect=lambda x,y:(x,y)
+        ui.NATIVE_H=800;ui.GL.GL_SCISSOR_BIT=1;ui.GL.GL_ENABLE_BIT=2
+        ui.radiogarden_project.return_value=(400,300,1);ui.contains.return_value=True
+        manager=Mock();now=time.time()
+        manager.track_snapshot.return_value={'abc':[dict(time=now-60,lat=44.5,lon=26,alt=3000)]}
+        manager.snapshot.return_value=dict(aircraft=[])
+        workspace=ADSBWorkspace(ui,manager)
+        state=dict(enabled=True,started_at=now-100,aircraft=[])
+        workspace.draw_map(Mock(),state,[])
+        self.assertEqual(len(workspace.points),1)
+        marker=workspace.points[0][2]
+        self.assertTrue(marker['historical']);self.assertEqual(marker['lat'],44.5)
+        self.assertFalse(workspace.positioned(marker))
+        workspace.actions=[];workspace.tap(400,300)
+        self.assertEqual(workspace.selected,'abc')
+        workspace.actions=[((0,0,10,10),('follow',None))];workspace.tap(5,5)
+        self.assertFalse(workspace.following)
+        workspace.trail_seconds=0;workspace.draw_map(Mock(),state,[])
+        self.assertEqual(workspace.points,[])
+        workspace.trail_seconds=86400;state['empty_title']='AIS'
+        workspace.draw_map(Mock(),state,[])
+        self.assertEqual(workspace.points,[],'Other VHF modes must not gain aircraft history icons')
+
+    def test_history_markers_expire_and_live_positions_replace_them(self):
+        from adsb_traffic import historical_aircraft,TrafficHistory
+        tracks={'abc':[dict(time=100,lat=44,lon=26)]}
+        self.assertEqual(historical_aircraft(tracks,[],300,110),[])
+        self.assertEqual(len(historical_aircraft(tracks,[],300,160)),1)
+        self.assertEqual(historical_aircraft(tracks,[dict(hex='abc')],300,160),[])
+        self.assertEqual(historical_aircraft(tracks,[],300,401),[])
+        history=TrafficHistory();history.ingest([dict(hex='abc',lat=44,lon=26,flight='TEST123',track=130,gs=230,seen_pos=0)],100)
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'trails.json.gz';history.save(path,110)
+            restored=TrafficHistory();restored.load(path,160)
+            marker=historical_aircraft(restored.snapshot(),[],300,160)[0]
+            self.assertEqual((marker['flight'],marker['track'],marker['gs']),('TEST123',130,230))
+
+    def test_zoomed_trail_crossing_viewport_keeps_its_offscreen_endpoint(self):
+        from adsb_workspace import ADSBWorkspace
+        ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
+        ui.logical_to_native.side_effect=lambda x,y:(x,y)
+        ui.NATIVE_H=800;ui.GL.GL_SCISSOR_BIT=1;ui.GL.GL_ENABLE_BIT=2
+        ui.radiogarden_project.side_effect=[(-100,300,1),(400,300,1)]
+        manager=Mock();now=time.time()
+        manager.track_snapshot.return_value={'abc':[dict(time=now-10,lat=44.5,lon=26),dict(time=now,lat=44.5,lon=26.01)]}
+        workspace=ADSBWorkspace(ui,manager);workspace.scale=12000
+        workspace.draw_map(Mock(),dict(enabled=True,started_at=now-100,aircraft=[]),[])
+        ui.draw_logical_polyline.assert_called_once_with([(-100,300),(400,300)],(*workspace.CYAN,150),2)
+
+    def test_manual_zoom_passes_imagery_detail_limit_and_stays_selected(self):
+        from adsb_workspace import ADSBWorkspace
+        from adsb_traffic import MAP_ZOOM_MAX
+        ui=Mock();ui.contains.return_value=True
+        workspace=ADSBWorkspace(ui,Mock());workspace.scale=120
+        workspace.actions=[((0,0,10,10),('zoom',1.6))]
+        workspace.tap(5,5)
+        self.assertEqual(workspace.scale,192)
+        self.assertTrue(workspace.centered,'New aircraft must not undo a manually chosen zoom')
+        for _ in range(20):workspace.tap(5,5)
+        self.assertEqual(workspace.scale,MAP_ZOOM_MAX)
+        workspace.zoom(1/1.6)
+        self.assertLess(workspace.scale,MAP_ZOOM_MAX)
+
     def test_startup_notice_expires_after_five_seconds_without_hiding_history(self):
         from adsb_workspace import ADSBWorkspace
         ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
@@ -236,6 +302,19 @@ class WorkspaceTests(unittest.TestCase):
 
 
 class LogsAndHistoryTests(unittest.TestCase):
+    def test_deep_zoom_reuses_bounded_imagery_tiles(self):
+        from adsb_globe import GlobeAssets
+        from adsb_traffic import MAP_ZOOM_MAX
+        import globe_tiles
+        globe=GlobeAssets();globe.fetcher=Mock();globe.fetcher.ready.return_value=None
+        view=globe.view(dict(yaw=['26.03'],pitch=['44.50'],scale=[str(MAP_ZOOM_MAX)],width=['1024'],height=['624']))
+        keys=globe.fetcher.prefetch.call_args.args[0]
+        self.assertTrue(keys)
+        self.assertLessEqual(len(keys),globe_tiles.MAX_VISIBLE_TILES)
+        self.assertTrue(all(key.level<=globe_tiles.MAX_LEVEL for key in keys))
+        self.assertEqual(view['tiles'],[])
+        with self.assertRaises(ValueError):globe.view(dict(scale=[str(MAP_ZOOM_MAX+1)]))
+
     def test_trails_keep_a_full_day_with_bounded_points_and_recent_detail(self):
         from adsb_traffic import TrafficHistory
         history=TrafficHistory()
