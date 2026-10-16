@@ -75,8 +75,9 @@ flash between boot and the radio interface. Receiver networking connects in
 the background instead of delaying the interface on `network-online.target`.
 The renderer publishes `/run/ituner-sdr/ready` after its first displayed frame.
 
-The original boot command line and any pre-existing user Labwc autostart are
-saved once as `/var/lib/ituner-sdr/cmdline.before-appliance` and
+The original boot command line and pre-existing system/user Labwc autostarts
+are saved once as `/var/lib/ituner-sdr/cmdline.before-appliance`,
+`/var/lib/ituner-sdr/labwc-system-autostart.before-appliance` and
 `/var/lib/ituner-sdr/labwc-autostart.before-appliance`. The pre-change
 `config.txt` is saved as `/var/lib/ituner-sdr/config.before-appliance` when the
 installer needs to suppress the firmware rainbow screen. The Plymouth and boot
