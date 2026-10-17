@@ -1,0 +1,14 @@
+{
+  "eu": [
+    {
+      "low": 400050000,
+      "high": 400150000,
+      "services": [{"name": "STANDARD FREQUENCY AND TIME SIGNAL-SATELLITE (400.1 MHz)", "priority": "primary", "references": []}],
+      "references": ["5.261", "5.262"],
+      "applications": [],
+      "source": "https://efis.cept.org/reports/ReportDownloader?reportid=1",
+      "source_page": 75,
+      "reason": "This allocation has no application column and is omitted from EFIS CSV. Verified against the official PDF, ERC Report 25, January 2025 / editorial update 28 November 2025."
+    }
+  ]
+}

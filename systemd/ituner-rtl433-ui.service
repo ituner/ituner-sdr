@@ -1,0 +1,31 @@
+[Unit]
+Description=RTL433-UI sensor dashboard using the iTuner receiver broker
+Wants=ituner-sdr.service mosquitto.service
+After=network.target ituner-sdr.service mosquitto.service
+
+[Service]
+Type=simple
+User=ituner
+WorkingDirectory=/opt/ituner-sdr/decoders/rtl433-ui
+Environment=NODE_ENV=production
+Environment=PORT=8093
+Environment=ITUNER_VHF_URL=http://127.0.0.1:8092
+Environment=MQTT_URL=mqtt://127.0.0.1:1883
+Environment=SETTINGS_FILE=/var/lib/ituner-rtl433-ui/settings.json
+Environment=MAPPINGS_FILE=/var/lib/ituner-rtl433-ui/mappings.json
+Environment=RTL433_CONFIG=/var/lib/ituner-rtl433-ui/receiver.conf
+Environment=DEVICES_FILE=/var/lib/ituner-rtl433-ui/devices.json
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+StateDirectory=ituner-rtl433-ui
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+DevicePolicy=closed
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

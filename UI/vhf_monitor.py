@@ -80,12 +80,12 @@ def parse_packet(mode, line):
 
 
 class DecoderSession:
-    def __init__(self, hub, mode):
-        self.hub,self.mode=hub,mode
-        self.root=hub.root/mode; self.root.mkdir(exist_ok=True)
-        self.runtime=hub.runtime/mode; self.runtime.mkdir(exist_ok=True)
+    def __init__(self, hub, mode, owner=None):
+        self.hub,self.mode,self.owner=hub,mode,owner or mode
+        self.root=hub.root/self.owner; self.root.mkdir(exist_ok=True)
+        self.runtime=hub.runtime/self.owner; self.runtime.mkdir(exist_ok=True)
         self.lock=threading.RLock(); self.wake=threading.Event(); self.closed=threading.Event()
-        self.processes=[]; self.assigned=None; self.generation=0; self.active_generation=-1
+        self.processes=[]; self.assigned=None; self.generation=0; self.active_generation=-1; self.active_frequency=None
         self.status='STOPPED'; self.detail='Choose a profile and press Start.'; self.messages=0
         self.records=OrderedDict(); self.tracks={}; self.events=deque(maxlen=160); self.output=deque(maxlen=120)
         self.rf={}; self.decoder_stats={}; self.orbit=None; self.started=0; self.retry=0; self.device_retry={}; self.run=None; self.kiss_offset=0; self.kiss_pending=b''
@@ -104,10 +104,11 @@ class DecoderSession:
         self.settings.setdefault('frequency',default['frequency']); self.settings.setdefault('gain',38.6)
         self.settings.setdefault('ppm',0); self.settings.setdefault('doppler',True)
         self.settings.setdefault('continuous',False)
-        # Only explicitly enabled continuous Meteor sessions resume after app startup.
-        self.enabled=self.mode=='meteor' and self.settings.get('continuous') is True and self.settings.get('enabled') is True
+        # The installed sensor dashboard and continuous Meteor can run unattended.
+        resume=(self.mode=='ism' and getattr(hub,'rtl433_ui_installed',False)) or (self.mode=='meteor' and self.settings.get('continuous') is True)
+        self.enabled=bool(resume and self.settings.get('enabled') is True)
         self.target=self.settings['selection']; self.tle_busy=False
-        hub.broker.register(mode,lambda:self.control('stop'))
+        hub.broker.register(self.owner,lambda:self.control('stop'))
         try:
             with (self.root/'receiver.log').open('rb') as stream:
                 stream.seek(0,2);size=stream.tell();stream.seek(max(0,size-65536));lines=stream.read(65536).decode('utf-8','replace').splitlines()
@@ -128,7 +129,8 @@ class DecoderSession:
 
     def control(self, action, **values):
         if action=='start':
-            self.target=self.hub.broker.request(self.mode,[d for d in self.hub.devices if d.get('persistent')],self.settings['selection'])
+            self.target=self.hub.broker.request(self.owner,[d for d in self.hub.devices if d.get('persistent')],self.settings['selection'],handoff=self.owner==self.mode)
+            if self.target is None:raise ValueError('Receiver belongs to another decoder; automatic expansion only uses free dongles.')
         if action=='tle':
             norads=self.profile().get('norads') or [self.profile().get('norad')]
             if not norads[0]: raise ValueError('This profile does not use orbital elements')
@@ -179,6 +181,7 @@ class DecoderSession:
 
     def ingest(self, item):
         now=time.time(); item=dict(item,time=now)
+        if self.mode=='ism':item.update(frequency=self.active_frequency,receiver=self.owner,serial=(self.assigned or {}).get('serial'))
         with self.lock:
             self.messages+=1; identity=item['id']; old=self.records.get(identity,{})
             if not clean_position(item):
@@ -224,13 +227,13 @@ class DecoderSession:
         return process
 
     def launch(self, device):
-        if not self.hub.broker.acquire(self.mode,device['id']): return
+        if not self.hub.broker.acquire(self.owner,device['id']): return
         self.assigned=dict(device); self.active_generation=self.generation; self.started=time.monotonic()
         self.rf={};self.decoder_stats={};self.messages=0;self.records.clear();self.events.clear();self.tracks.clear()
         self.reception={};self.last_reception_sample=0;self.next_reception_log=0
         self.run=self.root/'sessions'/time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())
         self.run.mkdir(parents=True,exist_ok=True); self.kiss_offset=0;self.kiss_pending=b'';self.telemetry_pipe=None;self.satdump_port=None;self.first_frame=None;self.last_frame=None;self.active_norad=None
-        profile=self.profile(); args=soapy_args(device); freq=self.settings['frequency']
+        profile=self.profile(); args=soapy_args(device); freq=self.settings['frequency'];self.active_frequency=freq
         gain=str(self.settings['gain']); ppm=str(self.settings['ppm'])
         self.event(f"Starting {MODES[self.mode]['engine']} · {freq/1e6:.6f} MHz · {device['label']}")
         self.status='STARTING';self.detail='Opening the assigned SoapySDR receiver…'
@@ -238,7 +241,8 @@ class DecoderSession:
             self.child([str(BIN/'AIS-catcher'),'-d','SOAPYSDR','-gu','DEVICE',args,'AGC','off','GAIN','TUNER='+gain,
                 '-s','1536K','-o','5','-M','DT','-N','8101','STATION','iTuner Maritime','-v','10'])
         elif self.mode=='ism':
-            self.child([str(BIN/'rtl_433'),'-c','0','-d',args,'-f',str(freq),'-s','250000','-g',gain,'-p',ppm,'-F','json','-M','time:unix','-M','level'])
+            rate='1000000' if freq>=600000000 else '250000'
+            self.child([str(BIN/'rtl_433'),'-c','0','-d',args,'-f',str(freq),'-s',rate,'-g',gain,'-p',ppm,'-F','json','-M','time:unix','-M','level'])
         else:
             format={'aprs':'pcm','cubesat':'iq','sonde':'iq16','meteor':'tcp'}[self.mode]
             port=free_port()
@@ -318,7 +322,7 @@ class DecoderSession:
             self.event('Receiver released. Capture files retained.')
         if getattr(self,'telemetry_pipe',None):
             self.telemetry_pipe.close();self.telemetry_pipe=None
-        self.assigned=None;self.rf={};self.hub.broker.release(self.mode)
+        self.assigned=None;self.rf={};self.hub.broker.release(self.owner)
         if self.settings['selection']=='auto':self.target='auto'
 
     def poll_kiss(self):
@@ -399,7 +403,7 @@ class DecoderSession:
                 self.status='ERROR';self.detail=f'Decoder exited ({code}). See receiver log.';self.retry=now if self.settings['selection']=='auto' else now+30
         if not self.processes and now>=self.retry:
             devices=[d for d in self.hub.devices if d.get('persistent') and (self.target=='auto' or d['id']==self.target)]
-            device=next((d for d in devices if self.hub.broker.available(self.mode,d['id']) and self.device_retry.get(d['id'],0)<=now),None)
+            device=next((d for d in devices if self.hub.broker.available(self.owner,d['id']) and self.device_retry.get(d['id'],0)<=now),None)
             if not device:
                 self.status='WAITING FOR USB' if not devices else 'WAITING FOR RECEIVER'
                 self.detail='Connect or assign an RTL-SDR.' if not devices else 'Receiver is busy or reconnecting; see receiver log.'
@@ -463,7 +467,8 @@ class DecoderSession:
 
     def snapshot(self):
         with self.lock:
-            return dict(mode=self.mode,status=self.status,detail=self.detail,enabled=self.enabled,
+            return dict(mode=self.mode,receiver=self.owner,target=self.target,status=self.status,detail=self.detail,enabled=self.enabled,
+                receiving_frequency=self.active_frequency if self.assigned and self.active_generation==self.generation else None,
                 settings=dict(self.settings),assigned=dict(self.assigned) if self.assigned else None,
                 messages=self.messages,records=copy.deepcopy(list(self.records.values())),events=copy.deepcopy(list(self.events)),
                 output=list(self.output),rf=dict(self.rf),decoder_stats=copy.deepcopy(self.decoder_stats),reception=dict(self.reception),orbit=copy.deepcopy(self.orbit),tle_busy=self.tle_busy)
@@ -480,6 +485,7 @@ class VHFHub:
         self.root=Path(root or Path.home()/'.local/share/ituner-sdr/vhf');self.root.mkdir(parents=True,exist_ok=True)
         self.runtime=Path(tempfile.gettempdir())/f'ituner-vhf-{os.getuid()}' if not root else self.root/'runtime'
         self.runtime.mkdir(exist_ok=True);self.tle_root=self.root/'orbits';self.tle_root.mkdir(exist_ok=True)
+        self.rtl433_ui_installed=Path('/opt/ituner-sdr/decoders/rtl433-ui/server/index.js').is_file()
         self.catalog=profiles();self.globe=GlobeAssets();self.port=port;self.token=secrets.token_urlsafe(32)
         self.closed=threading.Event();self.asset_lock=threading.Lock();self.assets=[];self.next_assets=0
         try:self.position=receiver_position(json.loads((self.root/'station.json').read_text()))
@@ -487,6 +493,9 @@ class VHFHub:
             try:self.position=receiver_position(json.loads((self.root.parent/'adsb/settings.json').read_text()).get('position'))
             except (OSError,ValueError):self.position=None
         self.sessions={mode:DecoderSession(self,mode) for mode in MODES}
+        self.sensor_receivers={'ism':self.sessions['ism'],**{f'ism-{i}':DecoderSession(self,'ism',f'ism-{i}') for i in range(2,7)}}
+        from spectrum_monitor import SpectrumSurvey
+        self.spectrum=SpectrumSurvey(self)
         self.thread=threading.Thread(target=self._worker,name='vhf-discovery',daemon=True);self.thread.start()
         self.server=None
         if port>=0:
@@ -506,10 +515,10 @@ class VHFHub:
 
     def refresh_assets(self):
         assets=[]
-        for mode in MODES:
-            base=self.root/mode/'sessions'
+        for mode,session in {**self.sessions,**self.sensor_receivers}.items():
+            base=session.root/'sessions'
             sessions=sorted(base.glob('*'),reverse=True) if base.exists() else []
-            for directory in sessions[:20]:
+            for directory in (sessions[:20] if mode in MODES else []):
                 for path in directory.rglob('*'):
                     if path.is_file() and path.name!='settings.json' and path.suffix.lower() in ('.png','.jpg','.jpeg','.json','.jsonl','.kiss','.txt','.cadu','.cbor'):
                         stat=path.stat()
@@ -517,7 +526,7 @@ class VHFHub:
                         assets.append(dict(path=path.relative_to(self.root).as_posix(),name=path.name,mode=mode,size=stat.st_size,time=stat.st_mtime,
                             image=path.suffix.lower() in ('.png','.jpg','.jpeg')))
             # Keep storage bounded; never remove an active capture directory.
-            active=self.sessions[mode].run
+            active=session.run
             total=sum(p.stat().st_size for d in sessions for p in d.rglob('*') if p.is_file())
             for directory in reversed(sessions):
                 if directory==active:continue
@@ -529,20 +538,34 @@ class VHFHub:
     def snapshot(self):
         with self.asset_lock:assets=list(self.assets)
         return dict(sessions={k:v.snapshot() for k,v in self.sessions.items()},devices=list(self.devices),
-            leases=self.broker.snapshot(),receiver_position=self.position,assets=assets,port=self.port)
+            sensor_receivers={k:v.snapshot() for k,v in self.sensor_receivers.items()},
+            leases=self.broker.snapshot(),receiver_position=self.position,assets=assets,port=self.port,
+            dashboards=dict(rtl433=self.rtl433_ui_installed))
 
     def control(self,mode,action,**values):
+        if mode=='spectrum':return self.spectrum.control(action,**values)
         if action=='location':
             self.position=receiver_position(values.get('position'))
             (self.root/'station.json').write_text(json.dumps(self.position));return
         if action=='scan':
             self.devices=self.scanner();return
+        if mode in self.sensor_receivers:
+            if mode!='ism' and action not in ('start','stop','configure'):raise ValueError('Unknown sensor receiver action')
+            # Native Stop sensors releases the whole pool. A broker handoff calls
+            # the individual session directly, leaving other dongles receiving.
+            if mode=='ism' and action=='stop':
+                for key,session in self.sensor_receivers.items():
+                    if key!='ism':session.control('stop')
+            self.sensor_receivers[mode].control(action,**values);return
         if mode not in self.sessions:raise ValueError('Unknown decoder')
         self.sessions[mode].control(action,**values)
 
     def close(self):
         self.closed.set();self.thread.join(timeout=6)
+        self.spectrum.close()
         for session in self.sessions.values():session.close()
+        for key,session in self.sensor_receivers.items():
+            if key!='ism':session.close()
         if self.server:self.server.shutdown();self.server.server_close()
 
 
@@ -551,6 +574,14 @@ class VHFHandler(ADSBHandler):
         manager=self.server.manager;request=urlsplit(self.path);path=unquote(request.path);query=parse_qs(request.query)
         try:
             if path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
+            elif path=='/api/spectrum':self.send(json.dumps(dict(manager.spectrum.snapshot(),devices=manager.devices,leases=manager.broker.snapshot(),control_token=manager.token)).encode())
+            elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())
+            elif path=='/api/spectrum/history':
+                with manager.spectrum.lock:
+                    data=dict(manager.spectrum.data)
+                    if 'settings' in data:data['settings']=dict(data['settings'])
+                values={key:query[key][0] for key in ('after','low','high','columns') if key in query}
+                self.send(json.dumps(manager.spectrum.history.read(data,**values)).encode())
             elif path=='/api/catalog':self.send(json.dumps(manager.catalog).encode())
             elif path=='/api/tracks':
                 mode=query.get('mode',['ais'])[0]
@@ -560,7 +591,7 @@ class VHFHandler(ADSBHandler):
                 self.send(json.dumps(data).encode())
             elif path=='/api/log':
                 mode=query.get('mode',['ais'])[0];kind=query.get('kind',['observations'])[0]
-                if mode not in MODES or kind not in ('observations','receiver'):raise ValueError('Unknown log')
+                if mode not in set(MODES)|set(manager.sensor_receivers)|{'spectrum'} or kind not in ('observations','receiver'):raise ValueError('Unknown log')
                 file=manager.root/mode/('observations.jsonl' if kind=='observations' else 'receiver.log')
                 self.send(file.read_bytes() if file.exists() else b'', 'text/plain; charset=utf-8')
             elif path.startswith('/products/'):
@@ -569,8 +600,8 @@ class VHFHandler(ADSBHandler):
                 if file.suffix.lower() not in ('.png','.jpg','.jpeg','.json','.jsonl','.kiss','.txt','.cadu','.cbor'):raise ValueError('Unknown capture type')
                 if file.stat().st_size>64*1024*1024:raise ValueError('Capture is too large to download in the browser')
                 self.send(file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-            elif path in ('/','/vhf_dashboard.js','/vhf_dashboard.css'):
-                filename='vhf_dashboard.html' if path=='/' else path[1:]
+            elif path in ('/','/vhf_dashboard.js','/vhf_dashboard.css','/spectrum','/spectrum.js','/spectrum.css'):
+                filename='vhf_dashboard.html' if path=='/' else 'spectrum.html' if path=='/spectrum' else path[1:]
                 self.send(Path(__file__).with_name(filename).read_bytes(),mimetypes.guess_type(filename)[0] or 'text/plain')
             else:super().do_GET()
         except (ValueError,OSError,KeyError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)

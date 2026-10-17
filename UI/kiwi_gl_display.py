@@ -2545,7 +2545,8 @@ VHF_UHF_DECODER_ITEMS = (
     ("cubesat", "CubeSat"),
     ("sonde", "Radiosonde"),
 )
-DIGITAL_MENU_ITEMS = HF_DECODER_ITEMS + VHF_UHF_DECODER_ITEMS + (("digital_back", "BACK"),)
+SPECTRUM_MENU_ITEMS = (("spectrum", "SPECTRUM ANALYZER"),)
+DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_ITEMS + (("digital_back", "BACK"),)
 
 
 SETTINGS_MENU_SUBTITLES = {
@@ -16683,15 +16684,18 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     if has_back and item_count == len(DIGITAL_MENU_ITEMS):
         if index == item_count - 1:
             return lcd_drawer_back_box()
+        if index < len(SPECTRUM_MENU_ITEMS):
+            return LCD_NAV_X0 + 10, 108, LOGICAL_W - 10, 172
+        index -= len(SPECTRUM_MENU_ITEMS)
         if index < len(HF_DECODER_ITEMS):
             col, row = index % 2, index // 2
             x0 = LCD_NAV_X0 + 10 + col * 122
-            return x0, 142 + row * 72, x0 + 114, 206 + row * 72
+            return x0, 210 + row * 64, x0 + 114, 266 + row * 64
         vhf_index = index - len(HF_DECODER_ITEMS)
         col, row = vhf_index % 2, vhf_index // 2
         x0 = LCD_NAV_X0 + 10 + col * 122
         x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
-        return x0, 408 + row * 72, x1, 472 + row * 72
+        return x0, 438 + row * 64, x1, 494 + row * 64
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
@@ -17112,8 +17116,8 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
-        draw_text(text_cache, LCD_NAV_X0 + 12, 124, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 382, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 194, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 420, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -23876,6 +23880,7 @@ def main():
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--adsb-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--decoder-menu-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--spectrum-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--rtl-lab-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
@@ -24719,9 +24724,14 @@ def main():
     adsb_manager = ADSBManager(broker=receiver_broker)
     vhf_hub = VHFHub(broker=receiver_broker)
     vhf_workspace = VHFWorkspace(sys.modules[__name__], vhf_hub)
-    if vhf_hub.sessions['meteor'].enabled:
+    if args.spectrum_preview:
+        vhf_workspace.show('spectrum')
+    elif vhf_hub.sessions['meteor'].enabled:
         vhf_workspace.show('meteor')
         vhf_workspace.view = 'products'
+    elif vhf_hub.sessions['ism'].enabled:
+        vhf_workspace.show('ism')
+        vhf_workspace.view = 'data'
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
     # Resume the active decoder workspace, matching Meteor startup behavior.
     adsb_workspace.open = args.adsb_preview or (adsb_manager.enabled and not vhf_workspace.open)
@@ -25865,6 +25875,7 @@ def main():
             dual_vfo_receiver_list_target = None
         adsb_workspace.open = False
         vhf_workspace.open = False
+        vhf_workspace.spectrum.open = False
         sstv_workspace.open = False
         hell_workspace.open = False
         qrss_workspace.open = False
@@ -26089,7 +26100,7 @@ def main():
             start_dual_vfo_clients()
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
-        elif kind in vhf_hub.sessions:
+        elif kind in vhf_hub.sessions or kind == "spectrum":
             settings_menu_open = digital_menu_open = False
             vhf_workspace.show(kind)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
@@ -30643,6 +30654,8 @@ def main():
                 qrss_manager.configs, cw_manager.configs,
             )
             decoder_counts['adsb'] = int(adsb_manager.snapshot()['status'] == 'RECEIVING')
+            with vhf_hub.spectrum.lock:
+                decoder_counts['spectrum'] = int(vhf_hub.spectrum.run_state()['phase'] == 'RUNNING')
             decoder_counts.update({mode: int(session.status in ('RECEIVING', 'LISTENING')) for mode, session in vhf_hub.sessions.items()})
             if not globe_covering_radio:
                 draw_ui(

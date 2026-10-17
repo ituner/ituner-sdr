@@ -23,13 +23,14 @@ class ReceiverBroker:
     def register(self, owner, stop):
         with self.lock: self.stoppers[owner] = stop
 
-    def request(self, owner, devices, selection='auto'):
+    def request(self, owner, devices, selection='auto', handoff=True):
         """User-requested handoff, preferring an unused receiver for Auto."""
         with self.lock:
             choices = [d for d in devices if selection == 'auto' or d['id'] == selection]
             if not choices: return selection
             target = next((d for d in choices if self.leases.get(d['id']) in (None, owner)), choices[0])
             previous = self.leases.get(target['id'])
+            if previous not in (None,owner) and not handoff:return None
             stop = self.stoppers.get(previous) if previous != owner else None
         if stop: stop()
         return target['id']
