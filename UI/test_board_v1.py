@@ -99,6 +99,27 @@ class BoardLayoutTests(unittest.TestCase):
         with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'linear_orange'}):
             self.assertEqual(ui.large_frequency_placement('middle')[1], 'rm')
 
+    def test_saving_large_meter_moves_frequency_to_visible_right_rail(self):
+        ui.configure_output(True)
+        with patch.dict(ui.theme_system.runtime_theme, {'sidebar': 'right'}):
+            self.assertEqual(
+                ui.instrument_layout_after_theme_save('left', 'bakelite_square'),
+                'right',
+            )
+            self.assertEqual(
+                ui.instrument_layout_after_theme_save('middle', 'aviation'),
+                'right',
+            )
+            self.assertEqual(
+                ui.instrument_layout_after_theme_save('left', 'linear_orange'),
+                'left',
+            )
+        with patch.dict(ui.theme_system.runtime_theme, {'sidebar': 'left'}):
+            self.assertEqual(
+                ui.instrument_layout_after_theme_save('middle', 'bakelite_square'),
+                'left',
+            )
+
     def test_old_frequency_positions_keep_their_screen_locations(self):
         self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
         self.assertEqual(ui.normalize_frequency_position('expanded'), 'middle')

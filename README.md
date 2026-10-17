@@ -41,7 +41,9 @@ sudo ./scripts/install.sh --cm5-existing-display
 The application-only installer copies the current UI and assets to
 `/opt/ituner-sdr`, records the installed Git commit, and restarts the two CM5
 services. It does not install an LCD module, overlay, kernel, orientation, or
-touch mapping. Check the deployed revision and follow the live log with:
+touch mapping. Its only boot-file edits are the reversible presentation flags
+and firmware-logo suppression described below. Check the deployed revision and
+follow the live log with:
 
 ```sh
 cat /var/lib/ituner-sdr/installed-commit
@@ -56,6 +58,22 @@ sudo systemctl restart ituner-sdr.service
 sudo systemctl stop ituner-sdr.service
 sudo systemctl start ituner-sdr.service
 ```
+
+The CM5 installation also configures an appliance-style boot presentation. A
+native iTuner SDR Plymouth screen replaces Raspberry Pi boot messages, and the
+same image continues as the Wayland background until the OpenGL application
+presents its first frame. The panel, desktop and mouse pointer therefore do not
+flash between boot and the radio interface. Receiver networking connects in
+the background instead of delaying the interface on `network-online.target`.
+The renderer publishes `/run/ituner-sdr/ready` after its first displayed frame.
+
+The original boot command line and pre-existing system/user Labwc autostarts
+are saved once as `/var/lib/ituner-sdr/cmdline.before-appliance`,
+`/var/lib/ituner-sdr/labwc-system-autostart.before-appliance` and
+`/var/lib/ituner-sdr/labwc-autostart.before-appliance`. The pre-change
+`config.txt` is saved as `/var/lib/ituner-sdr/config.before-appliance` when the
+installer needs to suppress the firmware rainbow screen. The Plymouth and boot
+presentation changes take effect after the next reboot.
 
 The current CM5 interface uses the native **1280 × 800** landscape workspace
 on the portrait 800 × 1280 JD9365DA-H3 panel and reads the GT911/Goodix touch
@@ -182,6 +200,14 @@ The minimum desktop packages exercise the UI, live receiver, waterfall and
 local audio. NumPy and SciPy enable the Python decoder paths. FFmpeg is needed
 for FM-DX MP3 audio.
 
+**Install the bundled fonts before opening the desktop app.** The files are in
+[`assets/fonts/`](assets/fonts/README.md): Oxanium (big frequency), Roboto,
+Liberation Sans/Mono/Serif, and DejaVu Sans. The Python UI looks up these font
+families through the operating system; keeping the files in the repository
+alone does not make them available to the desktop window. Use the steps for
+your operating system below, then fully quit and reopen the app if it was
+already running.
+
 ### macOS
 
 Install Python and the native audio/decoder tools with Homebrew, then create a
@@ -195,8 +221,13 @@ python3.12 -m venv UI/.venv
 source UI/.venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+mkdir -p "$HOME/Library/Fonts"
+find assets/fonts -type f -name '*.ttf' -exec cp -f {} "$HOME/Library/Fonts/" \;
 python UI/kiwi_gl_display.py --desktop --fps 30
 ```
+
+This installs the bundled fonts for your macOS user. You can also open the
+`.ttf` files from `assets/fonts/` in Font Book and choose **Install**.
 
 For a clean test that ignores the previously selected receiver:
 
@@ -219,6 +250,13 @@ Set-ExecutionPolicy -Scope Process Bypass
 UI\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+```
+
+Before starting the app, open `assets\fonts` in File Explorer. Open each font
+family folder, select its `.ttf` files, right-click, and choose **Install**
+(or **Show more options → Install**). Install Oxanium too. Then run:
+
+```powershell
 python UI\kiwi_gl_display.py --desktop --fps 30
 ```
 
@@ -244,6 +282,9 @@ python3 -m venv UI/.venv
 source UI/.venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+mkdir -p "$HOME/.local/share/fonts/ituner-sdr"
+find assets/fonts -type f -name '*.ttf' -exec cp -f {} "$HOME/.local/share/fonts/ituner-sdr/" \;
+fc-cache -f "$HOME/.local/share/fonts/ituner-sdr"
 SDL_VIDEODRIVER=wayland python UI/kiwi_gl_display.py --desktop --fps 30
 ```
 
