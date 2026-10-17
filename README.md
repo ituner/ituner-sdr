@@ -115,6 +115,16 @@ Whisper uses a pinned CPU-only `whisper.cpp` build and multilingual Base Q5_1,
 including Chinese and Romanian transcription. Installation makes the engine
 available; it preserves the selected ASR engine. See [Whisper installation](docs/whisper.md).
 
+## ADS-B and VHF/UHF decoders
+
+The Decode menu groups existing KiwiSDR modes under **HF DECODERS** and local
+USB tools under **VHF/UHF DECODERS**. Airspace uses readsb and the shared GLOBE
+map for live aircraft, trails, follow mode, traffic search, dongle assignment,
+reconnection and on-screen flight/receiver/diagnostic logs. Its separate 978 UAT
+slot is reserved for a future second receiver and decoder. Install
+with `sudo ./scripts/install-adsb.sh` or add `--adsb` to the CM5 app installer.
+See [ADS-B setup and custom-carrier USB power selection](docs/adsb.md).
+
 ## CM5 / JD9365DA-H3 30-pin LCD hardware setup
 
 For a fresh system using the r2 main board's **YX80030ACT3 on FPC2**, see the
@@ -450,3 +460,7 @@ all decoder modes, without mode suffixes. This is the user-selected project
 default, centralized in `UI/client_identity.py`. Kiwi listener names, OpenWebRX
 client identification and FM-DX receiver HTTP/WebSocket user agents share it.
 Reporter callsigns and locations for spot uploads remain separate settings.
+
+### VHF/UHF Signal Observatory
+
+AIS, APRS, rtl_433, Meteor-M LRPT, CubeSat telemetry and RS41/DFM radiosondes are available under **Decoders → VHF/UHF**, with SoapySDR receiver assignment and shared ownership with ADS-B. The browser observatory is at [cm5.local:8092](http://cm5.local:8092/). See [setup, reception profiles and visible logs](docs/vhf-uhf.md). Install engines using `sudo bash scripts/install-vhf.sh` or the app-only installer's `--vhf` option.

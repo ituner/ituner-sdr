@@ -15,3 +15,6 @@ UI/cw_vendor/libituner_cw.*
 
 /UI/cw_vendor/fldigi
 /.freebuff
+
+# Generated validation screenshots and machine-local receiver captures.
+/output/

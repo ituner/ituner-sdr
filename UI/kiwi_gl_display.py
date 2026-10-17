@@ -450,7 +450,7 @@ SPECTRUM_RAISE_Y = 12
 # unused scope space behind the fixed top instrumentation.
 WATERFALL_ONLY_WIDE_RAISE_Y = 52
 SPECTRUM_BINS = 240
-RADIOGARDEN_DRAG_GAIN = 1.0
+RADIOGARDEN_DRAG_GAIN = globe_tiles.GLOBE_DRAG_GAIN
 # The CM5 panel benefits from a little more geographic travel per finger
 # movement. Desktop mouse dragging keeps the exact 1:1 gain above.
 RADIOGARDEN_TOUCH_DRAG_GAIN = 1.3
@@ -2530,14 +2530,23 @@ SETTINGS_MENU_ITEMS = (
     ("system", "SYSTEM"),
     ("settings_back", "BACK"),
 )
-DIGITAL_MENU_ITEMS = (
+HF_DECODER_ITEMS = (
     ("wspr", "WSPR"),
     ("sstv", "SSTV"),
     ("hell", "Hell RX"),
     ("qrss", "QRSS"),
     ("cw", "CW MORSE"),
-    ("digital_back", "BACK"),
 )
+VHF_UHF_DECODER_ITEMS = (
+    ("adsb", "ADS-B"),
+    ("ais", "AIS"),
+    ("aprs", "APRS"),
+    ("ism", "rtl_433"),
+    ("meteor", "Meteor-M"),
+    ("cubesat", "CubeSat"),
+    ("sonde", "Radiosonde"),
+)
+DIGITAL_MENU_ITEMS = HF_DECODER_ITEMS + VHF_UHF_DECODER_ITEMS + (("digital_back", "BACK"),)
 
 
 SETTINGS_MENU_SUBTITLES = {
@@ -13863,7 +13872,7 @@ def draw_flat_coastlines(center_lon, center_lat, box, scale):
 
 def radiogarden_radius(box, scale):
     """Scale the map by the zoom shown to the operator, without a hidden cap."""
-    base = min(box[2] - box[0], box[3] - box[1]) * 0.92
+    base = min(box[2] - box[0], box[3] - box[1]) * globe_tiles.GLOBE_RADIUS_FACTOR
     return base * max(RADIOGARDEN_ZOOM_MIN, float(scale))
 
 
@@ -16679,6 +16688,18 @@ def left_smeter_box(text_cache, freq_khz, font_family=None, mirrored=None):
 
 def lcd_nav_box(index, item_count=None, has_back=False):
     """Return the logical box for the permanent LCD navigation rail."""
+    if has_back and item_count == len(DIGITAL_MENU_ITEMS):
+        if index == item_count - 1:
+            return lcd_drawer_back_box()
+        if index < len(HF_DECODER_ITEMS):
+            col, row = index % 2, index // 2
+            x0 = LCD_NAV_X0 + 10 + col * 122
+            return x0, 142 + row * 72, x0 + 114, 206 + row * 72
+        vhf_index = index - len(HF_DECODER_ITEMS)
+        col, row = vhf_index % 2, vhf_index // 2
+        x0 = LCD_NAV_X0 + 10 + col * 122
+        x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
+        return x0, 408 + row * 72, x1, 472 + row * 72
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
@@ -17098,6 +17119,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
+    if digital_open:
+        draw_text(text_cache, LCD_NAV_X0 + 12, 124, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 382, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -23858,6 +23882,8 @@ def main():
     parser.add_argument("--desktop", action="store_true", help="run the LCD 1280x800 landscape UI locally with mouse input")
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--adsb-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--decoder-menu-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--rtl-lab-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
@@ -24269,7 +24295,7 @@ def main():
     filter_drawer_open = False
     filter_drawer_width_hz = None
     settings_menu_open = False
-    digital_menu_open = False
+    digital_menu_open = args.decoder_menu_preview
     receiver_home_panel_open = False
     receiver_home_parent = "home"
     fan_curve_panel_open = False
@@ -24693,6 +24719,21 @@ def main():
     digital_web_next_snapshot = 0.0
     digital_web_next_options = 0.0
     sstv_workspace = SSTVWorkspace(sys.modules[__name__], sstv_manager)
+    from adsb_monitor import ADSBManager
+    from adsb_workspace import ADSBWorkspace
+    from sdr_broker import ReceiverBroker
+    from vhf_monitor import VHFHub
+    from vhf_workspace import VHFWorkspace
+    receiver_broker = ReceiverBroker()
+    adsb_manager = ADSBManager(broker=receiver_broker)
+    vhf_hub = VHFHub(broker=receiver_broker)
+    vhf_workspace = VHFWorkspace(sys.modules[__name__], vhf_hub)
+    if vhf_hub.sessions['meteor'].enabled:
+        vhf_workspace.show('meteor')
+        vhf_workspace.view = 'products'
+    adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
+    # Resume the active decoder workspace, matching Meteor startup behavior.
+    adsb_workspace.open = args.adsb_preview or (adsb_manager.enabled and not vhf_workspace.open)
     if sstv_manager.web:
         from log_search_workspace import install_search
         log_search_service = sstv_manager.web.search_history()
@@ -25831,6 +25872,8 @@ def main():
             theme_editor.open = False
         if kind != "dual":
             dual_vfo_receiver_list_target = None
+        adsb_workspace.open = False
+        vhf_workspace.open = False
         sstv_workspace.open = False
         hell_workspace.open = False
         qrss_workspace.open = False
@@ -26055,6 +26098,16 @@ def main():
             start_dual_vfo_clients()
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind in vhf_hub.sessions:
+            settings_menu_open = digital_menu_open = False
+            vhf_workspace.show(kind)
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = wspr_panel_open = False
+        elif kind == "adsb":
+            settings_menu_open = digital_menu_open = False
+            adsb_workspace.show()
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = wspr_panel_open = False
         elif kind in ("sstv", "hell", "qrss", "cw"):
             settings_menu_open = digital_menu_open = False
             active_server, active_freq, *_ = state.snapshot()
@@ -26752,7 +26805,7 @@ def main():
                                     or dual_vfo_picker_open or wspr_panel_open or wspr_add_open
                                     or wspr_identity_open or globe_open
                                     or cw_workspace.open or qrss_workspace.open
-                                    or hell_workspace.open or sstv_workspace.open
+                                    or vhf_workspace.open or adsb_workspace.open or hell_workspace.open or sstv_workspace.open
                                 )
                                 and not (asr_panel_open and contains(ASR_PANEL_BOX, x, y))
                                 and not (deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y))
@@ -26820,6 +26873,12 @@ def main():
                             # underlying waterfall controls settle.
                             if theme_editor.open:
                                 gesture = "theme"
+                            elif vhf_workspace.open:
+                                gesture = "vhf_workspace"
+                                vhf_workspace.drag_begin(x, y)
+                            elif adsb_workspace.open:
+                                gesture = "adsb_workspace"
+                                adsb_workspace.drag_begin(x, y)
                             elif cw_workspace.open:
                                 gesture = "cw_workspace"
                                 cw_workspace.drag_begin(x, y)
@@ -27333,8 +27392,8 @@ def main():
                             )
                             scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                             wake_controls()
-                        elif gesture in ("sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
-                            {"sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
+                        elif gesture in ("vhf_workspace", "adsb_workspace", "sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
+                            {"vhf_workspace": vhf_workspace, "adsb_workspace": adsb_workspace, "sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
@@ -28314,6 +28373,14 @@ def main():
                                     write_remembered_view(force=True)
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "vhf_workspace":
+                            if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                vhf_workspace.tap(x, y)
+                            wake_controls()
+                        elif touch_started and gesture == "adsb_workspace":
+                            if not adsb_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                adsb_workspace.tap(x, y)
                             wake_controls()
                         elif touch_started and gesture == "cw_workspace":
                             if cw_workspace.swipe(start_x, start_y, x, y):
@@ -30608,6 +30675,8 @@ def main():
                 wspr_tiles, sstv_manager.configs, hell_manager.configs,
                 qrss_manager.configs, cw_manager.configs,
             )
+            decoder_counts['adsb'] = int(adsb_manager.snapshot()['status'] == 'RECEIVING')
+            decoder_counts.update({mode: int(session.status in ('RECEIVING', 'LISTENING')) for mode, session in vhf_hub.sessions.items()})
             if not globe_covering_radio:
                 draw_ui(
                     text_cache,
@@ -31117,6 +31186,10 @@ def main():
                 )
             if not picker_open and not dual_vfo_open:
                 draw_desktop_1280_navigation(text_cache)
+            if adsb_workspace.open:
+                adsb_workspace.draw(text_cache)
+            if vhf_workspace.open:
+                vhf_workspace.draw(text_cache)
             if cw_workspace.open:
                 cw_workspace.draw(text_cache, wspr_receiver_choices())
             if qrss_workspace.open:
@@ -31205,6 +31278,8 @@ def main():
         hell_manager.stop()
         hell_workspace.close()
         sstv_manager.stop()
+        vhf_workspace.close()
+        adsb_workspace.close()
         sstv_workspace.close()
         wspr_monitor.stop()
         wspr_history_view.close()

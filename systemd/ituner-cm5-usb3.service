@@ -1,0 +1,14 @@
+[Unit]
+Description=iTuner custom CM5 carrier USB3 socket power selection
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+Before=ituner-sdr.service
+ConditionPathExists=/proc/device-tree/model
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pinctrl set 42 op dl
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

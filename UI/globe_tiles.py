@@ -21,6 +21,8 @@ GIBS_TILE_URL = (
     "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/"
     "BlueMarble_NextGeneration/default/500m/{level}/{row}/{col}.jpeg"
 )
+GLOBE_RADIUS_FACTOR = 0.92
+GLOBE_DRAG_GAIN = 1.0
 TILE_PIXELS = 512
 MAX_LEVEL = 7
 MAX_VISIBLE_TILES = 24

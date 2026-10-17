@@ -4,9 +4,13 @@ set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cm5_audio=0
+adsb=0
+vhf=0
 for option in "$@"; do
     case "$option" in
         --cm5-audio) cm5_audio=1 ;;
+        --adsb) adsb=1 ;;
+        --vhf) vhf=1 ;;
         --*) echo "Unknown CM5 option: $option" >&2; exit 2 ;;
         *) repo=$option ;;
     esac
@@ -214,3 +218,7 @@ fi
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 systemctl restart ituner-sdr-touch-ready.service
 systemctl restart ituner-sdr.service
+
+# Optional local USB decoder, retained across application-only upgrades.
+if (( adsb )); then bash "$repo/scripts/install-adsb.sh"; fi
+if (( vhf )); then bash "$repo/scripts/install-vhf.sh"; fi
