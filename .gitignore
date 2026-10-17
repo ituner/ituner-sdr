@@ -18,3 +18,5 @@ UI/cw_vendor/libituner_cw.*
 
 # Generated validation screenshots and machine-local receiver captures.
 /output/
+# Temporary source research downloads and extracted documents.
+/tmp/

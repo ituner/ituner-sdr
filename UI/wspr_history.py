@@ -207,6 +207,10 @@ class WSPRHistory:
 
     def configure(self, source, call='', grid='', enabled=False, confirmed=False):
         source = source_key(source)
+        from station_profile import peek_station
+        station=peek_station()
+        if station and station.local_receiver(source):
+            shared=station.snapshot();call=shared['config']['callsign'] or call;grid=shared['grid'] or grid
         if type(enabled) is not bool or type(confirmed) is not bool:
             raise ValueError('Invalid upload setting')
         if call or grid or enabled:
@@ -224,6 +228,19 @@ class WSPRHistory:
             if not enabled or changed:
                 self.db.execute("UPDATE outbox SET state='cancelled',error='Uploading disabled or identity changed' WHERE source=? AND state IN ('queued','retry')", (source,))
         return {'ok': True, 'enabled': enabled}
+
+    def sync_local_station(self,station):
+        """Update local identity; a changed identity requires renewed reporting consent."""
+        shared=station.snapshot()
+        if not shared['grid']:return
+        for row in self.sources():
+            if not station.local_receiver(row['source']):continue
+            call=shared['config']['callsign'] or row['call'];locator=shared['grid']
+            if (row['call'],row['grid'])!=(call,locator):
+                if call:self.configure(row['source'],call,locator,enabled=False,confirmed=False)
+                else:
+                    with self.lock,self.db:
+                        self.db.execute('UPDATE sources SET grid=?,enabled=0,confirmed=0 WHERE source=?',(locator,row['source']))
 
     def query(self, source='', band='', scope='all', run='', since=None, until=None, offset=0, limit=50, _max_rowid=None, q=''):
         limit = min(200, max(1, int(limit)))

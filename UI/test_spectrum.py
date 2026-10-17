@@ -103,3 +103,18 @@ class SurveyTests(unittest.TestCase):
   self.assertEqual(settings(dict(low=25e6,high=125e6,bin=5000))['bin'],5000)
   with self.assertRaisesRegex(ValueError,'20,001'):
    settings(dict(low=25e6,high=125000001,bin=5000))
+
+ def test_live_frame_stays_visible_until_next_measurement(self):
+  self.data();s=self.survey;s.data['settings']['purpose']='investigate'
+  s.ingest(dict(kind='begin',sweep=1,rate=2048000,fft=1024));s.ingest(self.row(-90));s.ingest(dict(kind='complete',time=3))
+  s.ingest(dict(kind='begin',sweep=2,rate=2048000,fft=1024))
+  self.assertEqual(s.data['power'][0],-90);self.assertFalse(s.data['complete']);self.assertEqual(s.comparison_data()['sweep'],1)
+  s.ingest(self.row(-100));self.assertEqual(s.data['power'][0],-100)
+ def test_watch_tuning_preserves_wide_channels_and_avoids_dc_for_narrow_ones(self):
+  from soapy_survey import watch_plan
+  watches=[dict(frequency=93.55e6,bandwidth=200000),dict(frequency=134.35e6,bandwidth=25000),dict(frequency=433.92e6,bandwidth=1000000)]
+  centers=watch_plan(watches,92.8e6,435.17e6)
+  self.assertEqual(len(centers),3)
+  for watch,center in zip(watches,centers):
+   self.assertLess(abs(watch['frequency']-center)+watch['bandwidth']/2,USABLE/2)
+   self.assertGreater(abs(watch['frequency']-center),14000)

@@ -22,6 +22,7 @@ import threading
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
 from urllib.request import urlopen
+from station_web import station_get, station_post
 from adsb_monitor import ADSBHandler, rtl_devices
 from adsb_globe import GlobeAssets
 from adsb_traffic import receiver_position
@@ -480,7 +481,7 @@ class DecoderSession:
 
 
 class VHFHub:
-    def __init__(self,broker=None,root=None,port=8092,scanner=rtl_devices):
+    def __init__(self,broker=None,root=None,port=8092,scanner=rtl_devices,station=None):
         self.broker=broker or ReceiverBroker();self.scanner=scanner;self.devices=[]
         self.root=Path(root or Path.home()/'.local/share/ituner-sdr/vhf');self.root.mkdir(parents=True,exist_ok=True)
         self.runtime=Path(tempfile.gettempdir())/f'ituner-vhf-{os.getuid()}' if not root else self.root/'runtime'
@@ -492,6 +493,8 @@ class VHFHub:
         except (OSError,ValueError):
             try:self.position=receiver_position(json.loads((self.root.parent/'adsb/settings.json').read_text()).get('position'))
             except (OSError,ValueError):self.position=None
+        self.station=station
+        if station:station.subscribe(self._station_changed)
         self.sessions={mode:DecoderSession(self,mode) for mode in MODES}
         self.sensor_receivers={'ism':self.sessions['ism'],**{f'ism-{i}':DecoderSession(self,'ism',f'ism-{i}') for i in range(2,7)}}
         from spectrum_monitor import SpectrumSurvey
@@ -504,6 +507,10 @@ class VHFHub:
                 threading.Thread(target=self.server.serve_forever,name='vhf-web',daemon=True).start()
             except OSError as exc:
                 self.web_error=str(exc)
+
+    def _station_changed(self,data):
+        p=data['position']
+        self.position=dict(lat=p['lat'],lon=p['lon'],alt=p.get('altitude_msl_m') or 0) if p else None
 
     def _worker(self):
         while not self.closed.is_set():
@@ -545,8 +552,12 @@ class VHFHub:
     def control(self,mode,action,**values):
         if mode=='spectrum':return self.spectrum.control(action,**values)
         if action=='location':
-            self.position=receiver_position(values.get('position'))
-            (self.root/'station.json').write_text(json.dumps(self.position));return
+            p=receiver_position(values.get('position'))
+            if self.station:self.station.update(dict(latitude=p['lat'] if p else None,longitude=p['lon'] if p else None,gps_auto=False))
+            else:
+                self.position=p
+                (self.root/'station.json').write_text(json.dumps(self.position))
+            return
         if action=='scan':
             self.devices=self.scanner();return
         if mode in self.sensor_receivers:
@@ -576,6 +587,12 @@ class VHFHandler(ADSBHandler):
             if path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum':self.send(json.dumps(dict(manager.spectrum.snapshot(),devices=manager.devices,leases=manager.broker.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())
+            elif path=='/api/spectrum/insights':
+                values={key:query[key][0] for key in ('low','high','columns') if key in query}
+                self.send(json.dumps(manager.spectrum.analysis(query.get('scope',['current'])[0],**values),allow_nan=False).encode())
+            elif path=='/api/spectrum/compare':
+                from spectrum_report import comparison
+                self.send(json.dumps(comparison(manager.spectrum.comparison_data(),manager.spectrum.trace(query.get('id',[''])[0])),allow_nan=False).encode())
             elif path=='/api/spectrum/history':
                 with manager.spectrum.lock:
                     data=dict(manager.spectrum.data)
@@ -583,6 +600,11 @@ class VHFHandler(ADSBHandler):
                 values={key:query[key][0] for key in ('after','low','high','columns') if key in query}
                 self.send(json.dumps(manager.spectrum.history.read(data,**values)).encode())
             elif path=='/api/catalog':self.send(json.dumps(manager.catalog).encode())
+            elif path.startswith('/spectrum/reports/'):
+                parts=path.split('/')
+                if len(parts)!=5 or not parts[3].isdigit() or len(parts[3])>24 or parts[4] not in ('index.html','report.json','signals.csv','comparison.csv','waterfall.png','spectrum.svg'):raise ValueError('Unknown report file')
+                file=manager.spectrum.root/'reports'/parts[3]/parts[4]
+                self.send(file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
             elif path=='/api/tracks':
                 mode=query.get('mode',['ais'])[0]
                 if mode not in manager.sessions:raise ValueError('Unknown decoder')
@@ -600,13 +622,14 @@ class VHFHandler(ADSBHandler):
                 if file.suffix.lower() not in ('.png','.jpg','.jpeg','.json','.jsonl','.kiss','.txt','.cadu','.cbor'):raise ValueError('Unknown capture type')
                 if file.stat().st_size>64*1024*1024:raise ValueError('Capture is too large to download in the browser')
                 self.send(file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-            elif path in ('/','/vhf_dashboard.js','/vhf_dashboard.css','/spectrum','/spectrum.js','/spectrum.css'):
+            elif path in ('/','/vhf_dashboard.js','/vhf_dashboard.css','/spectrum','/spectrum.js','/spectrum_tools.js','/spectrum.css'):
                 filename='vhf_dashboard.html' if path=='/' else 'spectrum.html' if path=='/spectrum' else path[1:]
                 self.send(Path(__file__).with_name(filename).read_bytes(),mimetypes.guess_type(filename)[0] or 'text/plain')
             else:super().do_GET()
         except (ValueError,OSError,KeyError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)
 
     def do_POST(self):
+        if self.path=='/api/station':station_post(self);return
         manager=self.server.manager
         origin=self.headers.get('Origin')
         if self.headers.get('X-VHF-Token')!=manager.token or (origin and urlsplit(origin).netloc!=self.headers.get('Host')):
@@ -616,5 +639,5 @@ class VHFHandler(ADSBHandler):
             length=int(self.headers.get('Content-Length','0'))
             if not 0<length<=8192:raise ValueError('Invalid request size')
             values=json.loads(self.rfile.read(length));mode=values.pop('mode','');action=values.pop('action','')
-            manager.control(mode,action,**values);self.send(b'{"ok":true}')
+            result=manager.control(mode,action,**values);self.send(json.dumps(dict(ok=True,result=result)).encode())
         except (ValueError,TypeError,KeyError,OSError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)

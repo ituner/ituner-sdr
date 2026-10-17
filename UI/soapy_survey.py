@@ -19,6 +19,17 @@ def plan(low,high):
     width=(high-low)/count
     return [low+(i+.5)*width for i in range(count)]
 
+def watch_plan(watches,low,high):
+    """Keep the entire requested channel inside the cropped passband."""
+    centers=[]
+    for watch in watches:
+        frequency=watch['frequency'];half=watch['bandwidth']/2
+        if any(abs(frequency-center)+half<USABLE/2-10000 and abs(frequency-center)>14000 for center in centers):continue
+        offset=min(USABLE/4,USABLE/2-half-10000)
+        center=frequency+offset if frequency+offset<=high else frequency-offset
+        centers.append(max(low,min(high,center)))
+    return centers
+
 def fft_density(samples):
     """Two-sided PSD, normalized so its integral equals mean complex IQ power."""
     import numpy as np
@@ -39,7 +50,8 @@ def retune(radio,stream,frequency,direction):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--device',required=True)
     for key in ('low','high','bin','gain','ppm'):p.add_argument('--'+key,type=float,required=True)
-    p.add_argument('--repeat',action='store_true');p.add_argument('--auto-gain',action='store_true');a=p.parse_args()
+    p.add_argument('--repeat',action='store_true');p.add_argument('--auto-gain',action='store_true')
+    p.add_argument('--live',action='store_true');p.add_argument('--watch',default='[]');a=p.parse_args()
     import numpy as np
     import SoapySDR as S
     stopped=threading.Event()
@@ -51,9 +63,12 @@ def main():
         radio.setSampleRate(S.SOAPY_SDR_RX,0,RATE);radio.setGainMode(S.SOAPY_SDR_RX,0,False);radio.setGain(S.SOAPY_SDR_RX,0,a.gain)
         if any(setting.key=='digital_agc' for setting in radio.getSettingInfo()):radio.writeSetting('digital_agc','false')
         if a.ppm:radio.setFrequencyCorrection(S.SOAPY_SDR_RX,0,a.ppm)
+        watches=json.loads(a.watch)
+        if a.live and a.high-a.low>USABLE:raise ValueError('Live span exceeds usable instantaneous bandwidth')
         centers=plan(a.low,a.high);size=math.ceil((a.high-a.low)/a.bin)
+        if watches:centers=watch_plan(watches,a.low,a.high)
         radio.setFrequency(S.SOAPY_SDR_RX,0,centers[0]);stream=radio.setupStream(S.SOAPY_SDR_RX,S.SOAPY_SDR_CF32,[0],dict(bufflen='32768',buffers='4',asyncBuffs='4'));radio.activateStream(stream)
-        buffer=np.empty(16384,np.complex64);sweep=0;gain=a.gain;reset=False
+        buffer=np.empty(16384,np.complex64);sweep=0;gain=a.gain;reset=False;continuous_ready=False
         def emit(value):print(json.dumps(value,separators=(',',':'),allow_nan=False),flush=True)
         def read():
             deadline=time.monotonic()+3
@@ -65,28 +80,31 @@ def main():
             return None
         while not stopped.is_set():
             sweep+=1;retry=False
-            emit(dict(kind='begin',sweep=sweep,hops=len(centers),rate=RATE,fft=FFT,gain=radio.getGain(S.SOAPY_SDR_RX,0),reset=reset))
+            emit(dict(kind='begin',sweep=sweep,time=time.time(),hops=len(centers),rate=RATE,fft=FFT,gain=radio.getGain(S.SOAPY_SDR_RX,0),reset=reset))
             reset=False
             for hop,center in enumerate(centers):
                 if stopped.is_set():break
-                retune(radio,stream,center,S.SOAPY_SDR_RX)
+                if not a.live or not continuous_ready:
+                    retune(radio,stream,center,S.SOAPY_SDR_RX)
                 # Eight 16k reads exceed both bounded four-buffer queues (USB
                 # plus Soapy), so no old-frequency samples enter the estimate.
-                for _ in range(8):
+                for _ in range(0 if a.live and continuous_ready else 8):
                     if read() is None:break
-                powers=[];clipped=total=0
-                for _ in range(4):
+                power_sum=np.zeros(FFT);frames=reads=0;clipped=total=0;frame_start=time.monotonic()
+                while reads<4 or a.live and time.monotonic()-frame_start<.2:
                     samples=read()
                     if samples is None:break
+                    reads+=1
                     clipped+=int(np.count_nonzero((np.abs(samples.real)>=.98)|(np.abs(samples.imag)>=.98)));total+=len(samples)
-                    if len(samples)>=FFT:powers.append(fft_density(samples))
+                    if len(samples)>=FFT:
+                        spectra=fft_density(samples);power_sum+=spectra.sum(axis=0);frames+=len(spectra)
                 if stopped.is_set():break
-                if not powers:raise RuntimeError('No FFT samples captured')
+                if not frames:raise RuntimeError('No FFT samples captured')
                 if a.auto_gain and clipped/max(1,total)>CLIP_LIMIT and gain>0:
                     previous=gain;gain=lower_gain(gain);radio.setGain(S.SOAPY_SDR_RX,0,gain)
                     emit(dict(kind='gain_adjust',previous=previous,gain=gain,frequency=center,time=time.time()))
-                    reset=True;retry=True;break
-                density=np.mean(np.concatenate(powers),axis=0)
+                    reset=True;retry=True;continuous_ready=False;break
+                continuous_ready=True;density=power_sum/frames
                 offset=np.fft.fftshift(np.fft.fftfreq(FFT,1/RATE));freq=center+offset
                 mask=(np.abs(offset)<USABLE/2)&(np.abs(offset)>6000)&(freq>=a.low)&(freq<a.high)
                 indices=((freq[mask]-a.low)/a.bin).astype(int)
@@ -94,6 +112,14 @@ def main():
                 cells=np.flatnonzero(counts)
                 values=(10*np.log10(np.maximum(sums[cells]/counts[cells],1e-18))).round(2)
                 emit(dict(kind='chunk',sweep=sweep,hop=hop+1,hops=len(centers),frequency=center,time=time.time(),clipped=clipped,samples=total,indices=cells.tolist(),values=values.tolist()))
+                for watch in watches:
+                    if abs(watch['frequency']-center)+watch['bandwidth']/2>USABLE/2-10000:continue
+                    usable=(np.abs(offset)<USABLE/2)&(np.abs(offset)>6000)
+                    channel=(np.abs(freq-watch['frequency'])<=watch['bandwidth']/2)&usable
+                    nearby=(np.abs(freq-watch['frequency'])<max(150000,watch['bandwidth']*3))&~channel&usable
+                    if channel.any() and nearby.any():
+                        level=10*np.log10(max(float(density[channel].mean()),1e-20));noise=10*np.log10(max(float(np.percentile(density[nearby],20)),1e-20))
+                        emit(dict(kind='watch',id=watch['id'],level=round(level,2),excess=round(level-noise,2),time=time.time(),resolution=RATE/FFT,method='FFT channel mean',clipped=clipped/max(1,total)>CLIP_LIMIT))
             if stopped.is_set():break
             if retry:sweep-=1;continue
             emit(dict(kind='complete',sweep=sweep,time=time.time()))

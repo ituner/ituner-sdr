@@ -420,6 +420,7 @@ MENU_ICON_FILENAMES = {
     "wspr": "digi.png",
     "tests": "apps.png",
     "system": "info.png",
+    "radio_info": "info.png",
 }
 
 
@@ -2523,6 +2524,7 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
+    ("radio_info", "RADIO / USER"),
     ("network", "NETWORK"),
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
@@ -2550,10 +2552,11 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 
 SETTINGS_MENU_SUBTITLES = {
+    "radio_info": "IDENTITY, SITE & GPS",
     "network": "WI-FI & LAN",
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
-    "system": "LOCATION & FAN",
+    "system": "HARDWARE & FAN",
 }
 
 
@@ -3212,6 +3215,9 @@ def adjust_fan_curve_slider(curve, control, x):
         save_fan_curve(curve)
 
 
+from station_profile import peek_station
+
+
 def valid_receiver_home_profile(profile):
     """Normalize a saved home point without trusting an old state file."""
     if not isinstance(profile, dict):
@@ -3232,6 +3238,11 @@ def valid_receiver_home_profile(profile):
 
 
 def load_receiver_home_profile():
+    shared=peek_station()
+    if shared:
+        data=shared.snapshot();p=data['position']
+        if p:return dict(name=data['config']['site_label'] or data['config']['station_name'],lat=p['lat'],lon=p['lon'],source='shared '+p['source']),True
+        return dict(name='Receiver location not set',lat=0.,lon=0.,source='unconfigured'),True
     try:
         profile = valid_receiver_home_profile(json.loads(RECEIVER_HOME_PROFILE.read_text()))
         if profile:
@@ -3282,6 +3293,7 @@ def detect_receiver_home(result):
 
 def station_distance_miles(station, home_profile):
     """Return great-circle distance when the live directory supplied GPS data."""
+    if home_profile.get("source")=="unconfigured":return None
     if len(station) < 7 or not home_profile:
         return None
     try:
@@ -11428,7 +11440,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
     draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 154, f"{profile['lat']:.4f}, {profile['lon']:.4f}", (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 154, ('Not configured' if profile.get('source')=='unconfigured' else f"{profile['lat']:.4f}, {profile['lon']:.4f}"), (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
     draw_text(text_cache, x0 + 12, 180, source, (153, 185, 191), 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
@@ -11441,8 +11453,11 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
               f"{theme_system.display_temperature(float(fan_curve['full_c']))}")
     )
     draw_lcd_audio_tile(text_cache, boxes["fan"], "FAN CURVE", fan_range, True)
-    draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
-    draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
+    if peek_station():
+        draw_lcd_audio_tile(text_cache,boxes["locate"],"RADIO / USER INFO","SITE & GPS",False)
+    else:
+        draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
+        draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
     draw_sidebar_header(text_cache, "INFO")
 
 
@@ -12046,6 +12061,8 @@ def kiwi_status_metadata(server):
 
 def kiwi_status_grid(server):
     """Read a locator from saved directory metadata without network requests."""
+    shared=peek_station()
+    if shared and shared.local_receiver(server):return shared.snapshot()['grid'] or None
     try:
         _used, _total, grid = kiwi_status_metadata(server)
     except (OSError, ValueError):
@@ -23879,8 +23896,11 @@ def main():
     parser.add_argument("--frequency-keypad-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wspr-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--adsb-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--adsb-coverage-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--radio-info-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--decoder-menu-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--spectrum-preview", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--spectrum-preview-view", choices=('survey','signals','activity','compare','watch','reports'), default='survey', help=argparse.SUPPRESS)
     parser.add_argument("--dual-vfo-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--rtl-lab-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--orientation", choices=("flipped", "normal"), default="flipped")
@@ -24229,6 +24249,11 @@ def main():
     # Health comes from the scanner cache reloaded below. The browser needs it
     # from its very first filtered list so an unconfirmed LAN Kiwi never shows.
     station_health = {}
+    from station_profile import get_station
+    radio_profile=get_station()
+    radio_profile_next=0
+    radio_shared_key=None
+    radio_shared_reporter=None
     receiver_home_profile, receiver_home_saved = load_receiver_home_profile()
     stations = filtered_stations(
         all_stations, station_query, station_sort, station_route_filter,
@@ -24721,20 +24746,30 @@ def main():
     from vhf_monitor import VHFHub
     from vhf_workspace import VHFWorkspace
     receiver_broker = ReceiverBroker()
-    adsb_manager = ADSBManager(broker=receiver_broker)
-    vhf_hub = VHFHub(broker=receiver_broker)
+    adsb_manager = ADSBManager(broker=receiver_broker,station=radio_profile)
+    vhf_hub = VHFHub(broker=receiver_broker,station=radio_profile)
     vhf_workspace = VHFWorkspace(sys.modules[__name__], vhf_hub)
     if args.spectrum_preview:
         vhf_workspace.show('spectrum')
+        vhf_workspace.spectrum.screen=args.spectrum_preview_view
     elif vhf_hub.sessions['meteor'].enabled:
         vhf_workspace.show('meteor')
         vhf_workspace.view = 'products'
     elif vhf_hub.sessions['ism'].enabled:
         vhf_workspace.show('ism')
         vhf_workspace.view = 'data'
+    from station_workspace import StationWorkspace
+    station_workspace=StationWorkspace(sys.modules[__name__],radio_profile)
+    sys.modules[__name__].station_settings=station_workspace
+    if args.radio_info_preview:station_workspace.show()
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
     # Resume the active decoder workspace, matching Meteor startup behavior.
-    adsb_workspace.open = args.adsb_preview or (adsb_manager.enabled and not vhf_workspace.open)
+    adsb_workspace.open = args.adsb_preview or args.adsb_coverage_preview or (adsb_manager.enabled and not vhf_workspace.open)
+    if args.adsb_coverage_preview:
+        vhf_workspace.open=False
+        vhf_workspace.spectrum.open=False
+        adsb_workspace.coverage_open=True
+        adsb_workspace.coverage_view.activate()
     if sstv_manager.web:
         from log_search_workspace import install_search
         log_search_service = sstv_manager.web.search_history()
@@ -25873,6 +25908,7 @@ def main():
             theme_editor.open = False
         if kind != "dual":
             dual_vfo_receiver_list_target = None
+        station_workspace.open=False
         adsb_workspace.open = False
         vhf_workspace.open = False
         vhf_workspace.spectrum.open = False
@@ -25969,6 +26005,11 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
             receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "radio_info":
+            station_workspace.show()
+            settings_menu_open=digital_menu_open=False
+            picker_open=radio_setup_open=display_setup_open=filter_drawer_open=receiver_home_panel_open=fan_curve_panel_open=audio_panel_open=asr_panel_open=False
+            tests_panel_open=dj_tune_open=filter_panel_open=False
         elif kind == "network":
             print("gl network panel requested", flush=True)
             network_panel_open = True
@@ -26583,6 +26624,13 @@ def main():
                     if deepgram_key_error:
                         last_vosc_error_key = ()
                     wake_controls()
+                elif event.type == pygame.KEYDOWN and station_workspace.open:
+                    if event.key==pygame.K_ESCAPE:
+                        if station_workspace.field is not None:station_workspace.key('CANCEL')
+                        else:station_workspace.open=False;restore_navigation_parent('settings')
+                    elif event.key==pygame.K_RETURN:station_workspace.key('DONE')
+                    elif event.key==pygame.K_BACKSPACE:station_workspace.key('DELETE')
+                    elif getattr(event,'unicode','') and event.unicode.isprintable():station_workspace.key(event.unicode)
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
                 elif (
@@ -26807,7 +26855,7 @@ def main():
                                     or dual_vfo_picker_open or wspr_panel_open or wspr_add_open
                                     or wspr_identity_open or globe_open
                                     or cw_workspace.open or qrss_workspace.open
-                                    or vhf_workspace.open or adsb_workspace.open or hell_workspace.open or sstv_workspace.open
+                                    or station_workspace.open or vhf_workspace.open or adsb_workspace.open or hell_workspace.open or sstv_workspace.open
                                 )
                                 and not (asr_panel_open and contains(ASR_PANEL_BOX, x, y))
                                 and not (deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y))
@@ -26875,6 +26923,8 @@ def main():
                             # underlying waterfall controls settle.
                             if theme_editor.open:
                                 gesture = "theme"
+                            elif station_workspace.open:
+                                gesture="station_workspace"
                             elif vhf_workspace.open:
                                 gesture = "vhf_workspace"
                                 vhf_workspace.drag_begin(x, y)
@@ -28376,6 +28426,11 @@ def main():
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
                             wake_controls()
+                        elif touch_started and gesture == "station_workspace":
+                            if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
+                                station_workspace.tap(x,y)
+                                if not station_workspace.open:restore_navigation_parent('settings')
+                            wake_controls()
                         elif touch_started and gesture == "vhf_workspace":
                             if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 vhf_workspace.tap(x, y)
@@ -29129,7 +29184,9 @@ def main():
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
                                     fan_curve_parent = navigation_previous_surface("fan_curve", receiver_home_parent)
-                                elif contains(home_boxes["fallback"], x, y):
+                                elif contains(home_boxes["locate"],x,y) and peek_station():
+                                    station_workspace.show();receiver_home_panel_open=False
+                                elif contains(home_boxes["fallback"], x, y) and not peek_station():
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
                                     receiver_home_locating = False
@@ -29924,6 +29981,29 @@ def main():
                     preferences_dirty = True
                     write_remembered_view(force=True)
                     print(f"gl WSPR local grid {discovered_local_grid}", flush=True)
+            if now>=radio_profile_next:
+                radio_profile_next=now+1
+                shared=radio_profile.snapshot();pos=shared['position'];config=shared['config']
+                if pos:
+                    key=(round(pos['lat'],4),round(pos['lon'],4),config['site_label'],config['station_name'],config['callsign'],config['timezone'])
+                    if key!=radio_shared_key:
+                        radio_shared_key=key
+                        wspr_archive.sync_local_station(radio_profile)
+                        profile=dict(name=config['site_label'] or config['station_name'],lat=pos['lat'],lon=pos['lon'],source='shared '+pos['source'])
+                        try:receiver_home_result_queue.put_nowait(profile)
+                        except queue.Full:pass
+                    if shared['grid'] and wspr_identity_values.get('grid')!=shared['grid']:
+                        wspr_identity_values['grid']=shared['grid'];wspr_local_grid=shared['grid'];wspr_identity_grid_source='local'
+                    if wspr_identity_values.get('reporter') in ('','SWL',radio_shared_reporter):
+                        wspr_identity_values['reporter']=config['callsign'] or 'SWL'
+                    radio_shared_reporter=config['callsign'] or 'SWL'
+                elif radio_shared_key is not None:
+                    radio_shared_key=None
+                    try:receiver_home_result_queue.put_nowait(dict(name='Receiver location not set',lat=0.,lon=0.,source='unconfigured'))
+                    except queue.Full:pass
+                if os.environ.get('TZ')!=config['timezone']:
+                    os.environ['TZ']=config['timezone']
+                    if hasattr(time,'tzset'):time.tzset()
             observe_preferences(now)
             while True:
                 try:
@@ -31178,6 +31258,8 @@ def main():
                 hell_workspace.draw(text_cache, wspr_receiver_choices())
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
+            if station_workspace.open:
+                station_workspace.draw(text_cache)
             if theme_editor.open:
                 # Capture the complete Home render, including its actual live meter
                 # and sidebar, before drawing any appearance-picker controls.
@@ -31261,6 +31343,7 @@ def main():
         wspr_monitor.stop()
         wspr_history_view.close()
         wspr_archive.close()
+        radio_profile.close()
         for texture in wspr_mini_textures.values():
             texture.close()
         stop_event.set()

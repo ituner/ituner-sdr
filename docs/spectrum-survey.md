@@ -115,24 +115,126 @@ persistence, deduplication, settings isolation, age/count bounds, clipping masks
 and viewport downsampling. History HTTP responses fetch only new rows for the
 current view, with at most 2048 columns per row; normal status polling stays small.
 
+## Survey → Signals → Investigate
+
+Both interfaces now follow the same six workspaces:
+
+- **Survey**: broad sweep, spectrum, recent individual-sweep waterfall and shared zoom.
+- **Signals**: groups of energy above an estimated local floor, ranked by strength,
+  activity or recency. Select a result to investigate or add it to the watchlist.
+  The web table pages 20 results; the touchscreen shows five large rows per page.
+- **Activity**: sampled activity heatmap, 24-hour peak/mean archive, and recent
+  spectrum persistence. Tap a frequency, zoom to it, or open a live investigation.
+- **Compare**: save complete sweep A, change the cable/antenna, then receive B
+  at identical settings. The difference graph uses **latest completed B minus
+  saved A**, excluding missing and overloaded measurements. Running averages
+  from before and after a change are never mixed into this difference.
+- **Watchlist**: named frequencies, requested channel widths, latest valid levels
+  and detected/appeared/disappeared/level-change events. Adding bookmarks does
+  not change RF tuning until Watch mode is explicitly started.
+- **Reports**: saved HTML, signal CSV, full JSON, waterfall PNG, optional difference
+  CSV, and antenna/cable notes. Open HTML and use Print / save PDF in the browser.
+  The native Reports workspace also exposes receiver lifecycle activity.
+
+Investigation uses a fixed tuning window of at most 1.536 MHz, with 5 kHz display
+bins. Its target is offset from the tuner DC notch. It consumes the continuously
+streaming 2.048 MS/s IQ and averages FFTs into approximately five updates/second;
+subsequent frames do not retune or flush the receiver. Real CM5 validation measured
+nine frames in two seconds. This improves time resolution within the selected
+band; it cannot monitor the entire 25–1700 MHz range simultaneously.
+
+**Return to survey** restores the previous receiver, range, bins, gain limit,
+PPM, repeat/protection settings and whether reception was enabled. The stack also
+supports Survey → Watchlist → Investigate → Watchlist → Survey. Opening a
+workspace or switching charts alone never claims USB. Configuring a fresh broad
+survey deliberately starts a new workflow. Start/Stop, investigation, return and
+watch mode all use the same serialized broker controls on web and touchscreen.
+
+## Detection, heatmap and retention
+
+A signal is a contiguous group at least **6 dB above a local 20th-percentile
+floor**, with one measured quiet bin allowed between active neighbours. Widths
+and peak frequencies are estimates at the acquired bin resolution; the analyzer
+does not identify transmitters or automatically select a decoder. Regional
+allocations describe permitted services rather than observed modulation.
+
+Activity is **detected visits / valid sampled visits** at a frequency. Missing,
+clipped and unsampled bins are excluded from both numerator and denominator.
+Screen columns show the strongest bin's activity. This is sampled activity,
+not continuous airtime: wide sweeps can miss short transmissions between visits.
+Manual-mode clipped data remains visible on the raw chart but is excluded from
+analytics and A/B differences. Watch measurements display their actual resolution;
+normal surveys use their acquired bins, while explicit Watch mode measures FFT
+channels at approximately 2 kHz resolution.
+
+`insights.sqlite3` retains measured mean power (averaged in linear units), peak
+power, valid and active counts in **one-minute buckets for 24 hours**. Fast live
+frames therefore do not exhaust history after only a few minutes. Buckets retain
+their actual first/last capture times and visit counts. Rows are recorded intervals,
+not uniform elapsed time; gaps never become invented quiet measurements. Recent
+detailed history remains capped at 720 individual sweeps globally. Persistence
+shows up to 240 recent matching detailed sweeps in 3 dB level buckets, with colour
+representing occurrence count rather than another peak-hold trace.
+
+Archive safety bounds are 2,880 minute buckets across settings, 2,048 discovered
+groups, 2,000 events and 64 watch frequencies. All history is separated by receiver,
+range, actual gain, PPM, bin width, sample rate and FFT. Retained genuine raw rows
+for the current settings are imported once at first startup; previous running
+averages cannot reconstruct missing history. Future observations build the day
+archive. Report bundles are retained separately, with an explicit 100-report limit.
+
+Watch mode revisits only windows containing bookmarks, keeping the entire requested
+channel in the usable cropped passband. The current list is captured when starting;
+restart Watch mode after editing bookmarks. Nearby bookmarks can share one window.
+Two quiet valid visits are required before a disappearance event. Invalid/clipped
+visits do not imply disappearance, and measurements older than five minutes are
+marked stale. Changing measurement settings resets transition comparisons. The
+last bookmark's removal stops Watch mode and releases the receiver.
+
+Reports are under `spectrum/reports/<id>/`; watch settings are in `watchlist.json`.
+JSON records include measurement metadata and notes about the limits above.
+Saved baselines and reports do not constitute calibrated antenna gain, SWR or
+absolute input power measurements.
+
 ## Native CM5 touchscreen
 
 Open **Decoders → Spectrum Analyzer**, the full-width tile above HF Decoders.
-This is a native OpenGL touch workspace; it shares `VHFHub.spectrum`, receiver
-leases, settings, saved baselines and `waterfall.sqlite3` with the web app.
-Opening or leaving the view does not start, stop or reassign a dongle. Start/Stop
-and all configuration changes use the same broker-controlled survey backend.
+The native OpenGL interface uses full-width workspaces, large 21 px control labels,
+large signal rows, and one main graph at a time. Survey → Signals → Investigate
+provides the primary flow, with separate Activity, Compare, Watchlist and Reports
+tabs. It shares receiver leases, settings, watchlist, baselines, history and exports
+with the web interface. There is no compressed web sidebar or embedded browser.
 
-Tap Scan Settings to choose a preset or edit range, gain, PPM, bins, repeat mode,
-overload protection and USB receiver. Stop before applying changes; Apply does
-not start reception. Zoom buttons and horizontal dragging change the display
-viewport. Tap either chart for frequency, level and EU/US allocations. Capture and activity
-timestamps are explicitly UTC. Vertical
-swipes or Older/Newer page through 60 real sweeps at a time; History cycles
-30/120/720 sweeps. Auto Contrast changes colours without changing RF gain.
-Save Baseline and Baseline Overlay use the same saved sweeps as the web app.
-The Logs tab exposes recent survey activity. Leaving with Back retains reception.
+**Setup** opens a separate full-screen configuration workspace. Edit presets,
+range, gain, PPM, bins, repeat/protection and USB choice while stopped. **Apply**
+saves without receiving; **Apply & Start** saves and starts through one serialized
+backend action. Large numeric and text keyboards support frequency entry,
+bookmark names and report notes. **Decoders** leaves the workspace while retaining
+reception. **Return** in Survey restores the preceding survey/watch workflow.
 
-Native snapshots, SQLite reads and raster updates run off the rendering thread.
-One reusable GPU texture keeps refreshes bounded; no browser or second radio
-process is launched by the native workspace.
+Horizontal dragging pans; tap to inspect/select a frequency, then use **Investigate**
+or **+ Watch**. **Details** shows EU/US allocations. Vertical swipes and Older/Newer
+page real history. Activity offers heatmap, archived peak/mean and persistence.
+Capture and event timestamps are explicitly UTC. Save/choose baseline and report
+controls use the same measurements as the web app. Download and print native-created
+reports from the web Reports tab.
+
+Snapshots, SQLite reads and raster updates run off the rendering thread. One
+reusable GPU texture bounds refresh cost. The native workspace launches no
+independent radio process and does not stop reception when changing tabs.
+
+## Validation
+
+Run from `UI`:
+
+```sh
+python3 -m unittest test_spectrum test_spectrum_history test_spectrum_analysis test_spectrum_workspace
+```
+
+Tests cover FFT normalization, fixed-window retention, channel coverage, clipped
+and missing counts, deduplication, minute history/restart, watch transitions,
+matching A/B differences, report escaping/real values, broker handoffs, workflow
+returns, touchscreen configuration and history rendering. CM5 tests additionally
+cover VHF supervision and existing menu navigation. Hardware/browser checks use
+real USB samples, including fixed-band live frames, multiplexed watch reception,
+return-to-survey, comparison and every export route.

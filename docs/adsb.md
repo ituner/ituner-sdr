@@ -96,8 +96,8 @@ its browser counterpart: 1090/978 receiver cards, map telemetry, floating touch
 controls, an aircraft instrument card, sortable contacts and dedicated Logs /
 Receiver views. Tap a map icon or contact to inspect it, then Follow or Locate;
 Clear removes the selection. Labels can be toggled, and overlapping labels are
-suppressed. Fit Traffic includes saved trail endpoints when no live position is
-available. Grey endpoints remain historical and cannot initiate Follow.
+suppressed. Fit Traffic fits the selected viewing window, including saved
+endpoints in History. Grey endpoints remain historical and cannot initiate Follow.
 On restart, an enabled ADS-B receiver reopens Airspace unless the Meteor
 workspace is active.
 
@@ -114,14 +114,20 @@ The viewer displays the latest 160 entries, including recent rotated files.
 Touchscreen times are labelled UTC; browser flight/event times use the browser's
 local timezone. New readsb diagnostic timestamps use UTC.
 
-**Receiver** in the browser includes antenna latitude/longitude settings. Saving
-a site restarts the assigned decoder with that reference position; range rings
-(50/100/200 NM) use this saved site. Clearing the site removes the reference.
-No site is inferred from the map's initial view. Native USB controls show site
-status and direct the user to the browser for editing it.
+**Settings → Radio / User** on touchscreen, or `/settings` in the browser, edits
+the shared antenna coordinates, optional callsign, height and GPS preferences.
+The browser Receiver panel links to it. Range rings (50/100/200 NM), local
+decoding and the reception dome use this position. No site is inferred from the
+map's initial view. See [shared location and GPS behavior](radio-user-information.md).
 
-Trails default to **24 hours**. Both interfaces offer Off, 5/15/30 minutes and
-1/3/6/12/24 hours. The shared history keeps recent positions about four seconds
+Both interfaces open in **Live** with five-minute trails. **Since opened** shows
+newly received samples from the current visit; **Start fresh** resets only that
+viewing window. **History** defaults to 24 hours and offers Off, 5/15/30 minutes
+and 1/3/6/12/24 hours. Optional Past trails adds a faint backdrop. Logging and
+coverage collection continue in every view. See [traffic windows, freshness and
+new-arrival counters](adsb-traffic-views.md).
+
+The shared history keeps recent positions about four seconds
 apart; positions older than 30 minutes are thinned to about one per minute,
 preserving endpoints around reception gaps. Tracks expire after 24 hours and
 are bounded to 1,024 aircraft, 2,048 positions per aircraft and 65,536 positions
@@ -132,7 +138,8 @@ The compressed `trails.json.gz` checkpoint is written atomically once per minute
 and at normal shutdown, so trails survive an application restart. Existing
 recent flight logs seed history on first upgrade; positions that were already
 discarded by the previous 30-minute history cannot be recovered. Aircraft which
-disappear are removed from live traffic while their retained trail stays visible.
+disappear are removed from Live while their retained trail remains available in
+History or the optional backdrop.
 
 The central **Listening for aircraft** notice is shown only during the first
 five seconds after the decoder starts, and is hidden sooner if a position is
@@ -210,4 +217,4 @@ installed.
 - https://www.dynonavionics.com/adsb-dual-band-receiver-472.php/1000
 - https://github.com/wiedehopf/tar1090
 
-Aircraft with stale positions remain as grey, selectable icons at their saved trail endpoints. Labels and selection details show the position age; they are excluded from live counts and cannot start Follow. They follow the selected trail duration (up to 24 hours), and disappear when trails are off. Live positions replace the historical icon. No position is extrapolated from speed reports. Callsign, heading and speed are saved with new trail points; older history uses the ICAO identifier.
+In History and Since opened, aircraft with stale positions remain as grey, selectable icons at retained trail endpoints within the chosen viewing window. Labels and selection details show the position age; they are excluded from live counts and cannot start Follow. They follow the selected trail duration (up to 24 hours), and disappear when trails are off. Live positions replace the historical icon. No position is extrapolated from speed reports. Callsign, heading and speed are saved with new trail points; older history uses the ICAO identifier.

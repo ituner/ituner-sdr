@@ -32,7 +32,7 @@ const SPECTRUM_ALLOCATION_DATA={"schema":1,"snapshot":"2026-10-17","sources":{"e
 /* END GENERATED ALLOCATION LOOKUP */
 'use strict';
 const $=id=>document.getElementById(id);let survey=null,token='',baseline=null,view=null,first=true,working=false,drag=null,noticeRun=null,noticeUntil=0,noticeSent=false,polling=false,actionError='',pendingAction='',hoverHz=null,dataRangeKey=null;
-const canvas=$('plot'),ctx=canvas.getContext('2d');
+const canvas=$('plot'),ctx=canvas.getContext('2d');let lastStatusPoll=0;
 $('weather').href=`http://${location.hostname}:8094/`;
 $('sensors').href=`http://${location.hostname}:8093/`;
 const presets={full:[25,1700,100000],fm:[87.5,108,25000],vhf:[100,300,25000],uhf:[300,1000,100000],high:[1000,1700,100000]};
@@ -63,6 +63,7 @@ async function command(action,values={}){
 }
 function compatible(){const a=survey?.data,b=baseline;return a?.settings&&b?.settings&&a.device?.id===b.device?.id&&['low','high','bin','gain','ppm'].every(k=>a.settings[k]===b.settings[k])&&a.rate===b.rate&&a.fft===b.fft;}
 function draw(){
+ const currentConfig=survey?.data?.settings||survey?.settings;if(currentConfig&&!view)view=[currentConfig.low,currentConfig.high];if(window.SurveyTools)SurveyTools.draw();if(canvas.clientWidth<100)return;
  const ratio=devicePixelRatio||1,width=canvas.clientWidth,height=canvas.clientHeight;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.scale(ratio,ratio);ctx.clearRect(0,0,width,height);
  const d=survey?.data,config=d?.settings||survey?.settings;if(!config)return;
  if(!view)view=[config.low,config.high];
@@ -101,23 +102,23 @@ function fillSettings(s){for(const key of ['low','high'])$(key).value=s[key]/1e6
 function renderActivity(){
  const d=survey.data,run=survey.run||{},phase=pendingAction||(actionError&&!survey.enabled?'FAILED':run.phase||(survey.enabled?'STARTING':survey.status==='ERROR'?'FAILED':'STOPPED'));
  $('status').textContent=phase;$('status').dataset.phase=phase;$('run-state').dataset.phase=phase;
- const live=phase==='RUNNING',active=survey.enabled;
- $('run-title').textContent=live?'Survey running · pass '+(d.sweep||1)+' · '+Math.round((d.progress||0)*100)+'%':phase==='STARTING'?'Starting survey…':phase==='STOPPING'?'Stopping survey…':phase==='WAITING FOR DATA'?'Receiver open · waiting for fresh measurements':phase==='FAILED'?'Survey failed':d.complete?'Survey complete · saved measurements':'Survey stopped';
+ const live=phase==='RUNNING',active=survey.enabled,fixed=survey.settings.purpose==='investigate';
+ $('run-title').textContent=live&&fixed?'Live investigation · frame '+(d.sweep||1):live?'Survey running · pass '+(d.sweep||1)+' · '+Math.round((d.progress||0)*100)+'%':phase==='STARTING'?'Starting survey…':phase==='STOPPING'?'Stopping survey…':phase==='WAITING FOR DATA'?'Receiver open · waiting for fresh measurements':phase==='FAILED'?'Survey failed':d.complete?'Survey complete · saved measurements':'Survey stopped';
  $('run-live').textContent=phase==='FAILED'?(actionError||survey.detail):live?'USB '+((survey.assigned||d.device)?.serial||'—')+' · fresh IQ · last update '+Number(run.last_sample_age||0).toFixed(1)+'s ago':phase==='STARTING'?'Waiting for receiver handoff and first IQ samples.':phase==='WAITING FOR DATA'?'Last IQ update '+Number(run.last_sample_age||0).toFixed(1)+'s ago. See activity and receiver log.':phase==='STOPPING'?'Waiting for the receiver process to exit.':d.updated?'Last measurement '+new Date(d.updated*1000).toLocaleString()+' · historical trace. Start a survey for live data.':'Press Start survey to receive live measurements.';
- $('run-progress').hidden=!active;$('run-progress').value=d.started>=(run.requested_at||Infinity)?d.progress||0:0;
+ $('run-progress').hidden=!active||fixed;$('run-progress').value=d.started>=(run.requested_at||Infinity)?d.progress||0:0;
  $('start').disabled=active||working;$('stop').disabled=!active||working;
  $('start').textContent=phase==='STARTING'?'Starting…':phase==='STOPPING'?'Stopping…':phase==='WAITING FOR DATA'?'Waiting for data…':active?'● Survey running':phase==='FAILED'?'↻ Retry survey':'▶ Start survey';
  $('activity').textContent=(survey.activity||[]).map(row=>new Date(row.time*1000).toLocaleTimeString()+' · '+row.action.toUpperCase()+' · '+row.detail).join('\n')||'No recent activity. Receiver messages are available in the log.';
 }
 async function poll(){
- if(polling)return;polling=true;
+ if(polling)return;polling=true;lastStatusPoll=Date.now();
  try{
- const r=await fetch('/api/spectrum');if(!r.ok)throw Error('Survey offline');survey=await r.json();token=survey.control_token;
+ const r=await fetch('/api/spectrum');if(!r.ok)throw Error('Survey offline');survey=await r.json();token=survey.control_token;if(window.SurveyTools)SurveyTools.update(survey);
  if(survey.enabled)actionError='';renderActivity();
  const previous=$('device').value,devices=survey.devices||[];
  if(document.activeElement!==$('device')){$('device').replaceChildren(new Option('Auto · prefer a free dongle','auto'),...devices.filter(d=>d.persistent).map(d=>new Option(d.label+(survey.leases[d.id]?' · '+survey.leases[d.id]:''),d.id)));$('device').value=previous;}
  if(first){fillSettings(survey.settings);first=false;}
- $('detail').textContent=!survey.enabled&&survey.data.complete&&survey.status!=='ERROR'?'Completed '+new Date(survey.data.finished*1000).toLocaleString()+' · saved measurements · receiver idle.':survey.detail;$('tuning-label').textContent=survey.enabled?'TUNING NOW':'LAST TUNED';$('save').disabled=!survey.can_save||working;
+ $('detail').textContent=!survey.enabled&&survey.data.complete&&survey.status!=='ERROR'?'Completed '+new Date(survey.data.finished*1000).toLocaleString()+' · saved measurements · receiver idle.':survey.detail;$('tuning-label').textContent=survey.enabled?(survey.settings.purpose==='investigate'?'FIXED TUNING':'TUNING NOW'):'LAST TUNED';$('save').disabled=!survey.can_save||working;
  const d=survey.data,config=d.settings||survey.settings,isCurrent=!survey.enabled||d.started>=(survey.run?.requested_at||Infinity);const nextRangeKey=[config.low,config.high,config.bin].join(':');if(nextRangeKey!==dataRangeKey){view=null;if(hoverHz!==null)hoverHz=Math.max(config.low,Math.min(config.high,hoverHz));dataRangeKey=nextRangeKey;}$('range').textContent=mhz(config.low)+'–'+mhz(config.high)+' MHz';$('sweep').textContent=isCurrent?d.sweep||'—':'—';$('progress').textContent=isCurrent&&d.progress!=null?Math.round(d.progress*100)+'%':'—';$('tuning').textContent=isCurrent&&d.current_frequency?mhz(d.current_frequency)+' MHz':'—';$('receiver').textContent=(survey.assigned||d.device)?.serial||'—';
  if(!isCurrent)$('detail').textContent='Previous trace retained · waiting for new receiver measurements.';
  const clipped=d.samples?d.clipped/d.samples:0,{excluded,notice}=qualityInfo(d,config,survey.enabled&&isCurrent);
@@ -219,7 +220,7 @@ function liveHistoryRow(){
 }
 function waterfallTime(row){return new Date(row.started*1000).toLocaleString()+' → '+new Date(row.finished*1000).toLocaleTimeString();}
 function drawWaterfall(){
- if(!survey||!view)return;
+ if(!survey||!view||waterfall.clientWidth<100)return;
  const width=waterfall.clientWidth,left=58,w=Math.max(1,Math.round(width-78)),top=24;
  waterfallGeometry={left,w,top,columns:w};
  const now=Date.now()/1000,archived=(historyKey===[survey.history?.key,...view,w].join(':')?historyRows:[]).filter(row=>row.finished>=now-86400).slice().reverse(),live=liveHistoryRow();
@@ -296,4 +297,5 @@ $('waterfall-zoom-in').onclick=()=>zoom(.5);$('waterfall-zoom-out').onclick=()=>
 for(const id of ['waterfall-depth','waterfall-floor','waterfall-ceiling'])$(id).addEventListener('input',drawWaterfall);
 new ResizeObserver(()=>{drawWaterfall();}).observe(waterfall.parentElement);
 
-new ResizeObserver(draw).observe(canvas);poll();setInterval(poll,1500);
+SurveyTools.init({command,poll,draw,zoom,fillSettings,compatible,getView:()=>view,getBaseline:()=>baseline,select:frequency=>{hoverHz=frequency;hoverHistory=null;refreshInspector();draw();}});
+new ResizeObserver(draw).observe(canvas);poll();setInterval(()=>{if(Date.now()-lastStatusPoll>=(survey?.settings.purpose==='investigate'?200:1400))poll();},250);

@@ -107,6 +107,18 @@ slot is reserved for a future second receiver and decoder. Install
 with `sudo ./scripts/install-adsb.sh` or add `--adsb` to the CM5 app installer.
 See [ADS-B setup and custom-carrier USB power selection](docs/adsb.md).
 
+Airspace now separates [Live, Since opened and History](docs/adsb-traffic-views.md),
+with position/contact ages and a display-only Start fresh control. Its
+[reception dome](docs/adsb-reception-coverage.md) accumulates received directions
+and 3D positions. The [Spectrum Analyzer](docs/spectrum-survey.md), above HF in
+the Decode menu, provides survey, signal investigation, heatmap, persistence,
+watchlist and comparison/report tools on web and touchscreen.
+
+**Settings → Radio / User** edits one [shared station profile](docs/radio-user-information.md)
+for local SDR applications, satellite predictions and weather. Optional USB GNSS
+can update the radio's location as it moves; enable support with
+`sudo scripts/install-station-info.sh`. Remote receivers retain their own sites.
+
 ## CM5 / JD9365DA-H3 30-pin LCD hardware setup
 
 For a fresh system using the r2 main board's **YX80030ACT3 on FPC2**, see the

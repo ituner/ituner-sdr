@@ -26,6 +26,10 @@ def collect():
  while True:
   try:
    with urlopen('http://127.0.0.1:8092/api/state',timeout=5) as response:state=json.load(response)
+   try:
+    with urlopen('http://127.0.0.1:8092/api/station',timeout=2) as response:station=json.load(response)
+    station.pop('control_token',None)
+   except (OSError,ValueError):station=STATE.get('station')
    rows=candidates(state);selection=SETTINGS.get('selection','auto')
    # Auto selection locks to the first compatible identity, never mixes stations.
    fresh=[r for r in rows if 0<=time.time()-r['time']<=120]
@@ -35,7 +39,7 @@ def collect():
     row=next((r for r in rows if r['id']==selection),None)
     valid=row is not None and 0<=time.time()-row['time']<=120
     status='Receiving weather data' if valid else 'Weather sensor is stale / awaiting its next transmission' if row else 'Waiting for compatible weather sensors'
-    STATE.update(candidates=rows,reading=row,fresh=valid,selection=selection,status=status,last_poll=time.time(),error='')
+    STATE.update(station=station,candidates=rows,reading=row,fresh=valid,selection=selection,status=status,last_poll=time.time(),error='')
   except (OSError,ValueError,KeyError) as exc:
    with LOCK:STATE.update(fresh=False,status='Shared receiver feed unavailable',error=str(exc))
   time.sleep(2)

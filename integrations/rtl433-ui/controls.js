@@ -2,7 +2,7 @@
 // Native RTL433-UI cards and plots, with the shared iTuner receiver controls.
 (()=>{
   const section=document.createElement('section');section.id='ituner-receiver';
-  section.innerHTML='<div class="ituner-radio-row"><label>Primary USB <select id="ituner-device" aria-label="USB receiver"><option value="auto">Auto · available dongle</option></select></label><button id="ituner-start">▶ Start sensors</button><button id="ituner-stop">■ Stop sensors</button><label class="pool-option"><input type="checkbox" id="ituner-expand" checked> Use free dongles</label><a id="ituner-observatory">Decoders ↗</a><a id="ituner-airspace">Airspace ↗</a><a id="ituner-survey">Spectrum Survey ↗</a><a id="ituner-weather">Weather ↗</a></div><div id="ituner-state" role="status">Connecting to the CM5 receiver…</div><div id="ituner-pool" aria-label="Sensor receivers"></div>';
+  section.innerHTML='<div class="ituner-radio-row"><label>Primary USB <select id="ituner-device" aria-label="USB receiver"><option value="auto">Auto · available dongle</option></select></label><button id="ituner-start">▶ Start sensors</button><button id="ituner-stop">■ Stop sensors</button><label class="pool-option"><input type="checkbox" id="ituner-expand" checked> Use free dongles</label><a id="ituner-observatory">Decoders ↗</a><a id="ituner-airspace">Airspace ↗</a><a id="ituner-survey">Spectrum Survey ↗</a><a id="ituner-weather">Weather ↗</a><a id="ituner-radio-info">Radio / user info ↗</a></div><div id="ituner-state" role="status">Connecting to the CM5 receiver…</div><div id="ituner-pool" aria-label="Sensor receivers"></div>';
   document.querySelector('header').after(section);
   const style=document.createElement('style');style.textContent=`
   #ituner-receiver{padding:10px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
@@ -26,6 +26,7 @@
   @media(max-width:700px){#ituner-receiver{padding:8px 12px}.ituner-radio-row{gap:8px}.intelligent-scan summary{font-size:12px}}
   `;document.head.append(style);
   const $=id=>document.getElementById(id);
+  $('ituner-radio-info').href=`http://${location.hostname}:8092/settings`;
   $('ituner-observatory').href=`http://${location.hostname}:8092/#ism`;
   $('ituner-airspace').href=`http://${location.hostname}:8090/`;
   $('ituner-weather').href=`http://${location.hostname}:8094/`;

@@ -25,7 +25,7 @@ mv "$staging" "$prefix"
 install -m 0644 "$repo/systemd/ituner-rtl433-ui.service" /etc/systemd/system/
 backup=/var/backups/ituner-sdr/rtl433-ui-$(date -u +%Y%m%dT%H%M%SZ)
 install -d "$backup"
-for file in vhf_monitor.py vhf_workspace.py vhf_dashboard.js vhf_dashboard.html kiwi_gl_display.py sdr_broker.py spectrum_monitor.py spectrum_history.py spectrum_workspace.py spectrum_allocations.json soapy_survey.py spectrum.html spectrum.css spectrum.js; do
+for file in vhf_monitor.py vhf_workspace.py vhf_dashboard.js vhf_dashboard.html kiwi_gl_display.py sdr_broker.py spectrum_monitor.py spectrum_history.py spectrum_analysis.py spectrum_report.py spectrum_workspace.py spectrum_allocations.json soapy_survey.py spectrum.html spectrum.css spectrum.js spectrum_tools.js; do
     [[ ! -f /opt/ituner-sdr/UI/$file ]] || cp -a "/opt/ituner-sdr/UI/$file" "$backup/"
     install -m 0644 "$repo/UI/$file" /opt/ituner-sdr/UI/
 done

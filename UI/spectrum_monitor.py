@@ -11,8 +11,9 @@ import threading
 import time
 from sdr_broker import soapy_args
 from spectrum_history import SweepHistory
+from spectrum_analysis import SpectrumInsights
 
-DEFAULT=dict(low=25000000,high=1700000000,bin=100000,gain=28.0,ppm=0,selection='auto',repeat=False,auto_gain=True)
+DEFAULT=dict(low=25000000,high=1700000000,bin=100000,gain=28.0,ppm=0,selection='auto',repeat=False,auto_gain=True,purpose='survey',focus=0)
 
 def settings(values,previous=None):
     result={**DEFAULT,**(previous or {})}
@@ -31,6 +32,11 @@ def settings(values,previous=None):
         if key in values:
             if not isinstance(values[key],bool):raise ValueError(key+' must be true or false')
             result[key]=values[key]
+    if 'purpose' in values:result['purpose']=values['purpose']
+    if result['purpose'] not in ('survey','investigate','watch'):raise ValueError('Unknown survey mode')
+    if 'focus' in values:result['focus']=float(values['focus'])
+    if not math.isfinite(result['focus']):raise ValueError('Focus frequency must be finite')
+    if result['purpose']=='investigate' and result['high']-result['low']>1536000:raise ValueError('Live investigation must fit within 1.536 MHz')
     return result
 
 class SpectrumSurvey:
@@ -42,8 +48,12 @@ class SpectrumSurvey:
         try:self.data=json.loads((self.root/'latest.json').read_text())
         except (OSError,ValueError):pass
         self.completed=json.loads(json.dumps(self.data)) if self.data.get('complete') else None
+        self._report_stamp=None;self._report_rows=[]
         self.history=SweepHistory(self.root/'waterfall.sqlite3')
         if self.completed:self.history.append(self.completed)
+        self.insights=SpectrumInsights(self.root);self.insights.seed(self.history,self.data)
+        try:self.parents=json.loads((self.root/'survey-return.json').read_text())[-2:]
+        except (ValueError,OSError,TypeError):self.parents=[]
         hub.broker.register('spectrum',lambda:self.stop('Receiver handed to another decoder'))
 
     def event(self,action,detail):
@@ -63,15 +73,44 @@ class SpectrumSurvey:
     def _control(self,action,**values):
         if action=='stop':self.stop();return
         if action=='save':return self.save(values.get('label','Antenna baseline'))
+        if action=='survey_start':
+            settings(dict(values,purpose='survey',focus=0),self.settings)
+            self.stop();self._control('configure',**values);return self._control('start')
+        if action=='watch_add':return self.insights.add_watch(values['frequency'],values.get('label',''),values.get('bandwidth',25000))
+        if action=='watch_remove':
+            self.insights.remove_watch(values['id'])
+            if self.settings.get('purpose')=='watch' and not self.insights.watch:self.stop('Watchlist empty; receiver released')
+            return
+        if action=='report':
+            from spectrum_report import create_report
+            return create_report(self,values.get('label','RF survey'),values.get('notes',''),values.get('baseline_id',''))
+        if action=='investigate':
+            frequency=float(values['frequency']);span=float(values.get('span',1500000))
+            if not math.isfinite(frequency) or not 25e6<=frequency<=1700e6:raise ValueError('Choose a frequency within 25–1700 MHz')
+            if not math.isfinite(span) or not 100000<=span<=1536000:raise ValueError('Live span must be 0.1–1.536 MHz')
+            low=max(25e6,min(1700e6-span,frequency-span/4))
+            updated=dict(self.settings,low=low,high=low+span,bin=5000,repeat=True,purpose='investigate',focus=frequency,gain=self.data.get('settings',self.settings)['gain'])
+            return self.switch(updated)
+        if action=='watch_start':
+            if not self.insights.watch:raise ValueError('Add a frequency to your watchlist first')
+            frequencies=[w['frequency'] for w in self.insights.watch]
+            updated=dict(self.settings,low=max(25e6,min(frequencies)-750000),high=min(1700e6,max(frequencies)+1250000),bin=100000,repeat=True,purpose='watch',focus=0,gain=self.data.get('settings',self.settings)['gain'])
+            return self.switch(updated)
+        if action=='return':
+            if not self.parents:raise ValueError('There is no previous survey to return to')
+            self.stop();parent=self.parents.pop();self.store_settings(settings(parent['settings']));self.store_parents()
+            if parent['enabled']:self._control('start')
+            return
         if action=='configure':
-            updated=settings(values,self.settings)
+            updated=settings(dict(values,purpose='survey',focus=0),self.settings)
             if updated['selection']!='auto' and not any(d['id']==updated['selection'] and d.get('persistent') for d in self.hub.devices):raise ValueError('Choose a connected receiver with a unique USB serial')
             if self.enabled:raise ValueError('Stop the survey before changing its settings')
-            self.settings=updated;(self.root/'settings.json').write_text(json.dumps(updated));return
+            self.parents=[];self.store_parents();self.store_settings(updated);return
         if action!='start':raise ValueError('Unknown survey action')
         if self.enabled:return
         devices=[d for d in self.hub.devices if d.get('persistent')]
         if not devices:raise ValueError('No uniquely identified RTL-SDR is connected')
+        if self.settings['purpose']=='watch' and not self.insights.watch:raise ValueError('Add a watch frequency first')
         self.target=self.hub.broker.request('spectrum',devices,self.settings['selection'])
         self.stopped.clear();self.enabled=True;self.requested_at=time.time();self.status='STARTING';self.detail='Waiting for the assigned receiver to be released…'
         self.event('start','Start requested · receiver '+self.target)
@@ -92,10 +131,13 @@ class SpectrumSurvey:
             with self.lock:
                 self.completed=None
                 self.data=dict(settings=dict(config),requested_gain=config['gain'],device=device,started=time.time(),updated=None,finished=None,sweep=0,progress=0,current_frequency=None,power=[None]*n,peak=[None]*n,average=[None]*n,counts=[0]*n,masked=[False]*n,quality=[],adjustments=[],clipped=0,samples=0,complete=False)
+                self.data['sample_time']=[None]*n
             command=[sys.executable,str(Path(__file__).with_name('soapy_survey.py')),'--device',soapy_args(device)]
             for key in ('low','high','bin','gain','ppm'):command+=['--'+key,str(config[key])]
             if config['repeat']:command+=['--repeat']
             if config['auto_gain']:command+=['--auto-gain']
+            if config['purpose']=='investigate':command+=['--live']
+            if config['purpose']=='watch':command+=['--watch',json.dumps(self.insights.watch,separators=(',',':'))]
             log=self.root/'receiver.log'
             if log.exists() and log.stat().st_size>1024*1024:log.replace(self.root/'receiver.log.1')
             with log.open('ab') as errors:
@@ -126,14 +168,19 @@ class SpectrumSurvey:
                     with self.lock:
                         temporary=self.root/'latest.tmp';temporary.write_text(json.dumps(self.data,allow_nan=False));temporary.replace(self.root/'latest.json')
             except OSError as exc:self.status='ERROR';self.detail='Could not save survey: '+str(exc)
-            finally:self.enabled=False
+            finally:
+                self.insights.flush();self.enabled=False
 
     def ingest(self,row):
         with self.lock:
             d=self.data;kind=row.get('kind')
             if kind=='begin':
-                d.update(sweep=row['sweep'],sweep_started=row.get('time',time.time()),progress=0,rate=row['rate'],fft=row['fft'],power=[None]*len(d['power']),complete=False)
+                # Fixed-band frames retain the last display until the next real
+                # measurement arrives; clearing at every begin makes a live view blank.
+                power=d['power'] if d['settings'].get('purpose')=='investigate' else [None]*len(d['power'])
+                d.update(sweep=row['sweep'],sweep_started=row.get('time',time.time()),progress=0,rate=row['rate'],fft=row['fft'],power=power,complete=False)
                 d['masked']=[False]*len(d['power']);d['quality']=[]
+                d['sample_time']=[None]*len(d['power'])
                 if 'gain' in row:d['settings']['gain']=row['gain']
                 if row.get('reset'):
                     self.completed=None
@@ -143,6 +190,7 @@ class SpectrumSurvey:
                 d.setdefault('adjustments',[]).append(row)
                 self.detail='Automatic gain: reducing to '+str(row['gain'])+' dB and restarting the sweep.'
             elif kind=='chunk':
+                if d['settings'].get('purpose')=='investigate':d['power']=[None]*len(d['power'])
                 if self.status!='SCANNING':self.event('receiving','Fresh IQ measurements received')
                 self.status='SCANNING'
                 bad=row['clipped']/max(1,row['samples'])>.001
@@ -156,6 +204,7 @@ class SpectrumSurvey:
                         d['counts'][index]=0
                         continue
                     if d.setdefault('masked',[False]*len(d['power']))[index]:continue
+                    d.setdefault('sample_time',[None]*len(d['power']))[index]=row['time']
                     d['power'][index]=value;d['peak'][index]=max(value,d['peak'][index] if d['peak'][index] is not None else value)
                     # Average linear power, not logarithmic dB values.
                     count=d['counts'][index];old=d['average'][index]
@@ -167,6 +216,34 @@ class SpectrumSurvey:
                 d.update(complete=True,finished=row['time'],progress=1)
                 self.completed=json.loads(json.dumps(d))
                 self.history.append(d)
+                self.insights.observe(d)
+            elif kind=='watch':
+                watch=next((w for w in self.insights.watch if w['id']==row.get('id')),None)
+                if watch:self.insights.watch_measure(watch,row,self.insights_key())
+
+    def store_settings(self,updated):
+        self.settings=updated;(self.root/'settings.json').write_text(json.dumps(updated))
+
+    def store_parents(self):(self.root/'survey-return.json').write_text(json.dumps(self.parents))
+
+    def context(self,scope='current'):
+        with self.lock:
+            if scope=='survey' and self.parents:return dict(self.parents[0]['context'])
+            return {key:json.loads(json.dumps(self.data[key])) for key in ('settings','device','rate','fft') if key in self.data}
+
+    def insights_key(self):
+        from spectrum_history import signature
+        return signature(self.context())
+
+    def analysis(self,scope='current',**values):
+        return self.insights.snapshot(self.context(scope),history=self.history,**values)
+
+    def switch(self,updated):
+        updated=settings(updated)
+        if not any(d.get('persistent') for d in self.hub.devices):raise ValueError('No uniquely identified RTL-SDR is connected')
+        if self.settings.get('purpose')!=updated['purpose']:
+            self.parents.append(dict(settings=dict(self.settings),enabled=self.enabled,context=self.context()));self.parents=self.parents[-2:]
+        self.stop();self.store_settings(updated);self.store_parents();self._control('start')
 
     def stop(self,reason='Stopped by request'):
         with self.control_lock:return self._stop(reason)
@@ -221,6 +298,24 @@ class SpectrumSurvey:
     def snapshot(self):
         with self.lock:
             # Serialize under the same lock that updates the trace arrays.
-            return json.loads(json.dumps(dict(enabled=self.enabled,status=self.status,detail=self.detail,assigned=self.assigned,run=self.run_state(),activity=list(self.activity),settings=self.settings,data=self.data,history=self.history.metadata(self.data),can_save=self.completed is not None,saved=self.saved()),allow_nan=False))
+            return json.loads(json.dumps(dict(enabled=self.enabled,status=self.status,detail=self.detail,assigned=self.assigned,run=self.run_state(),activity=list(self.activity),settings=self.settings,data=self.data,history=self.history.metadata(self.data),last_complete_finished=self.completed.get('finished') if self.completed else None,can_return=bool(self.parents),return_to=self.parents[-1]['settings'].get('purpose','survey') if self.parents else None,watchlist=self.insights.watches(),reports=self.reports(),can_save=self.completed is not None,saved=self.saved()),allow_nan=False))
+
+    def reports(self):
+        # Reports contain large arrays; only read each immutable export once.
+        paths=sorted((self.root/'reports').glob('*/report.json'),reverse=True)[:100]
+        stamp=tuple(str(p) for p in paths)
+        if self._report_stamp==stamp:return self._report_rows
+        result=[]
+        for path in paths:
+            try:
+                metadata=path.with_name('metadata.json')
+                value=json.loads((metadata if metadata.exists() else path).read_text())
+                result.append(dict(id=path.parent.name,label=value.get('label','RF survey'),time=value.get('created')))
+            except (ValueError,OSError):pass
+        self._report_rows=result;self._report_stamp=stamp
+        return result
+
+    def comparison_data(self):
+        with self.lock:return json.loads(json.dumps(self.completed)) if self.completed else {}
 
     def close(self):self.stop()

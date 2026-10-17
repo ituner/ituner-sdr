@@ -28,7 +28,18 @@ class ReceiverTests(unittest.TestCase):
 
     def tearDown(self):
         self.manager.close()
+        self.manager.coverage.close()  # The supervisor thread is mocked in these tests.
         self.tmp.cleanup()
+
+    def test_snapshot_ages_cached_rf_and_position_from_observation_time(self):
+        self.manager.aircraft_stamp=100
+        self.manager.planes=[dict(hex='abc',seen=1,seen_pos=10,lat=44,lon=26)]
+        with patch('adsb_monitor.time.time',return_value=104):
+            p=self.manager.snapshot()['aircraft'][0]
+        self.assertEqual(p['last_seen_at'],99);self.assertEqual(p['position_time'],90)
+        self.assertEqual(p['seen'],5);self.assertEqual(p['seen_pos'],14)
+        with patch('adsb_monitor.time.time',return_value=115):
+            self.assertEqual(self.manager.snapshot()['aircraft'],[])
 
     def child(self, returncode=None):
         p=Mock()
@@ -94,6 +105,17 @@ class ReceiverTests(unittest.TestCase):
         logged=json.loads((self.manager.root/'flights.jsonl').read_text())
         self.assertEqual(logged['aircraft'],plane)
         self.assertEqual(logged['device']['serial'],'123')
+
+    def test_live_direct_positions_reach_persistent_coverage(self):
+        manager=self.manager;manager.enabled=True;manager.process=self.child();manager.assigned=DEVICE
+        manager.started=time.monotonic();manager.position=dict(lat=44.4,lon=26.1);manager.active_position=dict(manager.position)
+        stamp=time.time();plane=dict(hex='abc123',type='adsb_icao',lat=44.5,lon=26.1,seen=0,seen_pos=0,alt_geom=10000,rssi=-22)
+        (manager.data/'aircraft.json').write_text(json.dumps(dict(now=stamp,messages=10,aircraft=[plane])))
+        manager._step();manager.coverage.tick(manager.position)
+        data=manager.coverage.snapshot()
+        self.assertEqual(data['meta']['retained_positions'],1)
+        self.assertEqual(data['meta']['max_altitude_ft'],10000)
+        self.assertEqual(data['aircraft'][0]['hex'],'abc123')
 
     def test_message_activity_and_position_activity_are_distinct(self):
         manager=self.manager;manager.enabled=True;manager.process=self.child();manager.assigned=DEVICE
@@ -169,7 +191,7 @@ class WorkspaceTests(unittest.TestCase):
         workspace.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
 
     def test_dashboard_actions_select_follow_sort_and_clear_without_restarting_receiver(self):
-        planes=[dict(hex='abc',flight='TEST',lat=44,lon=26,seen_pos=0,alt_baro=3000),dict(hex='def',flight='OTHER',seen=2,alt_baro=9000)]
+        planes=[dict(hex='abc',flight='TEST',lat=44,lon=26,seen=0,seen_pos=0,alt_baro=3000),dict(hex='def',flight='OTHER',seen=2,alt_baro=9000)]
         workspace,ui,manager,state=self.dashboard(planes)
         workspace.draw(Mock());self.press(workspace,('select','abc'))
         workspace.draw(Mock());self.press(workspace,('follow',None))
@@ -181,10 +203,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIsNone(workspace.selected);self.assertIsNone(workspace.selected_plane);self.assertFalse(workspace.following)
         manager.control.assert_not_called()
 
+    def test_view_modes_and_start_fresh_are_display_only_and_default_back_to_live_on_entry(self):
+        workspace,ui,manager,state=self.dashboard()
+        now=time.time();manager.track_snapshot.return_value={'old':[dict(time=now-60,lat=44,lon=26)]}
+        workspace.show();workspace.draw(Mock())
+        self.assertEqual(workspace.traffic_view.mode,'live');self.assertEqual(workspace.trail_seconds,300)
+        self.assertEqual(workspace.points,[])
+        self.press(workspace,('traffic_view','history'));workspace.draw(Mock())
+        self.assertEqual(len(workspace.points),1);self.assertEqual(workspace.trail_seconds,86400)
+        self.press(workspace,('start_fresh',None));workspace.draw(Mock())
+        self.assertEqual(workspace.traffic_view.mode,'session');self.assertEqual(workspace.points,[])
+        self.assertIn('old',workspace.tracks);manager.control.assert_not_called()
+        workspace.open=False;workspace.show();self.assertEqual(workspace.traffic_view.mode,'live')
+
     def test_dashboard_saved_target_can_be_located_but_cannot_start_follow(self):
         workspace,ui,manager,state=self.dashboard()
         manager.track_snapshot.return_value={'old':[dict(time=time.time()-60,lat=44.5,lon=26.2,alt=4000)]}
-        workspace.selected='old';workspace.draw(Mock())
+        workspace.set_traffic_view('history');workspace.selected='old';workspace.draw(Mock())
         self.assertTrue(workspace.selected_plane['historical'])
         self.assertNotIn(('follow',None),[action for _,action in workspace.actions])
         workspace.yaw=workspace.pitch=0
@@ -193,7 +228,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertAlmostEqual(workspace.pitch,math.radians(44.5))
         self.assertFalse(workspace.following);manager.control.assert_not_called()
         labels=[str(call.args[3]) for call in ui.draw_text.call_args_list]
-        self.assertTrue(any('LAST KNOWN' in label for label in labels))
+        self.assertTrue(any('Position old' in label for label in labels))
 
     def test_dashboard_controls_do_not_overlap_or_intercept_other_targets(self):
         workspace,ui,manager,state=self.dashboard()
@@ -210,7 +245,7 @@ class WorkspaceTests(unittest.TestCase):
                     self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(box,other))
 
     def test_dashboard_hud_does_not_select_or_drag_an_aircraft_behind_it(self):
-        workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen_pos=0)])
+        workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen=0,seen_pos=0)])
         ui.radiogarden_project.return_value=(50,200,1)
         workspace.draw(Mock());workspace.tap(50,200)
         self.assertIsNone(workspace.selected)
@@ -309,7 +344,8 @@ class WorkspaceTests(unittest.TestCase):
         from adsb_traffic import TRAIL_WINDOWS,trail_label
         ui=Mock();ui.contains.return_value=True
         workspace=ADSBWorkspace(ui,Mock())
-        self.assertEqual(workspace.trail_seconds,86400)
+        self.assertEqual(workspace.trail_seconds,300)
+        workspace.trail_seconds=86400
         workspace.actions=[((0,0,10,10),('trails',None))]
         values=[]
         for _ in TRAIL_WINDOWS:
@@ -345,23 +381,23 @@ class WorkspaceTests(unittest.TestCase):
         from adsb_workspace import ADSBWorkspace
         ui=Mock()
         ui.fit_station_text.side_effect=lambda cache,text,*args:text
-        ui.radiogarden_project.return_value=(400,300,1)
+        ui.radiogarden_project.return_value=(400,450,1)
         ui.logical_to_native.side_effect=lambda x,y:(x,y)
         ui.NATIVE_H=800
         ui.GL.GL_SCISSOR_BIT=1
         ui.GL.GL_ENABLE_BIT=2
         ui.contains.side_effect=lambda box,x,y:box[0]<=x<=box[2] and box[1]<=y<=box[3]
         manager=Mock()
-        manager.snapshot.return_value=dict(enabled=True,status='RECEIVING',aircraft=[dict(hex='abc123',lat=45,lon=25,seen_pos=0,flight='TEST123',track=90)],messages=100,detail='Test',port=8090,devices=[],selection='auto')
+        manager.snapshot.return_value=dict(enabled=True,status='RECEIVING',aircraft=[dict(hex='abc123',lat=45,lon=25,seen=0,seen_pos=0,flight='TEST123',track=90)],messages=100,detail='Test',port=8090,devices=[],selection='auto')
         workspace=ADSBWorkspace(ui,manager)
         workspace.show()
         workspace.draw(Mock())
         self.assertEqual(len(workspace.points),1)
-        workspace.tap(400,300)
+        workspace.tap(400,450)
         self.assertEqual(workspace.selected,'abc123')
-        workspace.drag_begin(400,300)
+        workspace.drag_begin(400,450)
         ui.radiogarden_pan_angles.return_value=(1,2)
-        workspace.drag_move(400,300,460,320)
+        workspace.drag_move(400,450,460,470)
         self.assertTrue(workspace.swipe())
         self.assertFalse(workspace.dragged)
         self.assertEqual((workspace.yaw,workspace.pitch),(1,2))

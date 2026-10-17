@@ -37,7 +37,7 @@ install -m 0644 "$repo/systemd/ituner-weather-web.service" "$repo/systemd/ituner
 # Navigation is static; no receiver restart is required.
 backup=/var/backups/ituner-sdr/weather-$(date -u +%Y%m%dT%H%M%SZ)
 install -d "$backup"
-for file in vhf_dashboard.html vhf_dashboard.js spectrum.html spectrum.js spectrum.css; do
+for file in vhf_dashboard.html vhf_dashboard.js spectrum.html spectrum.js spectrum_tools.js spectrum.css; do
     [[ ! -f /opt/ituner-sdr/UI/$file ]] || cp -a "/opt/ituner-sdr/UI/$file" "$backup/"
     install -m 0644 "$repo/UI/$file" /opt/ituner-sdr/UI/
 done

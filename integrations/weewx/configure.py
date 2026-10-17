@@ -5,7 +5,7 @@ root=Path('/var/lib/ituner-weather');path=root/'weewx.conf';c=configobj.ConfigOb
 c['Station']['station_type']='ITunerWeather'
 c['Station']['week_start']='0'
 c.pop('Simulator',None)
-c['ITunerWeather']=dict(driver='user.ituner_weather',feed_url='http://127.0.0.1:8094/api/weather')
+c['ITunerWeather']=dict(driver='user.ituner_weather',feed_url='http://127.0.0.1:8094/api/weather',station_url='http://127.0.0.1:8092/api/station')
 c['StdConvert']['target_unit']='METRICWX'
 c['StdArchive']['record_generation']='software';c['StdArchive']['archive_interval']='300'
 for name,section in c['StdRESTful'].items():

@@ -245,7 +245,11 @@ class HellWorkspace(SSTVWorkspace):
                 self.receiver_page=next((i//2 for i,r in enumerate(receivers) if self.ui.station_fields(r)[2]==row['server']),0)
             elif key=='report':
                 item=next(r for r in self.manager.image_snapshot() if r['id']==value)
-                profile=self.manager.reporter.snapshot()['profiles'].get(item['server'],{})
+                profile=dict(self.manager.reporter.snapshot()['profiles'].get(item['server'],{}))
+                from station_profile import peek_station
+                station=peek_station()
+                if station and station.local_receiver(item['server']):
+                    shared=station.snapshot();profile.update(reporter=shared['config']['callsign'] or profile.get('reporter',''),grid=shared['grid'] or profile.get('grid',''))
                 self.reporting=dict(image=value,call='',reporter=profile.get('reporter',''),grid=profile.get('grid',''),confirmed=False,receiver=item['receiver'],server=item['server'])
                 self.message='';self.report_field='call'
             elif key=='report_field':self.report_field=value

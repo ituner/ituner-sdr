@@ -43,10 +43,11 @@ class NativeSpectrumTests(unittest.TestCase):
         self.assertEqual(columns(data,'power',(100e6,101e6),4).tolist(),[102,122,0,1])
         self.assertEqual(columns(data,'power',(100.5e6,101e6),2).tolist(),[0,1])
         row=dict(values=np.array([0]*452+[1]*452,dtype=np.uint8))
+        self.workspace.display='waterfall'
         raw,_=self.workspace.paint(data,[row],(100e6,101e6))
-        image=Image.frombytes('RGBA',(984,480),raw)
-        self.assertEqual(image.getpixel((100,275))[:3],(8,18,29))
-        self.assertEqual(image.getpixel((900,275))[:3],(232,148,72))
+        image=Image.frombytes('RGBA',(1232,380),raw)
+        self.assertEqual(image.getpixel((140,44))[:3],(29,38,47))
+        self.assertEqual(image.getpixel((1200,44))[:3],(232,148,72))
 
     def test_draft_controls_apply_together_without_starting_reception(self):
         w=self.workspace;w.state=self.hub.spectrum.snapshot()
@@ -71,15 +72,15 @@ class NativeSpectrumTests(unittest.TestCase):
         w=self.workspace;w.state=self.hub.spectrum.snapshot();w.draft=dict(w.state['settings']);w.overlay='settings'
         w.draw(Mock())
         self.assertNotIn(('screen','chart'),[action for _,action in w.actions])
-        w.tap(40,105)  # Upper portion of the visible Preset tile.
+        w.tap(40,190)  # Upper portion of the visible Preset tile.
         self.assertEqual(w.overlay,'presets')
 
     def test_touch_zoom_and_pan_stay_within_acquired_range(self):
         w=self.workspace;w.state=dict(data=dict(settings=dict(low=118e6,high=139e6,bin=25000)))
         w.view=(118e6,139e6);w.zoom(.5)
         self.assertEqual(w.view,(123.25e6,133.75e6))
-        w.drag_begin(500,200);w.drag_move(500,200,2000,200)
+        w.drag_begin(500,400);w.drag_move(500,400,2000,400)
         self.assertEqual(w.view,(118e6,128.5e6))
-        w.drag_begin(500,200);w.drag_move(500,200,-2000,200)
+        w.drag_begin(500,400);w.drag_move(500,400,-2000,400)
         self.assertEqual(w.view,(128.5e6,139e6))
         w.zoom(1e-6);self.assertAlmostEqual(w.view[1]-w.view[0],500000)

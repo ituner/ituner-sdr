@@ -23,6 +23,7 @@ class VHFWorkspace(SSTVWorkspace):
         super().__init__(ui,hub)
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
         self.map=ADSBWorkspace(ui,MapAdapter(self))
+        self.map.trail_seconds=86400  # Independent VHF map keeps its existing history window.
         self.manager.gallery=SimpleNamespace(image_path=lambda key:self.manager.root/key)
         self.number='';self.edit_field='frequency';self.station_edit={}
         self.spectrum=SpectrumWorkspace(ui,hub)
@@ -65,6 +66,8 @@ class VHFWorkspace(SSTVWorkspace):
                     else:self.open=False
                 elif action=='view':self.view=value;self.page=0;self.overlay=None
                 elif action=='overlay':
+                    if value=='location' and getattr(self.ui,'station_settings',None):
+                        self.ui.station_settings.show();self.open=False;return
                     self.overlay=value;self.overlay_page=0
                     if value=='location':self.station_edit=dict(self.manager.position or dict(lat=0,lon=0))
                     elif value=='profiles':self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if p['id']==self.session.settings['profile']),0)
