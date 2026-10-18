@@ -63,13 +63,17 @@ def packed(array):return zlib.compress(np.asarray(array,dtype='<f8').tobytes())
 def unpacked(blob):return np.frombuffer(zlib.decompress(blob),dtype='<f8').copy()
 
 def reduce_values(values,config,low,high,columns,method='max'):
-    result=[];n=len(values)
-    for x in range(columns):
-        a=max(0,min(n-1,int((low+(high-low)*x/columns-config['low'])/config['bin'])))
-        b=min(n,max(a+1,math.ceil((low+(high-low)*(x+1)/columns-config['low'])/config['bin'])))
-        cell=values[a:b];finite=cell[np.isfinite(cell)]
-        result.append(float((np.mean if method=='mean' else np.max)(finite)) if len(finite) else None)
-    return result
+    values=np.asarray(values,dtype=float);n=len(values)
+    if not n:return [None]*columns
+    x=np.arange(columns,dtype=float)
+    first=np.clip(((low+(high-low)*x/columns-config['low'])/config['bin']).astype(int),0,n-1)
+    end=np.minimum(n,np.maximum(first+1,np.ceil((low+(high-low)*(x+1)/columns-config['low'])/config['bin']).astype(int)))
+    indices=first[:,None]+np.arange(int(np.max(end-first)))
+    cells=values[np.minimum(indices,n-1)];valid=(indices<end[:,None])&np.isfinite(cells)
+    count=valid.sum(axis=1)
+    if method=='mean':result=np.divide(np.where(valid,cells,0).sum(axis=1),count,out=np.full(columns,np.nan),where=count>0)
+    else:result=np.max(np.where(valid,cells,-np.inf),axis=1)
+    return [float(v) if count[i] else None for i,v in enumerate(result)]
 
 
 class SpectrumInsights:
@@ -205,14 +209,15 @@ class SpectrumInsights:
         with self.lock,self.db() as db:
             return [dict(id=r[0],time=r[1],label=r[2],frequency=r[3],kind=r[4],detail=r[5]) for r in db.execute('SELECT id,time,label,frequency,kind,detail FROM events ORDER BY id DESC LIMIT 100')]
 
-    def snapshot(self,data,low=None,high=None,columns=512,history=None):
+    def snapshot(self,data,low=None,high=None,columns=512,history=None,detail='full'):
+        if detail not in ('full','signals','timeline','persistence'):raise ValueError('Unknown analysis detail')
         config=data.get('settings')
         if not config:return dict(signals=[],watchlist=self.watches(),events=self.events(),visits=0,timeline=[],activity=[],persistence=[],threshold=THRESHOLD)
         low=float(low) if low is not None else config['low'];high=float(high) if high is not None else config['high'];columns=max(1,min(1024,int(columns)))
         if not all(math.isfinite(v) for v in (low,high)):raise ValueError('Invalid analysis viewport')
         low=max(config['low'],low);high=min(config['high'],high)
         if high<=low:raise ValueError('Invalid analysis viewport')
-        key=signature(data);cache_key=(key,low,high,columns)
+        key=signature(data);cache_key=(key,low,high,columns,detail)
         with self.lock:
             cache=self.cache.get(cache_key)
             if cache and time.monotonic()-cache[1]<(60 if cache[0]==self.revision else 1):return dict(cache[2],watchlist=self.watches(),events=self.events())
@@ -226,10 +231,11 @@ class SpectrumInsights:
                 pp=unpacked(p);ss=unpacked(s);hh=unpacked(h);tt=unpacked(t)
                 if len(pp)!=n:continue
                 seen+=ss;hits+=hh;total+=tt;peak=np.fmax(peak,pp);visits+=count
-                activity=np.divide(hh,ss,out=np.full(n,np.nan),where=ss>0)*100
-                reduced=reduce_values(pp,config,low,high,columns)
-                codes=encode(reduced,[])
-                timeline.append(dict(started=first,finished=last,visits=count,values=base64.b64encode(codes).decode(),
+                if detail in ('full','timeline'):
+                    activity=np.divide(hh,ss,out=np.full(n,np.nan),where=ss>0)*100
+                    reduced=reduce_values(pp,config,low,high,columns)
+                    codes=encode(reduced,[])
+                    timeline.append(dict(started=first,finished=last,visits=count,values=base64.b64encode(codes).decode(),
                                      mean=base64.b64encode(encode(reduce_values(np.where(ss>0,10*np.log10(np.maximum(tt/np.maximum(ss,1),1e-20)),np.nan),config,low,high,columns),[])).decode(),
                                      activity=reduce_values(activity,config,low,high,columns),aggregate=True))
             occupancy=np.divide(hits,seen,out=np.full(n,np.nan),where=seen>0)*100
@@ -240,11 +246,11 @@ class SpectrumInsights:
                 signals.append(dict(zip(('id','frequency','low','high','level','floor','excess','first','last','detections'),r),
                                     width=r[3]-r[2],visits=denominator,active_visits=detected,activity=round(100*detected/denominator,1) if denominator else None))
             persistence=[];persistence_visits=0
-            if history:
+            if history and detail in ('full','persistence'):
                 # Persistence is explicitly the recent detailed sweeps, not minute peak buckets.
-                raw=history.read(data,columns=min(columns,512),low=low,high=high)['rows'][-240:]
+                raw=history.read(data,columns=min(columns,512),low=low,high=high,raw=True)['rows'][-240:]
                 if raw:
-                    levels=np.vstack([np.frombuffer(base64.b64decode(r['values']),np.uint8) for r in raw]);persistence_visits=len(raw)
+                    levels=np.vstack([np.asarray(r['values'],dtype=np.uint8) for r in raw]);persistence_visits=len(raw)
                     for db_level in range(-150,-29,3):persistence.append(((levels>1)&(levels.astype(int)-202>=db_level)&(levels.astype(int)-202<db_level+3)).sum(axis=0).tolist())
             result=dict(key=key,low=low,high=high,columns=columns,threshold=THRESHOLD,visits=visits,signals=signals,
                         activity=reduce_values(occupancy,config,low,high,columns),measured=reduce_values(seen,config,low,high,columns),

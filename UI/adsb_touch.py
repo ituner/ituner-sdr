@@ -65,10 +65,10 @@ class AirspaceDashboard:
         ui.draw_logical_rect(0,88,1280,146,(11,23,33,255))
         ui.draw_logical_rect(0,145,1280,146,self.LINE)
         showing=self.logs_open or self.usb_open or self.traffic_open
-        for box,label,kind,active in (((16,96,116,136),'MAP','map_view',not showing),((126,96,266,136),f"TRAFFIC  {len(self.display_aircraft(state))}",'traffic',self.traffic_open),((276,96,376,136),'LOGS','logs',self.logs_open),((386,96,526,136),'COVERAGE','coverage',self.coverage_open),((536,96,676,136),'RECEIVER','usb',self.usb_open),((1160,96,1264,136),'BACK','back',False)):
+        for box,label,kind,active in (((16,96,116,136),'MAP','map_view',not showing),((126,96,266,136),f"TRAFFIC  {len(self.display_aircraft(state))}",'traffic',self.traffic_open),((276,96,376,136),'LOGS','logs',self.logs_open),((386,96,526,136),'RECEIVER','usb',self.usb_open),((1160,96,1264,136),'BACK','back',False)):
             self.button(cache,box,label,(kind,None),active=active)
         status=reception_summary(state,time.time()) if state['enabled'] else state['status']
-        self.text(cache,696,117,status,13,self.MUTED,width=448)
+        self.text(cache,546,117,status,13,self.MUTED,width=598)
         if self.last_count is None or state['messages']<self.last_count:
             self.last_count,self.last_rate_time=state['messages'],time.monotonic();self.rate=0
         elapsed=time.monotonic()-self.last_rate_time
@@ -80,12 +80,13 @@ class AirspaceDashboard:
         view=self.traffic_view
         self.ui.draw_logical_rect(0,146,944,224,(10,22,31,255))
         for box,label,action,active,enabled in (
-            ((16,156,140,212),'Live',('traffic_view','live'),view.mode=='live',True),
-            ((148,156,364,212),'Since opened',('traffic_view','session'),view.mode=='session',True),
-            ((372,156,516,212),'History',('traffic_view','history'),view.mode=='history',True),
-            ((524,156,704,212),'Start fresh',('start_fresh',None),False,True),
-            ((712,156,928,212),'Past trails '+('on' if view.backdrop else 'off'),('backdrop',None),view.backdrop,view.mode!='history')):
-            self.button(cache,box,label,action,active=active,enabled=enabled,font_size=20)
+            ((16,156,92,212),'Live',('traffic_view','live'),view.mode=='live',True),
+            ((100,156,300,212),'Reception dome',('coverage',None),self.coverage_open,True),
+            ((308,156,504,212),'Since opened',('traffic_view','session'),view.mode=='session',True),
+            ((512,156,616,212),'History',('traffic_view','history'),view.mode=='history',True),
+            ((624,156,788,212),'Start fresh',('start_fresh',None),False,True),
+            ((796,156,928,212),'Past trails',('backdrop',None),view.backdrop,view.mode!='history')):
+            self.button(cache,box,label,action,subtitle=('ON' if view.backdrop else 'OFF') if action[0]=='backdrop' else '',active=active,enabled=enabled,font_size=20)
 
     def draw_map_hud(self, cache, state, valid):
         # Compact instruments and buttons float above the same GPU map as GLOBE.

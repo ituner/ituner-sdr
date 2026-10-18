@@ -1,7 +1,7 @@
 # ADS-B reception coverage
 
-Open **ADS-B → Coverage** on the touchscreen, or **Coverage** in the Airspace
-web page (`http://cm5.local:8090/#coverage`). The black view uses the same stored
+Open **ADS-B → Reception dome**, beside **Live** in the viewing row, on the
+touchscreen or Airspace web page (`http://cm5.local:8090/#coverage`). The black view uses the same stored
 observations on both screens, without claiming an SDR or starting ADS-B.
 
 - **Sky cells** projects received directions onto an angular hemisphere, in
@@ -35,7 +35,13 @@ statistics and extrema use the full retained history. To bound UI payloads, dot
 views are thinned above 20,000 positions, preserving maximum altitude/range.
 
 The `/api/coverage` endpoint reads a cached snapshot built on the receiver
-worker. The native renderer builds its image off the GL/touch thread. History
+worker. The native renderer builds cached 3D geometry off the GL/touch thread, then
+rotates vector arrays and submits batched OpenGL triangles and lines. No dome
+bitmap is repainted or uploaded while dragging. Readouts sit beside the larger
+dome as plain text. The web view caches its grid and trigonometry, avoids
+resizing an unchanged canvas, and uses lower pixel density during a drag before
+restoring full sharpness on release. Unknown sky uses a faint wire shell;
+received cell boundaries and counts keep their original resolution. History
 remains visible with ADS-B paused; the receiver state is shown separately.
 
 Positions must be directly received ADS-B, with finite coordinates, a numeric
@@ -50,3 +56,8 @@ Unobserved cells cannot establish an obstruction: there may have been no
 transmitting aircraft in that direction, no decoded position, or no ADS-B
 receiver running. A probability-of-reception obstruction map requires an
 independent expected-position feed and synchronized receiver uptime.
+
+CM5 benchmark, 18 October 2026, same 583 retained positions: former native
+bitmap generation took 104.3 ms (cells), 65.9 ms (trails), 62.0 ms (3D). Cached
+scene rotation takes 10.0 / 1.6 / 1.6 ms respectively, excluding GL submission
+and screen presentation. These are processing timings, not measured FPS.

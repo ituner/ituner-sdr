@@ -1,6 +1,7 @@
 """Reception evidence, persistence, geometry, bounded rendering and touch flow."""
 import json
 import math
+import numpy as np
 from pathlib import Path
 import tempfile
 import time
@@ -9,6 +10,7 @@ from unittest.mock import Mock, patch
 from urllib.request import urlopen, Request
 from adsb_coverage import ReceptionCoverage, ecef, enu, observation
 from adsb_coverage_touch import paint, CoverageTouch
+import adsb_coverage_gl as dome_gl
 from adsb_monitor import ADSBManager
 from adsb_workspace import ADSBWorkspace
 
@@ -123,6 +125,41 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(w.dragged);self.assertEqual(w.coverage_view.yaw,35)
         w.actions=[((0,0,100,60),('map_view',None))];w.tap(20,20)
         self.assertFalse(w.coverage_open)
+
+    def test_batched_dome_keeps_unknown_cells_filters_and_altitude(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE);data=c.snapshot()
+            for mode in ('cells','trails','space'):
+                scene=dome_gl.prepare(data,mode)
+                frame=dome_gl.project(scene,35,55,920,590)
+                self.assertTrue(any('MAX ALT 10,000 ft' in item[2] for item in frame['labels']))
+                self.assertTrue(frame['hits'])
+                if mode=='cells':
+                    self.assertEqual(len(scene['cells']),4050)
+                    self.assertTrue(any('unobserved / unknown' in h[2] for h in frame['hits']))
+                else:
+                    self.assertEqual(len(scene['dots']),len(data['points']))
+                    empty=dome_gl.prepare(data,mode,aircraft='missing')
+                    self.assertEqual(len(empty['dots']),0)
+                for _,vertices,colours in frame['batches']:
+                    self.assertEqual(len(vertices),len(colours))
+                    self.assertTrue(np.isfinite(vertices).all())
+            c.close()
+
+    def test_rotation_changes_projection_without_rebuilding_or_uploading_raster(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE)
+            scene=dome_gl.prepare(c.snapshot(),'cells')
+            frame=dome_gl.project(scene,0,55,920,590)
+            rotated=dome_gl.project(scene,90,55,920,590)
+            self.assertFalse(np.array_equal(frame['batches'][0][1],rotated['batches'][0][1]))
+            ui=Mock();ui.logical_to_native.side_effect=lambda x,y:(800-y,x)
+            dome_gl.draw(ui,frame,(180,154,1100,744));cached=frame['native']
+            dome_gl.draw(ui,frame,(180,154,1100,744))
+            self.assertIs(frame['native'],cached)
+            ui.GL.glTexImage2D.assert_not_called()
+            self.assertLessEqual(ui.GL.glDrawArrays.call_count,6)
+            c.close()
 
     def test_http_assets_coverage_and_authenticated_height_control(self):
         with tempfile.TemporaryDirectory() as tmp:

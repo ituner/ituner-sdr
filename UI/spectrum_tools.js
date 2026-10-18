@@ -8,25 +8,28 @@
  function button(text,fn){const el=node('button',text);el.onclick=fn;return el;}
  function feedback(text){$('warning').textContent=text;}
  async function action(name,values={}){if(busy)return;busy=true;feedback(name==='investigate'?'Opening live investigation…':name==='return'?'Restoring previous survey…':'Applying…');try{const result=await app.command(name,values);fetchAt=0;await app.poll();feedback(name==='report'?'Report saved. Open it from the list below.':'');return result;}catch(e){feedback(e.message);}finally{busy=false;}}
- function choose(frequency){selected=frequency;$('investigate-frequency').value=mhz(frequency);$('watch-frequency').value=mhz(frequency);app.select(frequency);}
+ function choose(frequency){selected=frequency;$('investigate-frequency').value=mhz(frequency);$('watch-frequency').value=mhz(frequency);$('investigate-start').hidden=false;document.querySelector('.mission-bar').hidden=false;$('mission-description').textContent='Selected '+mhz(selected)+' MHz';app.select(frequency);}
  function investigate(frequency){if(!finite(frequency)||frequency<25e6||frequency>1700e6){feedback('Choose a frequency within 25–1700 MHz.');return;}choose(frequency);action('investigate',{frequency}).then(result=>{if(result)workspace('survey');});}
- function workspace(value){active=value;document.body.dataset.workspace=value;for(const el of document.querySelectorAll('[data-workspace]'))if(el.tagName==='BUTTON')el.classList.toggle('active',el.dataset.workspace===value);for(const key of ['survey','signals','activity','compare','watch','reports'])$(key+'-view').hidden=key!==value;activityStamp='';refresh(true);app.draw();}
+ function workspace(value){active=value;const back=$('scanner-back'),parent=['activity','compare','watch','reports'].includes(value)?'tools':value==='survey'?null:'survey';back.textContent=parent==='tools'?'← Back to tools':parent==='survey'?'← Back to scan':'← Back to decoders';back.href=parent?'#'+parent:'/';back.onclick=parent?e=>{e.preventDefault();workspace(parent);}:null;document.body.dataset.workspace=value;for(const el of document.querySelectorAll('[data-workspace]'))if(el.tagName==='BUTTON')el.classList.toggle('active',el.dataset.workspace===value||el.dataset.workspace==='tools'&&!['survey','signals'].includes(value));for(const key of ['survey','signals','tools','activity','compare','watch','reports'])$(key+'-view').hidden=key!==value;activityStamp='';refresh(true);app.draw();}
  function selectedFrequency(){return Number($('investigate-frequency').value)*1e6;}
  function update(value){
   state=value;const s=state.settings,purpose=s.purpose||'survey',config=JSON.stringify([s.low,s.high,s.bin,s.gain,s.ppm,s.selection,s.repeat,s.auto_gain,purpose,s.focus]);
   if(config!==serverConfig){serverConfig=config;app.fillSettings(s);fetchAt=0;}
   $('mission-mode').textContent=purpose==='investigate'?'LIVE INVESTIGATION':purpose==='watch'?'FREQUENCY WATCHLIST':'BROAD SURVEY';
-  $('mission-description').textContent=purpose==='investigate'?'Fixed tuning · ~5 averaged frames/s · '+mhz(s.focus)+' MHz target':purpose==='watch'?'Revisiting saved frequencies; other ranges are not surveyed.':'Discover → select a signal → investigate its band.';
+  document.querySelector('.mission-bar').hidden=!finite(selected)&&!state.can_return&&purpose!=='investigate';
+  $('mission-description').textContent=finite(selected)?'Selected '+mhz(selected)+' MHz':purpose==='investigate'?'Fixed tuning · ~5 averaged frames/s · '+mhz(s.focus)+' MHz target':purpose==='watch'?'Revisiting saved frequencies; other ranges are not surveyed.':'Discover → select a signal → investigate its band.';
   $('return-survey').hidden=!state.can_return;$('return-survey').textContent='← Return to '+(state.return_to==='watch'?'watchlist':'survey');
+  $('scan-settings-summary').textContent=mhz(s.low)+'–'+mhz(s.high)+' MHz · '+s.bin/1000+' kHz bins · '+(s.repeat?'Repeating':'One sweep');$('start').hidden=state.enabled;$('stop').hidden=!state.enabled;
+  $('investigate-start').hidden=!finite(selected);
   $('watch-start').textContent=purpose==='watch'?'Restart watch mode':'Start watch mode';
   for(const id of ['investigate-start','return-survey','watch-start'])$(id).disabled=busy;
   renderWatches();renderReports();renderComparison();refresh(false);
  }
  async function refresh(force){
-  if(!state||fetching)return;const scope=active==='signals'&&state.can_return?'survey':'current',range=app.getView(),params=new URLSearchParams({columns:'512',scope});
+  if(!state||fetching||!['signals','activity','watch'].includes(active))return;const scope=active==='signals'&&state.can_return?'survey':'current',range=app.getView(),params=new URLSearchParams({columns:'512',scope,detail:active==='activity'?($('activity-mode').value==='persistence'?'persistence':'timeline'):'signals'});
   if(scope==='current'&&range){params.set('low',range[0]);params.set('high',range[1]);}
   const key=params.toString();if(!force&&key===fetchKey&&Date.now()-fetchAt<4000)return;if(key!==fetchKey){insights=null;activityStamp='';const canvas=$('activity-plot');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);$('activity-description').textContent='Loading matching measurements…';}fetching=true;fetchKey=key;const serial=++seq;
-  try{const response=await fetch('/api/spectrum/insights?'+params,{signal:AbortSignal.timeout(20000)});if(!response.ok)throw Error('Analysis unavailable; retrying.');const data=await response.json();if(serial!==seq)return;insights=data;fetchAt=Date.now();activityStamp='';renderSignals();renderWatches();draw();}
+  try{const response=await fetch('/api/spectrum/insights?'+params,{signal:AbortSignal.timeout(20000)});if(!response.ok)throw Error('Analysis unavailable; retrying.');const data=await response.json();if(serial!==seq||key!==fetchKey)return;insights=data;fetchAt=Date.now();activityStamp='';renderSignals();renderWatches();draw();}
   catch(e){$('discovery-method').textContent=e.message;fetchAt=Date.now()-3000;}
   finally{fetching=false;}
  }
@@ -100,9 +103,20 @@
   activityGeometry={left,w,top,rh,rows,mode,cells};
  }
  function init(context){
-  app=context;for(const el of document.querySelectorAll('button[data-workspace]'))el.onclick=()=>workspace(el.dataset.workspace);
+  app=context;document.body.dataset.chart='spectrum';
+  const dialog=$('scan-setup');dialog.append(document.querySelector('.receiver-details'));
+  const commandBar=document.createElement('div');commandBar.className='workspace-bar';const tabs=document.querySelector('.survey-workflow');tabs.before(commandBar);commandBar.append(tabs,document.querySelector('.scan-toolbar'));
+  $('open-setup').onclick=()=>dialog.showModal();$('close-setup').onclick=()=>dialog.close();
+  $('settings').addEventListener('invalid',()=>{if(!dialog.open)dialog.showModal();},true);
+  dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});
+  const compareOptions=document.querySelector('.comparison-options');$('compare-view').append(compareOptions);
+  const manual=document.querySelector('.manual-tuning');$('manual-tune-slot').append(manual);const manualButton=$('investigate-start').cloneNode(true);manualButton.id='manual-investigate';manualButton.hidden=false;$('manual-tune-slot').append(manualButton);manualButton.onclick=()=>investigate(selectedFrequency());
+  const extra=document.querySelector('.bottom');$('tools-view').append(extra);
+  for(const b of document.querySelectorAll('button[data-chart]'))b.onclick=()=>{document.body.dataset.chart=b.dataset.chart;for(const other of document.querySelectorAll('button[data-chart]'))other.setAttribute('aria-pressed',String(other===b));app.draw();};
+  app.onStarted=()=>dialog.close();
+  for(const el of document.querySelectorAll('button[data-workspace]'))el.onclick=()=>workspace(el.dataset.workspace);
   $('investigate-start').onclick=()=>investigate(selectedFrequency());$('return-survey').onclick=()=>action('return').then(result=>{if(result)workspace('survey');});
-  $('signal-sort').onchange=()=>{signalPage=0;renderSignals();};$('signal-prev').onclick=()=>{signalPage=Math.max(0,signalPage-1);renderSignals();};$('signal-next').onclick=()=>{signalPage++;renderSignals();};$('activity-mode').onchange=()=>{activityStamp='';draw();};
+  $('signal-sort').onchange=()=>{signalPage=0;renderSignals();};$('signal-prev').onclick=()=>{signalPage=Math.max(0,signalPage-1);renderSignals();};$('signal-next').onclick=()=>{signalPage++;renderSignals();};$('activity-mode').onchange=()=>{activityStamp='';fetchKey='';refresh(true);draw();};
   $('activity-zoom-in').onclick=()=>{app.zoom(.5,selected??undefined);refresh(true);};$('activity-zoom-out').onclick=()=>{app.zoom(2,selected??undefined);refresh(true);};$('activity-full').onclick=()=>{$('reset-zoom').click();refresh(true);};
   $('compare-save').onclick=()=>$('save').click();$('compare-baseline').onchange=()=>{$('baseline').value=$('compare-baseline').value;$('baseline').dispatchEvent(new Event('change'));};
   $('watch-add').onsubmit=e=>{e.preventDefault();action('watch_add',{frequency:Number($('watch-frequency').value)*1e6,label:$('watch-label').value,bandwidth:Number($('watch-width').value)*1000});};
@@ -114,5 +128,5 @@
   new ResizeObserver(()=>{activityStamp='';draw();}).observe($('activity-plot').parentElement);
   document.body.dataset.workspace='survey';
  }
- root.SurveyTools={init,update,draw};
+ root.SurveyTools={init,update,draw,select:choose,started:()=>app?.onStarted?.()};
 })(window);

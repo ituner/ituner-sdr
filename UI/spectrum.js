@@ -35,7 +35,7 @@ const $=id=>document.getElementById(id);let survey=null,token='',baseline=null,v
 const canvas=$('plot'),ctx=canvas.getContext('2d');let lastStatusPoll=0;
 $('weather').href=`http://${location.hostname}:8094/`;
 $('sensors').href=`http://${location.hostname}:8093/`;
-const presets={full:[25,1700,100000],fm:[87.5,108,25000],vhf:[100,300,25000],uhf:[300,1000,100000],high:[1000,1700,100000]};
+const presets={full:[25,1700,100000],fm:[87.5,108,25000],air:[118,139,25000],vhf:[100,300,25000],uhf:[300,1000,100000],high:[1000,1700,100000]};
 const mhz=hz=>(hz/1e6).toFixed(hz<300e6?3:2);
 function message(text,type=''){$('warning').textContent=text;$('warning').dataset.type=type;}
 function qualityInfo(d,config,enabled){
@@ -175,7 +175,7 @@ $('preset').onchange=()=>{const p=presets[$('preset').value];if(p){$('low').valu
 for(const id of ['low','high'])$(id).addEventListener('input',()=>{$('preset').value='custom';updateBins();});$('bin').addEventListener('change',updateBins);
 $('settings').onsubmit=async e=>{e.preventDefault();if(working||!survey||!token)return;updateBins();working=true;pendingAction='STARTING';actionError='';if(survey)renderActivity();message('Starting survey…');try{
  const values={low:Number($('low').value)*1e6,high:Number($('high').value)*1e6,bin:Number($('bin').value),gain:Number($('gain').value),ppm:Number($('ppm').value),repeat:$('repeat').checked,auto_gain:$('auto-gain').checked,selection:$('device').value};
- await command('configure',values);await command('start');view=null;await poll();
+ await command('configure',values);await command('start');window.SurveyTools?.started();view=null;await poll();
  }catch(error){actionError=error.name==='TimeoutError'?'Start request timed out. Checking actual receiver state…':error.message;message(actionError);}finally{working=false;pendingAction='';if(survey)renderActivity();await poll();}};
 $('stop').onclick=async()=>{if(working)return;working=true;pendingAction='STOPPING';actionError='';if(survey)renderActivity();try{await command('stop');}catch(e){actionError=e.message;message(actionError);}finally{working=false;pendingAction='';await poll();}};
 $('save').onclick=async()=>{try{await command('save',{label:$('label').value});await poll();message('Completed sweep saved as a comparison baseline.');}catch(e){message(e.message);}};
@@ -184,7 +184,7 @@ $('export').onclick=()=>{if(!survey?.data.settings)return;const blob=new Blob([J
 function zoom(scale,center){const s=survey?.data.settings;if(!s)return;if(!view)view=[s.low,s.high];center=center??(view[0]+view[1])/2;const span=Math.min(s.high-s.low,Math.max(s.bin*20,(view[1]-view[0])*scale));let lo=Math.max(s.low,center-span/2),hi=lo+span;if(hi>s.high){hi=s.high;lo=hi-span;}view=[lo,hi];draw();}
 $('zoom-in').onclick=()=>zoom(.5);$('zoom-out').onclick=()=>zoom(2);$('reset-zoom').onclick=()=>{view=null;draw();};
 canvas.addEventListener('wheel',e=>{e.preventDefault();const box=canvas.getBoundingClientRect();if(!view)return;const fraction=Math.max(0,Math.min(1,(e.clientX-box.left-58)/(box.width-78)));zoom(e.deltaY>0?1.3:1/1.3,view[0]+fraction*(view[1]-view[0]));},{passive:false});
-canvas.onpointerdown=e=>{drag={x:e.clientX,view:view&&[...view]};canvas.setPointerCapture(e.pointerId);inspectPointer(e);};canvas.onpointerup=()=>drag=null;
+canvas.onpointerdown=e=>{drag={x:e.clientX,view:view&&[...view]};canvas.setPointerCapture(e.pointerId);inspectPointer(e);if(hoverHz!==null)SurveyTools.select(hoverHz);};canvas.onpointerup=()=>drag=null;
 canvas.onpointermove=e=>{const s=survey?.data.settings||survey?.settings;if(!s||!view)return;const box=canvas.getBoundingClientRect();
  if(drag?.view){const delta=(e.clientX-drag.x)/(box.width-78)*(drag.view[1]-drag.view[0]),span=drag.view[1]-drag.view[0];let lo=Math.min(s.high-span,Math.max(s.low,drag.view[0]-delta));view=[lo,lo+span];draw();}
  inspectPointer(e);
@@ -282,7 +282,7 @@ function inspectWaterfall(event){
  hoverHz=view[0]+fraction*(view[1]-view[0]);const code=row.values[Math.min(row.values.length-1,Math.floor(fraction*row.values.length))]||0;
  hoverHistory={row,code};$('cursor').hidden=true;refreshInspector();draw();
 }
-waterfall.addEventListener('pointermove',inspectWaterfall);waterfall.addEventListener('pointerdown',inspectWaterfall);
+waterfall.addEventListener('pointermove',inspectWaterfall);waterfall.addEventListener('pointerdown',e=>{inspectWaterfall(e);if(hoverHz!==null){const row=hoverHistory;SurveyTools.select(hoverHz);hoverHistory=row;refreshInspector();}});
 waterfall.addEventListener('pointerleave',()=>{hoverHistory=null;$('waterfall-cursor').hidden=true;});
 waterfall.addEventListener('wheel',e=>{if(!e.ctrlKey)return;e.preventDefault();zoom(e.deltaY>0?1.3:1/1.3,hoverHz??undefined);},{passive:false});
 waterfall.addEventListener('keydown',e=>{

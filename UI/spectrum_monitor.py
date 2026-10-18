@@ -1,5 +1,6 @@
 """Broker-owned, bounded spectrum surveys and comparable saved antenna traces."""
 import json
+import copy
 from collections import deque
 import math
 import os
@@ -10,7 +11,7 @@ import sys
 import threading
 import time
 from sdr_broker import soapy_args
-from spectrum_history import SweepHistory
+from spectrum_history import SweepHistory, signature
 from spectrum_analysis import SpectrumInsights
 
 DEFAULT=dict(low=25000000,high=1700000000,bin=100000,gain=28.0,ppm=0,selection='auto',repeat=False,auto_gain=True,purpose='survey',focus=0)
@@ -299,6 +300,26 @@ class SpectrumSurvey:
         with self.lock:
             # Serialize under the same lock that updates the trace arrays.
             return json.loads(json.dumps(dict(enabled=self.enabled,status=self.status,detail=self.detail,assigned=self.assigned,run=self.run_state(),activity=list(self.activity),settings=self.settings,data=self.data,history=self.history.metadata(self.data),last_complete_finished=self.completed.get('finished') if self.completed else None,can_return=bool(self.parents),return_to=self.parents[-1]['settings'].get('purpose','survey') if self.parents else None,watchlist=self.insights.watches(),reports=self.reports(),can_save=self.completed is not None,saved=self.saved()),allow_nan=False))
+
+    def native_snapshot(self):
+        """In-process data, without the HTTP/JSON serialization round trip.
+
+        Copy mutable samples under the receiver lock; directory/database work
+        stays outside it and is refreshed only when needed.
+        """
+        with self.lock:
+            result=copy.deepcopy(dict(enabled=self.enabled,status=self.status,detail=self.detail,assigned=self.assigned,
+                run=self.run_state(),activity=list(self.activity),settings=self.settings,data=self.data,
+                last_complete_finished=self.completed.get('finished') if self.completed else None,
+                can_return=bool(self.parents),return_to=self.parents[-1]['settings'].get('purpose','survey') if self.parents else None,
+                can_save=self.completed is not None))
+        now=time.monotonic();key=(signature(result['data']),result['last_complete_finished'])
+        cached=getattr(self,'_native_catalog',None)
+        if not cached or cached[0]!=key or now-cached[1]>2:
+            cached=(key,now,dict(history=self.history.metadata(result['data']),saved=self.saved(),reports=self.reports()))
+            self._native_catalog=cached
+        result.update(copy.deepcopy(cached[2]));result['watchlist']=copy.deepcopy(self.insights.watches())
+        return result
 
     def reports(self):
         # Reports contain large arrays; only read each immutable export once.

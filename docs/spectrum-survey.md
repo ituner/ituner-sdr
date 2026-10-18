@@ -117,9 +117,14 @@ current view, with at most 2048 columns per row; normal status polling stays sma
 
 ## Survey → Signals → Investigate
 
-Both interfaces now follow the same six workspaces:
+Both interfaces have three main destinations: **Scan**, **Signals** and **Tools**.
+Scan shows one chart at a time (Spectrum or Waterfall), one Start/Stop action,
+and Setup. Setup contains basic range/receiver choices; gain, resolution, PPM
+and overload handling are behind Advanced. Investigation appears after selecting
+a frequency. Activity, comparison, watchlists and reports are inside Tools:
 
-- **Survey**: broad sweep, spectrum, recent individual-sweep waterfall and shared zoom.
+
+- **Scan**: broad sweep, spectrum or recent individual-sweep waterfall, with shared zoom.
 - **Signals**: groups of energy above an estimated local floor, ranked by strength,
   activity or recency. Select a result to investigate or add it to the watchlist.
   The web table pages 20 results; the touchscreen shows five large rows per page.
@@ -201,26 +206,28 @@ absolute input power measurements.
 Open **Decoders → Spectrum Analyzer**, the full-width tile above HF Decoders.
 The native OpenGL interface uses full-width workspaces, large 21 px control labels,
 large signal rows, and one main graph at a time. Survey → Signals → Investigate
-provides the primary flow, with separate Activity, Compare, Watchlist and Reports
-tabs. It shares receiver leases, settings, watchlist, baselines, history and exports
+provides the primary flow. Activity, Compare, Watchlist and Reports live behind
+Tools, keeping only Scan / Signals / Tools in the primary navigation. It shares receiver leases, settings, watchlist, baselines, history and exports
 with the web interface. There is no compressed web sidebar or embedded browser.
 
 **Setup** opens a separate full-screen configuration workspace. Edit presets,
-range, gain, PPM, bins, repeat/protection and USB choice while stopped. **Apply**
+range, repeat and USB choice while stopped. Advanced contains gain, PPM, bins
+and overload protection. **Apply**
 saves without receiving; **Apply & Start** saves and starts through one serialized
 backend action. Large numeric and text keyboards support frequency entry,
 bookmark names and report notes. **Decoders** leaves the workspace while retaining
 reception. **Return** in Survey restores the preceding survey/watch workflow.
 
-Horizontal dragging pans; tap to inspect/select a frequency, then use **Investigate**
-or **+ Watch**. **Details** shows EU/US allocations. Vertical swipes and Older/Newer
-page real history. Activity offers heatmap, archived peak/mean and persistence.
+Horizontal dragging pans; tap to select a frequency, then use **Investigate**.
+Tap the selected-frequency readout for EU/US allocations and **Add to watchlist**.
+Vertical swipes and Older page through real history. Activity offers heatmap, archived peak/mean and persistence.
 Capture and event timestamps are explicitly UTC. Save/choose baseline and report
 controls use the same measurements as the web app. Download and print native-created
-reports from the web Reports tab.
+reports from web Tools → Reports & exports.
 
-Snapshots, SQLite reads and raster updates run off the rendering thread. One
-reusable GPU texture bounds refresh cost. The native workspace launches no
+Snapshots, SQLite reads and chart preparation run off the rendering thread.
+Native OpenGL draws spectrum traces; a reusable GPU texture is reserved for
+waterfalls and heatmaps. The native workspace launches no
 independent radio process and does not stop reception when changing tabs.
 
 ## Validation
@@ -238,3 +245,23 @@ returns, touchscreen configuration and history rendering. CM5 tests additionally
 cover VHF supervision and existing menu navigation. Hardware/browser checks use
 real USB samples, including fixed-band live frames, multiplexed watch reception,
 return-to-survey, comparison and every export route.
+
+### Native rendering and responsiveness
+
+The touchscreen consumes `native_snapshot()` directly in process. It does not
+embed a browser or fetch its own HTTP endpoints. Spectrum and difference traces
+are native OpenGL lines, with clipping bands drawn as native rectangles. Geometry
+is prepared only after samples, viewport or display settings change. Unchanged
+measurements do not trigger repeated chart rasterization or texture uploads.
+Heatmaps/waterfalls use a cached GPU texture prepared from NumPy arrays, with a
+raw history path that avoids base64 encoding and decoding locally.
+
+Scan does not compute historical discoveries, the minute timeline or persistence.
+Signals requests a lightweight signal summary; Activity requests only its chosen
+history representation. NumPy reductions preserve the same partial-bin maxima,
+clipped gaps, missing samples and valid-visit denominators as the original code.
+
+On the CM5's retained airband dataset, cold full history analysis measured about
+6.8 seconds before this change and 1.0 second afterward. The signal-only request
+measured about 0.10 seconds and native spectrum geometry about 0.004 seconds.
+These are data preparation timings, not a claim about display FPS or RF sensitivity.

@@ -589,6 +589,7 @@ class VHFHandler(ADSBHandler):
             elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())
             elif path=='/api/spectrum/insights':
                 values={key:query[key][0] for key in ('low','high','columns') if key in query}
+                values['detail']=query.get('detail',['full'])[0]
                 self.send(json.dumps(manager.spectrum.analysis(query.get('scope',['current'])[0],**values),allow_nan=False).encode())
             elif path=='/api/spectrum/compare':
                 from spectrum_report import comparison

@@ -654,6 +654,7 @@ class ParentNavigationTests(unittest.TestCase):
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "settings_back"), "home")
 
     def test_unknown_parent_falls_back_to_home(self):
+        self.assertEqual(ui.navigation_back_surface("digi"), "digi")
         self.assertEqual(ui.navigation_back_surface("settings"), "settings")
         self.assertEqual(ui.navigation_back_surface("home"), "home")
         self.assertEqual(ui.navigation_back_surface("unexpected"), "home")

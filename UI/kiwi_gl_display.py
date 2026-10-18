@@ -16744,6 +16744,7 @@ def navigation_parent(items, kind):
 
 NAVIGATION_SURFACES = frozenset({
     "home",
+    "digi",
     "settings",
     "display",
     "receivers",
@@ -25878,7 +25879,7 @@ def main():
         target = navigation_back_surface(parent)
         settings_menu_open = target == "settings"
         display_setup_open = target == "display"
-        digital_menu_open = False
+        digital_menu_open = target == "digi"
         picker_open = target == "receivers"
         if picker_open:
             picker_map_open = False
@@ -28434,6 +28435,8 @@ def main():
                         elif touch_started and gesture == "vhf_workspace":
                             if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 vhf_workspace.tap(x, y)
+                                if vhf_workspace.mode == 'spectrum' and not vhf_workspace.open:
+                                    restore_navigation_parent(vhf_workspace.spectrum.exit_target)
                             wake_controls()
                         elif touch_started and gesture == "adsb_workspace":
                             if not adsb_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:

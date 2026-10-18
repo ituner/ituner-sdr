@@ -60,15 +60,15 @@ class SpectrumWorkspace(SSTVWorkspace):
     """Touch-first Survey → Signals → Investigate workflow; no browser embedding."""
     BG=(8,16,25,255);PANEL=(16,31,45,255);MUTED=(155,179,197);CYAN=(112,234,206)
     GRAPH=(24,236,1256,616);PLOT=(92,272,1240,568);HISTORY=(124,272,1240,608)
-    TABS=(('survey','Survey'),('signals','Signals'),('activity','Activity'),('compare','Compare'),('watch','Watchlist'),('reports','Reports'))
+    TABS=(('survey','Scan'),('signals','Signals'),('tools','Tools'))
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
         self.survey=hub.spectrum;self.state={};self.view=None;self.view_key=None;self.frame_view=None;self.frame_kind=None
-        self.screen='survey';self.display='spectrum';self.activity_mode='activity';self.report_mode='reports';self.watch_mode='frequencies'
+        self.screen='survey';self.display='spectrum';self.activity_mode='activity';self.report_mode='reports';self.watch_mode='frequencies';self.exit_target='digi'
         self.overlay=None;self.draft={};self.number='';self.edit_field='low';self.overlay_page=0;self.label_value='';self.label_target='watch_label'
         self.selected=None;self.selected_watch=None;self.inspection=None;self.baseline=None;self.compare_data={};self.page=0;self.history_page=0;self.depth=120
         self.floor=-120;self.ceiling=-70;self.auto_key=None;self.rows=[];self.insights={};self.frame=None;self.frame_id=0;self.texture=None;self.uploaded=-1;self.limits=(-140,-60)
-        self.command_pending='';self.lock=threading.RLock();self.commands=queue.Queue();self.wake=threading.Event();self.closed=threading.Event();self.worker=None;self.drag=None;self.sort='excess';self.last_report=None
+        self.command_pending='';self.lock=threading.RLock();self.commands=queue.Queue();self.wake=threading.Event();self.closed=threading.Event();self.worker=None;self.last_paint_key=None;self.prepare_count=0;self.drag=None;self.sort='excess';self.last_report=None
         try:self.reference=json.loads(Path(__file__).with_name('spectrum_allocations.json').read_text())
         except (OSError,ValueError):self.reference={}
 
@@ -84,7 +84,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.actions.append((box,action))
 
     def show(self):
-        self.open=True;self.overlay=None;self.message='';self.inspection=None
+        self.open=True;self.overlay=None;self.message='';self.inspection=None;self.exit_target='digi'
         if not self.worker:
             self.worker=threading.Thread(target=self.run,name='spectrum-touch',daemon=True);self.worker.start()
         self.wake.set()
@@ -97,7 +97,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         history=[];history_key=None;after=0;revision=None;analysis_key=None;analysis_at=0
         while not self.closed.is_set():
             live=self.state.get('settings',{}).get('purpose')=='investigate'
-            self.wake.wait(.2 if live else .7);self.wake.clear()
+            self.wake.wait(.12 if live else .3);self.wake.clear()
             if not self.open and self.commands.empty():continue
             try:
                 while not self.commands.empty():
@@ -110,25 +110,28 @@ class SpectrumWorkspace(SSTVWorkspace):
                         self.message='Baseline saved.' if action=='save' else 'Report saved. Open Reports on the web to download or print.' if action=='report' else ''
                     except (ValueError,OSError,RuntimeError) as exc:self.message=str(exc)
                     finally:self.command_pending=''
-                state=self.survey.snapshot();data=state['data'];config=data.get('settings',state['settings'])
+                state=self.survey.native_snapshot();data=state['data'];config=data.get('settings',state['settings'])
                 with self.lock:
                     key=(config['low'],config['high'],config['bin'])
                     if key!=self.view_key:self.view=(config['low'],config['high']);self.view_key=key;self.history_page=0;self.inspection=None
                     view=self.view
                 scope='survey' if self.screen=='signals' and state.get('can_return') else 'current'
                 next_analysis=(scope,state['history']['key'],view if scope=='current' else None)
-                if next_analysis!=analysis_key or time.monotonic()-analysis_at>3:
+                detail='persistence' if self.screen=='activity' and self.activity_mode=='persistence' else 'timeline' if self.screen=='activity' else 'signals'
+                next_analysis+=(detail,)
+                if self.screen in ('signals','activity') and (next_analysis!=analysis_key or time.monotonic()-analysis_at>3):
                     values={} if scope=='survey' else dict(low=view[0],high=view[1])
                     context=self.survey.context(scope) if scope=='survey' else {k:data[k] for k in ('settings','device','rate','fft') if k in data}
-                    self.insights=self.survey.insights.snapshot(context,columns=512,history=self.survey.history,**values);analysis_at=time.monotonic();analysis_key=next_analysis
+                    self.insights=self.survey.insights.snapshot(context,columns=512,history=self.survey.history,detail=detail,**values);analysis_at=time.monotonic();analysis_key=next_analysis
+                if self.screen=='watch' and self.watch_mode=='events':self.insights=dict(self.insights,events=self.survey.insights.events())
                 rows=[]
                 if self.screen=='survey' and self.display=='waterfall':
                     next_history=(state['history']['key'],view)
                     if next_history!=history_key:history=[];after=0;history_key=next_history;revision=None
                     current_revision=(state['history']['latest_id'],state['history']['count'])
                     if current_revision!=revision:
-                        value=self.survey.history.read(data,after=after,low=view[0],high=view[1],columns=640)
-                        for row in value['rows']:row['values']=np.frombuffer(base64.b64decode(row['values']),np.uint8).copy();history.append(row)
+                        value=self.survey.history.read(data,after=after,low=view[0],high=view[1],columns=640,raw=True)
+                        for row in value['rows']:row['values']=np.asarray(row['values'],dtype=np.uint8);history.append(row)
                         history=[r for r in history if r['finished']>=time.time()-86400][-720:];after=value['latest_id'];revision=current_revision
                     rows=list(reversed(history))[:self.depth]
                     if data.get('updated') and not data.get('complete') and data['updated']>=data.get('sweep_started',data.get('started',0)):
@@ -145,8 +148,17 @@ class SpectrumWorkspace(SSTVWorkspace):
                 if rows and isinstance(rows[0],dict) and self.auto_key!=state['history']['key'] and self.screen=='survey':self.fit_colors(rows);self.auto_key=state['history']['key']
                 if self.screen=='compare':self.compare_data=self.survey.comparison_data()
                 paint_kind=(self.screen,self.display,self.activity_mode)
-                frame,limits=self.paint(self.compare_data if self.screen=='compare' else data,visible,view)
-                with self.lock:self.state=state;self.rows=visible;self.pages=pages;self.history_page=page;self.frame=frame;self.frame_view=view;self.frame_kind=paint_kind;self.frame_id+=1;self.limits=limits
+                paint_key=(paint_kind,view,data.get('updated'),data.get('sweep'),state['history']['latest_id'],state['history']['key'],self.insights.get('finished'),page,self.floor,self.ceiling,(self.baseline or {}).get('id'))
+                frame=self.frame;limits=self.limits
+                changed=paint_key!=self.last_paint_key
+                if changed and self.screen in ('survey','activity','compare'):
+                    source=self.compare_data if self.screen=='compare' else data
+                    frame,limits=self.prepare_native(source,visible,view)
+                    self.last_paint_key=paint_key;self.prepare_count+=1
+                with self.lock:
+                    self.state=state;self.rows=visible;self.pages=pages;self.history_page=page
+                    if changed and self.screen in ('survey','activity','compare'):
+                        self.frame=frame;self.frame_view=view;self.frame_kind=paint_kind;self.frame_id+=1;self.limits=limits
             except Exception as exc:self.message='Analyzer: '+str(exc)
 
     def fit_colors(self,rows):
@@ -205,7 +217,49 @@ class SpectrumWorkspace(SSTVWorkspace):
             image.paste(Image.fromarray(rgb).resize((1116,height),Image.Resampling.NEAREST),(100,36))
         return image.tobytes(),(lo,hi)
 
+    def prepare_native(self,data,rows,view):
+        if self.screen=='activity' or self.display=='waterfall' and self.screen!='compare':
+            return self.paint(data,rows,view)
+        result=comparison(data,self.baseline) if self.screen=='compare' else None
+        values=[v for v in (result.get('delta',[]) if result else data.get('peak',[])) if isinstance(v,(int,float)) and math.isfinite(v)]
+        hi=max(5,max((abs(v) for v in values),default=5)) if result else min(-10,math.ceil(max(values)/10)*10+5) if values else -60
+        lo=-hi if result else min(hi-30,max(-180,math.floor(min(values)/10)*10-5)) if values else -140
+        lines=[]
+        def series(source,field,color):
+            a=np.asarray([float(v) if v is not None else np.nan for v in source.get(field,[])])
+            if not len(a):return
+            mask=source.get('masked',[])
+            if len(mask)==len(a):a[np.asarray(mask,bool)]=np.nan
+            reduced=reduce_values(a,source['settings'],view[0],view[1],1148)
+            segments=[];segment=[]
+            for x,v in enumerate(reduced):
+                if v is None:
+                    if len(segment)>1:segments.append(segment)
+                    segment=[]
+                else:segment.append((92+x,272+(hi-max(lo,min(hi,v)))/(hi-lo)*296))
+            if len(segment)>1:segments.append(segment)
+            lines.append((segments,color))
+        if result:
+            if result['matched']:series(dict(data,delta=result['delta']),'delta',(112,234,206,255))
+        else:
+            series(data,'peak',(234,195,130,255));series(data,'power',(112,234,206,255))
+            if matching(data,self.baseline):series(self.baseline,'average',(126,186,255,255))
+        excluded=columns(data,'power',view,1148)==1 if not result else np.zeros(1148,bool)
+        edges=np.diff(np.r_[False,excluded,False].astype(int))
+        bands=list(zip(np.flatnonzero(edges==1),np.flatnonzero(edges==-1)))
+        return dict(native=True,lines=lines,bands=bands,zero=272+hi/(hi-lo)*296 if result else None),(lo,hi)
+
+    def draw_native_chart(self,frame):
+        ui=self.ui;ui.draw_logical_rect(*self.GRAPH,(11,23,35,255))
+        for i in range(5):ui.draw_logical_polyline([(92,272+296*i/4),(1240,272+296*i/4)],(38,60,77,255),1)
+        for i in range(7):ui.draw_logical_polyline([(92+1148*i/6,272),(92+1148*i/6,568)],(32,51,68,255),1)
+        for first,last in frame['bands']:ui.draw_logical_rect(92+int(first),272,92+int(last),568,(125,78,39,150))
+        if frame['zero'] is not None:ui.draw_logical_polyline([(92,frame['zero']),(1240,frame['zero'])],(125,164,182,255),2)
+        for segments,color in frame['lines']:
+            for segment in segments:ui.draw_logical_polyline(segment,color,2)
+
     def upload(self,frame,identity):
+        if isinstance(frame,dict):self.draw_native_chart(frame);return
         gl=self.ui.GL
         if self.texture is None:self.texture=gl.glGenTextures(1)
         if identity!=self.uploaded:
@@ -253,9 +307,13 @@ class SpectrumWorkspace(SSTVWorkspace):
         for box,(action,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             try:
-                if action=='back':
-                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'settings' if self.overlay in ('presets','usb') or self.overlay=='number' and self.edit_field!='focus' else None
-                    else:self.open=False
+                if action=='home':
+                    self.overlay=None;self.exit_target='home';self.open=False
+                elif action=='back':
+                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'settings' if self.overlay in ('presets','usb','advanced') or self.overlay=='number' and self.edit_field!='focus' else None
+                    elif self.screen in ('activity','compare','watch','reports'):self.screen='tools';self.page=0
+                    elif self.screen!='survey':self.screen='survey';self.page=0
+                    else:self.exit_target='digi';self.open=False
                 elif action=='screen':self.screen=value;self.page=0;self.history_page=0;self.overlay=None;self.inspection=None
                 elif action=='display':self.display=value;self.history_page=0
                 elif action=='activity':self.activity_mode=value;self.history_page=0
@@ -267,6 +325,7 @@ class SpectrumWorkspace(SSTVWorkspace):
                     self.overlay=value;self.overlay_page=0
                     if value=='settings':self.draft=dict(self.state.get('settings',self.survey.settings));self.edit_field='low'
                     if value=='watch':self.draft.update(watch_frequency=self.selected or (sum(self.view)/2 if self.view else 100e6),watch_width=25000,watch_label='')
+                elif action=='settings_back':self.overlay='settings'
                 elif action=='number':
                     self.edit_field=value;self.number=str(self.draft[value]/1e6 if value in ('low','high','watch_frequency') else self.draft[value]/1000 if value=='watch_width' else self.draft[value]);self.overlay='number'
                 elif action=='key':
@@ -277,7 +336,7 @@ class SpectrumWorkspace(SSTVWorkspace):
                         if not math.isfinite(number):raise ValueError('Enter a finite number')
                         if self.edit_field=='focus':self.request('investigate',frequency=number*1e6);self.overlay=None;self.screen='survey';self.display='spectrum'
                         else:
-                            self.draft[self.edit_field]=number*(1e6 if self.edit_field in ('low','high','watch_frequency') else 1000 if self.edit_field=='watch_width' else 1);self.overlay='watch' if self.edit_field.startswith('watch_') else 'settings'
+                            self.draft[self.edit_field]=number*(1e6 if self.edit_field in ('low','high','watch_frequency') else 1000 if self.edit_field=='watch_width' else 1);self.overlay='watch' if self.edit_field.startswith('watch_') else 'advanced' if self.edit_field in ('gain','ppm') else 'settings'
                     elif len(self.number)<16:self.number+=value
                 elif action=='label':self.label_target=value or 'watch_label';self.label_value=self.draft.get(self.label_target,'');self.overlay='label'
                 elif action=='letter':
@@ -356,6 +415,14 @@ class SpectrumWorkspace(SSTVWorkspace):
             self.text(cache,32,510,'Normal surveys observe this frequency when it is in range.',22,self.MUTED)
             self.text(cache,32,552,'Watch mode revisits saved bands and logs changes.',22,self.MUTED)
             self.button(cache,(24,600,1256,690),'Add to watchlist',('watch_add',None),active=True);return
+        if self.overlay=='advanced':
+            self.text(cache,24,144,'Advanced receiver settings',30,self.CYAN)
+            self.button(cache,(24,210,616,326),'Gain limit',('number','gain'),f"{self.draft['gain']:g} dB")
+            self.button(cache,(640,210,1256,326),'Frequency correction',('number','ppm'),f"{self.draft['ppm']:g} PPM")
+            self.button(cache,(24,350,616,466),'Resolution',('bin',None),f"{self.draft['bin']/1000:g} kHz bins")
+            self.button(cache,(640,350,1256,466),'Overload protection',('toggle','auto_gain'),'On' if self.draft.get('auto_gain') else 'Off',active=self.draft.get('auto_gain',False))
+            self.text(cache,24,528,'Protection lowers gain automatically; clipped data stays excluded.',22,self.MUTED)
+            self.button(cache,(24,608,1256,688),'Done · back to scan setup',('settings_back',None),active=True);return
         if self.overlay=='settings':
             if self.state.get('enabled'):
                 self.text(cache,40,180,'Stop reception to change the survey.',32,self.CYAN)
@@ -363,12 +430,11 @@ class SpectrumWorkspace(SSTVWorkspace):
                 self.button(cache,(40,310,760,404),'Stop and edit settings',('stop',None),active=True);return
             self.text(cache,24,144,'Choose what to survey.',30,self.CYAN)
             for i,(label,action,sub) in enumerate((('Range preset',('overlay','presets'),'Full / FM / Airband / VHF / UHF'),('USB receiver',('overlay','usb'),self.draft.get('selection','auto')),
-                 ('Start frequency',('number','low'),f"{self.draft['low']/1e6:g} MHz"),('End frequency',('number','high'),f"{self.draft['high']/1e6:g} MHz"),
-                 ('Gain limit',('number','gain'),f"{self.draft['gain']:g} dB"),('Frequency correction',('number','ppm'),f"{self.draft['ppm']:g} PPM"))):
-                x=24+i%2*624;y=180+i//2*104;self.button(cache,(x,y,x+608,y+88),label,action,sub)
-            self.button(cache,(24,504,420,572),'Bins '+str(self.draft['bin']/1000)+' kHz',('bin',None))
-            self.button(cache,(436,504,832,572),'Repeat: '+('On' if self.draft.get('repeat') else 'Off'),('toggle','repeat'),active=self.draft.get('repeat',False))
-            self.button(cache,(848,504,1256,572),'Protection: '+('On' if self.draft.get('auto_gain') else 'Off'),('toggle','auto_gain'),active=self.draft.get('auto_gain',False))
+                 ('Start frequency',('number','low'),f"{self.draft['low']/1e6:g} MHz"),('End frequency',('number','high'),f"{self.draft['high']/1e6:g} MHz"))):
+                x=24+i%2*624;y=180+i//2*108;self.button(cache,(x,y,x+608,y+92),label,action,sub)
+            self.button(cache,(24,408,616,496),'Repeat: '+('On' if self.draft.get('repeat') else 'Off'),('toggle','repeat'),active=self.draft.get('repeat',False))
+            self.button(cache,(640,408,1256,496),'Advanced settings',('overlay','advanced'),'Gain, resolution, PPM and overload protection')
+            self.text(cache,24,544,f"{self.draft['bin']/1000:g} kHz bins · gain limit {self.draft['gain']:g} dB · protection "+('on' if self.draft.get('auto_gain') else 'off'),22,self.MUTED)
             self.button(cache,(24,608,616,688),'Apply settings',('apply',False));self.button(cache,(640,608,1256,688),'Apply and start survey',('apply',True),active=True);return
         choices=[]
         if self.overlay=='presets':choices=[(p[0],('preset',i)) for i,p in enumerate(PRESETS)]
@@ -389,35 +455,38 @@ class SpectrumWorkspace(SSTVWorkspace):
         ui.draw_logical_rect(0,0,1280,800,self.BG);ui.draw_logical_rect(0,0,1280,78,self.PANEL)
         self.text(cache,24,28,'SPECTRUM',30,self.CYAN);self.text(cache,280,28,{'survey':'Broad survey','investigate':'Live investigation','watch':'Watch mode'}[purpose],22)
         self.text(cache,24,60,f"{config['low']/1e6:g}–{config['high']/1e6:g} MHz · {config['bin']/1000:g} kHz bins · {config['gain']:g} dB gain",18,self.MUTED,width=650)
-        self.text(cache,558,28,phase,19,self.CYAN if phase=='RUNNING' else self.MUTED,width=150)
+        self.text(cache,558,28,phase,19,self.CYAN if phase=='RUNNING' else self.MUTED,width=126)
+        self.button(cache,(992,10,1118,68),'Back',('back',None))
+        self.button(cache,(1130,10,1256,68),'Home',('home',None))
         if self.overlay:
-            self.button(cache,(1072,10,1256,68),'Cancel',('back',None));self.draw_overlay(cache)
+            self.draw_overlay(cache)
         else:
-            self.button(cache,(716,10,884,68),'Stop' if state.get('enabled') else 'Start',('stop' if state.get('enabled') else 'start',None),active=state.get('enabled',False))
-            self.button(cache,(896,10,1060,68),'Setup',('overlay','settings'));self.button(cache,(1072,10,1256,68),'Decoders',('back',None))
+            self.button(cache,(704,10,836,68),'Stop' if state.get('enabled') else 'Start',('stop' if state.get('enabled') else 'start',None),active=state.get('enabled',False))
+            self.button(cache,(848,10,980,68),'Setup',('overlay','settings'))
             for i,(key,label) in enumerate(self.TABS):
-                x=24+i*(1232/6);self.button(cache,(x,88,x+1232/6-8,152),label,('screen',key),active=self.screen==key)
+                x=24+i*(1232/3);self.button(cache,(x,88,x+1232/3-12,152),label,('screen',key),active=self.screen==key or key=='tools' and self.screen not in ('survey','signals'))
             if self.screen in ('survey','activity','compare'):
                 self.draw_graph(cache,data,config,frame,identity,frame_view)
             elif self.screen=='signals':self.draw_signals(cache)
             elif self.screen=='watch':self.draw_watch(cache)
+            elif self.screen=='tools':self.draw_tools(cache)
             else:self.draw_reports(cache,state)
         if self.message:self.text(cache,24,746,self.message,20,(242,198,130),width=1230)
         elif not self.overlay:self.draw_inspector(cache,data)
         age=state.get('run',{}).get('last_sample_age');detail=('Last IQ '+f'{age:.1f}s ago') if state.get('enabled') and age is not None else 'Measurements retained · receiver idle'
-        self.text(cache,24,780,detail+' · USB '+(data.get('device') or {}).get('serial','—')+' · timestamps UTC · mirrored on web',18,self.MUTED,width=1230)
+        self.text(cache,24,780,detail+' · USB '+(data.get('device') or {}).get('serial','—')+' · timestamps UTC · native display',18,self.MUTED,width=1230)
 
     def draw_graph(self,cache,data,config,frame,identity,frame_view):
         if self.screen=='compare':data=self.compare_data
         if self.screen=='survey':
-            self.button(cache,(24,168,320,222),'Spectrum',('display','spectrum'),active=self.display=='spectrum');self.button(cache,(332,168,628,222),'Recent waterfall',('display','waterfall'),active=self.display=='waterfall')
+            self.button(cache,(24,166,320,222),'Spectrum',('display','spectrum'),active=self.display=='spectrum');self.button(cache,(332,166,628,222),'Recent waterfall',('display','waterfall'),active=self.display=='waterfall')
             self.text(cache,656,196,f"Frame {data.get('sweep','—')}" if config.get('purpose')=='investigate' else f"Pass {data.get('sweep','—')} · {round(data.get('progress',0)*100)}%",22,self.MUTED)
-            if self.state.get('can_return'):self.button(cache,(932,168,1256,222),'← Return to '+('watchlist' if self.state.get('return_to')=='watch' else 'survey'),('return',None),active=True)
+            if self.state.get('can_return'):self.button(cache,(932,166,1256,222),'← Return to '+('watchlist' if self.state.get('return_to')=='watch' else 'survey'),('return',None),active=True)
         elif self.screen=='activity':
             for i,(key,label) in enumerate((('activity','Activity heatmap'),('persistence','Persistence'),('peak','Archive peak'),('mean','Archive mean'))):
-                x=24+i*310;self.button(cache,(x,168,x+298,222),label,('activity',key),active=self.activity_mode==key)
+                x=24+i*310;self.button(cache,(x,166,x+298,222),label,('activity',key),active=self.activity_mode==key)
         else:
-            self.button(cache,(24,168,440,222),'Choose reference A',('overlay','baselines'));self.button(cache,(452,168,852,222),'Save current as baseline',('save',None));self.button(cache,(864,168,1256,222),'Export report',('report',None))
+            self.button(cache,(24,166,440,222),'Choose reference A',('overlay','baselines'));self.button(cache,(452,166,852,222),'Save current as baseline',('save',None));self.button(cache,(864,166,1256,222),'Export report',('report',None))
         if frame and frame_view==self.view and self.frame_kind==(self.screen,self.display,self.activity_mode):self.upload(frame,identity)
         else:self.text(cache,360,400,'Loading matching measurements…',26,self.MUTED)
         line_graph=self.screen=='compare' or self.screen=='survey' and self.display=='spectrum'
@@ -449,12 +518,21 @@ class SpectrumWorkspace(SSTVWorkspace):
                     t=i/47*4;index=min(3,int(t));f=t-index;color=tuple(int(a*(1-f)+b*f) for a,b in zip(PALETTE[index],PALETTE[index+1]))+(255,)
                     self.ui.draw_logical_rect(884+i*6,630,890+i*6,644,color)
         else:self.text(cache,24,638,'Tap a frequency to select it. Drag horizontally to pan; swipe vertically for history.',20,self.MUTED,width=1200)
-        for box,title,action in (((24,664,192,722),'Zoom +',('zoom',.5)),((204,664,372,722),'Zoom −',('zoom',2)),((384,664,570,722),'Full range',('full',None)),((582,664,796,722),'Investigate →',('investigate',None))):self.button(cache,box,title,action,active=title=='Investigate →')
+        for box,title,action in (((24,664,228,722),'Zoom +',('zoom',.5)),((240,664,444,722),'Zoom −',('zoom',2)),((456,664,680,722),'Full range',('full',None))):
+            if action[0]=='full' and (not self.view or self.view==(config['low'],config['high'])):continue
+            self.button(cache,box,title,action)
+        if self.selected is not None:self.button(cache,(884,664,1256,722),'Investigate selected →',('investigate',None),active=True)
         if not line_graph and not (self.screen=='activity' and self.activity_mode=='persistence'):
-            self.button(cache,(808,664,1020,722),'Newer',('page',-1));self.button(cache,(1032,664,1256,722),'Older',('page',1))
-        else:
-            self.button(cache,(808,664,1080,722),'+ Watch selected',('overlay','watch'))
-            self.button(cache,(1092,664,1256,722),'Details',('overlay','info'))
+            self.button(cache,(692,664,880,722),'Older sweeps',('page',1))
+
+
+    def draw_tools(self,cache):
+        self.text(cache,24,194,'Go deeper when you need to.',26,self.CYAN)
+        choices=(('Activity & heatmap','Where signals appear over time','activity'),('Compare antennas','Saved reference versus current sweep','compare'),('Watchlist','Revisit selected frequencies and log changes','watch'),('Reports & logs','Save measurements or inspect receiver activity','reports'))
+        for i,(title,subtitle,destination) in enumerate(choices):
+            x=24+i%2*624;y=250+i//2*176
+            self.button(cache,(x,y,x+608,y+148),title,('screen',destination),subtitle)
+        self.text(cache,24,656,'Persistence and archived power are inside Activity & heatmap.',22,self.MUTED)
 
     def draw_signals(self,cache):
         signals=sorted(self.insights.get('signals',[]),key=lambda s:s.get(self.sort) if s.get(self.sort) is not None else -1,reverse=True);last=max(0,math.ceil(len(signals)/5)-1);self.page=min(self.page,last)
@@ -472,7 +550,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.button(cache,(666,664,930,722),'Sort: '+self.sort,('sort',None));self.button(cache,(942,664,1092,722),'Previous',('page',-1));self.button(cache,(1104,664,1256,722),'Next',('page',1))
 
     def draw_watch(self,cache):
-        for i,(key,label) in enumerate((('frequencies','Frequencies'),('events','Watch events'))):self.button(cache,(24+i*400,168,412+i*400,222),label,('watch_view',key),active=self.watch_mode==key)
+        for i,(key,label) in enumerate((('frequencies','Frequencies'),('events','Watch events'))):self.button(cache,(24+i*400,166,412+i*400,222),label,('watch_view',key),active=self.watch_mode==key)
         if self.watch_mode=='events':
             events=self.insights.get('events',[]);last=max(0,math.ceil(len(events)/5)-1);self.page=min(self.page,last)
             for i,e in enumerate(events[self.page*5:(self.page+1)*5]):
@@ -490,7 +568,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.button(cache,(676,664,982,722),'Remove selected',('watch_remove',None));self.button(cache,(994,664,1118,722),'Prev',('page',-1));self.button(cache,(1130,664,1256,722),'Next',('page',1))
 
     def draw_reports(self,cache,state):
-        self.button(cache,(24,168,436,222),'Saved reports',('report_view','reports'),active=self.report_mode=='reports');self.button(cache,(448,168,852,222),'Receiver activity',('report_view','logs'),active=self.report_mode=='logs')
+        self.button(cache,(24,166,436,222),'Saved reports',('report_view','reports'),active=self.report_mode=='reports');self.button(cache,(448,166,852,222),'Receiver activity',('report_view','logs'),active=self.report_mode=='logs')
         if self.report_mode=='logs':
             items=list(reversed(state.get('activity',[])))
             for i,r in enumerate(items[self.page*7:(self.page+1)*7]):self.text(cache,24,264+i*48,time.strftime('%H:%M:%S UTC',time.gmtime(r['time']))+' · '+r['action'].upper()+' · '+r['detail'],20,width=1230)

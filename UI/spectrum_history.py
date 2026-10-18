@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import zlib
+import numpy as np
 
 MAX_ROWS = 720
 MAX_AGE = 24 * 3600
@@ -72,7 +73,7 @@ class SweepHistory:
             count, latest = db.execute('SELECT COUNT(*), MAX(id) FROM sweeps WHERE signature=?', (key,)).fetchone()
         return dict(key=key, count=count, latest_id=latest or 0, max_rows=MAX_ROWS, max_age=MAX_AGE)
 
-    def read(self, data, after=0, low=None, high=None, columns=1024):
+    def read(self, data, after=0, low=None, high=None, columns=1024, raw=False):
         config = data.get('settings')
         if not config:
             return dict(key=signature(data), rows=[], latest_id=0)
@@ -94,14 +95,16 @@ class SweepHistory:
                     'SELECT id,started,finished,gain,pass,power FROM sweeps '
                     'WHERE signature=? AND id>? ORDER BY id', (key, after)):
                 power = zlib.decompress(blob)
-                cells = bytearray(columns)
-                for column in range(columns):
-                    start = max(0, min(len(power)-1, int((low + (high-low)*column/columns-config['low'])/config['bin'])))
-                    end = min(len(power), max(start+1, math.ceil((low + (high-low)*(column+1)/columns-config['low'])/config['bin'])))
-                    values = power[start:end]
-                    # Preserve clipped gaps even when zoomed out; never draw them as a signal.
-                    cells[column] = 1 if 1 in values else max(values, default=0)
+                values=np.frombuffer(power,dtype=np.uint8);n=len(values)
+                if not n:continue
+                x=np.arange(columns,dtype=float)
+                start=np.clip(((low+(high-low)*x/columns-config['low'])/config['bin']).astype(int),0,n-1)
+                end=np.minimum(n,np.maximum(start+1,np.ceil((low+(high-low)*(x+1)/columns-config['low'])/config['bin']).astype(int)))
+                indices=start[:,None]+np.arange(int(np.max(end-start)))
+                valid=indices<end[:,None];samples=values[np.minimum(indices,n-1)]
+                cells=np.max(np.where(valid,samples,0),axis=1).astype(np.uint8)
+                cells[np.any(valid&(samples==1),axis=1)]=1
                 result.append(dict(id=identity, started=started, finished=finished, gain=gain,
-                                   sweep=sweep, values=base64.b64encode(cells).decode()))
+                                   sweep=sweep, values=cells if raw else base64.b64encode(cells.tobytes()).decode()))
         return dict(key=key, rows=result, low=low, high=high, columns=columns,
                     latest_id=result[-1]['id'] if result else after)

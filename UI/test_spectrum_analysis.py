@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 import numpy as np
-from spectrum_analysis import SpectrumInsights,detect
+from spectrum_analysis import SpectrumInsights,detect,reduce_values
 from spectrum_monitor import SpectrumSurvey,settings
 from spectrum_report import comparison,create_report
 from sdr_broker import ReceiverBroker
@@ -86,3 +86,31 @@ class TransitionTests(unittest.TestCase):
    s.control('watch_start');self.assertEqual(s.settings['purpose'],'watch')
    s.thread=None;s.control('investigate',frequency=433.92e6);self.assertEqual(len(s.parents),2)
    s.thread=None;s.control('return');self.assertEqual(s.settings['purpose'],'watch')
+
+class ReductionContractTests(unittest.TestCase):
+ def test_vector_reduction_matches_reference_with_gaps_and_partial_bins(self):
+  import math
+  rng=np.random.default_rng(4);values=rng.normal(-100,10,97);values[::7]=np.nan
+  config=dict(low=25e6,bin=25000,high=25e6+97*25000)
+  for low,high,columns in ((25e6,config['high'],14),(25e6+12345,26e6+6789,129),(25e6,config['high'],1)):
+   for method in ('max','mean'):
+    expected=[]
+    for x in range(columns):
+     a=max(0,min(len(values)-1,int((low+(high-low)*x/columns-config['low'])/config['bin'])))
+     b=min(len(values),max(a+1,math.ceil((low+(high-low)*(x+1)/columns-config['low'])/config['bin'])))
+     cell=values[a:b];cell=cell[np.isfinite(cell)]
+     expected.append(float((np.mean if method=='mean' else np.max)(cell)) if len(cell) else None)
+    actual=reduce_values(values,config,low,high,columns,method)
+    self.assertEqual([v is None for v in actual],[v is None for v in expected])
+    np.testing.assert_allclose([v for v in actual if v is not None],[v for v in expected if v is not None])
+
+class AnalysisDetailTests(unittest.TestCase):
+ def test_signals_query_keeps_counts_without_building_history_or_persistence(self):
+  with tempfile.TemporaryDirectory() as name:
+   insights=SpectrumInsights(Path(name));now=time.time()
+   d=dict(settings=dict(low=100e6,high=100.3e6,bin=25000,gain=0,ppm=0),device=dict(id='test'),complete=True,started=now-1,finished=now,sweep=1,power=[-110]*12)
+   d['power'][5]=-80;insights.observe(d);history=Mock()
+   small=insights.snapshot(d,history=history,columns=12,detail='signals')
+   history.read.assert_not_called();self.assertEqual(small['timeline'],[]);self.assertEqual(small['persistence'],[])
+   full=insights.snapshot(d,columns=12)
+   self.assertEqual(small['signals'],full['signals']);self.assertEqual(small['visits'],full['visits'])
