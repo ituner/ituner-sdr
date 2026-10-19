@@ -1,47 +1,50 @@
 #!/usr/bin/env python3
-"""Build the native portrait buffer used as a landscape CM5 boot splash."""
+"""Build the landscape preview and native portrait CM5 boot splash."""
 
+from io import BytesIO
 from pathlib import Path
+import re
+import shutil
+import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
+from PIL.PngImagePlugin import PngInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "assets/boot-splash/ituner-sdr-native.png"
-FONT = ROOT / "assets/fonts/oxanium/Oxanium.ttf"
-
-
-def centered(draw, y, text, font, fill, width=1280):
-    box = draw.textbbox((0, 0), text, font=font)
-    draw.text(((width - (box[2] - box[0])) / 2, y), text, font=font, fill=fill)
+PREVIEW = ROOT / "assets/boot-splash/ituner-sdr-preview.png"
+LOGO = ROOT / "assets/boot-splash/ituner-logo-color.svg"
+LOGO_WIDTH = 350
 
 
 def main():
+    version = (ROOT / 'VERSION').read_text().strip()
+    if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+        raise SystemExit('VERSION must contain a major.minor.patch version, for example 0.1.0')
+    renderer = shutil.which("rsvg-convert")
+    if renderer is None:
+        raise SystemExit("Install librsvg (rsvg-convert) to render the SVG logo.")
+    # Specifying only width preserves the SVG's original aspect ratio.
+    rendered = subprocess.check_output([renderer, "--width", str(LOGO_WIDTH), str(LOGO)])
+    logo = Image.open(BytesIO(rendered)).convert("RGBA")
     canvas = Image.new("RGB", (1280, 800), "#000000")
+    canvas.paste(logo, ((canvas.width - logo.width) // 2,
+                        (canvas.height - logo.height) // 2), logo)
+
     draw = ImageDraw.Draw(canvas)
-    title = ImageFont.truetype(str(FONT), 104)
-    subtitle = ImageFont.truetype(str(FONT), 25)
-    status = ImageFont.truetype(str(FONT), 18)
+    font = ImageFont.truetype(str(ROOT / 'assets/fonts/oxanium/Oxanium.ttf'), 18)
+    draw.text((canvas.width / 2, (canvas.height + logo.height) // 2 + 20),
+              'v' + version, font=font, fill='#C0C0C0', anchor='mt')
 
-    cyan = "#00E5FF"
-    white = "#F4F7F8"
-    secondary = "#737A7D"
-    divider = "#202629"
-
-    draw.line((388, 306, 892, 306), fill=divider, width=2)
-    draw.line((498, 306, 546, 306), fill=cyan, width=3)
-    draw.line((734, 306, 782, 306), fill=cyan, width=3)
-    centered(draw, 326, "iTUNER SDR", title, white)
-    centered(draw, 455, "SOFTWARE DEFINED RADIO", subtitle, secondary)
-    draw.rectangle((548, 515, 732, 517), fill=divider)
-    draw.rectangle((548, 515, 610, 517), fill=cyan)
-    centered(draw, 546, "STARTING", status, secondary)
-
-    # The CM5 panel is physically landscape but exposes an 800x1280 native
-    # mode. The renderer maps its 1280x800 logical canvas counter-clockwise.
+    # The landscape CM5 panel exposes an 800x1280 native portrait buffer.
     native = canvas.transpose(Image.Transpose.ROTATE_90)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    native.save(OUTPUT, optimize=True)
+    metadata = PngInfo()
+    metadata.add_text('SoftwareVersion', version)
+    canvas.save(PREVIEW, optimize=True, pnginfo=metadata)
+    native.save(OUTPUT, optimize=True, pnginfo=metadata)
+    print(PREVIEW)
     print(OUTPUT)
 
 

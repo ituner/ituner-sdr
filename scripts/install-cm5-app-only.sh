@@ -34,6 +34,7 @@ for unit in ituner-sdr.service ituner-sdr-health.service; do
 done
 
 install -d /opt/ituner-sdr /usr/local/lib/ituner-sdr /usr/local/share/ituner-sdr /var/lib/ituner-sdr
+install -m 0644 "$repo/VERSION" /opt/ituner-sdr/VERSION
 cp -a "$repo/UI" "$repo/assets" "$repo/licenses" /opt/ituner-sdr/
 chown -R root:root /opt/ituner-sdr/UI /opt/ituner-sdr/assets
 install -m 0644 "$repo/assets/boot-splash/ituner-sdr-native.png" /usr/local/share/ituner-sdr/boot-splash.png
@@ -149,6 +150,7 @@ cat > "$labwc_dir/autostart" <<'EOF'
 EOF
 chown "$app_user:$app_user" "$labwc_dir/autostart"
 chmod 0755 "$labwc_dir/autostart"
+runuser -u "$app_user" -- python3 "$repo/scripts/configure-cm5-cursor.py" --home "$app_home"
 
 # Install the early-boot Plymouth half of the same visual handoff.
 plymouth_theme=/usr/share/plymouth/themes/ituner-sdr

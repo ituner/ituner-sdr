@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import sys
+import runpy
+import struct
 import tempfile
 import unittest
 
@@ -24,6 +26,34 @@ class Cm5ApplianceBootTests(unittest.TestCase):
         with Image.open(ROOT / "assets/boot-splash/ituner-sdr-native.png") as image:
             self.assertEqual(image.size, (800, 1280))
             self.assertEqual(image.mode, "RGB")
+
+    def test_splash_version_matches_release(self):
+        version = (ROOT / 'VERSION').read_text().strip()
+        self.assertRegex(version, r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+        for filename in ('ituner-sdr-native.png', 'ituner-sdr-preview.png'):
+            with Image.open(ROOT / 'assets/boot-splash' / filename) as image:
+                self.assertEqual(image.info.get('SoftwareVersion'), version,
+                                 'Rebuild the splash after changing VERSION')
+
+    def test_invisible_cursor_preserves_session_and_touch_settings(self):
+        configure = runpy.run_path(str(ROOT / 'scripts/configure-cm5-cursor.py'))['configure']
+        with tempfile.TemporaryDirectory() as directory:
+            home=Path(directory);config=home / '.config/labwc'
+            config.mkdir(parents=True)
+            (config / 'rc.xml').write_text('<touch mouseEmulation="yes"/>')
+            (config / 'environment').write_text('XKB_DEFAULT_LAYOUT=us\n')
+            icons=home / 'icons';(icons / 'sample/cursors').mkdir(parents=True)
+            (icons / 'sample/cursors/custom-arrow').touch()
+            configure(home,icons);configure(home,icons)
+            self.assertEqual((config / 'rc.xml').read_text(),'<touch mouseEmulation="yes"/>')
+            self.assertEqual((config / 'environment').read_text(),'XKB_DEFAULT_LAYOUT=us\n')
+            self.assertIn('XCURSOR_THEME=ituner-invisible',
+                          (config / 'environment.d/99-ituner-cursor.env').read_text())
+            for name in ('left_ptr','default','custom-arrow'):
+                data=(home / '.icons/ituner-invisible/cursors' / name).read_bytes()
+                self.assertEqual(data[:4],b'Xcur')
+                self.assertEqual(struct.unpack_from('<IIIII',data,44),(1,1,0,0,0))
+                self.assertEqual(data[64:],b'\0'*4)
 
     def test_installer_keeps_network_out_of_app_critical_path(self):
         source = (ROOT / "scripts/install-cm5-app-only.sh").read_text()

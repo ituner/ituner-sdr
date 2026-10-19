@@ -11,6 +11,13 @@ import kiwi_gl_display as ui  # noqa: E402
 
 
 class MenuIconTests(unittest.TestCase):
+    def test_cursor_hidden_only_on_touchscreen(self):
+        with mock.patch.object(ui, 'pygame') as pygame, mock.patch.object(ui, 'GL'):
+            pygame.OPENGL=1;pygame.NOFRAME=2;pygame.FULLSCREEN=4
+            for desktop in (False, True):
+                ui.setup_gl(desktop=desktop)
+                pygame.mouse.set_visible.assert_called_with(desktop)
+
     def test_required_runtime_icons_exist_in_both_asset_roots(self):
         required = {
             "apps.png",

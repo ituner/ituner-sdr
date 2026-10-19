@@ -67,6 +67,7 @@ awk '/^# BEGIN ITUNER SDR$/ {skip=1; next} /^# END ITUNER SDR$/ {skip=0; next} !
   printf '# END ITUNER SDR\n'
 } >"${config_txt}"
 
+install -m 0644 "${repo_dir}/VERSION" /opt/ituner-sdr/VERSION
 install -m 0644 "${repo_dir}"/UI/*.py "${repo_dir}"/UI/*.json /opt/ituner-sdr/UI/
 cp -a "${repo_dir}/UI/sstv_vendor" "${repo_dir}/UI/cw_vendor" /opt/ituner-sdr/UI/
 cp -a "${repo_dir}/licenses" /opt/ituner-sdr/
