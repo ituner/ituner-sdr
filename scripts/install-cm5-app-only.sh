@@ -150,6 +150,7 @@ cat > "$labwc_dir/autostart" <<'EOF'
 EOF
 chown "$app_user:$app_user" "$labwc_dir/autostart"
 chmod 0755 "$labwc_dir/autostart"
+runuser -u "$app_user" -- python3 "$repo/scripts/configure-cm5-cursor.py" --home "$app_home"
 
 # Install the early-boot Plymouth half of the same visual handoff.
 plymouth_theme=/usr/share/plymouth/themes/ituner-sdr

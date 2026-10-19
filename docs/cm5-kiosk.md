@@ -40,3 +40,11 @@ an exact measurement of system-wide free RAM. A subsequent reboot test exposed
 system/user autostart merging; the system guard above corrected it. A second
 reboot confirmed that the SDR starts automatically, with one kanshi process,
 one black background, and no desktop, taskbar or desktop respawn wrappers.
+
+## Touchscreen cursor
+
+The CM5 app-only installer configures an invisible Xcursor theme for the
+appliance user's Labwc session, including the boot background. The app also
+hides its SDL cursor in touchscreen mode; desktop mode keeps it visible.
+Touch mapping is unchanged. To restore the compositor pointer, remove
+`~/.config/labwc/environment.d/99-ituner-cursor.env` and run `labwc --reconfigure`.
