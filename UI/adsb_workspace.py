@@ -4,6 +4,8 @@ import textwrap
 import time
 from sstv_workspace import SSTVWorkspace
 from adsb_touch import AirspaceDashboard
+from adsb_coverage_touch import CoverageTouch
+from adsb_view import TrafficView, aged, freshness
 from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
 
@@ -22,6 +24,8 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         self.selected = None
         self.selected_plane = None
         self.following = False
+        self.coverage_open = False
+        self.coverage_view = CoverageTouch(self)
         self.usb_open = False
         self.usb_page = 0
         self.traffic_open = False
@@ -30,7 +34,9 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         self.log_kind = 'flights'
         self.log_page = 0
         self.map_style = 'both'
-        self.trail_seconds = TRAIL_RETENTION
+        self.trail_seconds = 300
+        self.traffic_view = TrafficView(time.time())
+        self.history_seconds = TRAIL_RETENTION
         self.rings = False
         self.labels = True
         self.traffic_sort = 'recent'
@@ -45,7 +51,21 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         self.last_rate_time = 0
         self.rate = 0
 
-    def show(self, *args): self.open = True
+    def show(self, *args):
+        if not self.open:
+            self.traffic_view = TrafficView(time.time())
+            self.selected=self.selected_plane=None;self.following=False
+        self.open = True
+
+    def set_traffic_view(self, mode):
+        self.traffic_view.mode=mode
+        self.traffic_view.trail_seconds=self.history_seconds if mode=='history' else 300
+        self.trail_seconds=self.traffic_view.trail_seconds
+        self.selected=self.selected_plane=None;self.following=False;self.traffic_page=0
+
+    def display_aircraft(self, state, map_only=False):
+        if self.dashboard:return self.traffic_view.aircraft(state['aircraft'],self.tracks,time.time(),map_only)
+        return state['aircraft']
 
     def zoom(self, factor):
         self.scale=max(MAP_ZOOM_MIN,min(MAP_ZOOM_MAX,self.scale*factor))
@@ -61,10 +81,13 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         return bool(plane and isinstance(plane.get('lat'),(int,float)) and isinstance(plane.get('lon'),(int,float)) and plane.get('seen_pos',100)<15)
 
     def drag_begin(self, x, y):
+        if self.coverage_open:self.coverage_view.drag_begin(x,y)
         self.drag_origin = self.yaw, self.pitch
         self.dragged = False
 
     def drag_move(self, sx, sy, x, y):
+        if self.coverage_open:
+            self.coverage_view.drag_move(sx,sy,x,y);return
         if self.usb_open or self.logs_open or self.traffic_open or not self.ui.contains(self.MAP, sx, sy): return
         if self.dashboard and any(self.ui.contains(box,sx,sy) for box in self.overlay_boxes):return
         if self.dashboard and any(self.ui.contains(box,sx,sy) for box,_ in self.actions):return
@@ -83,11 +106,19 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
     def tap(self, x, y, *args):
         for box,(kind,value) in self.actions:
             if not self.ui.contains(box,x,y): continue
-            if kind=='home': self.open=False
+            if kind.startswith('coverage_'):self.coverage_view.action(kind,value)
+            elif kind=='coverage':
+                self.coverage_open=True;self.usb_open=self.logs_open=self.traffic_open=False;self.coverage_view.activate()
+            elif kind=='home': self.open=False
             elif kind=='back':
+                if self.coverage_open:self.coverage_open=False;return
                 if self.logs_open or self.traffic_open or self.usb_open: self.logs_open=self.traffic_open=self.usb_open=False
                 else: self.open=False
-            elif kind=='map_view':self.usb_open=self.logs_open=self.traffic_open=False
+            elif kind=='map_view':self.coverage_open=self.usb_open=self.logs_open=self.traffic_open=False
+            elif kind=='traffic_view':self.set_traffic_view(value)
+            elif kind=='start_fresh':
+                self.traffic_view.reset(time.time());self.traffic_view.ingest(self.manager.snapshot()['aircraft'],time.time());self.set_traffic_view('session')
+            elif kind=='backdrop':self.traffic_view.backdrop=not self.traffic_view.backdrop
             elif kind=='labels':self.labels=not self.labels
             elif kind=='sort':
                 sorts=('recent','altitude','callsign');self.traffic_sort=sorts[(sorts.index(self.traffic_sort)+1)%3]
@@ -98,6 +129,7 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
                     self.yaw,self.pitch=math.radians(plane['lon']),max(math.radians(-82),min(math.radians(82),math.radians(plane['lat'])))
                     self.centered=True;self.following=False
             elif kind in ('usb','logs','traffic'):
+                self.coverage_open=False
                 showing = getattr(self,kind+'_open')
                 self.usb_open=self.logs_open=self.traffic_open=False
                 setattr(self,kind+'_open',not showing)
@@ -107,7 +139,11 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
             elif kind=='log_kind': self.log_kind=value;self.log_page=0
             elif kind=='zoom': self.zoom(value)
             elif kind=='style': self.map_style={'both':'satellite','satellite':'borders','borders':'both'}[self.map_style]
-            elif kind=='trails': self.trail_seconds=TRAIL_WINDOWS[(TRAIL_WINDOWS.index(self.trail_seconds)+1)%len(TRAIL_WINDOWS)]
+            elif kind=='trails':
+                self.trail_seconds=TRAIL_WINDOWS[(TRAIL_WINDOWS.index(self.trail_seconds)+1)%len(TRAIL_WINDOWS)]
+                if self.dashboard:
+                    self.traffic_view.trail_seconds=self.trail_seconds
+                    if self.traffic_view.mode=='history':self.history_seconds=self.trail_seconds
             elif kind=='rings':
                 if self.manager.snapshot().get('receiver_position'): self.rings=not self.rings
                 else: self.message='Set receiver latitude/longitude in the browser Receiver panel.'
@@ -118,13 +154,13 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
                 else: self.message='Select an aircraft with a fresh position to follow.'
             elif kind=='select':
                 self.selected=value;self.following=False;self.traffic_open=False
-                plane=next((p for p in self.manager.snapshot()['aircraft'] if p.get('hex')==value),None)
+                plane=next((p for p in self.display_aircraft(self.manager.snapshot()) if p.get('hex')==value),None)
                 self.selected_plane=plane;self.locate(plane)
             elif kind=='fit':
                 self.following=False;self.centered=False
                 if self.dashboard:
                     valid=[p for p in self.manager.snapshot()['aircraft'] if self.positioned(p)]
-                    targets=valid or historical_aircraft(self.tracks,[],self.trail_seconds,time.time())
+                    targets=self.display_aircraft(self.manager.snapshot(),True)
                     if targets:self.fit_aircraft(targets)
             else:
                 try:
@@ -132,6 +168,7 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
                     if kind=='assign': self.usb_open=False
                 except ValueError as exc: self.message=str(exc)
             return
+        if self.coverage_open:self.coverage_view.tap(x,y);return
         if not (self.usb_open or self.logs_open or self.traffic_open):
             if self.dashboard and any(self.ui.contains(box,x,y) for box in self.overlay_boxes):return
             if not self.ui.contains(self.MAP,x,y):return
@@ -160,7 +197,7 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
             if isinstance(tracks,dict): self.tracks=tracks
             self.track_time=time.monotonic()
         if self.dashboard and not self.centered:
-            targets=valid or historical_aircraft(self.tracks,[],self.trail_seconds,time.time())
+            targets=self.display_aircraft(state,True)
             if targets:self.fit_aircraft(targets)
         if self.following and self.positioned(live): self.locate(live)
         elif valid and not self.centered:
@@ -183,27 +220,32 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
             clip()
             if self.map_style!='satellite': ui._globe_borders.draw(ui.globe_gpu_matrix(self.yaw,self.pitch,self.MAP,self.scale),(160,190,180,140))
             if self.rings and state.get('receiver_position'): self.draw_rings(state['receiver_position'])
-            cutoff=time.time()-self.trail_seconds
-            if self.trail_seconds:
+            now=time.time();view=self.traffic_view if self.dashboard else None
+            cutoff=view.cutoff(now) if view else now-self.trail_seconds
+            def draw_trace(trace,color,alpha,cutoff,until=None):
+                points=[];previous_time=None
+                for item in trace:
+                    if item.get('time',0)<cutoff or (until is not None and item.get('time',0)>=until): continue
+                    if previous_time is not None and item.get('time',0)-previous_time>120:
+                        if len(points)>1:ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
+                        points=[]
+                    previous_time=item.get('time',0)
+                    p=ui.radiogarden_project(item,self.yaw,self.pitch,self.MAP,self.scale)
+                    # The map scissor clips segments crossing the viewport;
+                    # their endpoints need not both be inside a close view.
+                    if p: points.append(p[:2])
+                    elif points:
+                        if len(points)>1: ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
+                        points=[]
+                if len(points)>1: ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
+            if view and view.backdrop and view.mode!='history':
+                for trace in self.tracks.values():draw_trace(trace,self.MUTED,45,now-TRAIL_RETENTION,cutoff if view.mode=='session' else None)
+            if self.trail_seconds or (view and view.mode=='session'):
                 for key,trace in self.tracks.items():
-                    points=[];previous_time=None
-                    color=self.GOLD if key==self.selected else self.CYAN
-                    for item in trace:
-                        if item.get('time',0)<cutoff: continue
-                        if previous_time is not None and item.get('time',0)-previous_time>120:
-                            if len(points)>1:ui.draw_logical_polyline(points,(*color,150),2)
-                            points=[]
-                        previous_time=item.get('time',0)
-                        p=ui.radiogarden_project(item,self.yaw,self.pitch,self.MAP,self.scale)
-                        # The map scissor clips segments crossing the viewport;
-                        # their endpoints need not both be inside a close view.
-                        if p: points.append(p[:2])
-                        elif points:
-                            if len(points)>1: ui.draw_logical_polyline(points,(*color,150),2)
-                            points=[]
-                    if len(points)>1: ui.draw_logical_polyline(points,(*color,150),2)
+                    if view and not view.trail_visible(key,state['aircraft'],now):continue
+                    draw_trace(trace,self.GOLD if key==self.selected else self.CYAN,150,cutoff)
             self.points=[]
-            historical=historical_aircraft(self.tracks,valid,self.trail_seconds,time.time()) if 'empty_title' not in state else []
+            historical=([p for p in self.display_aircraft(state,True) if p.get('historical')] if view else historical_aircraft(self.tracks,valid,self.trail_seconds,now)) if 'empty_title' not in state else []
             selected_history=next((p for p in historical if p['hex']==self.selected),None)
             if selected_history:self.selected_plane=selected_history
             label_boxes=[]
@@ -212,7 +254,11 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
                 if not point or not ui.contains(self.MAP,*point[:2]): continue
                 x,y=point[:2];self.points.append((x,y,plane))
                 color=self.GOLD if plane['hex']==self.selected else self.MUTED if plane.get('historical') else (120,184,255) if isinstance(plane.get('alt_baro'),(int,float)) and plane['alt_baro']>20000 else self.CYAN
+                if view and not plane.get('historical') and plane['hex']!=self.selected:
+                    color=tuple(int(c*max(.25,1-plane.get('seen_pos',0)/20)) for c in color)
                 angle=math.radians(plane.get('track') or 0)
+                if view and view.arrival(plane['hex'],now):
+                    ui.draw_logical_polyline([(x+20*math.cos(a*math.pi/18),y+20*math.sin(a*math.pi/18)) for a in range(37)],(*self.CYAN,180),2)
                 def vertex(dx,dy): return x+dx*math.cos(angle)-dy*math.sin(angle),y+dx*math.sin(angle)+dy*math.cos(angle)
                 if plane.get('kind')=='ship':
                     ui.draw_logical_polyline([vertex(0,-12),vertex(6,-3),vertex(6,9),vertex(-6,9),vertex(-6,-3),vertex(0,-12)],(*color,255),2)
@@ -270,17 +316,18 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         self.button(cache,(694,688,912,734),'NEXT',('page',1))
 
     def draw_traffic(self, cache, state):
-        self.panel((16,158,928,750));self.ink(cache,34,193,'LIVE TRAFFIC',22)
-        self.button(cache,(670,174,910,218),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
+        self.panel((16,224,928,750));self.ink(cache,34,253,self.traffic_view.label+' TRAFFIC',22)
+        self.button(cache,(670,232,910,276),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
         planes=self.sorted_aircraft(state)
-        self.traffic_page=min(self.traffic_page,max(0,(len(planes)-1)//6))
-        if not planes:self.text(cache,34,284,'No live aircraft. Tap a grey map icon for a saved position.',18,self.MUTED,width=860)
-        for i,plane in enumerate(planes[self.traffic_page*6:self.traffic_page*6+6]):
+        self.traffic_page=min(self.traffic_page,max(0,(len(planes)-1)//5))
+        if not planes:self.text(cache,34,320,'No contacts in this viewing window. Saved observations remain in History.',18,self.MUTED,width=860)
+        for i,plane in enumerate(planes[self.traffic_page*5:self.traffic_page*5+5]):
             title=f"{(plane.get('flight') or plane['hex']).strip()} · ICAO {plane['hex'].upper()}"
-            detail=f"{self.instrument_value(plane.get('alt_baro'))} FT · {self.instrument_value(plane.get('gs'))} KT · "+('POSITION' if self.positioned(plane) else 'NO POSITION')
-            self.button(cache,(32,234+i*70,912,296+i*70),title,('select',plane['hex']),detail,active=plane['hex']==self.selected)
+            detail=freshness(plane)
+            if self.traffic_view.arrival(plane['hex'],time.time()):title+=' · NEW'
+            self.button(cache,(32,292+i*76,912,360+i*76),title,('select',plane['hex']),detail,active=plane['hex']==self.selected)
         self.button(cache,(32,688,250,734),'PREVIOUS',('page',-1));self.button(cache,(694,688,912,734),'NEXT',('page',1))
-        self.ink(cache,472,711,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+5)//6)}',14,self.MUTED,anchor='cm')
+        self.ink(cache,472,711,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+4)//5)}',14,self.MUTED,anchor='cm')
 
     def draw_usb(self, cache, state):
         self.panel((16,158,928,750));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)

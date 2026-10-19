@@ -161,7 +161,7 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_digi_rail_retains_all_decoder_destinations(self):
         self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},
-                         {"wspr", "sstv", "hell", "qrss", "cw", "adsb", "ais", "aprs", "ism", "meteor", "cubesat", "sonde", "digital_back"})
+                         {"spectrum", "wspr", "sstv", "hell", "qrss", "cw", "adsb", "ais", "aprs", "ism", "meteor", "cubesat", "sonde", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
     def test_decoder_sections_keep_hf_and_vhf_targets_separate(self):
@@ -172,8 +172,11 @@ class DrawerGeometryTests(unittest.TestCase):
         for i, box in enumerate(boxes):
             center = ((box[0]+box[2])/2, (box[1]+box[3])/2)
             self.assertEqual(ui.lcd_nav_item_at(*center, ui.DIGITAL_MENU_ITEMS), i)
-        self.assertLess(max(box[3] for box in boxes[:5]), boxes[5][1])
-        self.assertLess(max(box[3] for box in boxes[5:-1]), boxes[-1][1])
+        self.assertEqual(ui.DIGITAL_MENU_ITEMS[0], ('spectrum', 'SPECTRUM ANALYZER'))
+        first_hf=len(ui.SPECTRUM_MENU_ITEMS);first_vhf=first_hf+len(ui.HF_DECODER_ITEMS)
+        self.assertLess(boxes[0][3], boxes[first_hf][1])
+        self.assertLess(max(box[3] for box in boxes[first_hf:first_vhf]), boxes[first_vhf][1])
+        self.assertLess(max(box[3] for box in boxes[first_vhf:-1]), boxes[-1][1])
         for i,box in enumerate(boxes):
             for other in boxes[i+1:]: self.assertFalse(self._overlaps(box,other))
 
@@ -201,7 +204,7 @@ class DrawerGeometryTests(unittest.TestCase):
             )
         self.assertEqual(
             [call.args[2] for call in buttons.call_args_list],
-            ["2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE", "ADS-B", "AIS", "APRS", "rtl_433", "Meteor-M", "CubeSat", "Radiosonde"],
+            ["SPECTRUM ANALYZER", "2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE", "ADS-B", "AIS", "APRS", "rtl_433", "Meteor-M", "CubeSat", "Radiosonde"],
         )
         dots = [call.args for call in circles.call_args_list]
         self.assertEqual(len(dots), 6)
@@ -237,7 +240,7 @@ class DrawerGeometryTests(unittest.TestCase):
         digi_calls = [call.args for call in buttons.call_args_list
                       if call.args[2] == "DECODE"]
         self.assertEqual(len(digi_calls), 1)
-        self.assertEqual(digi_calls[0][3], "12 MODES")
+        self.assertEqual(digi_calls[0][3], "13 MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "draw_logical_line"), \
              mock.patch.object(ui, "draw_logical_circle"), \
@@ -245,7 +248,7 @@ class DrawerGeometryTests(unittest.TestCase):
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
                            if call.args[2] == "DECODE"]
-        self.assertEqual(zero_digi_calls[0][3], "12 MODES")
+        self.assertEqual(zero_digi_calls[0][3], "13 MODES")
 
     def test_home_digi_title_stays_compact_with_many_running_sessions(self):
         ui.configure_output(True)
@@ -256,7 +259,7 @@ class DrawerGeometryTests(unittest.TestCase):
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
                     if call.args[2] == "DECODE")
-        self.assertEqual(digi[3], "12 MODES")
+        self.assertEqual(digi[3], "13 MODES")
         cache = ui.TextCache()
         font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
                           family=ui.APP_UI_STYLE.button.font_family)
@@ -365,7 +368,7 @@ class DrawerGeometryTests(unittest.TestCase):
             "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
             "settings": "SYSTEM", "tests": "APPS",
         })
-        self.assertEqual(ui.menu_subtitle("digital"), "12 MODES")
+        self.assertEqual(ui.menu_subtitle("digital"), "13 MODES")
         self.assertEqual(ui.HOME_MENU_SUBTITLES["vosc"], "TRANSCRIBE")
         self.assertNotIn("theme", dict(ui.SETTINGS_MENU_ITEMS))
         self.assertNotIn("theme", ui.SETTINGS_MENU_SUBTITLES)
@@ -651,6 +654,7 @@ class ParentNavigationTests(unittest.TestCase):
         self.assertEqual(ui.navigation_parent(ui.SETTINGS_MENU_ITEMS, "settings_back"), "home")
 
     def test_unknown_parent_falls_back_to_home(self):
+        self.assertEqual(ui.navigation_back_surface("digi"), "digi")
         self.assertEqual(ui.navigation_back_surface("settings"), "settings")
         self.assertEqual(ui.navigation_back_surface("home"), "home")
         self.assertEqual(ui.navigation_back_surface("unexpected"), "home")

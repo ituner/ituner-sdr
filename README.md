@@ -24,6 +24,10 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
+For a plain black appliance screen without the desktop wallpaper or taskbar,
+see [CM5 kiosk configuration](docs/cm5-kiosk.md). This keeps the verified
+Wayland compositor, display and touch setup.
+
 ### Update, validate and run on the CM5
 
 Run the following on the CM5 from its repository checkout. The compile check
@@ -124,6 +128,18 @@ reconnection and on-screen flight/receiver/diagnostic logs. Its separate 978 UAT
 slot is reserved for a future second receiver and decoder. Install
 with `sudo ./scripts/install-adsb.sh` or add `--adsb` to the CM5 app installer.
 See [ADS-B setup and custom-carrier USB power selection](docs/adsb.md).
+
+Airspace now separates [Live, Since opened and History](docs/adsb-traffic-views.md),
+with position/contact ages and a display-only Start fresh control. Its
+[reception dome](docs/adsb-reception-coverage.md) accumulates received directions
+and 3D positions. The [Spectrum Analyzer](docs/spectrum-survey.md), above HF in
+the Decode menu, provides survey, signal investigation, heatmap, persistence,
+watchlist and comparison/report tools on web and touchscreen.
+
+**Settings → Radio / User** edits one [shared station profile](docs/radio-user-information.md)
+for local SDR applications, satellite predictions and weather. Optional USB GNSS
+can update the radio's location as it moves; enable support with
+`sudo scripts/install-station-info.sh`. Remote receivers retain their own sites.
 
 ## CM5 / JD9365DA-H3 30-pin LCD hardware setup
 

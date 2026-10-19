@@ -7,6 +7,7 @@ from adsb_workspace import ADSBWorkspace
 from sstv_workspace import SSTVWorkspace
 from vhf_catalog import MODES
 from vhf_monitor import clean_position
+from spectrum_workspace import SpectrumWorkspace
 
 
 class MapAdapter:
@@ -22,22 +23,31 @@ class VHFWorkspace(SSTVWorkspace):
         super().__init__(ui,hub)
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
         self.map=ADSBWorkspace(ui,MapAdapter(self))
+        self.map.trail_seconds=86400  # Independent VHF map keeps its existing history window.
         self.manager.gallery=SimpleNamespace(image_path=lambda key:self.manager.root/key)
         self.number='';self.edit_field='frequency';self.station_edit={}
+        self.spectrum=SpectrumWorkspace(ui,hub)
 
     @property
     def session(self):return self.manager.sessions[self.mode]
 
     def show(self,mode):
+        self.spectrum.open=mode=='spectrum'
+        if mode=='spectrum':
+            self.mode=mode;self.open=True;self.spectrum.show();return
         self.mode=mode;self.open=True;self.view='map' if mode in ('ais','aprs','sonde') else 'data'
         self.overlay=None;self.page=0;self.map.centered=False;self.map.selected=None;self.map.following=False;self.map.track_time=-float('inf')
 
     def panel(self,box):self.ui.draw_logical_rounded_rect(*box,8,self.PANEL,(42,68,87,255),1)
 
-    def drag_begin(self,x,y):self.map.drag_begin(x,y)
+    def drag_begin(self,x,y):
+        if self.mode=='spectrum':return self.spectrum.drag_begin(x,y)
+        self.map.drag_begin(x,y)
     def drag_move(self,sx,sy,x,y):
+        if self.mode=='spectrum':return self.spectrum.drag_move(sx,sy,x,y)
         if self.view=='map' and not self.overlay:self.map.drag_move(sx,sy,x,y)
     def swipe(self,sx=None,sy=None,x=None,y=None):
+        if self.mode=='spectrum':return self.spectrum.swipe(sx,sy,x,y)
         if sx is None:return self.map.swipe()
         if abs(y-sy)>60 and abs(y-sy)>abs(x-sx)*1.5:
             field='overlay_page' if self.overlay in ('profiles','usb') else 'page'
@@ -45,6 +55,8 @@ class VHFWorkspace(SSTVWorkspace):
         return self.map.swipe()
 
     def tap(self,x,y):
+        if self.mode=='spectrum':
+            self.spectrum.tap(x,y);self.open=self.spectrum.open;return
         for box,(action,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             try:
@@ -54,6 +66,8 @@ class VHFWorkspace(SSTVWorkspace):
                     else:self.open=False
                 elif action=='view':self.view=value;self.page=0;self.overlay=None
                 elif action=='overlay':
+                    if value=='location' and getattr(self.ui,'station_settings',None):
+                        self.ui.station_settings.show();self.open=False;return
                     self.overlay=value;self.overlay_page=0
                     if value=='location':self.station_edit=dict(self.manager.position or dict(lat=0,lon=0))
                     elif value=='profiles':self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if p['id']==self.session.settings['profile']),0)
@@ -222,6 +236,7 @@ class VHFWorkspace(SSTVWorkspace):
         self.button(cache,(526,626,740,684),'PREVIOUS',('page',-1));self.button(cache,(754,626,968,684),'NEXT',('page',1))
 
     def draw(self,cache):
+        if self.mode=='spectrum':return self.spectrum.draw(cache)
         ui=self.ui;self.actions=[];state=self.session.snapshot()
         ui.draw_logical_rect(0,0,1280,800,self.BG);self.header(cache,state)
         if self.overlay:self.draw_overlay(cache,state)
@@ -247,7 +262,8 @@ class VHFWorkspace(SSTVWorkspace):
             if self.mode in ('meteor','cubesat'):self.button(cache,(1034,636,1270,704),'SITE / ORBITS',('overlay','location'))
         self.button(cache,(1034,728,1270,792),'BACK',('back',None))
         self.text(cache,20,740,self.message or state['detail'],14,self.MUTED,width=990)
-        self.text(cache,20,778,'SIGNAL OBSERVATORY · cm5.local:8092 · '+time.strftime('%H:%M:%S UTC',time.gmtime()),13,self.MUTED)
+        dashboard='RTL433-UI · cm5.local:8093' if self.mode=='ism' and getattr(self.manager,'rtl433_ui_installed',False) else 'SIGNAL OBSERVATORY · cm5.local:8092'
+        self.text(cache,20,778,dashboard+' · '+time.strftime('%H:%M:%S UTC',time.gmtime()),13,self.MUTED)
 
     def close(self):
-        super().close();self.manager.close()
+        self.spectrum.close();super().close();self.manager.close()

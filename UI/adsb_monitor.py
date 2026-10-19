@@ -17,6 +17,9 @@ import threading
 import tempfile
 import time
 from urllib.parse import unquote, urlsplit, parse_qs
+from station_web import station_get, station_post
+from station_profile import distance_m
+from adsb_coverage import ReceptionCoverage
 from adsb_logs import LOG_FILES, read_log_tail
 from adsb_globe import GlobeAssets
 from adsb_traffic import BANDS, TrafficHistory, receiver_position
@@ -66,7 +69,7 @@ def aircraft_rows(payload, now=None):
 
 
 class ADSBManager:
-    def __init__(self, root=None, port=None, scanner=rtl_devices, binary=None, map_root=None, broker=None):
+    def __init__(self, root=None, port=None, scanner=rtl_devices, binary=None, map_root=None, broker=None, station=None):
         self.root = Path(root or Path(os.environ.get('XDG_DATA_HOME', Path.home()/'.local/share'))/'ituner-sdr/adsb')
         self.root.mkdir(parents=True, exist_ok=True)
         self.data = self.root/'live' if root else Path(os.environ.get('XDG_RUNTIME_DIR', tempfile.gettempdir()))/f'ituner-adsb-{os.getuid()}'
@@ -84,6 +87,7 @@ class ADSBManager:
         self.assigned = None
         self.devices = []
         self.planes = []
+        self.aircraft_stamp = None
         self.status = 'STOPPED'
         self.detail = ''
         self.messages = 0
@@ -116,6 +120,10 @@ class ADSBManager:
             if isinstance(item.get('time'), (int,float)) and 0<=time.time()-item['time'] <= self.history.retention:
                 self.history.ingest([item.get('aircraft') or {}], item['time'])
         if not isinstance(self.selection, str): self.selection = 'auto'
+        self.coverage = ReceptionCoverage(self.root)
+        self.coverage_error = ''
+        self.station = station
+        if station:station.subscribe(self._station_changed)
         self.flight_log = self._logger('flights', 10*1024*1024, 6)
         self.events = self._logger('receiver', 2*1024*1024, 3)
         self.thread = threading.Thread(target=self._worker, name='adsb-receiver', daemon=True)
@@ -130,6 +138,24 @@ class ADSBManager:
                 self._event('map_error', detail=str(exc))
                 self.detail = f'Map server unavailable: {exc}'
 
+    def _station_changed(self, data):
+        p=data['position']
+        with self.lock:
+            self.position=dict(lat=p['lat'],lon=p['lon']) if p else None
+            height=p.get('ellipsoid_height_m') if p else None
+            with self.coverage.lock:
+                if self.coverage.height!=height:
+                    self.coverage.height=height;self.coverage.key=None;self.coverage.requested=True
+        self.wake.set()
+
+    def _location_restart_needed(self):
+        if self.position==self.active_position:return False
+        # GPS motion updates maps immediately without repeatedly interrupting RF.
+        # readsb's local CPR reference needs resetting only after substantial travel.
+        if self.station and (self.station.snapshot()['position'] or {}).get('source')=='gps':
+            return distance_m(self.active_position,self.position)>=25000
+        return True
+
     def _logger(self, name, size, backups):
         logger = logging.Logger(f'adsb-{name}-{id(self)}')
         handler = RotatingFileHandler(self.root/(name+'.jsonl'), maxBytes=size, backupCount=backups)
@@ -138,9 +164,12 @@ class ADSBManager:
         return logger
 
     def _event(self, event, **values):
-        self.events.info(json.dumps(dict(time=time.time(), event=event, **values)))
+        stamp=time.time()
+        self.events.info(json.dumps(dict(time=stamp, event=event, **values)))
+        if event in ('start','stop','released','assigned','readsb_exited','location'):
+            self.coverage.mark_break(stamp)
 
-    def control(self, action, selection=None, position=None):
+    def control(self, action, selection=None, position=None, height_m=None):
         if action == "start" and self.broker:
             self.broker.request("adsb", self.devices, self.selection)
         with self.lock:
@@ -149,7 +178,13 @@ class ADSBManager:
                     raise ValueError('Dongle no longer available; scan again')
                 self.selection = selection
             elif action == 'location':
-                self.position = receiver_position(position)
+                if self.station:
+                    p=receiver_position(position)
+                    self.station.update(dict(latitude=p['lat'] if p else None,longitude=p['lon'] if p else None,gps_auto=False))
+                else:self.position = receiver_position(position)
+            elif action == 'coverage_height':
+                if self.station:self.station.update(dict(ellipsoid_height_m=height_m))
+                else:self.coverage.set_height(height_m)
             elif action in ('start', 'stop'):
                 self.enabled = action == 'start'
             elif action != 'scan':
@@ -165,9 +200,18 @@ class ADSBManager:
     def snapshot(self):
         with self.lock:
             assigned = self.assigned
-            return dict(enabled=self.enabled, selection=self.selection, devices=[dict(d) for d in self.devices],
+            now=time.time();stamp=self.aircraft_stamp if self.aircraft_stamp is not None else now
+            # Absolute observation times let clients age a cached snapshot honestly.
+            planes=[]
+            for p in self.planes:
+                row=dict(p, band='1090', last_seen_at=stamp-p.get('seen',100))
+                row['seen']=max(0,now-row['last_seen_at'])
+                if isinstance(p.get('seen_pos'),(int,float)):
+                    row['position_time']=stamp-p['seen_pos'];row['seen_pos']=max(0,now-row['position_time'])
+                if row['seen']<15:planes.append(row)
+            return dict(now=now, enabled=self.enabled, selection=self.selection, devices=[dict(d) for d in self.devices],
                         assigned=dict(assigned) if assigned else None, status=self.status, detail=self.detail,
-                        aircraft=[dict(p, band='1090') for p in self.planes], messages=self.messages, port=self.port,
+                        aircraft=planes, messages=self.messages, port=self.port,
                         started_at=self.started_at,last_message_at=self.last_message_at,
                         last_position_at=self.history.latest_position_time(time.time()),
                         receiver_position=dict(self.position) if self.position else None,
@@ -255,7 +299,7 @@ class ADSBManager:
         if now >= self.next_scan:
             self.devices = self.scanner()
             self.next_scan = now+5
-        if self.process and (not self.enabled or self.position != self.active_position or
+        if self.process and (not self.enabled or self._location_restart_needed() or
                 (self.selection != 'auto' and self.assigned['id'] != self.selection) or
                 not any(d['id'] == self.assigned['id'] for d in self.devices)):
             self._stop()
@@ -291,6 +335,7 @@ class ADSBManager:
             payload = {}
         fresh = 0 <= time.time()-float(payload.get('now', 0)) <= 15
         self.planes = aircraft_rows(payload)
+        self.aircraft_stamp = payload.get('now') if fresh else None
         if fresh:
             self.status, self.detail = 'RECEIVING', self.assigned['label']
             if payload.get('messages',0)>self.messages:self.last_message_at=payload['now']
@@ -298,9 +343,13 @@ class ADSBManager:
             with self.lock: self.history.ingest(self.planes, payload['now'])
             if now-self.last_log >= 5 and payload.get('now') != self.last_payload:
                 self.last_log, self.last_payload = now, payload.get('now')
+                coverage_rows = []
                 for plane in self.planes:
                     if plane.get('seen', 100) < 5:
-                        self.flight_log.info(json.dumps(dict(time=payload['now'], device=self.assigned, aircraft=plane)))
+                        observation=dict(time=payload['now'],device=self.assigned,aircraft=plane,receiver_position=dict(self.position) if self.position else None)
+                        self.flight_log.info(json.dumps(observation))
+                        coverage_rows.append(observation)
+                self.coverage.add(coverage_rows)
         elif now-self.started > 20:
             self.detail = 'Decoder stopped updating; reconnecting the assigned dongle.'
             failed = self.assigned['id']
@@ -319,9 +368,17 @@ class ADSBManager:
             try: self._refresh_logs()
             except OSError: pass
             self._save_history()
+            try:
+                with self.lock: site = dict(self.position) if self.position else None
+                self.coverage.tick(site)
+                self.coverage_error = ''
+            except Exception as exc:
+                if str(exc) != self.coverage_error: self._event('coverage_error', detail=str(exc))
+                self.coverage_error = str(exc)
             self.wake.wait(1)
             self.wake.clear()
         self._save_history(force=True)
+        self.coverage.close()
         self._stop()
 
     def close(self):
@@ -353,9 +410,13 @@ class ADSBHandler(BaseHTTPRequestHandler):
         request = urlsplit(self.path)
         path = unquote(request.path)
         query = parse_qs(request.query)
+        if station_get(self,path):return
         try:
             if path == '/api/state':
                 self.send(json.dumps(dict(manager.snapshot(), control_token=manager.token)).encode())
+            elif path == '/api/coverage':
+                state=manager.snapshot()
+                self.send(json.dumps(dict(manager.coverage.snapshot(), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
             elif path == '/api/tracks':
                 self.send(json.dumps(manager.track_snapshot()).encode())
             elif path == '/api/logs':
@@ -376,7 +437,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
             elif path.startswith('/globe/tiles/'):
                 tile = manager.globe.tile(path)
                 self.send(tile or b'', 'image/jpeg', status=200 if tile else 404)
-            elif path in ('/adsb_globe.js', '/adsb_controls.js', '/adsb_map.css'):
+            elif path in ('/adsb_globe.js', '/adsb_controls.js', '/adsb_view.js', '/adsb_coverage.js', '/adsb_map.css', '/adsb_coverage.css'):
                 self.send(Path(__file__).with_name(path[1:]).read_bytes(), 'text/css; charset=utf-8' if path.endswith('.css') else 'text/javascript; charset=utf-8')
             elif path == '/':
                 self.send(Path(__file__).with_name('adsb_map.html').read_bytes(), 'text/html; charset=utf-8')
@@ -404,6 +465,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError): self.send(b'Unavailable', 'text/plain', 503)
 
     def do_POST(self):
+        if self.path=='/api/station':station_post(self);return
         manager = self.server.manager
         # Same-origin page token is required; no permissive CORS or query tokens.
         origin = self.headers.get('Origin')
@@ -415,7 +477,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= 4096: raise ValueError('Invalid request size')
             data = json.loads(self.rfile.read(size))
-            manager.control(data.get('action'), data.get('selection'), data.get('position'))
+            manager.control(data.get('action'), data.get('selection'), data.get('position'), data.get('height_m'))
             self.send(b'{"ok":true}')
         except (ValueError, TypeError, AttributeError) as exc:
             self.send(json.dumps(dict(error=str(exc))).encode(), status=400)

@@ -15,6 +15,11 @@ D1=dict(id='serial:123',serial='123',index=0,persistent=True,label='RTL one')
 D2=dict(id='serial:456',serial='456',index=1,persistent=True,label='RTL two')
 
 class BrokerTests(unittest.TestCase):
+    def test_automatic_expansion_never_hands_off_a_busy_receiver(self):
+        broker=ReceiverBroker();stop=Mock();broker.register('adsb',stop);broker.acquire('adsb',D1['id'])
+        self.assertIsNone(broker.request('ism-2',[D1],D1['id'],handoff=False));stop.assert_not_called()
+        self.assertEqual(broker.snapshot(),{D1['id']:'adsb'})
+        self.assertEqual(broker.request('ism-2',[D1,D2],handoff=False),D2['id'])
     def test_handoff_waits_for_release_and_auto_prefers_unused(self):
         broker=ReceiverBroker();stop=Mock();broker.register('adsb',stop)
         self.assertTrue(broker.acquire('adsb',D1['id']))
@@ -55,6 +60,7 @@ class ManagerTests(unittest.TestCase):
         self.hub.devices=[D1,D2]
         self.hub.thread=Mock()
         for session in self.hub.sessions.values():session.thread=Mock()
+        for session in self.hub.sensor_receivers.values():session.thread=Mock()
 
     def tearDown(self):self.hub.close();self.temp.cleanup()
 
@@ -118,6 +124,21 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(session.rotate_meteor_if_finished(1000));session.stop.assert_called_once()
         self.assertTrue(session.enabled)
         session.processes=[]
+
+    def test_installed_sensor_dashboard_resumes_only_an_explicitly_enabled_session(self):
+        from vhf_monitor import DecoderSession
+        self.hub.rtl433_ui_installed=True
+        session=self.hub.sessions['ism'];session.control('start')
+        with patch('vhf_monitor.threading.Thread.start'):resumed=DecoderSession(self.hub,'ism')
+        resumed.thread=Mock()
+        try:
+            self.assertTrue(resumed.enabled)
+            resumed.control('stop')
+        finally:resumed.close()
+        with patch('vhf_monitor.threading.Thread.start'):stopped=DecoderSession(self.hub,'ism')
+        stopped.thread=Mock()
+        try:self.assertFalse(stopped.enabled)
+        finally:stopped.close()
 
     def test_continuous_meteor_resumes_after_restart_and_stop_cancels(self):
         from vhf_monitor import DecoderSession
@@ -195,6 +216,44 @@ class ManagerTests(unittest.TestCase):
             self.assertTrue(any('driver=rtlsdr,serial=456' in c for c in commands))
             self.assertEqual(self.hub.broker.snapshot().get(D2['id']),mode)
             session.stop()
+
+    def test_sensor_rate_and_log_frequency_follow_actual_tuning(self):
+        session=self.hub.sessions['ism'];session.child=Mock()
+        for frequency,rate in ((433920000,'250000'),(868300000,'1000000'),(915000000,'1000000')):
+            session.control('configure',frequency=frequency);session.launch(D1)
+            command=session.child.call_args.args[0]
+            self.assertEqual(command[command.index('-s')+1],rate)
+            self.assertEqual(session.snapshot()['receiving_frequency'],frequency)
+            # A pending retune must not relabel a message from the old process.
+            session.control('configure',frequency=frequency+1000)
+            self.assertIsNone(session.snapshot()['receiving_frequency'])
+            session.ingest(parse_packet('ism','{"model":"Weather","id":7}'))
+            self.assertEqual(session.snapshot()['events'][-1]['frequency'],frequency)
+            self.assertEqual(json.loads((session.root/'observations.jsonl').read_text().splitlines()[-1])['frequency'],frequency)
+            session.stop()
+
+    def test_parallel_sensors_have_separate_serials_leases_and_logs(self):
+        primary=self.hub.sessions['ism'];extra=self.hub.sensor_receivers['ism-2']
+        for session,device,frequency in ((primary,D1,433920000),(extra,D2,915000000)):
+            session.child=Mock();session.control('configure',selection=device['id'],frequency=frequency)
+            session.control('start');session.launch(device)
+            command=session.child.call_args.args[0];self.assertIn(soapy_args(device),command)
+            session.ingest(parse_packet('ism','{"model":"Weather","id":7}'))
+            row=json.loads((session.root/'observations.jsonl').read_text().splitlines()[-1])
+            self.assertEqual(row['receiver'],session.owner);self.assertEqual(row['serial'],device['serial'])
+        self.assertEqual(self.hub.broker.snapshot(),{D1['id']:'ism',D2['id']:'ism-2'})
+        extra.stop();self.assertEqual(self.hub.broker.snapshot(),{D1['id']:'ism'})
+        # A competing decoder wins a handoff of just the requested receiver.
+        extra.control('start');extra.launch(D2)
+        self.hub.broker.request('adsb',[D1,D2],D2['id'])
+        self.assertFalse(extra.enabled);self.assertTrue(primary.enabled)
+        self.hub.control('ism','stop');self.assertFalse(primary.enabled);self.assertFalse(extra.enabled)
+
+    def test_auxiliary_start_rejects_a_lease_race_without_stopping_adsb(self):
+        extra=self.hub.sensor_receivers['ism-2'];extra.control('configure',selection=D2['id'])
+        stop=Mock();self.hub.broker.register('adsb',stop);self.hub.broker.acquire('adsb',D2['id'])
+        with self.assertRaises(ValueError):self.hub.control('ism-2','start')
+        stop.assert_not_called();self.assertFalse(extra.enabled)
 
 class TouchTests(unittest.TestCase):
     setUp=ManagerTests.setUp
