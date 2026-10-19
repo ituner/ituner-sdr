@@ -24,6 +24,10 @@ Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
 levelling off. Existing preferences are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
+For a plain black appliance screen without the desktop wallpaper or taskbar,
+see [CM5 kiosk configuration](docs/cm5-kiosk.md). This keeps the verified
+Wayland compositor, display and touch setup.
+
 ### Update, validate and run on the CM5
 
 Run the following on the CM5 from its repository checkout. The compile check
