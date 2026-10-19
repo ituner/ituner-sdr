@@ -3294,9 +3294,9 @@ def detect_receiver_home(result):
 
 def station_distance_miles(station, home_profile):
     """Return great-circle distance when the live directory supplied GPS data."""
-    if home_profile.get("source")=="unconfigured":return None
     if len(station) < 7 or not home_profile:
         return None
+    if home_profile.get("source")=="unconfigured":return None
     try:
         return globe_haversine_km(
             {"lat": float(home_profile["lat"]), "lon": float(home_profile["lon"])},
