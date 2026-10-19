@@ -161,7 +161,7 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_digi_rail_retains_all_decoder_destinations(self):
         self.assertEqual({kind for kind, _ in ui.DIGITAL_MENU_ITEMS},
-                         {"spectrum", "wspr", "sstv", "hell", "qrss", "cw", "adsb", "ais", "aprs", "ism", "meteor", "cubesat", "sonde", "digital_back"})
+                         {"spectrum", "wspr", "sstv", "hell", "qrss", "cw", "adsb", "ais", "aprs", "ism", "meteor", "cubesat", "sonde", "groundstation", "satvisor", "digital_back"})
         self.assertIs(ui.lcd_nav_items(digital_open=True), ui.DIGITAL_MENU_ITEMS)
 
     def test_decoder_sections_keep_hf_and_vhf_targets_separate(self):
@@ -204,7 +204,7 @@ class DrawerGeometryTests(unittest.TestCase):
             )
         self.assertEqual(
             [call.args[2] for call in buttons.call_args_list],
-            ["SPECTRUM ANALYZER", "2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE", "ADS-B", "AIS", "APRS", "rtl_433", "Meteor-M", "CubeSat", "Radiosonde"],
+            ["SPECTRUM ANALYZER", "2 WSPR", "SSTV", "1 Hell RX", "QRSS", "1 CW MORSE", "ADS-B", "AIS", "APRS", "rtl_433", "Meteor-M", "CubeSat", "Radiosonde", "Ground Stn", "Satvisor"],
         )
         dots = [call.args for call in circles.call_args_list]
         self.assertEqual(len(dots), 6)
