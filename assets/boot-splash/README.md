@@ -13,7 +13,11 @@ python3 scripts/build-boot-splash.py
 
 The supplied logo, with blue/violet recolored silver (#C0C0C0), is stored as
 `ituner-logo-color.svg` and is the only splash artwork, centered on
-black at 500 px wide with its original proportions preserved. The build also
+black at 350 px wide with its original proportions preserved. The build also
 writes `ituner-sdr-preview.png` in the visible 1280x800 landscape orientation.
 Rendering requires Pillow and librsvg's `rsvg-convert` (Homebrew: `brew install
 librsvg`; Debian/Raspberry Pi OS: `sudo apt install librsvg2-bin`).
+
+A centered 18 px software version appears below the logo. Pass `--version
+"v1.2.3"` for a release label; otherwise the builder uses the current Git build
+ID. The checked-in image identifies the source revision used to generate it.
