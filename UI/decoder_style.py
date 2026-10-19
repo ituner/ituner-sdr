@@ -1,16 +1,18 @@
 """Live theme tokens and navigation for native decoder workspaces."""
 import theme_system
 from ui_style import APP_UI_STYLE
+from ui_chrome import (RAIL_BACK_BOX, CANVAS_WIDTH, STATUS_TOP, STATUS_FIRST_Y,
+                       STATUS_CLOCK_Y, STATUS_FONT_SIZE, STATUS_FONT, draw_status_clock)
 
 
 def full_width_back_box():
     """Full-width screens place navigation directly, without moving pixels."""
-    x = 10 if theme_system.runtime_theme['sidebar'] == 'left' else 1034
-    return (x, 728, x + 236, 792)
+    x0,y0,x1,y1 = RAIL_BACK_BOX
+    return (x0-1024,y0,x1-1024,y1) if theme_system.runtime_theme['sidebar'] == 'left' else RAIL_BACK_BOX
 
 
 def footer_content_box():
-    return (270, 728, 1256, 792) if full_width_back_box()[0] == 10 else (24, 728, 1010, 792)
+    return (274, 712, 1262, 800) if full_width_back_box()[0] == 10 else (18, 712, 1006, 800)
 
 
 class DecoderStyle:
@@ -50,4 +52,17 @@ class DecoderStyle:
             self.actions.append((box, action))
 
     def draw_back(self, cache, action=('back', None)):
-        self.decoder_button(cache, full_width_back_box(), 'BACK', action)
+        box=full_width_back_box()
+        self.ui.draw_styled_two_line_button(cache,box,'BACK','')
+        self.actions.append((box,action))
+
+    def draw_status(self, cache, message, detail='', *, full_width=False):
+        """Use HOME's two rows, font, colors and UTC clock position."""
+        offset = 256 if full_width and theme_system.runtime_theme['sidebar']=='left' else 0
+        ui=self.ui
+        ui.draw_logical_rect(offset,STATUS_TOP,offset+CANVAS_WIDTH,800,self.color('footer_background'))
+        message=ui.fit_station_text(cache,str(message),988,STATUS_FONT_SIZE,True,False,STATUS_FONT)
+        ui.draw_text(cache,offset+18,STATUS_FIRST_Y,message,self.color('footer_primary'),STATUS_FONT_SIZE,True,False,'lm',family=STATUS_FONT)
+        draw_status_clock(ui,cache,offset+18)
+        detail=ui.fit_station_text(cache,str(detail),666,STATUS_FONT_SIZE,False,False,STATUS_FONT)
+        ui.draw_text(cache,offset+340,STATUS_CLOCK_Y,detail,self.color('footer_primary'),STATUS_FONT_SIZE,False,False,'lm',family=STATUS_FONT)

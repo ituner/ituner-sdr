@@ -1,5 +1,6 @@
 """Touch-first shared Radio / User Information, with a local keyboard."""
 import time
+from ui_chrome import draw_status_clock
 from decoder_style import DecoderStyle, footer_content_box
 from station_profile import FIELDS
 
@@ -94,4 +95,5 @@ class StationWorkspace(DecoderStyle):
         self.ink(cache,24,669,self.message or 'Shared across local SDRs, decoder maps, satellite predictions and weather.',18,self.CYAN if self.message else self.MUTED,width=1220)
         x0,_,x1,_=footer_content_box()
         self.button(cache,(x1-436,728,x1,792),'Save radio information',('save',None),True)
-        self.ink(cache,x0,758,'Callsign optional · receive only',17,self.MUTED,width=x1-x0-460)
+        self.ink(cache,x0,739,'Callsign optional · receive only',18,self.MUTED,width=x1-x0-460)
+        draw_status_clock(ui,cache,x0)

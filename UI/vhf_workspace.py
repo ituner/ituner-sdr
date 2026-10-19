@@ -261,9 +261,8 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             self.button(cache,(1034,558,1148,626),'PREV',('page',-1));self.button(cache,(1156,558,1270,626),'NEXT',('page',1))
             if self.mode in ('meteor','cubesat'):self.button(cache,(1034,636,1270,704),'SITE / ORBITS',('overlay','location'))
         self.button(cache,(1034,728,1270,792),'BACK',('back',None))
-        self.text(cache,20,740,self.message or state['detail'],14,self.MUTED,width=990)
         dashboard='RTL433-UI · cm5.local:8093' if self.mode=='ism' and getattr(self.manager,'rtl433_ui_installed',False) else 'SIGNAL OBSERVATORY · cm5.local:8092'
-        self.text(cache,20,778,dashboard+' · '+time.strftime('%H:%M:%S UTC',time.gmtime()),13,self.MUTED)
+        self.draw_status(cache,self.message or state['detail'],dashboard)
 
     def close(self):
         self.spectrum.close();super().close();self.manager.close()

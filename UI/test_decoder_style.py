@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import theme_system
 from decoder_style import full_width_back_box
 from ui_style import APP_UI_STYLE
+from ui_chrome import RAIL_BACK_BOX
 import test_station_profile
 import test_adsb
 import test_spectrum_workspace
@@ -27,9 +28,9 @@ class DecoderThemeTests(unittest.TestCase):
         theme=deepcopy(theme_system.BUILTIN_THEMES[name]);theme['sidebar']=side
         theme_system.apply_theme(theme)
 
-    def assert_navigation_clear(self,w,action=('back',None)):
+    def assert_navigation_clear(self,w,action=('back',None),rail=False):
         backs=[b for b,a in w.actions if a==action]
-        self.assertEqual(backs,[full_width_back_box()])
+        self.assertEqual(backs,[RAIL_BACK_BOX if rail else full_width_back_box()])
         for box,item in w.actions:
             if item!=action:self.assertFalse(overlap(box,backs[0]),item)
 
@@ -55,7 +56,33 @@ class DecoderThemeTests(unittest.TestCase):
             for view in ('map','traffic','logs','usb','coverage'):
                 w.traffic_open=view=='traffic';w.logs_open=view=='logs';w.usb_open=view=='usb';w.coverage_open=view=='coverage'
                 w.draw(Mock())
-                self.assert_navigation_clear(w,('map_view',None) if view=='coverage' else ('back',None))
+                self.assert_navigation_clear(w,('map_view',None) if view=='coverage' else ('back',None),rail=view!='coverage')
+
+    def test_adsb_uses_home_rail_buttons_clock_and_status_typography(self):
+        import time
+        from unittest.mock import patch
+        planes=[dict(hex=str(i),flight='FLIGHT '+str(i),lat=44,lon=26,last_seen_at=time.time(),position_time=time.time(),seen=0,seen_pos=0,alt_baro=10000) for i in range(5)]
+        w,ui,manager,state=test_adsb.WorkspaceTests().dashboard(planes)
+        w.selected='0';w.selected_plane=planes[0]
+        self.apply('left')
+        with patch('ui_chrome.time.strftime',return_value='12:34:56'):
+            w.draw(Mock())
+        boxes=[c.args[1] for c in ui.draw_styled_two_line_button.call_args_list]
+        for box,action in w.actions:
+            self.assertIn(box,boxes,action)
+        self.assertIn(RAIL_BACK_BOX,boxes)
+        self.assertIn((1034,12,1270,76),boxes)
+        # A left-side physical BACK hit must map to the same HOME rail coordinates.
+        self.assertEqual(theme_system.display_to_logical_x(20),1044)
+        clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC (UTC)']
+        self.assertEqual(len(clock),1)
+        self.assertEqual(clock[0].args[1:3],(18,771))
+        self.assertEqual(clock[0].args[5],18)
+        for i,(box,action) in enumerate(w.actions):
+            for other,item in w.actions[i+1:]:
+                self.assertFalse(overlap(box,other),(action,item))
+        w.open=True;w.tap(theme_system.display_to_logical_x(20),750)
+        self.assertFalse(w.open)
 
     def test_station_footer_and_keyboard_follow_theme_side_without_saving(self):
         fixture=test_station_profile.StationTests();fixture.setUp()
@@ -78,7 +105,7 @@ class DecoderThemeTests(unittest.TestCase):
         w,ui,_,_=test_adsb.WorkspaceTests().dashboard();w.actions=[]
         w.button(Mock(),(0,0,200,64),'FOLLOW',('follow',None),enabled=False)
         self.assertEqual(w.actions,[])
-        self.assertEqual(ui.draw_text.call_args.args[4],APP_UI_STYLE.palette.untested_text)
+        self.assertFalse(ui.draw_styled_two_line_button.call_args.kwargs['enabled'])
 
     def test_pressed_button_uses_theme_pressed_state(self):
         w=self.fixture.workspace;w.ui.ui_button_pressed.return_value=True

@@ -468,11 +468,9 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
             elif self.screen=='watch':self.draw_watch(cache)
             elif self.screen=='tools':self.draw_tools(cache)
             else:self.draw_reports(cache,state)
-        x0,_,x1,_=footer_content_box()
-        if self.message:self.text(cache,x0,746,self.message,20,self.GOLD,width=x1-x0)
-        elif not self.overlay:self.draw_inspector(cache,data)
         age=state.get('run',{}).get('last_sample_age');detail=('Last IQ '+f'{age:.1f}s ago') if state.get('enabled') and age is not None else 'Measurements retained · receiver idle'
-        self.text(cache,x0,780,detail+' · USB '+(data.get('device') or {}).get('serial','—')+' · timestamps UTC',18,self.MUTED,width=x1-x0)
+        self.draw_status(cache,self.message,detail+' · USB '+(data.get('device') or {}).get('serial','—'),full_width=True)
+        if not self.message and not self.overlay:self.draw_inspector(cache,data)
 
     def draw_graph(self,cache,data,config,frame,identity,frame_view):
         if self.screen=='compare':data=self.compare_data
@@ -516,12 +514,12 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                     t=i/47*4;index=min(3,int(t));f=t-index;color=tuple(int(a*(1-f)+b*f) for a,b in zip(PALETTE[index],PALETTE[index+1]))+(255,)
                     self.ui.draw_logical_rect(884+i*6,630,890+i*6,644,color)
         else:self.text(cache,24,638,'Tap a frequency to select it. Drag horizontally to pan; swipe vertically for history.',20,self.MUTED,width=1200)
-        for box,title,action in (((24,664,228,722),'Zoom +',('zoom',.5)),((240,664,444,722),'Zoom −',('zoom',2)),((456,664,680,722),'Full range',('full',None))):
+        for box,title,action in (((24,654,228,712),'Zoom +',('zoom',.5)),((240,654,444,712),'Zoom −',('zoom',2)),((456,654,680,712),'Full range',('full',None))):
             if action[0]=='full' and (not self.view or self.view==(config['low'],config['high'])):continue
             self.button(cache,box,title,action)
-        if self.selected is not None:self.button(cache,(884,664,1256,722),'Investigate selected →',('investigate',None),active=True)
+        if self.selected is not None:self.button(cache,(884,654,1256,712),'Investigate selected →',('investigate',None),active=True)
         if not line_graph and not (self.screen=='activity' and self.activity_mode=='persistence'):
-            self.button(cache,(692,664,880,722),'Older sweeps',('page',1))
+            self.button(cache,(692,654,880,712),'Older sweeps',('page',1))
 
 
     def draw_tools(self,cache):
@@ -544,8 +542,8 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
             self.text(cache,1030,y+34,time.strftime('%H:%M:%S',time.gmtime(s['last'])),20,self.MUTED)
         if not signals:self.text(cache,80,360,'No completed visits with signals above the threshold yet.',26,self.MUTED,width=1150)
         self.text(cache,24,638,f"{len(signals)} signal groups · {self.insights.get('visits',0)} visits · +6 dB local-floor threshold · page {self.page+1}/{last+1}",19,self.MUTED)
-        self.button(cache,(24,664,348,722),'Investigate selected →',('investigate',None),active=True);self.button(cache,(360,664,654,722),'+ Watch selected',('overlay','watch'))
-        self.button(cache,(666,664,930,722),'Sort: '+self.sort,('sort',None));self.button(cache,(942,664,1092,722),'Previous',('page',-1));self.button(cache,(1104,664,1256,722),'Next',('page',1))
+        self.button(cache,(24,654,348,712),'Investigate selected →',('investigate',None),active=True);self.button(cache,(360,654,654,712),'+ Watch selected',('overlay','watch'))
+        self.button(cache,(666,654,930,712),'Sort: '+self.sort,('sort',None));self.button(cache,(942,654,1092,712),'Previous',('page',-1));self.button(cache,(1104,654,1256,712),'Next',('page',1))
 
     def draw_watch(self,cache):
         for i,(key,label) in enumerate((('frequencies','Frequencies'),('events','Watch events'))):self.button(cache,(24+i*400,166,412+i*400,222),label,('watch_view',key),active=self.watch_mode==key)
@@ -562,8 +560,8 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                 self.text(cache,830,y+25,f"{m['level']:.1f} dBFS/Hz · +{m['excess']:.1f} dB" if m else 'No valid visit yet',21,self.CYAN,width=410)
                 self.text(cache,830,y+52,time.strftime('%H:%M:%S UTC',time.gmtime(m['time'])) if m else 'Outside current survey? Start Watch mode.',18,self.MUTED,width=410)
             if not watches:self.text(cache,64,350,'Add a frequency, or select a signal in Results first.',27,self.MUTED)
-        self.button(cache,(24,664,320,722),'+ Add frequency',('overlay','watch'));self.button(cache,(332,664,664,722),'Start watch mode',('watch_start',None),active=True)
-        self.button(cache,(676,664,982,722),'Remove selected',('watch_remove',None));self.button(cache,(994,664,1118,722),'Prev',('page',-1));self.button(cache,(1130,664,1256,722),'Next',('page',1))
+        self.button(cache,(24,654,320,712),'+ Add frequency',('overlay','watch'));self.button(cache,(332,654,664,712),'Start watch mode',('watch_start',None),active=True)
+        self.button(cache,(676,654,982,712),'Remove selected',('watch_remove',None));self.button(cache,(994,654,1118,712),'Prev',('page',-1));self.button(cache,(1130,654,1256,712),'Next',('page',1))
 
     def draw_reports(self,cache,state):
         self.button(cache,(24,166,436,222),'Saved reports',('report_view','reports'),active=self.report_mode=='reports');self.button(cache,(448,166,852,222),'Receiver activity',('report_view','logs'),active=self.report_mode=='logs')
@@ -576,12 +574,12 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                 y=268+i*82;self.text(cache,32,y,r['label'],26,self.CYAN,width=1200);self.text(cache,32,y+32,time.strftime('%d %b %H:%M UTC',time.gmtime(r['time']))+' · HTML / CSV / JSON / PNG',20,self.MUTED)
             if not reports:self.text(cache,64,350,'Export a report with your real measurements and signal list.',26,self.MUTED,width=1160)
         self.text(cache,24,628,'Download or print at cm5.local:8092/spectrum → Reports',22,self.MUTED)
-        self.button(cache,(24,664,720,722),'Generate survey report',('report',None),active=True);self.button(cache,(732,664,984,722),'Previous',('page',-1));self.button(cache,(996,664,1256,722),'Next',('page',1))
+        self.button(cache,(24,654,720,712),'Generate survey report',('report',None),active=True);self.button(cache,(732,654,984,712),'Previous',('page',-1));self.button(cache,(996,654,1256,712),'Next',('page',1))
 
     def draw_inspector(self,cache,data):
         x0,_,x1,_=footer_content_box()
         if self.selected is None:
-            self.text(cache,x0,746,'Survey → Signals → Investigate · Watch and compare without changing the display gain.',19,self.MUTED,width=x1-x0);return
+            self.text(cache,x0,739,'Survey → Signals → Investigate · Watch and compare without changing the display gain.',18,self.MUTED,width=x1-x0);return
         selection=self.inspection or {};row=selection.get('row');code=selection.get('code');level='Selected for investigation'
         if isinstance(row,dict) and code is not None:level='No valid measurement' if code==0 else 'Clipping excluded' if code==1 else f'≈ {code-202} dBFS/Hz · '+time.strftime('%H:%M:%S UTC',time.gmtime(row['finished']))
         elif self.screen=='compare' and self.compare_data.get('settings'):
@@ -590,8 +588,8 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
         elif data.get('settings'):
             index=int((self.selected-data['settings']['low'])/data['settings']['bin']);power=data.get('power',[])
             if 0<=index<len(power) and power[index] is not None:level=f'{power[index]:.1f} dBFS/Hz · latest visit'
-        self.text(cache,x0,746,f'{self.selected/1e6:.6f} MHz · {level} · tap for allocations',22,self.CYAN,width=x1-x0)
-        self.actions.append(((x0,730,x1,768),('overlay','info')))
+        self.text(cache,x0,739,f'{self.selected/1e6:.6f} MHz · {level} · tap for allocations',18,self.CYAN,width=x1-x0)
+        self.actions.append(((x0,720,x1,756),('overlay','info')))
 
     def close(self):
         self.open=False;self.closed.set();self.wake.set()

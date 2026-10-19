@@ -1,12 +1,11 @@
 """Full-screen native reception dome with cached geometry and batched OpenGL."""
 import math
 import threading
-from decoder_style import footer_content_box
 from PIL import Image, ImageDraw
 import adsb_coverage_gl as dome_gl
 
 BLUE=(76,157,255); MUTED=(145,170,193); TEXT=(220,236,255)
-BOX=(180,154,1100,720)
+BOX=(180,154,1100,712)
 GL_WIDTH,GL_HEIGHT=BOX[2]-BOX[0],BOX[3]-BOX[1]
 WIDTH,HEIGHT=1232,460
 
@@ -80,7 +79,7 @@ class CoverageTouch:
         self.wake.set()
 
     def button(self,cache,box,title,kind,value=None,active=False):
-        self.w.decoder_button(cache,box,title,(kind,value),active=active)
+        self.w.button(cache,box,title,(kind,value),active=active)
 
     def draw(self,cache,state):
         w=self.w;ui=w.ui;ui.draw_logical_rect(0,0,1280,800,w.BG)
@@ -90,7 +89,6 @@ class CoverageTouch:
         summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
         w.ink(cache,24,61,summary,18,w.MUTED)
         w.draw_back(cache,('map_view',None))
-        x0,_,x1,_=footer_content_box()
         for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','usb',None,False)):
             self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')
@@ -109,8 +107,7 @@ class CoverageTouch:
         w.ink(cache,196,176,'TRUE DISTANCE · NO VERTICAL EXAGGERATION' if self.mode=='space' else 'ANGULAR SKY · 90° ZENITH',13,w.MUTED)
         for box,title,kind,value in (((24,568,152,624),'− 30°','coverage_turn',-30),((24,636,152,692),'+ 30°','coverage_turn',30),((1128,568,1256,624),'Tilt −','coverage_tilt',-10),((1128,636,1256,692),'Tilt +','coverage_tilt',10)):
             self.button(cache,box,title,kind,value)
-        w.ink(cache,x0,746,self.detail,17,w.TEXT,width=x1-x0)
-        w.ink(cache,24,708,'BLUE · RECEIVED / GREY · UNKNOWN',13,w.MUTED,width=310)
+        w.ink(cache,24,700,'BLUE · RECEIVED / GREY · UNKNOWN',13,w.MUTED,width=310)
         site=meta.get('reference');reference=f"{site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'SITE NOT SET'
         h=f"{meta.get('reference_height_m',0):g} m ellipsoid height" if meta.get('reference_height_known') else 'Height unknown; 0 m assumed · Settings / Radio info'
-        w.ink(cache,x0,780,reference+' · '+h,13,w.MUTED,width=x1-x0)
+        w.draw_status(cache,self.detail,reference+' · '+h,full_width=True)
