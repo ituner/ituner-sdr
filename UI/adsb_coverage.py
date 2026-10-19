@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import time
 from station_profile import distance_m
+from adsb_footprint import build_footprint
 from pathlib import Path
 
 RETENTION = 90 * 86400
@@ -173,7 +174,7 @@ class ReceptionCoverage:
                     retention_days=90, storage_limit=MAX_POINTS, retained_positions=0, positioned_aircraft=0,
                     altitude_sources={}, horizontal_range_max_km=0, slant_range_max_km=0, max_altitude_ft=None,
                     rssi_min=-40, rssi_max=0)
-        empty = dict(status='NO SITE' if not site else 'EMPTY', meta=meta, base=0, points=[], cells=[], aircraft=[], breaks=[])
+        empty = dict(status='NO SITE' if not site else 'EMPTY', meta=meta, base=0, points=[], cells=[], aircraft=[], breaks=[], footprint=build_footprint(site,[]))
         if not site: return empty
         rows = self.db.execute('SELECT time,hex,lat,lon,altitude,gnss,rssi,label,site_lat,site_lon FROM positions ORDER BY time,hex').fetchall()
         legacy=self.db.execute("SELECT value FROM coverage_meta WHERE key='legacy_site'").fetchone()
@@ -215,7 +216,8 @@ class ReceptionCoverage:
         meta['displayed_positions']=len(points)
         breaks = [r[0] for r in self.db.execute('SELECT time FROM breaks WHERE time >= ? ORDER BY time', (base,))]
         return dict(status='READY', meta=meta, base=base, aircraft=[dict(hex=a,label=names.get(a,a)) for a in addresses], points=points,
-                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks)
+                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,
+                    footprint=build_footprint(site,((r[2],r[3]) for r in rows)))
 
     def mark_break(self, stamp):
         with self.lock:self.pending_breaks.append(stamp)

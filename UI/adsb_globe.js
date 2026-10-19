@@ -19,12 +19,18 @@ export function compactTrail(points, now=Date.now()/1000) {
   }
   return result.slice(-2048);
 }
+export function receptionFootprintRegions(footprint,site){
+  if(!footprint?.site||!site||!Array.isArray(footprint.regions))return [];
+  const a=footprint.site,b=site,p=a.lat*RAD,q=b.lat*RAD,d=(b.lon-a.lon)*RAD;
+  const distance=12742000*Math.asin(Math.min(1,Math.sqrt(Math.sin((q-p)/2)**2+Math.cos(p)*Math.cos(q)*Math.sin(d/2)**2)));
+  return distance<=100?footprint.regions:[];
+}
 export class ADSBGlobe {
   constructor(host, onSelect, onError, storageKey='ituner-adsb-globe') {
     this.storageKey=storageKey;
     this.host=host; this.onSelect=onSelect; this.onError=onError;
     this.yaw=25*RAD; this.pitch=45*RAD; this.scale=5; this.radiusFactor=.92; this.dragGain=1;
-    this.historicalMarkers=false;this.style='both'; this.following=false; this.labels=true; this.rings=false; this.trailSeconds=900; this.site=null; this.planes=[]; this.selected=null; this.centered=false;
+    this.footprintEnabled=true;this.footprint=null;this.historicalMarkers=false;this.style='both'; this.following=false; this.labels=true; this.rings=false; this.trailSeconds=900; this.site=null; this.planes=[]; this.selected=null; this.centered=false;
     this.tiles=new Map(); this.traces=new Map(); this.wanted=[]; this.pending=new Set();
     this.canvas=document.createElement('canvas'); this.canvas.setAttribute('aria-label','GLOBE satellite map');
     this.overlay=document.createElement('canvas'); this.overlay.setAttribute('aria-hidden','true');
@@ -35,6 +41,7 @@ export class ADSBGlobe {
     this.loadTexture('/globe/earth.jpg').then(t=>{this.earth=t;this.render();}).catch(()=>onError('Could not load GLOBE satellite imagery.'));
     fetch('/globe/countries.json').then(r=>{if(!r.ok)throw Error();return r.json();}).then(c=>{this.countries=c;this.borders=this.borderMesh(c);this.render();}).catch(()=>onError('Country outlines are unavailable.'));
     try { const s=JSON.parse(localStorage.getItem(this.storageKey));
+      if(typeof s?.footprintEnabled==='boolean')this.footprintEnabled=s.footprintEnabled;
       if(s && [s.yaw,s.pitch,s.scale].every(Number.isFinite)) {this.yaw=s.yaw;this.pitch=clamp(s.pitch,-82*RAD,82*RAD);this.scale=clamp(s.scale,MAP_ZOOM_MIN,MAP_ZOOM_MAX);this.centered=true;}
     } catch {}
     this.bind(); this.observer=new ResizeObserver(()=>{this.resize();this.requestTiles();});this.observer.observe(host);
@@ -84,7 +91,7 @@ export class ADSBGlobe {
     return[this.width/2+cl*Math.sin(delta)*this.radius(),this.height/2-(cp*sl-sp*cl*Math.cos(delta))*this.radius()];
   }
   resize(){const rect=this.host.getBoundingClientRect();this.width=Math.max(1,rect.width);this.height=Math.max(1,rect.height);const dpr=Math.min(devicePixelRatio||1,2);for(const c of [this.canvas,this.overlay]){c.width=Math.round(this.width*dpr);c.height=Math.round(this.height*dpr);}this.ctx.setTransform(dpr,0,0,dpr,0,0);this.render();}
-  save(){try{localStorage.setItem(this.storageKey,JSON.stringify({yaw:this.yaw,pitch:this.pitch,scale:this.scale}));}catch{}}
+  save(){try{localStorage.setItem(this.storageKey,JSON.stringify({yaw:this.yaw,pitch:this.pitch,scale:this.scale,footprintEnabled:this.footprintEnabled}));}catch{}}
   bind() {
     const points=new Map(); let origin=null,moved=false;
     const reset=()=>{const a=[...points.values()];origin={yaw:this.yaw,pitch:this.pitch,scale:this.scale,points:a};moved=false;};
@@ -104,10 +111,23 @@ export class ADSBGlobe {
   setStyle(value){this.style=value;this.render();}
   locate(plane){if(!plane||!Number.isFinite(plane.lat)||!Number.isFinite(plane.lon))return;this.yaw=plane.lon*RAD;this.pitch=clamp(plane.lat*RAD,-82*RAD,82*RAD);this.centered=true;this.save();this.render();this.requestTiles();}
   followSelected(enabled){const plane=this.planes.find(p=>p.hex===this.selected&&Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&p.seen_pos<15);if(enabled&&!plane)return;this.following=enabled;if(enabled)this.locate(plane);this.onFollowChange?.(enabled);}
-  fitTraffic(){this.following=false;this.onFollowChange?.(false);const planes=this.trafficView?this.mapAircraft():this.planes.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&p.seen_pos<15);if(!planes.length){this.locate(this.site||{lat:45,lon:25});return;}
+  footprintRegions(){return this.footprintEnabled?receptionFootprintRegions(this.footprint,this.site):[];}
+  setFootprint(value){this.footprint=value;this.render();}
+  drawFootprint(){
+    const regions=this.footprintRegions();if(!regions.length)return;
+    const ctx=this.ctx;ctx.save();ctx.fillStyle='#84b6bf';ctx.strokeStyle='#84b6bf';ctx.lineWidth=1;
+    for(const region of regions){
+      const polygon=region.vertices.map(p=>this.project(p)),outline=region.outline.map(p=>this.project(p));
+      if(polygon.some(p=>!p)||outline.some(p=>!p))continue;
+      ctx.beginPath();polygon.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.globalAlpha=.13;ctx.fill();
+      ctx.beginPath();outline.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.globalAlpha=.38;ctx.stroke();
+    }
+    ctx.restore();
+  }
+  fitTraffic(){this.following=false;this.onFollowChange?.(false);const regions=this.footprintRegions(),localFit=Boolean(this.trafficView)||regions.length>0,margin=regions.length?.28:.38,planes=[...(this.trafficView?this.mapAircraft():this.planes.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&p.seen_pos<15)),...regions.flatMap(r=>r.vertices)];if(!planes.length){this.locate(this.site||{lat:45,lon:25});return;}
     this.yaw=Math.atan2(planes.reduce((v,p)=>v+Math.sin(p.lon*RAD),0),planes.reduce((v,p)=>v+Math.cos(p.lon*RAD),0));this.pitch=clamp(planes.reduce((v,p)=>v+p.lat,0)/planes.length*RAD,-82*RAD,82*RAD);
-    let x=.02,y=.02;for(const p of planes){const lat=p.lat*RAD,delta=p.lon*RAD-this.yaw;x=Math.max(x,Math.abs(Math.cos(lat)*Math.sin(delta)));y=Math.max(y,Math.abs(Math.cos(this.pitch)*Math.sin(lat)-Math.sin(this.pitch)*Math.cos(lat)*Math.cos(delta)));}
-    this.scale=clamp(Math.min(this.width*.38/(Math.min(this.width,this.height)*this.radiusFactor*x),this.height*.38/(Math.min(this.width,this.height)*this.radiusFactor*y)),.55,35);this.centered=true;this.save();this.render();this.requestTiles();}
+    let x=localFit?.0004:.02,y=x;for(const p of planes){const lat=p.lat*RAD,delta=p.lon*RAD-this.yaw;x=Math.max(x,Math.abs(Math.cos(lat)*Math.sin(delta)));y=Math.max(y,Math.abs(Math.cos(this.pitch)*Math.sin(lat)-Math.sin(this.pitch)*Math.cos(lat)*Math.cos(delta)));}
+    this.scale=clamp(Math.min(this.width*margin/(Math.min(this.width,this.height)*this.radiusFactor*x),this.height*margin/(Math.min(this.width,this.height)*this.radiusFactor*y)),.55,localFit?1200:35);this.centered=true;this.save();this.render();this.requestTiles();}
   mapAircraft(now=Date.now()/1000){
     if(this.trafficView)return this.trafficView.aircraft(this.planes,Object.fromEntries([...this.traces].map(([key,v])=>[key,v.points])),this.trafficNow?.()??now,true);
     const live=this.planes.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&(p.seen_pos??100)<15);
@@ -147,7 +167,7 @@ export class ADSBGlobe {
     this.draw(this.base,this.style!=='borders'?this.earth:null,[.055,.15,.18,1]);
     if(this.style!=='borders')for(const key of this.wanted){const tile=this.tiles.get(key);if(tile)this.draw(tile.mesh,tile.texture);}
     if(this.style!=='satellite')this.draw(this.borders,null,[.62,.75,.71,1]);
-    const ctx=this.ctx;ctx.clearRect(0,0,this.width,this.height);ctx.font='12px system-ui';ctx.lineJoin='round';
+    const ctx=this.ctx;ctx.clearRect(0,0,this.width,this.height);ctx.font='12px system-ui';ctx.lineJoin='round';this.drawFootprint();
     const scaleLabel=document.querySelector('#scale-bar b'),scaleLine=document.querySelector('#scale-bar span');
     if(scaleLabel&&scaleLine){const maxDistance=Math.asin(Math.min(.95,110/this.radius()))*3440.065;const distances=[.005,.01,.02,.05,.1,.2,.5,1,2,5,10,20,50,100,200,500,1000,2000];const distance=distances.filter(n=>n<=maxDistance).pop()||distances[0];scaleLabel.textContent=distance<1?Math.round(distance*1852)+' m':distance+' NM';scaleLine.style.width=(Math.sin(distance/3440.065)*this.radius())+'px';}
     const viewStatus=document.querySelector('#view-status');if(viewStatus)viewStatus.textContent='NORTH UP · '+(this.style==='borders'?'BORDERS':'GLOBE')+' · '+this.scale.toFixed(1)+'×';

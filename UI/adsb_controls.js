@@ -77,7 +77,7 @@ async function refresh(){if(refreshBusy)return;refreshBusy=true;try{
   $('start').disabled=state.enabled;$('stop').disabled=!state.enabled;
   $('site-status').textContent=state.receiver_position?`${state.receiver_position.lat.toFixed(5)}°, ${state.receiver_position.lon.toFixed(5)}°`:'Site not configured';
   if(state.receiver_position&&document.activeElement!==$('site-lat')&&document.activeElement!==$('site-lon')&&!$('site-form').dataset.editing){$('site-lat').value=state.receiver_position.lat;$('site-lon').value=state.receiver_position.lon;}
-  error('');globe?.update(state);renderTraffic();if(selected)renderDetails(currentPlane());
+  error('');globe?.update(state);footprintLegend();renderTraffic();if(selected)renderDetails(currentPlane());
   if(!$('logs-panel').hidden)refreshLogs();
 }catch(e){error('Receiver connection lost. Retrying…');$('status').textContent='OFFLINE';$('connection').textContent='● DISCONNECTED';if(state){state={...state,status:'OFFLINE',aircraft:[]};renderTraffic();renderReception();}$('positioned').textContent='0';$('tracked').textContent='0';$('traffic-count').textContent='0';$('map-empty').hidden=false;$('map-empty').querySelector('b').textContent='Receiver offline';globe?.update({aircraft:[]});if(selected)renderDetails(null);}finally{refreshBusy=false;}}
 async function control(action,extra={}){try{const r=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json','X-ADSB-Token':token},body:JSON.stringify({action,selection:$('usb').value,...extra})});const result=await r.json();if(!r.ok)throw Error(result.error);editing=false;await refresh();}catch(e){error(e.message);}}
@@ -105,6 +105,14 @@ document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].include
 
 const observatoryLink=document.getElementById('observatory-link');if(observatoryLink)observatoryLink.href=`http://${location.hostname}:8092/`;
 
+let footprintBusy=false;
+function footprintLegend(){if(globe){$('rx-footprint').setAttribute('aria-pressed',String(globe.footprintEnabled));$('footprint-legend').hidden=!globe.footprintRegions().length;}}
+async function refreshFootprint(){
+  if(footprintBusy||!globe||!globe.footprintEnabled)return;footprintBusy=true;
+  try{const r=await fetch('/api/footprint',{signal:AbortSignal.timeout(10000)});if(r.ok){const data=await r.json();if(data.status==='LOADING')setTimeout(refreshFootprint,1200);else{globe.setFootprint(data.footprint);footprintLegend();}}}catch{}finally{footprintBusy=false;}
+}
+$('rx-footprint').onclick=()=>{if(!globe)return;globe.footprintEnabled=!globe.footprintEnabled;globe.save();footprintLegend();globe.render();if(globe.footprintEnabled)refreshFootprint();};
+footprintLegend();refreshFootprint();setInterval(refreshFootprint,10000);
 const reloadCoverage=mountCoverage($('coverage-panel'));
 function coverageVisible(show){document.body.classList.toggle('coverage-open',show);$('coverage-panel').hidden=!show;$('coverage').setAttribute('aria-expanded',String(show));if(show){history.replaceState(null,'',location.pathname+'#coverage');showDrawer('logs',false);showDrawer('receiver',false);reloadCoverage();}if(location.hash==='#coverage'&&!show)history.replaceState(null,'',location.pathname);}
 $('coverage').onclick=()=>coverageVisible($('coverage-panel').hidden);$('close-coverage').onclick=()=>coverageVisible(false);

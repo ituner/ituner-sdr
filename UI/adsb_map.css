@@ -6,3 +6,5 @@
 @media(max-width:720px){.traffic-view-bar{padding:7px 10px;gap:6px}.traffic-view-bar button{padding:7px 11px;font-size:12px;min-height:40px}.traffic-view-bar #window-summary{font-size:10px}.telemetry{right:10px}.telemetry>div{min-width:0;flex:1;padding:7px}.telemetry strong{font-size:20px}.telemetry span{font-size:7px;letter-spacing:.02em}.map-controls{top:97px}.view-status{top:80px}}
 
 @media(max-width:720px){.nav-group{flex-wrap:wrap;min-width:0}.position-line{white-space:pre-line}}
+
+.map-legend .dot.footprint{background:#84b6bf55;border:1px solid #84b6bf88}.map-legend [hidden]{display:none}
