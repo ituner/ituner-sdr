@@ -55,8 +55,12 @@ class DecoderThemeTests(unittest.TestCase):
             self.apply(side)
             for view in ('map','traffic','logs','usb','coverage'):
                 w.traffic_open=view=='traffic';w.logs_open=view=='logs';w.usb_open=view=='usb';w.coverage_open=view=='coverage'
-                w.draw(Mock())
-                self.assert_navigation_clear(w,('map_view',None) if view=='coverage' else ('back',None),rail=view!='coverage')
+                w.open=True;w.draw(Mock())
+                self.assert_navigation_clear(w,rail=view!='coverage')
+                box=next(box for box,action in w.actions if action==('back',None))
+                w.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
+                self.assertFalse(w.open,view)
+                self.assertFalse(w.coverage_open or w.traffic_open or w.logs_open or w.usb_open)
 
     def test_adsb_uses_home_rail_buttons_clock_and_status_typography(self):
         import time

@@ -88,7 +88,7 @@ class CoverageTouch:
         meta=data.get('meta',{});count=meta.get('retained_positions',0)
         summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
         w.ink(cache,24,61,summary,18,w.MUTED)
-        w.draw_back(cache,('map_view',None))
+        w.draw_back(cache,('back',None))
         for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','usb',None,False)):
             self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')

@@ -107,9 +107,8 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                 self.coverage_open=True;self.usb_open=self.logs_open=self.traffic_open=False;self.coverage_view.activate()
             elif kind=='home': self.open=False
             elif kind=='back':
-                if self.coverage_open:self.coverage_open=False;return
-                if self.logs_open or self.traffic_open or self.usb_open: self.logs_open=self.traffic_open=self.usb_open=False
-                else: self.open=False
+                self.coverage_open=self.logs_open=self.traffic_open=self.usb_open=False
+                self.open=False
             elif kind=='map_view':self.coverage_open=self.usb_open=self.logs_open=self.traffic_open=False
             elif kind=='traffic_view':self.set_traffic_view(value)
             elif kind=='start_fresh':
