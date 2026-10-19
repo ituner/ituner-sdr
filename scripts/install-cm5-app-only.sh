@@ -34,6 +34,7 @@ for unit in ituner-sdr.service ituner-sdr-health.service; do
 done
 
 install -d /opt/ituner-sdr /usr/local/lib/ituner-sdr /usr/local/share/ituner-sdr /var/lib/ituner-sdr
+install -m 0644 "$repo/VERSION" /opt/ituner-sdr/VERSION
 cp -a "$repo/UI" "$repo/assets" "$repo/licenses" /opt/ituner-sdr/
 chown -R root:root /opt/ituner-sdr/UI /opt/ituner-sdr/assets
 install -m 0644 "$repo/assets/boot-splash/ituner-sdr-native.png" /usr/local/share/ituner-sdr/boot-splash.png

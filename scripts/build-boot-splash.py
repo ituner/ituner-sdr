@@ -3,11 +3,12 @@
 
 from io import BytesIO
 from pathlib import Path
-import argparse
+import re
 import shutil
 import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
+from PIL.PngImagePlugin import PngInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,11 +19,9 @@ LOGO_WIDTH = 350
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--version', help='Software version or build ID displayed beneath the logo')
-    args = parser.parse_args()
-    version = args.version or ('Build ' + subprocess.check_output(
-        ['git', '-C', str(ROOT), 'rev-parse', '--short=7', 'HEAD'], text=True).strip())
+    version = (ROOT / 'VERSION').read_text().strip()
+    if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+        raise SystemExit('VERSION must contain a major.minor.patch version, for example 0.1.0')
     renderer = shutil.which("rsvg-convert")
     if renderer is None:
         raise SystemExit("Install librsvg (rsvg-convert) to render the SVG logo.")
@@ -36,13 +35,15 @@ def main():
     draw = ImageDraw.Draw(canvas)
     font = ImageFont.truetype(str(ROOT / 'assets/fonts/oxanium/Oxanium.ttf'), 18)
     draw.text((canvas.width / 2, (canvas.height + logo.height) // 2 + 20),
-              version, font=font, fill='#C0C0C0', anchor='mt')
+              'v' + version, font=font, fill='#C0C0C0', anchor='mt')
 
     # The landscape CM5 panel exposes an 800x1280 native portrait buffer.
     native = canvas.transpose(Image.Transpose.ROTATE_90)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(PREVIEW, optimize=True)
-    native.save(OUTPUT, optimize=True)
+    metadata = PngInfo()
+    metadata.add_text('SoftwareVersion', version)
+    canvas.save(PREVIEW, optimize=True, pnginfo=metadata)
+    native.save(OUTPUT, optimize=True, pnginfo=metadata)
     print(PREVIEW)
     print(OUTPUT)
 
