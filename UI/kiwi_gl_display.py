@@ -6472,6 +6472,7 @@ def setup_gl(desktop=False):
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     flags = pygame.OPENGL | pygame.NOFRAME if desktop else pygame.OPENGL | pygame.FULLSCREEN
     screen = pygame.display.set_mode((NATIVE_W, NATIVE_H), flags)
+    pygame.mouse.set_visible(bool(desktop))
     GL.glViewport(0, 0, NATIVE_W, NATIVE_H)
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
