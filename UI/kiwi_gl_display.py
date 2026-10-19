@@ -2086,7 +2086,7 @@ MENU_ITEMS = (
     ("dual", "DUAL RX"),
     ("audio", "AUDIO"),
     ("display", "DISPLAY"),
-    ("digital", "DECODE"),
+    ("digital", "DIGITAL"),
     ("vosc", "CAPTIONS"),
     ("tests", "APPS"),
     ("settings", "SYSTEM"),

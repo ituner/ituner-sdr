@@ -245,7 +245,7 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=4)
         digi_calls = [call.args for call in buttons.call_args_list
-                      if call.args[2] == "DECODE"]
+                      if call.args[2] == "DIGITAL"]
         self.assertEqual(len(digi_calls), 1)
         self.assertEqual(digi_calls[0][3], "13 MODES")
         with mock.patch.object(ui, "draw_logical_rect"), \
@@ -254,7 +254,7 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_navigation_button") as zero_buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=0)
         zero_digi_calls = [call.args for call in zero_buttons.call_args_list
-                           if call.args[2] == "DECODE"]
+                           if call.args[2] == "DIGITAL"]
         self.assertEqual(zero_digi_calls[0][3], "13 MODES")
 
     def test_home_digi_title_stays_compact_with_many_running_sessions(self):
@@ -265,7 +265,7 @@ class DrawerGeometryTests(unittest.TestCase):
              mock.patch.object(ui, "draw_navigation_button") as buttons:
             ui.draw_lcd_navigation(None, running_decoder_count=100)
         digi = next(call.args for call in buttons.call_args_list
-                    if call.args[2] == "DECODE")
+                    if call.args[2] == "DIGITAL")
         self.assertEqual(digi[3], "13 MODES")
         cache = ui.TextCache()
         font = cache.font(ui.APP_UI_STYLE.button.title_size, bold=True,
@@ -371,7 +371,7 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_home_and_settings_tiles_use_requested_copy_and_full_subtitles(self):
         self.assertEqual(dict(ui.MENU_ITEMS), {
-            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DECODE",
+            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DIGITAL",
             "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
             "settings": "SYSTEM", "tests": "APPS",
         })
