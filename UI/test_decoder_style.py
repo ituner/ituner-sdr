@@ -88,6 +88,21 @@ class DecoderThemeTests(unittest.TestCase):
         w.open=True;w.tap(theme_system.display_to_logical_x(20),750)
         self.assertFalse(w.open)
 
+    def test_footprint_control_uses_theme_and_stays_above_footer(self):
+        w,ui,manager,state=test_adsb.WorkspaceTests().dashboard()
+        for name in theme_system.BUILTIN_THEMES:
+            self.apply(name=name)
+            w.open=True;w.rx_footprint=True;ui.reset_mock();w.draw(Mock())
+            box=next(box for box,action in w.actions if action==('rx_footprint',None))
+            self.assertGreaterEqual(box[3]-box[1],56)
+            self.assertLessEqual(box[3],712)
+            call=next(c for c in ui.draw_styled_two_line_button.call_args_list if c.args[1]==box)
+            self.assertTrue(call.kwargs['active'])
+            self.assertIn(('fit',None),[action for _,action in w.actions])
+            w.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
+            self.assertFalse(w.rx_footprint)
+            self.assertTrue(w.open)
+
     def test_station_footer_and_keyboard_follow_theme_side_without_saving(self):
         fixture=test_station_profile.StationTests();fixture.setUp()
         self.addCleanup(fixture.tearDown)

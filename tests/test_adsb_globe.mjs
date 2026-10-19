@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const source=fs.readFileSync(new URL('../UI/adsb_globe.js',import.meta.url),'utf8')+'\n//# sourceURL=adsb_globe_under_test.mjs';
-const {ADSBGlobe,compactTrail,startupNoticeVisible,receptionSummary,MAP_ZOOM_MAX}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {ADSBGlobe,compactTrail,startupNoticeVisible,receptionSummary,MAP_ZOOM_MAX,receptionFootprintRegions}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 assert.equal(startupNoticeVisible({enabled:true,started_at:100},104.99),true);
 assert.equal(startupNoticeVisible({enabled:true,started_at:100},105),false,'Startup message must expire after five seconds');
 assert.equal(startupNoticeVisible({enabled:true,started_at:100},1000),false,'Opening a running decoder must not show the startup message');
@@ -80,3 +80,18 @@ view.planes=[{hex:'a',lat:45,lon:179,seen_pos:0},{hex:'b',lat:45,lon:-179,seen_p
 view.fitTraffic();assert.ok(Math.abs(Math.abs(view.yaw)-Math.PI)<.02,'Fit must handle the date line');
 assert.equal(view.following,false);
 console.log('PASS: globe projection, follow, target loss, 24-hour history, bounded compaction, reception gaps and date-line fit');
+
+const footprintSite={lat:44.45,lon:26.06};
+const footprintRegion={vertices:[footprintSite,{lat:44.47,lon:26.07},{lat:44.48,lon:26.08},footprintSite],outline:[footprintSite,{lat:44.47,lon:26.07},footprintSite]};
+const footprint={site:footprintSite,regions:[footprintRegion]};
+assert.equal(receptionFootprintRegions(footprint,footprintSite).length,1);
+assert.equal(receptionFootprintRegions(footprint,{lat:45,lon:26}).length,0,'Old-site footprint must disappear after receiver moves');
+assert.equal(receptionFootprintRegions(footprint,null).length,0);
+view.footprintEnabled=true;view.footprint=footprint;view.site=footprintSite;
+let fills=0,strokes=0;
+view.ctx={save(){},restore(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){fills++;},stroke(){strokes++;}};
+view.locate(footprintSite);view.drawFootprint();assert.equal(fills,1);assert.equal(strokes,1);
+view.footprintEnabled=false;view.drawFootprint();assert.equal(fills,1,'Footprint off must leave map unshaded');
+view.footprintEnabled=true;view.planes=[];view.traces.clear();view.fitTraffic();
+assert.ok(view.scale>35,'Fit view must frame nearby reception, rather than the old distant zoom cap');
+assert.ok(Math.abs(view.yaw-footprintSite.lon*Math.PI/180)<.01);

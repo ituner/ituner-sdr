@@ -28,6 +28,10 @@ For a plain black appliance screen without the desktop wallpaper or taskbar,
 see [CM5 kiosk configuration](docs/cm5-kiosk.md). This keeps the verified
 Wayland compositor, display and touch setup.
 
+For the separately installed Ground Station and Satvisor evaluation dashboards,
+addresses, setup and receiver ownership notes, see
+[satellite application evaluation](docs/satellite-evaluation.md).
+
 ### Update, validate and run on the CM5
 
 Run the following on the CM5 from its repository checkout. The compile check

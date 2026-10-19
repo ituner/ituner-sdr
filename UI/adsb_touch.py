@@ -88,10 +88,10 @@ class AirspaceDashboard:
         view=self.traffic_view
         window=('since '+time.strftime('%H:%M',time.localtime(view.opened_at))) if view.mode=='session' else 'trails '+trail_label(self.trail_seconds)
         self.ink(cache,26,348,view.label+' · '+window+' · LOGS RETAINED',15,self.CYAN)
-        self.ink(cache,26,369,f'Contact & position age independently · GLOBE {self.scale:,.1f}×',12,self.MUTED)
+        self.ink(cache,26,369,('RX footprint · retained history · ' if self.footprint_regions(state) else '')+f'GLOBE {self.scale:,.1f}×',12,self.MUTED)
         style={'both':'SAT + BORDERS','satellite':'SATELLITE','borders':'BORDERS'}[self.map_style]
-        for index,(label,kind,value,active) in enumerate((('+   ZOOM IN','zoom',1.6,False),('−   ZOOM OUT','zoom',1/1.6,False),('FIT TRAFFIC','fit',None,False),(style,'style',None,False),('TRAILS · '+trail_label(self.trail_seconds),'trails',None,False),('LABELS '+('ON' if self.labels else 'OFF'),'labels',None,self.labels),('RANGE RINGS','rings',None,self.rings))):
-            y=232+index*64
+        for index,(label,kind,value,active) in enumerate((('+   ZOOM IN','zoom',1.6,False),('−   ZOOM OUT','zoom',1/1.6,False),('FIT VIEW','fit',None,False),(style,'style',None,False),('TRAILS · '+trail_label(self.trail_seconds),'trails',None,False),('LABELS '+('ON' if self.labels else 'OFF'),'labels',None,self.labels),('RANGE RINGS','rings',None,self.rings),('RX FOOTPRINT','rx_footprint',None,self.rx_footprint))):
+            y=232+index*60
             if kind=='trails' and view.mode=='session':label='SINCE OPENED'
             self.button(cache,(858,y,1008,y+56),label,(kind,value),active=active,enabled=not(kind=='trails' and view.mode=='session'))
         if self.following:

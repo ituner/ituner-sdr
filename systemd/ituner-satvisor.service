@@ -1,0 +1,16 @@
+[Unit]
+Description=Satvisor satellite tracker evaluation
+After=network.target
+
+[Service]
+User=ituner
+ExecStart=/usr/bin/python3 /usr/local/lib/ituner-sdr/satvisor-server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

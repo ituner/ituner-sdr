@@ -61,3 +61,25 @@ CM5 benchmark, 18 October 2026, same 583 retained positions: former native
 bitmap generation took 104.3 ms (cells), 65.9 ms (trails), 62.0 ms (3D). Cached
 scene rotation takes 10.0 / 1.6 / 1.6 ms respectively, excluding GL submission
 and screen presentation. These are processing timings, not measured FPS.
+
+## Live-map reception footprint
+
+**RX FOOTPRINT** adds a faint shaded background to the traffic map on web and
+touchscreen. It defaults on; toggle it off to hide it. **FIT VIEW** frames both
+the displayed aircraft and the enabled footprint. Changing Live / Since opened /
+History or starting a fresh viewing window does not clear the reception history.
+The reception dome is unchanged.
+
+The boundary uses the furthest directly received position in each 5-degree
+bearing sector, over the full retained history (up to 90 days). Adjacent observed
+sectors join; unobserved directions stay blank, including across north. This is
+a historical maximum-range envelope, not a guarantee of continuous reception
+inside it or proof of obstruction outside it. It combines aircraft at different
+altitudes. No external aircraft feed or terrain prediction is used.
+
+The compact `/api/footprint` endpoint exposes the cached sector counts and
+geographic regions without transferring the detailed dome points. It is
+refreshed every ten seconds in the browser. Native projection is cached until
+the history or camera changes and drawn in two OpenGL batches below the trails
+and aircraft. A footprint from a receiver site more than 100 m away is hidden
+until history for the current site is ready.

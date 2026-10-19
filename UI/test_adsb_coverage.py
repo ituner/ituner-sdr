@@ -78,6 +78,7 @@ class CoverageTests(unittest.TestCase):
             data=c.snapshot();self.assertEqual(data['meta']['retained_positions'],25)
             self.assertLessEqual(len(data['points']),8);self.assertEqual(data['meta']['max_altitude_ft'],12000)
             self.assertEqual(sum(cell[2] for cell in data['cells']),25)
+            self.assertEqual(sum(s['positions'] for s in data['footprint']['sectors']),25)
             self.assertIn(12000,[p[5] for p in data['points']]);c.close()
 
     def test_mobile_receiver_positions_are_kept_separate(self):
@@ -89,7 +90,9 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(c.snapshot()['meta']['excluded_other_sites'],1)
             c.snapshot();c.tick(b,time.time()+6)
             self.assertEqual(c.snapshot()['meta']['retained_positions'],1)
-            self.assertEqual(c.snapshot()['meta']['excluded_other_sites'],1);c.close()
+            self.assertEqual(c.snapshot()['meta']['excluded_other_sites'],1)
+            self.assertEqual(c.snapshot()['footprint']['site'],b)
+            self.assertEqual(sum(s['positions'] for s in c.snapshot()['footprint']['sectors']),1);c.close()
 
     def test_empty_and_unknown_site_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +164,25 @@ class CoverageTests(unittest.TestCase):
             self.assertLessEqual(ui.GL.glDrawArrays.call_count,6)
             c.close()
 
+    def test_native_footprint_cache_toggle_and_fit_do_not_control_receiver(self):
+        from adsb_footprint import build_footprint
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        ui.logical_to_native.side_effect=lambda x,y:(800-y,x)
+        ui.radiogarden_project.side_effect=lambda p,*args:(p['lon']*10,p['lat']*10,1)
+        manager=Mock();state=dict(receiver_position=SITE,aircraft=[])
+        manager.snapshot.return_value=state
+        manager.coverage.snapshot.return_value=dict(footprint=build_footprint(SITE,[(44.5,26.1),(44.4,26.2)]))
+        w=ADSBWorkspace(ui,manager);w.dashboard=True
+        w.draw_footprint(state);frame=w.rx_frame;w.draw_footprint(state)
+        self.assertIs(w.rx_frame,frame)
+        self.assertEqual(len(w.footprint_regions(state)),2)
+        self.assertEqual(w.footprint_regions(dict(receiver_position=dict(lat=45,lon=26))),[])
+        w.actions=[((0,0,100,60),('fit',None))];w.tap(20,20)
+        self.assertGreater(w.scale,35)
+        w.actions=[((0,0,100,60),('rx_footprint',None))];w.tap(20,20)
+        self.assertEqual(w.footprint_regions(state),[])
+        manager.control.assert_not_called();ui.GL.glTexImage2D.assert_not_called()
+
     def test_http_assets_coverage_and_authenticated_height_control(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp)/'flights.jsonl').write_text(json.dumps(row())+'\n')
@@ -176,6 +198,10 @@ class CoverageTests(unittest.TestCase):
                 self.assertEqual(data['meta']['retained_positions'],1)
                 for asset in ('adsb_coverage.js','adsb_coverage.css'):
                     self.assertEqual(urlopen(base+'/'+asset).status,200)
+                footprint=json.load(urlopen(base+'/api/footprint'))
+                self.assertEqual(footprint['retained_positions'],1)
+                self.assertTrue(footprint['footprint']['regions'])
+                self.assertNotIn('points',footprint)
                 token=json.load(urlopen(base+'/api/state'))['control_token']
                 r=Request(base+'/api/control',data=json.dumps(dict(action='coverage_height',height_m=85)).encode(),headers={'X-ADSB-Token':token})
                 self.assertTrue(json.load(urlopen(r))['ok'])

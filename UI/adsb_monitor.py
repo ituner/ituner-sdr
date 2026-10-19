@@ -417,6 +417,9 @@ class ADSBHandler(BaseHTTPRequestHandler):
             elif path == '/api/coverage':
                 state=manager.snapshot()
                 self.send(json.dumps(dict(manager.coverage.snapshot(), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
+            elif path == '/api/footprint':
+                data=manager.coverage.snapshot();meta=data.get('meta',{})
+                self.send(json.dumps(dict(status=data.get('status'),error=manager.coverage_error,footprint=data.get('footprint'),retained_positions=meta.get('retained_positions',0),first_position=meta.get('first_position'),last_position=meta.get('last_position'))).encode())
             elif path == '/api/tracks':
                 self.send(json.dumps(manager.track_snapshot()).encode())
             elif path == '/api/logs':

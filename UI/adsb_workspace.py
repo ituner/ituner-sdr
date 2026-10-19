@@ -6,6 +6,9 @@ from decoder_style import DecoderStyle
 from sstv_workspace import SSTVWorkspace
 from adsb_touch import AirspaceDashboard
 from adsb_coverage_touch import CoverageTouch
+from adsb_footprint import projected_frame
+from adsb_coverage_gl import draw as draw_footprint_mesh
+from station_profile import distance_m
 from adsb_view import TrafficView, aged, freshness
 from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
@@ -20,6 +23,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.selected = None
         self.selected_plane = None
         self.following = False
+        self.rx_footprint=True;self.rx_frame=None;self.rx_key=None;self.rx_regions=None
         self.coverage_open = False
         self.coverage_view = CoverageTouch(self)
         self.usb_open = False
@@ -115,6 +119,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                 self.traffic_view.reset(time.time());self.traffic_view.ingest(self.manager.snapshot()['aircraft'],time.time());self.set_traffic_view('session')
             elif kind=='backdrop':self.traffic_view.backdrop=not self.traffic_view.backdrop
             elif kind=='labels':self.labels=not self.labels
+            elif kind=='rx_footprint':self.rx_footprint=not self.rx_footprint
             elif kind=='sort':
                 sorts=('recent','altitude','callsign');self.traffic_sort=sorts[(sorts.index(self.traffic_sort)+1)%3]
             elif kind=='clear':self.selected=None;self.selected_plane=None;self.following=False
@@ -154,9 +159,9 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             elif kind=='fit':
                 self.following=False;self.centered=False
                 if self.dashboard:
-                    valid=[p for p in self.manager.snapshot()['aircraft'] if self.positioned(p)]
-                    targets=self.display_aircraft(self.manager.snapshot(),True)
-                    if targets:self.fit_aircraft(targets)
+                    state=self.manager.snapshot();targets=list(self.display_aircraft(state,True))
+                    regions=self.footprint_regions(state);targets.extend(p for r in regions for p in r['vertices'])
+                    if targets:self.fit_aircraft(targets,.28 if regions else .34)
             else:
                 try:
                     self.manager.control(kind,value);self.message=''
@@ -177,11 +182,11 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     @staticmethod
     def value(value): return '—' if value is None else str(value)
 
-    def fit_aircraft(self, planes):
+    def fit_aircraft(self, planes, padding=.34):
         self.yaw=math.atan2(sum(math.sin(math.radians(p['lon'])) for p in planes),sum(math.cos(math.radians(p['lon'])) for p in planes))
         self.pitch=max(math.radians(-82),min(math.radians(82),sum(math.radians(p['lat']) for p in planes)/len(planes)))
         extent=max([.0004]+[max(abs(math.cos(math.radians(p['lat']))*math.sin(math.radians(p['lon'])-self.yaw)),abs(math.cos(self.pitch)*math.sin(math.radians(p['lat']))-math.sin(self.pitch)*math.cos(math.radians(p['lat']))*math.cos(math.radians(p['lon'])-self.yaw))) for p in planes])
-        self.scale=max(MAP_ZOOM_MIN,min(1200,.34/(.92*extent)));self.centered=True
+        self.scale=max(MAP_ZOOM_MIN,min(1200,padding/(.92*extent)));self.centered=True
 
     def draw_map(self, cache, state, valid):
         ui=self.ui
@@ -192,8 +197,9 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             if isinstance(tracks,dict): self.tracks=tracks
             self.track_time=time.monotonic()
         if self.dashboard and not self.centered:
-            targets=self.display_aircraft(state,True)
-            if targets:self.fit_aircraft(targets)
+            targets=self.display_aircraft(state,True);regions=self.footprint_regions(state)
+            if not targets:targets=[p for r in regions for p in r['vertices']]
+            if targets:self.fit_aircraft(targets,.28 if regions else .34)
         if self.following and self.positioned(live): self.locate(live)
         elif valid and not self.centered:
             # Fit all current targets around a circular longitude mean.
@@ -214,6 +220,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             if self.map_style!='borders': ui.draw_receiver_map_satellite(cache,self.yaw,self.pitch,self.MAP,self.scale,interactive=self.dragged)
             clip()
             if self.map_style!='satellite': ui._globe_borders.draw(ui.globe_gpu_matrix(self.yaw,self.pitch,self.MAP,self.scale),(160,190,180,140))
+            if self.dashboard:self.draw_footprint(state)
             if self.rings and state.get('receiver_position'): self.draw_rings(state['receiver_position'])
             now=time.time();view=self.traffic_view if self.dashboard else None
             cutoff=view.cutoff(now) if view else now-self.trail_seconds
@@ -280,6 +287,23 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         if self.following and not self.dashboard:
             self.panel((260,652,764,696));label='FOLLOWING' if self.positioned(live) else 'WAITING FOR SIGNAL'
             self.text(cache,278,674,label+' · '+str((self.selected_plane or {}).get('flight') or self.selected).strip(),18,self.GOLD)
+
+    def footprint_regions(self,state):
+        if not self.dashboard or not self.rx_footprint:return []
+        coverage=getattr(self.manager,'coverage',None)
+        data=coverage.snapshot() if coverage is not None else None
+        if not isinstance(data,dict):return []
+        footprint=data.get('footprint') or {};site=state.get('receiver_position')
+        if not isinstance(footprint,dict) or not site or distance_m(footprint.get('site'),site)>100:return []
+        return footprint.get('regions',[])
+
+    def draw_footprint(self,state):
+        regions=self.footprint_regions(state)
+        if not regions:return
+        key=(self.yaw,self.pitch,self.scale,self.MAP)
+        if regions is not self.rx_regions or key!=self.rx_key:
+            self.rx_frame=projected_frame(regions,lambda p:self.ui.radiogarden_project(p,self.yaw,self.pitch,self.MAP,self.scale));self.rx_key=key;self.rx_regions=regions
+        draw_footprint_mesh(self.ui,self.rx_frame,(0,0,1280,800))
 
     def draw_rings(self, site):
         ui=self.ui;lat,lon=math.radians(site['lat']),math.radians(site['lon'])
