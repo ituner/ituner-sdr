@@ -217,6 +217,7 @@ import pygame
 from OpenGL import GL
 
 from client_identity import CLIENT_NAME
+from boot_ready import mark_boot_ready
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
 import openwebrx_directory
@@ -24191,6 +24192,7 @@ def main():
     clock = pygame.time.Clock()
     start = time.monotonic()
     frames = 0
+    boot_ready_published = False
     display_freq = args.freq_khz
     display_span = receiver_display_span(args.zoom, state.receiver_type_snapshot())
     # Scope sizing begins at the established height. A held vertical drag on
@@ -31308,6 +31310,9 @@ def main():
                 GL.glFlush()
             pygame.display.flip()
             frames += 1
+            if not boot_ready_published:
+                mark_boot_ready(os.environ.get("ITUNER_BOOT_READY_FILE"))
+                boot_ready_published = True
             if args.duration and time.monotonic() - start >= args.duration:
                 break
             globe_moving = (
