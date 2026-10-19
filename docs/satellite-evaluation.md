@@ -24,6 +24,23 @@ These previews retain the upstream interfaces; they are not native UI ports.
 No antenna
 rotator or automatic RF observations are enabled by this installation.
 
+### Mac desktop preview
+
+On macOS, the native app opens satellite previews in Google Chrome or Chromium
+from `/Applications` or `~/Applications`, using a separate iTuner browser profile.
+The preview shows loading feedback and provides **← Decoders** to return.
+To use the satellite services already installed on your CM5, launch iTuner with:
+
+```sh
+export ITUNER_SATELLITE_HOST=cm5.local
+```
+
+This is a hostname override, without a scheme or port. Ground Station uses port
+7000 and Satvisor uses 8095. CM5 must be reachable on the local network. This
+opens their web interfaces on the Mac; it does not install their server backends
+on macOS. Without the override, previews use the same host as the iTuner web
+server, which is appropriate for CM5 or separately installed local backends.
+
 Ground Station's local account is `ituner`. A generated password is stored in
 `/home/ituner/.config/ituner-sdr/groundstation-evaluation.json` with mode 0600.
 It is separate from the SSH password and is not stored in Git. The station

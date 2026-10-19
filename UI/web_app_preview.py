@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -20,16 +21,21 @@ class WebAppPreviews:
     def __init__(self, port=8092):
         self.port = port
         self.rotation = 0
+        self.hostname = os.environ.get("ITUNER_SATELLITE_HOST", "").strip()
         self.process = None
         self.key = None
         self.resume_at = 0
         self.return_to_decoders = False
         self.lock = threading.RLock()
+        self.error_notice = None
+        self.error_until = 0
 
     @property
     def active(self):
         with self.lock:
             if self.process and self.process.poll() is not None:
+                if self.process.returncode:
+                    self._show_error(self.key, "Browser closed unexpectedly. Please try again.")
                 self.process = None
                 self.key = None
                 self.resume_at = time.monotonic() + .5
@@ -40,7 +46,33 @@ class WebAppPreviews:
     def blocks_touch(self):
         return self.active or time.monotonic() < self.resume_at
 
+    def _show_error(self, key, detail):
+        name = WEB_APPS.get(key, {}).get('name', 'Application')
+        self.error_notice = (f'Could not open {name}', detail)
+        self.error_until = time.monotonic() + 8
+
+    @property
+    def notice(self):
+        """Native feedback remains visible until the browser covers the SDR."""
+        with self.lock:
+            if self.active:
+                return (f'Loading {WEB_APPS[self.key]["name"]}…', 'Please wait')
+            if time.monotonic() < self.error_until:
+                return self.error_notice
+            return None
+
     def open(self, key):
+        with self.lock:
+            try:
+                self._open(key)
+            except (OSError, ValueError) as exc:
+                if not self.active:
+                    self._show_error(key, str(exc))
+                raise
+            self.error_notice = None
+            self.error_until = 0
+
+    def _open(self, key):
         if key not in WEB_APPS:
             raise ValueError('Unknown satellite application')
         with self.lock:
@@ -48,19 +80,30 @@ class WebAppPreviews:
                 if self.key == key:
                     return
                 raise ValueError('Return to Decoders before opening another preview')
-            browser = shutil.which('chromium') or shutil.which('chromium-browser')
-            if not browser:
-                raise ValueError('Chromium is required for touchscreen web previews')
-            profile = Path.home()/'.local/share/ituner-sdr/web-app-preview'
+            if sys.platform == 'darwin':
+                candidates = [base / f'{name}.app/Contents/MacOS/{name}'
+                              for base in (Path('/Applications'), Path.home() / 'Applications')
+                              for name in ('Google Chrome', 'Chromium')]
+                browser = next((str(path) for path in candidates if path.is_file()), None)
+                if not browser:
+                    raise ValueError('Install Google Chrome or Chromium to open satellite previews')
+                profile = Path.home()/'Library/Application Support/iTuner/web-app-preview'
+                platform_args = ['--window-size=1280,800']
+                env = os.environ.copy()
+            else:
+                browser = shutil.which('chromium') or shutil.which('chromium-browser')
+                if not browser:
+                    raise ValueError('Chromium is required for touchscreen web previews')
+                profile = Path.home()/'.local/share/ituner-sdr/web-app-preview'
+                platform_args = ['--ozone-platform=wayland', '--kiosk', '--password-store=basic']
+                env = dict(os.environ, WAYLAND_DISPLAY=os.environ.get('WAYLAND_DISPLAY', 'wayland-0'),
+                           XDG_RUNTIME_DIR=os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
             profile.mkdir(mode=0o700, parents=True, exist_ok=True)
             url = f'http://127.0.0.1:{self.port}/apps/{key}?touch=1&rotation={self.rotation}'
-            env = dict(os.environ, WAYLAND_DISPLAY=os.environ.get('WAYLAND_DISPLAY', 'wayland-0'),
-                       XDG_RUNTIME_DIR=os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
             self.process = subprocess.Popen([
-                browser, '--ozone-platform=wayland', '--kiosk', '--no-first-run',
+                browser, *platform_args, '--no-first-run',
                 '--no-default-browser-check', '--disable-session-crashed-bubble',
-                '--disable-pinch', '--password-store=basic', f'--user-data-dir={profile}',
-                f'--app={url}',
+                '--disable-pinch', f'--user-data-dir={profile}', f'--app={url}',
             ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
             self.key = key
@@ -79,6 +122,8 @@ class WebAppPreviews:
                     pass
             self.process = None
             self.key = None
+            self.error_notice = None
+            self.error_until = 0
             self.resume_at = time.monotonic() + .5
             self.return_to_decoders = True
 
@@ -101,13 +146,29 @@ def preview_html(key, hostname, token, *, touch=False, rotation=0):
 header{height:64px;flex:none;display:flex;align-items:center;gap:14px;padding:4px 12px;background:#101d29;border-bottom:1px solid #355065}
 button,a{min-height:56px;padding:10px 18px;border:1px solid #557b8f;border-radius:8px;background:#20384a;color:inherit;font-size:20px;text-decoration:none;cursor:pointer}
 strong{font-size:20px}small{color:#a3bacb;font-size:14px;margin-left:auto}iframe{flex:1;width:100%;min-height:0;border:0;background:#000}
+#loading{position:absolute;inset:64px 0 0;display:grid;place-items:center;background:#080e15}
+#loading[hidden]{display:none}#loading .card{text-align:center;padding:24px 36px;border:1px solid #557b8f;border-radius:12px;background:#101d29;font-size:24px}
+#loading p{font-size:18px;color:#a3bacb;margin-bottom:0}
 #error{position:absolute;top:75px;left:20px;padding:15px;background:#632c28;border-radius:8px;font-size:20px}
 </style></head><body><div class="preview"><header><button id="back">← Decoders</button>
 <strong>TITLE</strong><small>WEB PREVIEW</small><button id="reload">Reload</button></header>
-<iframe title="TITLE application" src="SOURCE"></iframe><div id="error" hidden></div></div>
+<iframe title="TITLE application" data-source="SOURCE"></iframe>
+<div id="loading" role="status" aria-live="polite"><div class="card"><strong>Loading TITLE…</strong><p id="loading-detail">Please wait</p></div></div>
+<div id="error" hidden></div></div>
 <script>
 const frame=document.querySelector('iframe');
-document.getElementById('reload').onclick=()=>{frame.src=frame.src;};
+const loading=document.getElementById('loading');
+const detail=document.getElementById('loading-detail');
+let loadingTimer;
+function loadApp(){
+ loading.hidden=false;detail.textContent='Please wait';
+ clearTimeout(loadingTimer);
+ loadingTimer=setTimeout(()=>{detail.textContent='Taking longer than expected. Try Reload or return to Decoders.';},20000);
+ frame.src=frame.dataset.source;
+}
+frame.onload=()=>{if(frame.getAttribute('src')){clearTimeout(loadingTimer);loading.hidden=true;}};
+document.getElementById('reload').onclick=loadApp;
+loadApp();
 document.getElementById('back').onclick=async()=>{
  if(!TOUCH){location.href='/';return;}
  try{const r=await fetch('/api/web-app',{method:'POST',headers:{'Content-Type':'application/json','X-VHF-Token':TOKEN},body:JSON.stringify({action:'close'})});if(!r.ok)throw Error('Could not return to Decoders');}

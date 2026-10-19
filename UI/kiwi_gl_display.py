@@ -218,6 +218,8 @@ from OpenGL import GL
 
 from client_identity import CLIENT_NAME
 from boot_ready import mark_boot_ready
+from app_update import UpdateController, register_runtime
+import app_update_ui
 import kiwi_live_display_fb as kiwi
 import openwebrx_client as owrx
 import openwebrx_directory
@@ -2531,6 +2533,7 @@ SETTINGS_MENU_ITEMS = (
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
+    ("updates", "UPDATES"),
     ("settings_back", "BACK"),
 )
 HF_DECODER_ITEMS = (
@@ -2560,6 +2563,7 @@ SETTINGS_MENU_SUBTITLES = {
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
     "system": "HARDWARE & FAN",
+    "updates": "APPLICATION",
 }
 
 
@@ -24336,6 +24340,8 @@ def main():
     network_notice = ""
     network_next_refresh = 0.0
     network_bridge = NetworkManagerBridge()
+    application_update = UpdateController()
+    update_poll_at = 0.0
     audio_panel_open = False
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
@@ -25915,6 +25921,7 @@ def main():
         if kind != "dual":
             dual_vfo_receiver_list_target = None
         station_workspace.open=False
+        application_update.open = False
         adsb_workspace.open = False
         vhf_workspace.open = False
         vhf_workspace.spectrum.open = False
@@ -26016,6 +26023,13 @@ def main():
             settings_menu_open=digital_menu_open=False
             picker_open=radio_setup_open=display_setup_open=filter_drawer_open=receiver_home_panel_open=fan_curve_panel_open=audio_panel_open=asr_panel_open=False
             tests_panel_open=dj_tune_open=filter_panel_open=False
+        elif kind == "updates":
+            application_update.open = True
+            application_update.confirm = None
+            settings_menu_open = digital_menu_open = False
+            picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
+            receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = network_panel_open = False
         elif kind == "network":
             print("gl network panel requested", flush=True)
             network_panel_open = True
@@ -26465,7 +26479,7 @@ def main():
         # Fullscreen workspaces own their visible right edge too. Without
         # this guard, the desktop-only permanent rail could steal a click
         # from WSPR's top-band actions or transparent Home button.
-        if picker_open or wspr_panel_open:
+        if picker_open or wspr_panel_open or application_update.open:
             return None
         window_w, window_h = pygame.display.get_window_size()
         nx = round(position[0] * NATIVE_W / max(1, window_w))
@@ -26623,14 +26637,23 @@ def main():
                 digital_menu_open=True
                 settings_menu_open=False
             for event in pygame.event.get():
+                # Desktop close/menu Quit and Cmd-Q must work even while a
+                # modal workspace or an external app blocks radio input.
+                if args.desktop and (
+                    event.type == pygame.QUIT
+                    or (
+                        event.type == pygame.KEYDOWN
+                        and event.key == pygame.K_q
+                        and event.mod & pygame.KMOD_GUI
+                    )
+                ):
+                    stop_event.set()
+                    break
                 if web_apps.blocks_touch:
                     continue
                 if event.type == pygame.QUIT:
-                    # KMS/SDL can emit a synthetic QUIT while the DSI panel
-                    # finishes probing after boot (Cocoa can do the same for
-                    # the desktop window). This is a continuously supervised
-                    # appliance, so it has no valid in-app QUIT action: a
-                    # service manager or explicit system command owns exit.
+                    # Ignore synthetic KMS/SDL QUIT during panel probing on
+                    # the supervised appliance only, never on the desktop.
                     print("gl ignored synthetic SDL QUIT", flush=True)
                 elif (
                     args.desktop
@@ -26952,7 +26975,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if theme_editor.open:
+                            if application_update.open:
+                                gesture = "application_update"
+                            elif theme_editor.open:
                                 gesture = "theme"
                             elif station_workspace.open:
                                 gesture="station_workspace"
@@ -28456,6 +28481,11 @@ def main():
                                     write_remembered_view(force=True)
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
+                            wake_controls()
+                        elif touch_started and gesture == "application_update":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                if app_update_ui.action(application_update, sys.modules[__name__], x, y) == "back":
+                                    restore_navigation_parent("settings")
                             wake_controls()
                         elif touch_started and gesture == "station_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
@@ -31318,10 +31348,25 @@ def main():
                         text_cache, theme_editor.notice_action, theme_editor.notice_detail,
                         green_osd_alpha(theme_notice_remaining, args.zoom_osd_seconds),
                     )
+            if application_update.open:
+                if now >= update_poll_at:
+                    application_update.poll()
+                    update_poll_at = now + 0.5
+                app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
             if rail_relocation_active():
                 if sidebar_composer is None:
                     sidebar_composer = SidebarComposer()
                 sidebar_composer.compose_left()
+            web_notice = web_apps.notice
+            if web_notice:
+                cx, cy = LOGICAL_W / 2, LOGICAL_H / 2
+                draw_logical_rounded_rect(cx - 280, cy - 66, cx + 280, cy + 66,
+                                          12, (16, 29, 41, 255), (85, 123, 143, 255))
+                draw_text(text_cache, cx, cy - 22, web_notice[0],
+                          (228, 237, 245), 26, bold=True, anchor="cm")
+                detail = fit_station_text(text_cache, web_notice[1], 520, 20, False, False)
+                draw_text(text_cache, cx, cy + 25, detail,
+                          (163, 186, 203), 20, anchor="cm")
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -31342,6 +31387,7 @@ def main():
             frames += 1
             if not boot_ready_published:
                 mark_boot_ready(os.environ.get("ITUNER_BOOT_READY_FILE"))
+                register_runtime()
                 boot_ready_published = True
             if args.duration and time.monotonic() - start >= args.duration:
                 break
