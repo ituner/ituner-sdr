@@ -50,7 +50,7 @@ class Cm5ApplianceBootTests(unittest.TestCase):
             self.assertIn('XCURSOR_THEME=ituner-invisible',
                           (config / 'environment.d/99-ituner-cursor.env').read_text())
             for name in ('left_ptr','default','custom-arrow'):
-                data=(home / '.local/share/icons/ituner-invisible/cursors' / name).read_bytes()
+                data=(home / '.icons/ituner-invisible/cursors' / name).read_bytes()
                 self.assertEqual(data[:4],b'Xcur')
                 self.assertEqual(struct.unpack_from('<IIIII',data,44),(1,1,0,0,0))
                 self.assertEqual(data[64:],b'\0'*4)

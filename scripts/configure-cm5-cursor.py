@@ -7,7 +7,7 @@ import struct
 
 def configure(home, icons=Path('/usr/share/icons')):
     home = Path(home)
-    theme = home / '.local/share/icons/ituner-invisible'
+    theme = home / '.icons/ituner-invisible'
     cursors = theme / 'cursors'
     cursors.mkdir(parents=True, exist_ok=True)
     # Xcursor header, one image TOC entry, 1x1 transparent ARGB image.
