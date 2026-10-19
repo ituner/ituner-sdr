@@ -1,0 +1,187 @@
+diff --git a/package.json b/package.json
+index 138e387..a206cd2 100644
+--- a/package.json
++++ b/package.json
+@@ -11,15 +11,12 @@
+     "rotator-sim": "node scripts/rotator-sim.mjs"
+   },
+   "dependencies": {
+-    "@satvisorcom/buttplug": "^4.1.1",
+-    "@satvisorcom/buttplug-wasm": "^4.1.1",
+     "satellite.js": "^6.0.2",
+     "svelte": "^5.53.2",
+     "three": "^0.170.0"
+   },
+   "devDependencies": {
+     "@sveltejs/vite-plugin-svelte": "^6.2.4",
+-    "@tauri-apps/cli": "^2",
+     "@types/three": "^0.170.0",
+     "typescript": "^5.6.0",
+     "vite": "^6.0.0",
+diff --git a/src/feedback/target-buttplug.ts b/src/feedback/target-buttplug.ts
+index c9de03e..b82d440 100644
+--- a/src/feedback/target-buttplug.ts
++++ b/src/feedback/target-buttplug.ts
+@@ -1,100 +1,13 @@
++// CM5 evaluation: optional Bluetooth feedback is disabled; no private packages.
+ import type { FeedbackEffect } from './types';
+-
+-export interface ButtplugDeviceInfo {
+-  name: string;
+-  index: number;
+-  battery: number | null; // 0-1, null if no battery sensor
+-}
+-
++export interface ButtplugDeviceInfo { name: string; index: number; battery: number | null; }
+ export class ButtplugTarget {
+-  private client: any = null;
+-  private connector: any = null;
+-  private _connected = false;
+-  private _devices = new Map<number, any>();
+-  private _stopTimers = new Map<number, ReturnType<typeof setTimeout>>();
+-  private _DeviceOutput: any = null;
+-
+   onStatusChange: ((status: string) => void) | null = null;
+   onDevicesChange: ((devices: ButtplugDeviceInfo[]) => void) | null = null;
+-
+-  isSupported(): boolean {
+-    return typeof navigator !== 'undefined' && 'bluetooth' in navigator;
+-  }
+-
+-  async init(): Promise<void> {
+-    const [{ ButtplugClient, DeviceOutput }, { ButtplugWasmClientConnector }] = await Promise.all([
+-      import('@satvisorcom/buttplug'),
+-      import('@satvisorcom/buttplug-wasm'),
+-    ]);
+-    this._DeviceOutput = DeviceOutput;
+-    this.connector = new ButtplugWasmClientConnector();
+-    this.client = new ButtplugClient('Satvisor');
+-
+-    this.client.addListener('deviceadded', async (device: any) => {
+-      this._devices.set(device.index, device);
+-      this.onDevicesChange?.(await this.getDeviceList());
+-    });
+-    this.client.addListener('deviceremoved', async (device: any) => {
+-      this._devices.delete(device.index);
+-      this.onDevicesChange?.(await this.getDeviceList());
+-    });
+-
+-    await this.client.connect(this.connector);
+-    this._connected = true;
+-    this.onStatusChange?.('connected');
+-  }
+-
+-  async startScanning(): Promise<void> {
+-    if (!this.client || !this._connected) return;
+-    await this.client.startScanning();
+-  }
+-
+-  fire(effect: FeedbackEffect): void {
+-    if (!effect.buttplug || !this._connected || this._devices.size === 0) return;
+-    const { intensity, durationMs } = effect.buttplug;
+-
+-    for (const [idx, device] of this._devices) {
+-      const existing = this._stopTimers.get(idx);
+-      if (existing) clearTimeout(existing);
+-
+-      if (intensity <= 0) {
+-        device.stop().catch(() => {});
+-      } else {
+-        device.runOutput(this._DeviceOutput.Vibrate.percent(intensity)).catch(() => {});
+-        if (durationMs) {
+-          this._stopTimers.set(idx, setTimeout(() => {
+-            device.stop().catch(() => {});
+-            this._stopTimers.delete(idx);
+-          }, durationMs));
+-        }
+-      }
+-    }
+-  }
+-
+-  async getDeviceList(): Promise<ButtplugDeviceInfo[]> {
+-    const list: ButtplugDeviceInfo[] = [];
+-    for (const d of this._devices.values()) {
+-      let battery: number | null = null;
+-      try {
+-        if (d.hasInput && d.hasInput('Battery')) {
+-          battery = await d.battery();
+-        }
+-      } catch {}
+-      list.push({ name: d.name, index: d.index, battery });
+-    }
+-    return list;
+-  }
+-
+-  async dispose(): Promise<void> {
+-    for (const timer of this._stopTimers.values()) clearTimeout(timer);
+-    this._stopTimers.clear();
+-    if (this.client && this._connected) {
+-      try { await this.client.stopAllDevices(); } catch {}
+-      try { await this.client.disconnect(); } catch {}
+-    }
+-    this._connected = false;
+-    this._devices.clear();
+-    this.client = null;
+-    this.connector = null;
+-  }
++  isSupported(): boolean { return false; }
++  async init(): Promise<void> { throw new Error('Optional Bluetooth feedback is disabled in this evaluation build.'); }
++  async startScanning(): Promise<void> {}
++  fire(_effect: FeedbackEffect): void {}
++  async getDeviceList(): Promise<ButtplugDeviceInfo[]> { return []; }
++  async dispose(): Promise<void> {}
+ }
+diff --git a/src/graphics.ts b/src/graphics.ts
+index 57380c3..91e79b1 100644
+--- a/src/graphics.ts
++++ b/src/graphics.ts
+@@ -51,7 +51,7 @@ export const PRESETS: GraphicsPreset[] = [
+   },
+ ];
+ 
+-export const DEFAULT_PRESET = 'rtx';
++export const DEFAULT_PRESET = 'standard';
+ 
+ export function findMatchingPreset(current: GraphicsSettings): string | null {
+   for (const preset of PRESETS) {
+diff --git a/src/stores/observer.svelte.ts b/src/stores/observer.svelte.ts
+index 18dd1e7..2e12bca 100644
+--- a/src/stores/observer.svelte.ts
++++ b/src/stores/observer.svelte.ts
+@@ -19,7 +19,21 @@ class ObserverStore {
+ 
+   onLocationChange: ((loc: ObserverLocation) => void) | null = null;
+ 
++  private async loadStation() {
++    try {
++      const response = await fetch('/cm5-station.json', { cache: 'no-store' });
++      if (!response.ok) return;
++      const loc = await response.json();
++      if (!Number.isFinite(loc.lat) || !Number.isFinite(loc.lon)) return;
++      if (this.location.lat !== loc.lat || this.location.lon !== loc.lon || this.location.alt !== loc.alt || this.location.name !== loc.name) {
++        this.setLocation(loc);
++      }
++    } catch { /* Retain the last observer when the shared station is unavailable. */ }
++  }
++
+   load() {
++    void this.loadStation();
++    setInterval(() => void this.loadStation(), 30000);
+     const saved = localStorage.getItem(STORAGE_KEY);
+     if (saved) {
+       try {
+diff --git a/src/stores/settings.svelte.ts b/src/stores/settings.svelte.ts
+index 8103b4f..190db92 100644
+--- a/src/stores/settings.svelte.ts
++++ b/src/stores/settings.svelte.ts
+@@ -4,8 +4,8 @@ import { type SimulationSettings, getSimPresetSettings, DEFAULT_SIM_PRESET, find
+ class SettingsStore {
+   graphics = $state<GraphicsSettings>(getPresetSettings(DEFAULT_PRESET));
+   simulation = $state<SimulationSettings>(getSimPresetSettings(DEFAULT_SIM_PRESET));
+-  fpsLimit = $state(-1); // -1=vsync, 0=unlocked, >0=cap
+-  fpsSliderValue = $state(0); // raw slider value (0=Vsync, 1-480=cap, >480=Unlocked)
++  fpsLimit = $state(30); // -1=vsync, 0=unlocked, >0=cap
++  fpsSliderValue = $state(30); // raw slider value (0=Vsync, 1-480=cap, >480=Unlocked)
+   fov = $state(45); // camera field of view in degrees (10–120)
+   timezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone); // IANA timezone ID
+ 
