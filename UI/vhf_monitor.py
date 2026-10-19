@@ -26,6 +26,7 @@ from station_web import station_get, station_post
 from adsb_monitor import ADSBHandler, rtl_devices
 from adsb_globe import GlobeAssets
 from adsb_traffic import receiver_position
+from web_app_preview import WebAppPreviews, WEB_APPS, preview_html
 from sdr_broker import ReceiverBroker, soapy_args
 from vhf_catalog import MODES, profiles, write_satellite_profile
 from vhf_satellite import prediction, refresh_tle
@@ -488,6 +489,7 @@ class VHFHub:
         self.runtime.mkdir(exist_ok=True);self.tle_root=self.root/'orbits';self.tle_root.mkdir(exist_ok=True)
         self.rtl433_ui_installed=Path('/opt/ituner-sdr/decoders/rtl433-ui/server/index.js').is_file()
         self.catalog=profiles();self.globe=GlobeAssets();self.port=port;self.token=secrets.token_urlsafe(32)
+        self.web_apps=WebAppPreviews(port)
         self.closed=threading.Event();self.asset_lock=threading.Lock();self.assets=[];self.next_assets=0
         try:self.position=receiver_position(json.loads((self.root/'station.json').read_text()))
         except (OSError,ValueError):
@@ -504,6 +506,7 @@ class VHFHub:
         if port>=0:
             try:
                 self.server=ThreadingHTTPServer(('0.0.0.0',port),VHFHandler);self.server.manager=self;self.port=self.server.server_port
+                self.web_apps.port=self.port
                 threading.Thread(target=self.server.serve_forever,name='vhf-web',daemon=True).start()
             except OSError as exc:
                 self.web_error=str(exc)
@@ -573,6 +576,7 @@ class VHFHub:
 
     def close(self):
         self.closed.set();self.thread.join(timeout=6)
+        self.web_apps.close()
         self.spectrum.close()
         for session in self.sessions.values():session.close()
         for key,session in self.sensor_receivers.items():
@@ -584,7 +588,14 @@ class VHFHandler(ADSBHandler):
     def do_GET(self):
         manager=self.server.manager;request=urlsplit(self.path);path=unquote(request.path);query=parse_qs(request.query)
         try:
-            if path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
+            if path.startswith('/apps/'):
+                key=path.removeprefix('/apps/')
+                if key not in WEB_APPS:raise ValueError('Unknown satellite application')
+                hostname=urlsplit('http://'+self.headers.get('Host','localhost')).hostname or 'localhost'
+                rotation=int(query.get('rotation',['0'])[0])
+                if rotation not in (0,90,270):raise ValueError('Invalid preview rotation')
+                self.send(preview_html(key,hostname,manager.token,touch=query.get('touch')==['1'],rotation=rotation).encode(),'text/html; charset=utf-8')
+            elif path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum':self.send(json.dumps(dict(manager.spectrum.snapshot(),devices=manager.devices,leases=manager.broker.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())
             elif path=='/api/spectrum/insights':
@@ -636,9 +647,18 @@ class VHFHandler(ADSBHandler):
         if self.headers.get('X-VHF-Token')!=manager.token or (origin and urlsplit(origin).netloc!=self.headers.get('Host')):
             self.send(b'{"error":"Reload the receiver page before controlling it"}',status=403);return
         try:
-            if self.path!='/api/control':raise ValueError('Unknown action path')
+            if self.path not in ('/api/control','/api/web-app'):raise ValueError('Unknown action path')
             length=int(self.headers.get('Content-Length','0'))
             if not 0<length<=8192:raise ValueError('Invalid request size')
-            values=json.loads(self.rfile.read(length));mode=values.pop('mode','');action=values.pop('action','')
+            values=json.loads(self.rfile.read(length))
+            if self.path=='/api/web-app':
+                if self.client_address[0] not in ('127.0.0.1','::1'):
+                    self.send(b'{"error":"Touchscreen launch controls are local only"}',status=403);return
+                action=values.get('action')
+                if action=='close':manager.web_apps.close()
+                elif action=='open':manager.web_apps.open(values.get('app'))
+                else:raise ValueError('Unknown web preview action')
+                self.send(b'{"ok":true}');return
+            mode=values.pop('mode','');action=values.pop('action','')
             result=manager.control(mode,action,**values);self.send(json.dumps(dict(ok=True,result=result)).encode())
         except (ValueError,TypeError,KeyError,OSError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)

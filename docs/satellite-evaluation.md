@@ -13,7 +13,15 @@ The pre-sync CM5 working files are archived under
 | Satvisor | http://cm5.local:8095/ | Globe, sky view, pass predictions and rotator controls; no SDR decoder backend |
 
 Both are web applications. They do not replace or autostart over the native
-touchscreen app. Use a tablet or computer browser to evaluate them. No antenna
+touchscreen app. **Decoders / Satellite Web Apps** has Ground Station and
+Satvisor buttons which open a managed Chromium preview on the CM5 touchscreen.
+A permanent **← Decoders** toolbar closes the preview and returns to the native
+menu. The shell rotates with the CM5's existing landscape orientation; it does
+not change compositor/display settings. Native touch events are suppressed and
+its background renderer slows while the preview is open, preserving decoder
+services. The VHF web dashboard also has links to the same applications.
+These previews retain the upstream interfaces; they are not native UI ports.
+No antenna
 rotator or automatic RF observations are enabled by this installation.
 
 Ground Station's local account is `ituner`. A generated password is stored in

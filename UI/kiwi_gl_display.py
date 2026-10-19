@@ -2086,7 +2086,7 @@ MENU_ITEMS = (
     ("dual", "DUAL RX"),
     ("audio", "AUDIO"),
     ("display", "DISPLAY"),
-    ("digital", "DECODE"),
+    ("digital", "DIGITAL"),
     ("vosc", "CAPTIONS"),
     ("tests", "APPS"),
     ("settings", "SYSTEM"),
@@ -2550,7 +2550,8 @@ VHF_UHF_DECODER_ITEMS = (
     ("sonde", "Radiosonde"),
 )
 SPECTRUM_MENU_ITEMS = (("spectrum", "SPECTRUM ANALYZER"),)
-DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_ITEMS + (("digital_back", "BACK"),)
+WEB_APP_MENU_ITEMS = (("groundstation", "Ground Stn"), ("satvisor", "Satvisor"))
+DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_ITEMS + WEB_APP_MENU_ITEMS + (("digital_back", "BACK"),)
 
 
 SETTINGS_MENU_SUBTITLES = {
@@ -2564,7 +2565,7 @@ SETTINGS_MENU_SUBTITLES = {
 
 def menu_subtitle(kind):
     if kind == "digital":
-        count = sum(key != "digital_back" for key, _ in DIGITAL_MENU_ITEMS)
+        count = len(SPECTRUM_MENU_ITEMS) + len(HF_DECODER_ITEMS) + len(VHF_UHF_DECODER_ITEMS)
         return f"{count} MODES"
     return HOME_MENU_SUBTITLES.get(kind, SETTINGS_MENU_SUBTITLES.get(kind, ""))
 
@@ -16713,12 +16714,16 @@ def lcd_nav_box(index, item_count=None, has_back=False):
         if index < len(HF_DECODER_ITEMS):
             col, row = index % 2, index // 2
             x0 = LCD_NAV_X0 + 10 + col * 122
-            return x0, 210 + row * 64, x0 + 114, 266 + row * 64
+            return x0, 200 + row * 58, x0 + 114, 256 + row * 58
         vhf_index = index - len(HF_DECODER_ITEMS)
+        if vhf_index >= len(VHF_UHF_DECODER_ITEMS):
+            col=vhf_index-len(VHF_UHF_DECODER_ITEMS)
+            x0=LCD_NAV_X0 + 10 + col * 122
+            return x0, 668, x0 + 114, 724
         col, row = vhf_index % 2, vhf_index // 2
         x0 = LCD_NAV_X0 + 10 + col * 122
         x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
-        return x0, 438 + row * 64, x1, 494 + row * 64
+        return x0, 408 + row * 58, x1, 464 + row * 58
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
@@ -17140,8 +17145,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
-        draw_text(text_cache, LCD_NAV_X0 + 12, 194, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 420, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 184, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 392, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 652, "SATELLITE WEB APPS", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -24753,6 +24759,8 @@ def main():
     receiver_broker = ReceiverBroker()
     adsb_manager = ADSBManager(broker=receiver_broker,station=radio_profile)
     vhf_hub = VHFHub(broker=receiver_broker,station=radio_profile)
+    web_apps = vhf_hub.web_apps
+    web_apps.rotation = (90 if args.orientation == 'normal' else 270) if LCD_NATIVE_TOUCH else 0
     vhf_workspace = VHFWorkspace(sys.modules[__name__], vhf_hub)
     if args.spectrum_preview:
         vhf_workspace.show('spectrum')
@@ -26055,6 +26063,11 @@ def main():
         elif kind == "digital_back":
             settings_menu_open = False
             digital_menu_open = False
+        elif kind in dict(WEB_APP_MENU_ITEMS):
+            try:
+                web_apps.open(kind)
+            except (OSError, ValueError) as exc:
+                print(f'gl satellite web preview: {exc}', flush=True)
         elif kind == "favorite":
             picker_parent = parent
             settings_menu_open = False
@@ -26612,7 +26625,13 @@ def main():
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            if web_apps.return_to_decoders:
+                web_apps.return_to_decoders=False
+                digital_menu_open=True
+                settings_menu_open=False
             for event in pygame.event.get():
+                if web_apps.blocks_touch:
+                    continue
                 if event.type == pygame.QUIT:
                     # KMS/SDL can emit a synthetic QUIT while the DSI panel
                     # finishes probing after boot (Cocoa can do the same for
@@ -26768,6 +26787,16 @@ def main():
                     raise
                 if not data or len(data) != kiwi.EVENT_STRUCT.size:
                     break
+                if web_apps.blocks_touch:
+                    # Drain raw Goodix reports while Chromium owns the screen.
+                    # Never let a browser gesture operate a hidden native tile.
+                    touch_started=False
+                    active=False
+                    gesture=None
+                    mt_slots.clear()
+                    raw_x=raw_y=None
+                    set_ui_press_point()
+                    continue
                 _, _, event_type, code, value = kiwi.EVENT_STRUCT.unpack(data)
                 if event_type == kiwi.EV_ABS:
                     if code == kiwi.ABS_MT_SLOT:
@@ -31353,7 +31382,7 @@ def main():
                 or picker_map_zoom_target is not None or picker_map_lock_target is not None
                 or (args.desktop and desktop_map_dragged)
             )
-            clock.tick(globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
+            clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
     finally:
         if theme_frame_context is not None:
             theme_frame_context.__exit__(None, None, None)
