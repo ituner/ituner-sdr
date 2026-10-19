@@ -26411,6 +26411,10 @@ def main():
         return (
             theme_system.runtime_theme["sidebar"] == "left"
             and not theme_editor.open
+            # These screens position BACK themselves and span the whole canvas.
+            # Moving the last 256 pixels would slice their charts and controls.
+            and not (adsb_workspace.open or station_workspace.open
+                     or (vhf_workspace.open and vhf_workspace.mode == 'spectrum'))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open) or globe_open)
         )

@@ -2,6 +2,7 @@
 import math
 import textwrap
 import time
+from decoder_style import DecoderStyle
 from sstv_workspace import SSTVWorkspace
 from adsb_touch import AirspaceDashboard
 from adsb_coverage_touch import CoverageTouch
@@ -9,13 +10,8 @@ from adsb_view import TrafficView, aged, freshness
 from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
 
-class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
+class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     MAP = (0, 82, 1024, 716)
-    BG = (8, 16, 24, 255)
-    PANEL = (14, 30, 42, 255)
-    MUTED = (147, 175, 192)
-    CYAN = (101, 227, 210)
-    GOLD = (255, 200, 116)
 
     def __init__(self, ui, manager):
         super().__init__(ui, manager)
@@ -177,7 +173,7 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
                 _,self.selected,self.selected_plane=min(near,key=lambda v:v[0]);self.following=False;self.message=''
 
     def panel(self, box):
-        self.ui.draw_logical_rounded_rect(*box,7,self.PANEL,(48,77,96,255),1)
+        self.ui.draw_logical_rounded_rect(*box,self.RADIUS,self.PANEL,self.LINE,1)
 
     @staticmethod
     def value(value): return '—' if value is None else str(value)
@@ -302,21 +298,21 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
             if len(points)>1: ui.draw_logical_polyline(points,(125,166,185,115),1)
 
     def draw_logs(self, cache):
-        self.panel((16,158,928,750))
+        self.panel((16,158,928,720))
         for index,(kind,label) in enumerate((('flights','FLIGHTS'),('receiver','RECEIVER'),('diagnostics','DIAGNOSTICS'))):
             self.button(cache,(32+index*294,176,310+index*294,226),label,('log_kind',kind),active=kind==self.log_kind)
         data=self.manager.log_snapshot(self.log_kind)
         source=list(reversed(data.get('lines',[]))) if self.log_kind!='diagnostics' else data.get('lines',[])
         lines=[part for line in source for part in (textwrap.wrap(line,100) or [''])]
-        count=max(1,(len(lines)+16)//17);self.log_page=min(self.log_page,count-1)
+        count=max(1,(len(lines)+15)//16);self.log_page=min(self.log_page,count-1)
         if not lines:self.text(cache,34,286,'No entries yet. Receiver and Diagnostics show radio activity.',18,self.MUTED,width=860)
-        for i,line in enumerate(lines[self.log_page*17:(self.log_page+1)*17]):self.text(cache,34,256+i*24,line,14,width=860)
-        self.button(cache,(32,688,250,734),'PREVIOUS',('page',-1))
-        self.ink(cache,472,711,f'PAGE {self.log_page+1} / {count} · UTC',14,self.MUTED,anchor='cm')
-        self.button(cache,(694,688,912,734),'NEXT',('page',1))
+        for i,line in enumerate(lines[self.log_page*16:(self.log_page+1)*16]):self.text(cache,34,256+i*24,line,14,width=860)
+        self.button(cache,(32,656,250,712),'PREVIOUS',('page',-1))
+        self.ink(cache,472,684,f'PAGE {self.log_page+1} / {count} · UTC',14,self.MUTED,anchor='cm')
+        self.button(cache,(694,656,912,712),'NEXT',('page',1))
 
     def draw_traffic(self, cache, state):
-        self.panel((16,224,928,750));self.ink(cache,34,253,self.traffic_view.label+' TRAFFIC',22)
+        self.panel((16,224,928,720));self.ink(cache,34,253,self.traffic_view.label+' TRAFFIC',22)
         self.button(cache,(670,232,910,276),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
         planes=self.sorted_aircraft(state)
         self.traffic_page=min(self.traffic_page,max(0,(len(planes)-1)//5))
@@ -325,12 +321,12 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
             title=f"{(plane.get('flight') or plane['hex']).strip()} · ICAO {plane['hex'].upper()}"
             detail=freshness(plane)
             if self.traffic_view.arrival(plane['hex'],time.time()):title+=' · NEW'
-            self.button(cache,(32,292+i*76,912,360+i*76),title,('select',plane['hex']),detail,active=plane['hex']==self.selected)
-        self.button(cache,(32,688,250,734),'PREVIOUS',('page',-1));self.button(cache,(694,688,912,734),'NEXT',('page',1))
-        self.ink(cache,472,711,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+4)//5)}',14,self.MUTED,anchor='cm')
+            self.button(cache,(32,284+i*72,912,348+i*72),title,('select',plane['hex']),detail,active=plane['hex']==self.selected)
+        self.button(cache,(32,656,250,712),'PREVIOUS',('page',-1));self.button(cache,(694,656,912,712),'NEXT',('page',1))
+        self.ink(cache,472,684,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+4)//5)}',14,self.MUTED,anchor='cm')
 
     def draw_usb(self, cache, state):
-        self.panel((16,158,928,750));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)
+        self.panel((16,158,928,720));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)
         self.text(cache,34,224,'978 UAT · future second receiver · not installed',15,self.MUTED)
         self.button(cache,(32,246,912,302),'AUTO · FIRST AVAILABLE DONGLE',('assign','auto'),active=state['selection']=='auto')
         devices=state['devices'];self.usb_page=min(self.usb_page,max(0,(len(devices)-1)//4))
@@ -338,7 +334,7 @@ class ADSBWorkspace(AirspaceDashboard, SSTVWorkspace):
         if not devices:self.text(cache,34,358,'No RTL-SDR detected. Check USB power and connection.',18,self.MUTED,width=850)
         site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET · CONFIGURE IN BROWSER / RECEIVER'
         self.ink(cache,34,622,location,14,self.MUTED,width=850)
-        self.text(cache,34,652,'Receiver settings and logs are shared with cm5.local:8090',14,self.MUTED,width=850)
-        self.button(cache,(32,688,306,734),'SCAN USB',('scan',None));self.button(cache,(322,688,604,734),'PREVIOUS',('page',-1));self.button(cache,(620,688,912,734),'NEXT',('page',1))
+        self.text(cache,34,640,'Receiver settings and logs are shared with cm5.local:8090',14,self.MUTED,width=850)
+        self.button(cache,(32,656,306,712),'SCAN USB',('scan',None));self.button(cache,(322,656,604,712),'PREVIOUS',('page',-1));self.button(cache,(620,656,912,712),'NEXT',('page',1))
 
     def close(self): self.manager.close()

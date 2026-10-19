@@ -6,6 +6,8 @@ from pathlib import Path
 import queue
 import threading
 import time
+import theme_system
+from decoder_style import DecoderStyle, footer_content_box
 import textwrap
 
 import numpy as np
@@ -56,9 +58,8 @@ def allocations(reference,frequency):
     return labels
 
 
-class SpectrumWorkspace(SSTVWorkspace):
+class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
     """Touch-first Survey → Signals → Investigate workflow; no browser embedding."""
-    BG=(8,16,25,255);PANEL=(16,31,45,255);MUTED=(155,179,197);CYAN=(112,234,206)
     GRAPH=(24,236,1256,616);PLOT=(92,272,1240,568);HISTORY=(124,272,1240,608)
     TABS=(('survey','Scan'),('signals','Signals'),('tools','Tools'))
     def __init__(self,ui,hub):
@@ -73,15 +74,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         except (OSError,ValueError):self.reference={}
 
     def button(self,cache,box,title,action,subtitle='',active=False):
-        """Large labels and hit targets; critical controls never shrink to rail typography."""
-        ui=self.ui;x0,y0,x1,y1=box;fill=(30,77,69,255) if active else (20,39,56,255);border=(112,234,206,255) if active else (52,78,98,255)
-        ui.draw_logical_rounded_rect(*box,8,fill,border,2 if active else 1)
-        label=ui.fit_station_text(cache,str(title),x1-x0-24,21,True,False,'Liberation Sans')
-        ui.draw_text(cache,(x0+x1)/2,(y0+y1)/2-(11 if subtitle else 0),label,(224,244,250),21,True,False,'cm',family='Liberation Sans')
-        if subtitle:
-            sub=ui.fit_station_text(cache,str(subtitle),x1-x0-24,18,False,False,'Liberation Sans')
-            ui.draw_text(cache,(x0+x1)/2,(y0+y1)/2+15,sub,self.MUTED,18,False,False,'cm',family='Liberation Sans')
-        self.actions.append((box,action))
+        self.decoder_button(cache,box,title,action,subtitle,active,font_size=21)
 
     def show(self):
         self.open=True;self.overlay=None;self.message='';self.inspection=None;self.exit_target='digi'
@@ -148,7 +141,7 @@ class SpectrumWorkspace(SSTVWorkspace):
                 if rows and isinstance(rows[0],dict) and self.auto_key!=state['history']['key'] and self.screen=='survey':self.fit_colors(rows);self.auto_key=state['history']['key']
                 if self.screen=='compare':self.compare_data=self.survey.comparison_data()
                 paint_kind=(self.screen,self.display,self.activity_mode)
-                paint_key=(paint_kind,view,data.get('updated'),data.get('sweep'),state['history']['latest_id'],state['history']['key'],self.insights.get('finished'),page,self.floor,self.ceiling,(self.baseline or {}).get('id'))
+                paint_key=(theme_system.runtime_revision,paint_kind,view,data.get('updated'),data.get('sweep'),state['history']['latest_id'],state['history']['key'],self.insights.get('finished'),page,self.floor,self.ceiling,(self.baseline or {}).get('id'))
                 frame=self.frame;limits=self.limits
                 changed=paint_key!=self.last_paint_key
                 if changed and self.screen in ('survey','activity','compare'):
@@ -171,15 +164,15 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.floor=max(-180,min(-70,math.floor(lo/5)*5));self.ceiling=min(-20,max(-120,self.floor+20,math.ceil(hi/5)*5))
 
     def paint(self,data,rows,view):
-        image=Image.new('RGBA',(1232,380),(11,23,35,255));draw=ImageDraw.Draw(image);left,right,top,bottom=68,1216,36,332
+        image=Image.new('RGBA',(1232,380),self.color('spectrum_field'));draw=ImageDraw.Draw(image);left,right,top,bottom=68,1216,36,332
         finite=[v for v in data.get('peak',[]) if isinstance(v,(int,float)) and math.isfinite(v)];hi=min(-10,math.ceil(max(finite)/10)*10+5) if finite else -60;lo=min(hi-30,max(-180,math.floor(min(finite)/10)*10-5)) if finite else -140
         if self.screen=='compare':
             result=comparison(data,self.baseline);values=[v for v in result.get('delta',[]) if v is not None];hi=max(5,max((abs(v) for v in values),default=5));lo=-hi
         if self.screen in ('survey','compare') and (self.screen=='compare' or self.display=='spectrum'):
             for i in range(5):
-                y=top+(bottom-top)*i/4;draw.line((left,y,right,y),fill=(38,60,77),width=1)
+                y=top+(bottom-top)*i/4;draw.line((left,y,right,y),fill=self.color('spectrum_grid')[:3],width=1)
             for i in range(7):
-                x=left+(right-left)*i/6;draw.line((x,top,x,bottom),fill=(32,51,68),width=1)
+                x=left+(right-left)*i/6;draw.line((x,top,x,bottom),fill=self.color('spectrum_grid')[:3],width=1)
             def line(values,color):
                 points=[]
                 for x,value in enumerate(values):
@@ -196,11 +189,11 @@ class SpectrumWorkspace(SSTVWorkspace):
                 return reduce_values(values,source['settings'],view[0],view[1],1148)
             if self.screen=='compare':
                 if result['matched']:
-                    zero=top+hi/(hi-lo)*(bottom-top);draw.line((left,zero,right,zero),fill=(125,164,182),width=2)
-                    line(series(dict(data,delta=result['delta']),'delta'),(112,234,206))
+                    zero=top+hi/(hi-lo)*(bottom-top);draw.line((left,zero,right,zero),fill=self.color('spectrum_axis')[:3],width=2)
+                    line(series(dict(data,delta=result['delta']),'delta'),self.color('spectrum_line')[:3])
             else:
-                line(series(data,'peak'),(234,195,130));line(series(data,'power'),(112,234,206))
-                if matching(data,self.baseline):line(series(self.baseline,'average'),(126,186,255))
+                line(series(data,'peak'),self.color('spectrum_peak_line')[:3]);line(series(data,'power'),self.color('spectrum_line')[:3])
+                if matching(data,self.baseline):line(series(self.baseline,'average'),self.color('focus')[:3])
                 for x,code in enumerate(columns(data,'power',view,1148)):
                     if code==1:draw.line((left+x,top,left+x,bottom),fill=(187,119,57),width=1)
         elif rows:
@@ -214,7 +207,11 @@ class SpectrumWorkspace(SSTVWorkspace):
                 values=np.vstack([r['values'] for r in rows]);missing=values==0;clipped=values==1;t=(values.astype(float)-202-self.floor)/max(5,self.ceiling-self.floor)*4
             t=np.clip(t,0,4);index=np.minimum(3,t.astype(int));f=(t-index)[...,None];rgb=(PALETTE[index]*(1-f)+PALETTE[index+1]*f).astype('uint8');rgb[missing]=(29,38,47);rgb[clipped]=(232,148,72)
             height=336 if kind=='persistence' else min(336,len(rows)*16)
-            image.paste(Image.fromarray(rgb).resize((1116,height),Image.Resampling.NEAREST),(100,36))
+            signal=Image.fromarray(rgb).convert('RGBA')
+            mapper=getattr(self.ui,'themed_waterfall_pixels',None)
+            mapped=mapper(signal.tobytes()) if callable(mapper) else None
+            if isinstance(mapped,bytes):signal=Image.frombytes('RGBA',signal.size,mapped)
+            image.paste(signal.resize((1116,height),Image.Resampling.NEAREST),(100,36))
         return image.tobytes(),(lo,hi)
 
     def prepare_native(self,data,rows,view):
@@ -240,21 +237,21 @@ class SpectrumWorkspace(SSTVWorkspace):
             if len(segment)>1:segments.append(segment)
             lines.append((segments,color))
         if result:
-            if result['matched']:series(dict(data,delta=result['delta']),'delta',(112,234,206,255))
+            if result['matched']:series(dict(data,delta=result['delta']),'delta',self.color('spectrum_line'))
         else:
-            series(data,'peak',(234,195,130,255));series(data,'power',(112,234,206,255))
-            if matching(data,self.baseline):series(self.baseline,'average',(126,186,255,255))
+            series(data,'peak',self.color('spectrum_peak_line'));series(data,'power',self.color('spectrum_line'))
+            if matching(data,self.baseline):series(self.baseline,'average',self.color('focus'))
         excluded=columns(data,'power',view,1148)==1 if not result else np.zeros(1148,bool)
         edges=np.diff(np.r_[False,excluded,False].astype(int))
         bands=list(zip(np.flatnonzero(edges==1),np.flatnonzero(edges==-1)))
         return dict(native=True,lines=lines,bands=bands,zero=272+hi/(hi-lo)*296 if result else None),(lo,hi)
 
     def draw_native_chart(self,frame):
-        ui=self.ui;ui.draw_logical_rect(*self.GRAPH,(11,23,35,255))
-        for i in range(5):ui.draw_logical_polyline([(92,272+296*i/4),(1240,272+296*i/4)],(38,60,77,255),1)
-        for i in range(7):ui.draw_logical_polyline([(92+1148*i/6,272),(92+1148*i/6,568)],(32,51,68,255),1)
+        ui=self.ui;ui.draw_logical_rect(*self.GRAPH,self.color('spectrum_field'))
+        for i in range(5):ui.draw_logical_polyline([(92,272+296*i/4),(1240,272+296*i/4)],self.color('spectrum_grid'),1)
+        for i in range(7):ui.draw_logical_polyline([(92+1148*i/6,272),(92+1148*i/6,568)],self.color('spectrum_grid'),1)
         for first,last in frame['bands']:ui.draw_logical_rect(92+int(first),272,92+int(last),568,(125,78,39,150))
-        if frame['zero'] is not None:ui.draw_logical_polyline([(92,frame['zero']),(1240,frame['zero'])],(125,164,182,255),2)
+        if frame['zero'] is not None:ui.draw_logical_polyline([(92,frame['zero']),(1240,frame['zero'])],self.color('spectrum_axis'),2)
         for segments,color in frame['lines']:
             for segment in segments:ui.draw_logical_polyline(segment,color,2)
 
@@ -456,7 +453,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.text(cache,24,28,'SPECTRUM',30,self.CYAN);self.text(cache,280,28,{'survey':'Broad survey','investigate':'Live investigation','watch':'Watch mode'}[purpose],22)
         self.text(cache,24,60,f"{config['low']/1e6:g}–{config['high']/1e6:g} MHz · {config['bin']/1000:g} kHz bins · {config['gain']:g} dB gain",18,self.MUTED,width=650)
         self.text(cache,558,28,phase,19,self.CYAN if phase=='RUNNING' else self.MUTED,width=126)
-        self.button(cache,(992,10,1118,68),'Back',('back',None))
+        self.draw_back(cache)
         self.button(cache,(1130,10,1256,68),'Home',('home',None))
         if self.overlay:
             self.draw_overlay(cache)
@@ -471,10 +468,11 @@ class SpectrumWorkspace(SSTVWorkspace):
             elif self.screen=='watch':self.draw_watch(cache)
             elif self.screen=='tools':self.draw_tools(cache)
             else:self.draw_reports(cache,state)
-        if self.message:self.text(cache,24,746,self.message,20,(242,198,130),width=1230)
+        x0,_,x1,_=footer_content_box()
+        if self.message:self.text(cache,x0,746,self.message,20,self.GOLD,width=x1-x0)
         elif not self.overlay:self.draw_inspector(cache,data)
         age=state.get('run',{}).get('last_sample_age');detail=('Last IQ '+f'{age:.1f}s ago') if state.get('enabled') and age is not None else 'Measurements retained · receiver idle'
-        self.text(cache,24,780,detail+' · USB '+(data.get('device') or {}).get('serial','—')+' · timestamps UTC · native display',18,self.MUTED,width=1230)
+        self.text(cache,x0,780,detail+' · USB '+(data.get('device') or {}).get('serial','—')+' · timestamps UTC',18,self.MUTED,width=x1-x0)
 
     def draw_graph(self,cache,data,config,frame,identity,frame_view):
         if self.screen=='compare':data=self.compare_data
@@ -539,7 +537,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.text(cache,24,188,'Select a signal → Investigate its band or add it to Watchlist',23,self.CYAN)
         for x,label in ((36,'Frequency'),(340,'Width estimate'),(524,'Above floor'),(726,'Detected / valid'),(1030,'Last UTC')):self.text(cache,x,224,label,18,self.MUTED)
         for i,s in enumerate(signals[self.page*5:(self.page+1)*5]):
-            y=244+i*76;box=(24,y,1256,y+68);self.ui.draw_logical_rounded_rect(*box,6,(28,65,72,255) if self.selected==s['frequency'] else self.PANEL,(43,70,88,255),1);self.actions.append((box,('select_signal',s['frequency'])))
+            y=244+i*76;box=(24,y,1256,y+68);self.ui.draw_logical_rounded_rect(*box,self.RADIUS,self.color('selected_surface') if self.selected==s['frequency'] else self.PANEL,self.LINE,1);self.actions.append((box,('select_signal',s['frequency'])))
             self.text(cache,36,y+26,f"{s['frequency']/1e6:.6f}",26,self.CYAN);self.text(cache,36,y+52,'MHz',18,self.MUTED)
             self.text(cache,340,y+34,f"{s['width']/1000:g} kHz",22);self.text(cache,524,y+34,f"+{s['excess']:.1f} dB",24,self.CYAN)
             self.text(cache,726,y+24,f"{s['active_visits']}/{s['visits']} · {s['activity'] or 0:.0f}%",22);self.text(cache,726,y+50,'sampled visits',18,self.MUTED)
@@ -558,7 +556,7 @@ class SpectrumWorkspace(SSTVWorkspace):
         else:
             watches=self.state.get('watchlist',[]);last=max(0,math.ceil(len(watches)/5)-1);self.page=min(self.page,last)
             for i,w in enumerate(watches[self.page*5:(self.page+1)*5]):
-                y=240+i*76;box=(24,y,1256,y+68);self.ui.draw_logical_rounded_rect(*box,6,(28,65,72,255) if self.selected_watch==w['id'] else self.PANEL,(43,70,88,255),1);self.actions.append((box,('select_watch',w['id'])))
+                y=240+i*76;box=(24,y,1256,y+68);self.ui.draw_logical_rounded_rect(*box,self.RADIUS,self.color('selected_surface') if self.selected_watch==w['id'] else self.PANEL,self.LINE,1);self.actions.append((box,('select_watch',w['id'])))
                 m=w.get('measurement');self.text(cache,36,y+25,w['label'],23,self.CYAN,width=440);self.text(cache,36,y+52,f"{w['frequency']/1e6:.6f} MHz · {w['bandwidth']/1000:g} kHz",18,self.MUTED)
                 self.text(cache,510,y+34,'Not sampled' if w['stale'] else 'Detected' if m['present'] else 'Quiet on visits',23)
                 self.text(cache,830,y+25,f"{m['level']:.1f} dBFS/Hz · +{m['excess']:.1f} dB" if m else 'No valid visit yet',21,self.CYAN,width=410)
@@ -581,8 +579,9 @@ class SpectrumWorkspace(SSTVWorkspace):
         self.button(cache,(24,664,720,722),'Generate survey report',('report',None),active=True);self.button(cache,(732,664,984,722),'Previous',('page',-1));self.button(cache,(996,664,1256,722),'Next',('page',1))
 
     def draw_inspector(self,cache,data):
+        x0,_,x1,_=footer_content_box()
         if self.selected is None:
-            self.text(cache,24,746,'Survey → Signals → Investigate · Watch and compare without changing the display gain.',19,self.MUTED,width=1230);return
+            self.text(cache,x0,746,'Survey → Signals → Investigate · Watch and compare without changing the display gain.',19,self.MUTED,width=x1-x0);return
         selection=self.inspection or {};row=selection.get('row');code=selection.get('code');level='Selected for investigation'
         if isinstance(row,dict) and code is not None:level='No valid measurement' if code==0 else 'Clipping excluded' if code==1 else f'≈ {code-202} dBFS/Hz · '+time.strftime('%H:%M:%S UTC',time.gmtime(row['finished']))
         elif self.screen=='compare' and self.compare_data.get('settings'):
@@ -591,8 +590,8 @@ class SpectrumWorkspace(SSTVWorkspace):
         elif data.get('settings'):
             index=int((self.selected-data['settings']['low'])/data['settings']['bin']);power=data.get('power',[])
             if 0<=index<len(power) and power[index] is not None:level=f'{power[index]:.1f} dBFS/Hz · latest visit'
-        self.text(cache,24,746,f'{self.selected/1e6:.6f} MHz · {level} · tap for allocations',22,self.CYAN,width=1230)
-        self.actions.append(((24,730,1256,768),('overlay','info')))
+        self.text(cache,x0,746,f'{self.selected/1e6:.6f} MHz · {level} · tap for allocations',22,self.CYAN,width=x1-x0)
+        self.actions.append(((x0,730,x1,768),('overlay','info')))
 
     def close(self):
         self.open=False;self.closed.set();self.wake.set()

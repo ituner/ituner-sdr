@@ -5,14 +5,14 @@ same instruments and touch actions as the browser without embedding a browser.
 """
 import math
 import time
+from decoder_style import footer_content_box
+from ui_style import APP_UI_STYLE
 from adsb_traffic import historical_aircraft, position_age, reception_summary, trail_label
 from adsb_view import aged, freshness
 
 
 class AirspaceDashboard:
-    DASHBOARD_MAP = (0, 224, 944, 764)
-    LINE = (43, 65, 81, 255)
-    TEXT = (223, 235, 242)
+    DASHBOARD_MAP = (0, 224, 944, 720)
 
     def ink(self, cache, x, y, value, size=16, color=None, width=None, anchor='lm', bold=False):
         value=str(value)
@@ -21,18 +21,10 @@ class AirspaceDashboard:
         self.ui.draw_text(cache,x,y,value,color or self.TEXT,size,bold,False,anchor,family='Oxanium')
 
     def surface(self, box, fill=None, border=None, radius=8):
-        self.ui.draw_logical_rounded_rect(*box,radius,fill or self.PANEL,border or self.LINE,1)
+        self.ui.draw_logical_rounded_rect(*box,APP_UI_STYLE.button.radius,fill or self.PANEL,border or self.LINE,1)
 
     def button(self, cache, box, title, action, subtitle='', active=False, enabled=True, font_size=None):
-        x0,y0,x1,y1=box
-        fill=(22,57,60,245) if active else (13,30,43,245)
-        border=(*self.CYAN,210) if active else self.LINE
-        color=self.CYAN if active else self.TEXT if enabled else (89,111,127)
-        self.surface(box,fill,border,6)
-        size=font_size or (16 if x1-x0>160 else 14)
-        self.ink(cache,(x0+x1)/2,(y0+y1)/2-(8 if subtitle else 0),title,size,color,width=x1-x0-20,anchor='cm',bold=True)
-        if subtitle:self.text(cache,x0+10,(y0+y1)/2+15,subtitle,11,self.MUTED,width=x1-x0-20)
-        if enabled:self.actions.append((box,action))
+        self.decoder_button(cache,box,title,action,subtitle,active,enabled,font_size or 16)
 
     @staticmethod
     def instrument_value(value, digits=0):
@@ -47,14 +39,14 @@ class AirspaceDashboard:
 
     def header(self, cache, state, valid):
         ui=self.ui
-        ui.draw_logical_rect(0,0,1280,88,(13,25,35,255))
-        ui.draw_logical_rect(0,0,680,88,(19,35,47,255))
+        ui.draw_logical_rect(0,0,1280,88,self.PANEL)
+        ui.draw_logical_rect(0,0,680,88,self.PANEL)
         ui.draw_logical_rect(0,87,1280,88,self.LINE)
         self.plane_symbol(35,45,self.CYAN,1.05)
         self.ink(cache,66,24,'iTUNER / VHF + UHF',10,self.MUTED)
         self.ink(cache,64,56,'A I R S P A C E',27,bold=True)
         for box,title,sub,ready in (((300,14,476,75),'1090 ES',state['status'],True),((488,14,664,75),'978 UAT','NOT INSTALLED',False)):
-            self.surface(box,(16,33,44,255),self.LINE,6)
+            self.surface(box,self.PANEL,self.LINE,6)
             self.ui.draw_logical_circle(box[0]+15,box[1]+20,3,self.CYAN if ready and state['enabled'] else self.MUTED)
             self.ink(cache,box[0]+30,box[1]+22,title,22,self.TEXT if ready else self.MUTED)
             self.ink(cache,box[0]+30,box[1]+46,sub,10,self.CYAN if ready else self.MUTED,width=138)
@@ -62,10 +54,10 @@ class AirspaceDashboard:
         self.ink(cache,1098,33,time.strftime('%H:%M:%S UTC',time.gmtime()),20,self.MUTED,anchor='rm')
         self.ink(cache,1098,60,'LOCAL GROUND RECEIVER',10,self.MUTED,anchor='rm')
         self.button(cache,(1120,16,1264,74),'STOP' if state['enabled'] else 'START',('stop' if state['enabled'] else 'start',None),active=state['enabled'])
-        ui.draw_logical_rect(0,88,1280,146,(11,23,33,255))
+        ui.draw_logical_rect(0,88,1280,146,self.PANEL)
         ui.draw_logical_rect(0,145,1280,146,self.LINE)
         showing=self.logs_open or self.usb_open or self.traffic_open
-        for box,label,kind,active in (((16,96,116,136),'MAP','map_view',not showing),((126,96,266,136),f"TRAFFIC  {len(self.display_aircraft(state))}",'traffic',self.traffic_open),((276,96,376,136),'LOGS','logs',self.logs_open),((386,96,526,136),'RECEIVER','usb',self.usb_open),((1160,96,1264,136),'BACK','back',False)):
+        for box,label,kind,active in (((16,96,116,136),'MAP','map_view',not showing),((126,96,266,136),f"TRAFFIC  {len(self.display_aircraft(state))}",'traffic',self.traffic_open),((276,96,376,136),'LOGS','logs',self.logs_open),((386,96,526,136),'RECEIVER','usb',self.usb_open)):
             self.button(cache,box,label,(kind,None),active=active)
         status=reception_summary(state,time.time()) if state['enabled'] else state['status']
         self.text(cache,546,117,status,13,self.MUTED,width=598)
@@ -78,7 +70,7 @@ class AirspaceDashboard:
 
     def draw_view_controls(self, cache):
         view=self.traffic_view
-        self.ui.draw_logical_rect(0,146,944,224,(10,22,31,255))
+        self.ui.draw_logical_rect(0,146,944,224,self.PANEL)
         for box,label,action,active,enabled in (
             ((16,156,92,212),'Live',('traffic_view','live'),view.mode=='live',True),
             ((100,156,300,212),'Reception dome',('coverage',None),self.coverage_open,True),
@@ -86,20 +78,20 @@ class AirspaceDashboard:
             ((512,156,616,212),'History',('traffic_view','history'),view.mode=='history',True),
             ((624,156,788,212),'Start fresh',('start_fresh',None),False,True),
             ((796,156,928,212),'Past trails',('backdrop',None),view.backdrop,view.mode!='history')):
-            self.button(cache,box,label,action,subtitle=('ON' if view.backdrop else 'OFF') if action[0]=='backdrop' else '',active=active,enabled=enabled,font_size=20)
+            self.button(cache,box,label,action,subtitle=('ON' if view.backdrop else 'OFF') if action[0]=='backdrop' else '',active=active,enabled=enabled,font_size=18)
 
     def draw_map_hud(self, cache, state, valid):
         # Compact instruments and buttons float above the same GPU map as GLOBE.
         self.draw_view_controls(cache)
-        self.overlay_boxes=[(16,240,492,320),(16,332,690,382),(16,722,530,750),(16,678,160,710)]
-        self.surface((16,240,492,320),(10,25,37,240))
+        self.overlay_boxes=[(16,240,492,320),(16,332,690,382),(16,630,530,658),(16,678,160,710)]
+        self.surface((16,240,492,320),self.PANEL)
         counts=self.traffic_view.counts(state['aircraft'],time.time())
         for index,(label,value) in enumerate((('LIVE CONTACTS',counts['live']),('FRESH POSITIONS',counts['positions']),('NEW THIS VISIT',counts['new']),('MSG / SEC',f'{self.rate:.1f}'))):
             x=32+index*118
             if index:self.ui.draw_logical_rect(x-16,241,x-15,319,self.LINE)
             self.ink(cache,x,259,label,9,self.MUTED)
             self.ink(cache,x,293,value,27,width=100)
-        self.surface((16,332,690,382),(10,25,37,225),radius=4)
+        self.surface((16,332,690,382),self.PANEL,radius=4)
         view=self.traffic_view
         window=('since '+time.strftime('%H:%M',time.localtime(view.opened_at))) if view.mode=='session' else 'trails '+trail_label(self.trail_seconds)
         self.ink(cache,26,348,view.label+' · '+window+' · LOGS RETAINED',15,self.CYAN)
@@ -110,16 +102,16 @@ class AirspaceDashboard:
             if kind=='trails' and view.mode=='session':label='SINCE OPENED'
             self.button(cache,(778,y,928,y+44),label,(kind,value),active=active,enabled=not(kind=='trails' and view.mode=='session'))
         if self.following:
-            self.surface((240,666,714,710),(53,43,27,240),(130,101,58,255))
+            self.surface((240,666,714,710),self.PANEL,self.color('waiting'))
             live=next((p for p in state['aircraft'] if p['hex']==self.selected),None)
             label='FOLLOWING' if self.positioned(live) else 'WAITING FOR POSITION'
             name=((self.selected_plane or {}).get('flight') or self.selected or '').strip()
             self.ink(cache,477,688,label+' · '+name,15,self.GOLD,anchor='cm')
             self.overlay_boxes.append((240,666,714,710))
-        self.surface((16,722,530,750),(10,25,37,235),radius=4)
+        self.surface((16,630,530,658),self.PANEL,radius=4)
         for x,label,color in ((30,'Low altitude',self.CYAN),(158,'High altitude',(120,184,255)),(291,'Selected',self.GOLD),(400,'Last known',self.MUTED)):
-            self.ui.draw_logical_circle(x,736,3,color)
-            self.text(cache,x+10,736,label,11,self.MUTED)
+            self.ui.draw_logical_circle(x,644,3,color)
+            self.text(cache,x+10,644,label,11,self.MUTED)
         radius=min(self.MAP[2]-self.MAP[0],self.MAP[3]-self.MAP[1])*.92*self.scale
         maximum=math.asin(min(.95,120/max(1,radius)))*3440.065
         steps=(.005,.01,.02,.05,.1,.2,.5,1,2,5,10,20,50,100,200,500,1000,2000)
@@ -134,8 +126,8 @@ class AirspaceDashboard:
 
     def draw_aircraft_sidebar(self, cache, state, valid):
         ui=self.ui
-        ui.draw_logical_rect(944,146,1280,764,(14,28,40,255))
-        ui.draw_logical_rect(944,146,945,764,self.LINE)
+        ui.draw_logical_rect(944,146,1280,720,self.PANEL)
+        ui.draw_logical_rect(944,146,945,720,self.LINE)
         self.ink(cache,962,168,self.traffic_view.label+' TRAFFIC',11,self.MUTED)
         self.ink(cache,960,197,'Aircraft',25)
         self.ink(cache,1260,190,len(self.display_aircraft(state)),34,self.MUTED,anchor='rm')
@@ -146,7 +138,7 @@ class AirspaceDashboard:
         historical=next((p for p in self.display_aircraft(state) if p['hex']==self.selected and p.get('historical')),None)
         if live or historical:plane=live if self.positioned(live) else historical or live;self.selected_plane=plane
         if plane:plane=aged(plane,time.time())
-        self.surface((960,270,1264,592),(29,32,29,255) if plane else (10,24,35,255),(133,107,65,255) if plane else self.LINE)
+        self.surface((960,270,1264,592),self.color('selected_surface') if plane else self.PANEL,self.color('selected_border') if plane else self.LINE)
         if plane:
             self.ink(cache,976,291,'TARGET DETAILS',10,self.MUTED)
             self.ink(cache,976,321,(plane.get('flight') or plane['hex']).strip(),25,self.GOLD,width=212)
@@ -174,9 +166,9 @@ class AirspaceDashboard:
         self.ink(cache,962,616,'LATEST CONTACTS',10,self.MUTED)
         planes=self.sorted_aircraft(state)
         for index,plane in enumerate(planes[:2]):
-            y=634+index*58;selected=plane['hex']==self.selected
+            y=600+index*58;selected=plane['hex']==self.selected
             box=(960,y,1264,y+52)
-            self.surface(box,(32,45,44,255) if selected else (16,33,45,255),self.LINE,5)
+            self.surface(box,self.color('selected_surface') if selected else self.PANEL,self.LINE,5)
             if selected:ui.draw_logical_rect(960,y+5,963,y+47,(*self.GOLD,255))
             self.ink(cache,974,y+17,(plane.get('flight') or plane['hex']).strip(),16,self.GOLD if selected else self.TEXT,width=170)
             self.ink(cache,1250,y+17,self.instrument_value(plane.get('alt_baro'))+' ft',12,self.MUTED,anchor='rm')
@@ -187,7 +179,7 @@ class AirspaceDashboard:
         if not planes:
             self.text(cache,976,657,'No contacts in this view.',16,self.MUTED)
             self.text(cache,976,686,'Choose History for earlier observations.',12,self.MUTED,width=272)
-            self.text(cache,976,720,'Flights and receiver activity are in Logs.',12,self.MUTED,width=272)
+            self.text(cache,976,710,'Flights and receiver activity are in Logs.',12,self.MUTED,width=272)
 
     def draw(self, cache, *args):
         state=self.manager.snapshot();self.actions=[]
@@ -206,11 +198,13 @@ class AirspaceDashboard:
             else:self.draw_usb(cache,state)
         else:self.draw_map(cache,state,valid)
         self.draw_aircraft_sidebar(cache,state,valid)
-        self.ui.draw_logical_rect(0,764,1280,800,(10,22,31,255))
-        self.ui.draw_logical_rect(0,764,1280,765,self.LINE)
-        self.ui.draw_logical_circle(18,783,3,self.CYAN if state['enabled'] else self.MUTED)
+        self.ui.draw_logical_rect(0,724,1280,800,self.BG)
+        self.ui.draw_logical_rect(0,724,1280,725,self.LINE)
+        x0,_,x1,_=footer_content_box()
+        self.draw_back(cache)
+        self.ui.draw_logical_circle(x0,747,3,self.CYAN if state['enabled'] else self.MUTED)
         status='1090 ES · '+state['status']
-        self.ink(cache,30,783,status,10,self.CYAN if state['enabled'] else self.MUTED,width=180)
+        self.ink(cache,x0+12,747,status,10,self.CYAN if state['enabled'] else self.MUTED,width=180)
         detail=self.message or 'NASA BLUE MARBLE / GIBS · NATURAL EARTH'
-        self.text(cache,230,783,detail,11,self.GOLD if self.message else self.MUTED,width=650)
-        self.ink(cache,1262,783,f'TRAILS {trail_label(self.trail_seconds)} · cm5.local:{state["port"]}',10,self.MUTED,anchor='rm')
+        self.text(cache,x0,777,detail,11,self.GOLD if self.message else self.MUTED,width=650)
+        self.ink(cache,x1,747,f'TRAILS {trail_label(self.trail_seconds)} · cm5.local:{state["port"]}',10,self.MUTED,anchor='rm')
