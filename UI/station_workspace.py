@@ -1,5 +1,7 @@
 """Touch-first shared Radio / User Information, with a local keyboard."""
 import time
+from ui_chrome import draw_status_clock
+from decoder_style import DecoderStyle, footer_content_box
 from station_profile import FIELDS
 
 PAGES=(('identity','Identity'),('location','Location'),('gps','GPS & movement'))
@@ -8,8 +10,7 @@ LOCATION=(('latitude','Latitude · decimal degrees'),('longitude','Longitude · 
 NUMERIC={k for k,_ in LOCATION}
 
 
-class StationWorkspace:
-    BG=(8,16,25,255);PANEL=(16,33,48,255);TEXT=(222,239,251);MUTED=(151,179,199);CYAN=(117,229,208)
+class StationWorkspace(DecoderStyle):
     def __init__(self,ui,station):
         self.ui=ui;self.station=station;self.open=False;self.page='identity';self.draft={};self.field=None;self.caps=False;self.value='';self.message='';self.actions=[];self.dirty=False
     def show(self):
@@ -19,9 +20,8 @@ class StationWorkspace:
         if width:text=self.ui.fit_station_text(cache,text,width,size,size>=20,False,'Liberation Sans')
         self.ui.draw_text(cache,x,y,text,color or self.TEXT,size,size>=20,False,anchor,family='Liberation Sans')
     def button(self,cache,box,label,action,active=False):
-        self.ui.draw_logical_rounded_rect(*box,8,(29,74,68,255) if active else self.PANEL,(*self.CYAN,255) if active else (48,76,98,255),1)
-        self.ink(cache,(box[0]+box[2])/2,(box[1]+box[3])/2,label,21,self.CYAN if active else self.TEXT,'cm',box[2]-box[0]-24)
-        self.actions.append((box,action))
+        self.decoder_button(cache,box,label,action,active=active,font_size=21,
+                            uppercase=action[0] not in ('edit','key'))
     def drag_begin(self,*args):pass
     def drag_move(self,*args):pass
     def swipe(self,*args):return False
@@ -55,16 +55,17 @@ class StationWorkspace:
         ui=self.ui;ui.draw_logical_rect(0,0,1280,800,self.BG)
         self.ink(cache,24,34,dict(IDENTITY+LOCATION).get(self.field,self.field),26)
         value=self.value or ('Unknown / blank' if self.field in NUMERIC else 'Blank')
-        ui.draw_logical_rounded_rect(24,78,1256,150,8,self.PANEL,(80,139,157,255),1)
+        ui.draw_logical_rounded_rect(24,78,1256,150,self.RADIUS,self.PANEL,self.LINE,1)
         self.ink(cache,42,113,value[-90:],25,width=1180)
         rows=['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM./-']
         for r,row in enumerate(rows):
             if not self.caps:row=row.lower()
             width=104;offset=(1280-len(row)*114+10)/2
             for col,key in enumerate(row):self.button(cache,(offset+col*114,190+r*88,offset+col*114+width,264+r*88),key,('key',key))
-        for box,label,key in (((24,560,172,630),'Space',' '),((184,560,324,630),'Shift','SHIFT'),((336,560,426,630),':',':'),((438,560,598,630),'Delete','DELETE'),((610,560,750,630),'Clear','CLEAR'),((762,560,942,630),'Cancel','CANCEL'),((954,560,1256,630),'Done','DONE')):
+        for box,label,key in (((24,560,172,630),'Space',' '),((184,560,324,630),'Shift','SHIFT'),((336,560,426,630),':',':'),((438,560,598,630),'Delete','DELETE'),((610,560,750,630),'Clear','CLEAR'),((762,560,1256,630),'Done','DONE')):
             self.button(cache,box,label,('key',key),key=='DONE')
         self.ink(cache,24,690,self.message or 'Blank numeric fields mean unknown. GPS may supply the antenna position.',18,self.MUTED,width=1230)
+        self.draw_back(cache,('key','CANCEL'))
     def draw(self,cache):
         self.actions=[]
         if self.field is not None:self.keyboard(cache);return
@@ -74,7 +75,7 @@ class StationWorkspace:
         self.ink(cache,24,32,'RADIO / USER INFORMATION',27)
         source=('GPS · LAST KNOWN / STALE' if p and p['source']=='gps' and p['stale'] else 'GPS · AUTOMATIC' if p and p['source']=='gps' else 'MANUAL')
         self.ink(cache,24,67,(f"{p['lat']:.6f}°, {p['lon']:.6f}° · {data['grid']} · {source}" if p else 'Location not set · enter coordinates or connect GPS'),18,self.CYAN,width=994)
-        self.button(cache,(1050,16,1256,80),'Back to Settings',('back',None))
+        self.draw_back(cache)
         for i,(key,title) in enumerate(PAGES):self.button(cache,(24+i*312,100,320+i*312,158),title,('page',key),self.page==key)
         if self.page in ('identity','location'):
             fields=IDENTITY if self.page=='identity' else LOCATION
@@ -92,5 +93,7 @@ class StationWorkspace:
                 self.ink(cache,32,y,label,20,self.MUTED);self.ink(cache,516,y,value,20,width=730)
             self.ink(cache,32,573,'Connect a gpsd-compatible USB GNSS receiver. No fix keeps the saved location.',18,self.MUTED,width=1210)
         self.ink(cache,24,669,self.message or 'Shared across local SDRs, decoder maps, satellite predictions and weather.',18,self.CYAN if self.message else self.MUTED,width=1220)
-        self.button(cache,(820,707,1256,775),'Save radio information',('save',None),True)
-        self.ink(cache,24,738,'Callsign optional · no reporting or transmitting is enabled.',17,self.MUTED,width=770)
+        x0,_,x1,_=footer_content_box()
+        self.button(cache,(x1-436,728,x1,792),'Save radio information',('save',None),True)
+        self.ink(cache,x0,739,'Callsign optional · receive only',18,self.MUTED,width=x1-x0-460)
+        draw_status_clock(ui,cache,x0)

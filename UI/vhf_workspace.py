@@ -2,6 +2,7 @@
 import math
 import textwrap
 import time
+from decoder_style import DecoderStyle
 from types import SimpleNamespace
 from adsb_workspace import ADSBWorkspace
 from sstv_workspace import SSTVWorkspace
@@ -17,8 +18,7 @@ class MapAdapter:
         with session.lock:return {k:list(v) for k,v in session.tracks.items()}
 
 
-class VHFWorkspace(SSTVWorkspace):
-    BG=(8,16,25,255);PANEL=(15,30,44,255);MUTED=(137,164,186);CYAN=(102,226,210)
+class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
@@ -38,7 +38,7 @@ class VHFWorkspace(SSTVWorkspace):
         self.mode=mode;self.open=True;self.view='map' if mode in ('ais','aprs','sonde') else 'data'
         self.overlay=None;self.page=0;self.map.centered=False;self.map.selected=None;self.map.following=False;self.map.track_time=-float('inf')
 
-    def panel(self,box):self.ui.draw_logical_rounded_rect(*box,8,self.PANEL,(42,68,87,255),1)
+    def panel(self,box):self.ui.draw_logical_rounded_rect(*box,self.RADIUS,self.PANEL,self.LINE,1)
 
     def drag_begin(self,x,y):
         if self.mode=='spectrum':return self.spectrum.drag_begin(x,y)
@@ -111,7 +111,7 @@ class VHFWorkspace(SSTVWorkspace):
     def header(self,cache,state):
         ui=self.ui;meta=MODES[self.mode]
         ui.draw_logical_rect(0,0,1024,82,self.PANEL)
-        ui.draw_text(cache,20,30,meta['title'].upper(),(224,241,251),25,True,False,'lm',family='Oxanium')
+        ui.draw_text(cache,20,30,meta['title'].upper(),self.TEXT,25,True,False,'lm',family='Oxanium')
         self.text(cache,22,60,meta['label']+' / '+meta['engine'],13,self.MUTED)
         for x,label,value in ((610,'FREQUENCY',f"{state['settings']['frequency']/1e6:.3f} MHz"),(850,'DECODED',state['messages'])):
             self.text(cache,x,22,label,10,self.MUTED);self.text(cache,x,52,value,23,self.CYAN)
@@ -261,9 +261,8 @@ class VHFWorkspace(SSTVWorkspace):
             self.button(cache,(1034,558,1148,626),'PREV',('page',-1));self.button(cache,(1156,558,1270,626),'NEXT',('page',1))
             if self.mode in ('meteor','cubesat'):self.button(cache,(1034,636,1270,704),'SITE / ORBITS',('overlay','location'))
         self.button(cache,(1034,728,1270,792),'BACK',('back',None))
-        self.text(cache,20,740,self.message or state['detail'],14,self.MUTED,width=990)
         dashboard='RTL433-UI · cm5.local:8093' if self.mode=='ism' and getattr(self.manager,'rtl433_ui_installed',False) else 'SIGNAL OBSERVATORY · cm5.local:8092'
-        self.text(cache,20,778,dashboard+' · '+time.strftime('%H:%M:%S UTC',time.gmtime()),13,self.MUTED)
+        self.draw_status(cache,self.message or state['detail'],dashboard)
 
     def close(self):
         self.spectrum.close();super().close();self.manager.close()

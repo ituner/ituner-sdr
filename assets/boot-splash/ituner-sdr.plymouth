@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=iTuner SDR
+Description=Quiet appliance boot screen for the iTuner SDR CM5
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/ituner-sdr
+ScriptFile=/usr/share/plymouth/themes/ituner-sdr/ituner-sdr.script
