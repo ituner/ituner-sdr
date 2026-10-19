@@ -25,6 +25,14 @@ class Cm5ApplianceBootTests(unittest.TestCase):
             self.assertEqual(image.size, (800, 1280))
             self.assertEqual(image.mode, "RGB")
 
+    def test_splash_version_matches_release(self):
+        version = (ROOT / 'VERSION').read_text().strip()
+        self.assertRegex(version, r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+        for filename in ('ituner-sdr-native.png', 'ituner-sdr-preview.png'):
+            with Image.open(ROOT / 'assets/boot-splash' / filename) as image:
+                self.assertEqual(image.info.get('SoftwareVersion'), version,
+                                 'Rebuild the splash after changing VERSION')
+
     def test_installer_keeps_network_out_of_app_critical_path(self):
         source = (ROOT / "scripts/install-cm5-app-only.sh").read_text()
         unit = source.split("cat > /etc/systemd/system/ituner-sdr.service <<EOF", 1)[1]

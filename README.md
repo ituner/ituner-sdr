@@ -32,6 +32,16 @@ For the separately installed Ground Station and Satvisor evaluation dashboards,
 addresses, setup and receiver ownership notes, see
 [satellite application evaluation](docs/satellite-evaluation.md).
 
+### Software version
+
+[`VERSION`](VERSION) is the source of the `major.minor.patch` release number,
+starting at 0.1.0. Increase patch for fixes, minor for new features, and major
+for incompatible changes. Bump it for each release, rebuild the splash with
+`python3 scripts/build-boot-splash.py`, and commit the version and generated
+images together. The splash displays this number below the logo; installers
+copy it to `/opt/ituner-sdr/VERSION`. Git commit IDs remain separate build
+identifiers for diagnosis.
+
 ### Update, validate and run on the CM5
 
 Run the following on the CM5 from its repository checkout. The compile check
