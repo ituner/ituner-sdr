@@ -24,6 +24,39 @@ bootstrap. Satvisor follows that shared location every 30 seconds through a
 sanitized, read-only local endpoint; Ground Station currently receives an
 initial copy, so update its Location settings if moving the receiver.
 
+### Login mode (reversible)
+
+At the user's request, Ground Station is configured for **no login prompt** on
+the local network. Anyone who can reach port 7000 can operate the existing
+`ituner` account. The account, password and normal upstream login implementation
+are preserved. No credentials or session tokens are embedded in the frontend.
+An external Python launcher supplies an internal session to HTTP and WebSocket
+requests; the pinned upstream image is unchanged.
+
+To require login again, run on CM5 from `/home/ituner/ituner-sdr`:
+
+```sh
+sudo bash scripts/set-groundstation-login.sh required
+```
+
+To return to no prompt:
+
+```sh
+sudo bash scripts/set-groundstation-login.sh open
+```
+
+The switch is stored in
+`/var/lib/ituner-groundstation/configs/ituner_access.json` and survives reboot.
+The helper restarts only Ground Station, dropping existing automatic-access
+sockets. Missing settings default to requiring login. Existing legitimate
+browser login sessions retain normal upstream behavior. The private credential
+file above remains the login recovery reference; do not delete it.
+
+For an older evaluation container, install the launcher mounts once with
+`sudo bash scripts/start-groundstation-evaluation.sh --recreate`. The previous
+container is retained stopped as `ituner-groundstation-backup-<timestamp>` with
+automatic restart disabled. Both containers use the same persistent data.
+
 ## Ground Station
 
 Pinned ARM64 image:
