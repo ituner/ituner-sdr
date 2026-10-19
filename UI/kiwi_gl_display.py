@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+from ui_chrome import draw_status_clock, RAIL_BACK_BOX
 import traceback
 import re
 import html
@@ -3293,9 +3294,9 @@ def detect_receiver_home(result):
 
 def station_distance_miles(station, home_profile):
     """Return great-circle distance when the live directory supplied GPS data."""
-    if home_profile.get("source")=="unconfigured":return None
     if len(station) < 7 or not home_profile:
         return None
+    if home_profile.get("source")=="unconfigured":return None
     try:
         return globe_haversine_km(
             {"lat": float(home_profile["lat"]), "lon": float(home_profile["lon"])},
@@ -8588,12 +8589,13 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None, fit_full_subtitle=False):
+                                style=None, fit_full_subtitle=False, enabled=True):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active, pressed=pressed, style=style)
+    pressed = enabled and ui_button_pressed(box)
+    visual = draw_styled_button_frame(box, active=active and enabled, pressed=pressed, style=style)
+    text_color = visual.text if enabled else style.palette.untested_text
     center_x = (x0 + x1) / 2
 
     def draw_line(caption, center_y, color, size, *, fit_full=False):
@@ -8615,12 +8617,12 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
 
     if subtitle:
         center_y = (y0 + y1) / 2
-        draw_line(title, center_y - 12, visual.text, style.title_size)
+        draw_line(title, center_y - 12, text_color, style.title_size)
         draw_line(subtitle, center_y + 12,
-                  visual.text if pressed else style.subtitle_color, style.subtitle_size,
+                  text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
-        draw_line(title, (y0 + y1) / 2, visual.text, style.title_size)
+        draw_line(title, (y0 + y1) / 2, text_color, style.title_size)
     return visual
 
 
@@ -15769,12 +15771,7 @@ def lcd_rail_bottom():
 
 def lcd_drawer_back_box():
     """Shared bottom return target for every right-rail drawer."""
-    return (
-        LCD_NAV_X0 + 10,
-        lcd_rail_bottom() - 72,
-        LOGICAL_W - 10,
-        lcd_rail_bottom() - 8,
-    )
+    return RAIL_BACK_BOX
 
 
 def settings_center_workspace_box():
@@ -18552,10 +18549,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
             draw_text(text_cache, capacity_x, first_y, capacity_label,
                       APP_UI_STYLE.palette.footer_live, size, True, False,
                       "lm", alpha, family="Liberation Sans")
-        clock_label = time.strftime("%H:%M:%S", time.gmtime()) + f" UTC ({TIME_SOURCE_LABEL})"
-        draw_text(text_cache, 18, second_y, clock_label,
-                  APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
-                  family="Liberation Sans")
+        clock_label = draw_status_clock(sys.modules[__name__], text_cache, 18, second_y, alpha)
         clock_width = text_cache.font(size, family="Liberation Sans").size(clock_label)[0]
         buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
         draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
@@ -26402,6 +26396,10 @@ def main():
         return (
             theme_system.runtime_theme["sidebar"] == "left"
             and not theme_editor.open
+            # These screens position BACK themselves and span the whole canvas.
+            # Moving the last 256 pixels would slice their charts and controls.
+            and not ((adsb_workspace.open and adsb_workspace.coverage_open) or station_workspace.open
+                     or (vhf_workspace.open and vhf_workspace.mode == 'spectrum'))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open) or globe_open)
         )
@@ -28435,12 +28433,14 @@ def main():
                         elif touch_started and gesture == "vhf_workspace":
                             if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 vhf_workspace.tap(x, y)
-                                if vhf_workspace.mode == 'spectrum' and not vhf_workspace.open:
-                                    restore_navigation_parent(vhf_workspace.spectrum.exit_target)
+                                if not vhf_workspace.open and not station_workspace.open:
+                                    restore_navigation_parent(vhf_workspace.spectrum.exit_target if vhf_workspace.mode == 'spectrum' else 'digi')
                             wake_controls()
                         elif touch_started and gesture == "adsb_workspace":
                             if not adsb_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 adsb_workspace.tap(x, y)
+                                if not adsb_workspace.open:
+                                    restore_navigation_parent('digi')
                             wake_controls()
                         elif touch_started and gesture == "cw_workspace":
                             if cw_workspace.swipe(start_x, start_y, x, y):
