@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "assets/boot-splash/ituner-sdr-native.png"
 PREVIEW = ROOT / "assets/boot-splash/ituner-sdr-preview.png"
 LOGO = ROOT / "assets/boot-splash/ituner-logo-color.svg"
-LOGO_WIDTH = 700
+LOGO_WIDTH = 500
 
 
 def main():
