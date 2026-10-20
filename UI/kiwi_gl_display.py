@@ -18122,6 +18122,8 @@ def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LI
     if local_receiver:
         return ReceiverBadge("LAN", theme.lan, (18, 18, 18))
     key = str(receiver_type).casefold()
+    if key == "usb":
+        return ReceiverBadge("USB", theme.lan, (18, 18, 18))
     if key == "openwebrx":
         return ReceiverBadge("OPENWEBRX", theme.openwebrx, theme.primary_text)
     if key == "fmdx":
@@ -18292,26 +18294,24 @@ def draw_station_picker(
         draw_picker_two_line_button(text_cache, PICKER_SORT_BOX, "SORT", sort_mode.upper(), 20)
         draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
 
-    if route_filter == "usb":
-        for idx, (_source, device, detail) in enumerate(stations):
-            box = station_tile(idx, scroll)
-            if box:
-                draw_picker_two_line_button(text_cache, box, device, detail)
-        return
-
     leading_rows = 1 if show_fmdx_notice else 0
     if show_fmdx_notice:
         draw_fmdx_disclaimer(text_cache, scroll)
 
     for idx, station in enumerate(stations):
-        name, location, server, listener_used, listener_total = station_fields(station)
+        usb_receiver = route_filter == "usb"
+        if usb_receiver:
+            server, name, _detail = station
+            location, listener_used, listener_total = "", None, None
+        else:
+            name, location, server, listener_used, listener_total = station_fields(station)
         box = station_tile(idx + leading_rows, scroll)
         if not box:
             continue
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
         selected = receiver_servers_match(server, selected_server)
         pending = receiver_servers_match(server, pending_server)
-        receiver_type = station_receiver_type(station)
+        receiver_type = "usb" if usb_receiver else station_receiver_type(station)
         pressed = ui_button_pressed(box)
         focused = selected or pending
         fill = APP_UI_STYLE.palette.active_surface if pressed else (theme.selected_background if focused else theme.row_background)
@@ -18326,6 +18326,8 @@ def draw_station_picker(
             f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
             if listener_used is not None and listener_total is not None else "FREE ?"
         )
+        if usb_receiver:
+            capacity = "CONNECTED"
         left = box[0] + 16
         right = box[2] - 16
         station_label = " · ".join(part for part in (str(name).strip(), str(location).strip()) if part)
@@ -18344,12 +18346,12 @@ def draw_station_picker(
             text_cache, right, box[1] + 28, capacity, secondary_color,
             theme.label_size, False, False, "rm", family=theme.font_family,
         )
-        distance_label = format_station_distance(station, home_profile)
+        distance_label = "LOCAL USB" if usb_receiver else format_station_distance(station, home_profile)
         badge_y = box[1] + 52
         badge_x = left
         badges = (
             receiver_source_badge(receiver_type, local_receiver, theme),
-        ) + receiver_directory_badges(station, theme)
+        ) + (() if usb_receiver else receiver_directory_badges(station, theme))
         for badge in badges:
             badge_x += draw_receiver_badge(
                 text_cache, badge_x, badge_y, badge, theme, background=fill,

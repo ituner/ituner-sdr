@@ -203,15 +203,30 @@ class MenuIconTests(unittest.TestCase):
             draws = {}
             for name in ('draw_logical_rect', 'draw_receiver_action_button',
                          'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
-                         'draw_receiver_back_button', 'draw_picker_two_line_button'):
+                         'draw_receiver_back_button', 'draw_picker_two_line_button',
+                         'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):
                 draws[name] = stack.enter_context(mock.patch.object(ui, name))
-            ui.draw_station_picker(mock.Mock(), [('rtl-sdr', 'RTL-SDR V3', 'USB')],
+            cache = mock.Mock()
+            cache.texture.return_value = (None, 80, 20)
+            draws['draw_receiver_badge'].return_value = 60
+            stack.enter_context(mock.patch.object(ui, 'ui_button_pressed', return_value=False))
+            stack.enter_context(mock.patch.object(ui, 'fit_receiver_name', side_effect=lambda cache, name, *args: name))
+            ui.draw_station_picker(cache, [('rtl-sdr', 'RTL-SDR V3', 'USB')],
                                    0, 'http://kiwisdr.local:8073', '', 'name_az', {},
                                    route_filter='usb')
             categories = draws['draw_receiver_filter_button'].call_args_list
             self.assertTrue(next(call.args[3] for call in categories if call.args[2] == 'USB'))
             self.assertFalse(next(call.args[3] for call in categories if call.args[2] == 'LAN'))
-            self.assertEqual(draws['draw_picker_two_line_button'].call_args.args[2], 'RTL-SDR V3')
+            draws['draw_picker_two_line_button'].assert_not_called()
+            box = ui.station_tile(0, 0)
+            self.assertEqual(draws['draw_station_list_frame'].call_args.args[0], box)
+            title = next(call for call in draws['draw_text'].call_args_list if call.args[3] == 'RTL-SDR V3')
+            self.assertEqual(title.args[1:3], (box[0] + 16, box[1] + 28))
+            self.assertEqual(title.args[5], ui.RECEIVER_LIST_THEME.server_name_size)
+            self.assertEqual(title.args[8], 'lm')
+            badge = draws['draw_receiver_badge'].call_args.args
+            self.assertEqual(badge[1:3], (box[0] + 16, box[1] + 52))
+            self.assertEqual(badge[3].label, 'USB')
 
     def test_usb_browsing_does_not_require_starting_audio(self):
         with mock.patch.object(ui.RTLSDRLab, 'probe'):

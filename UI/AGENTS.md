@@ -21,3 +21,9 @@ Use full-width workspaces and one main chart at a time, including for its
 waterfall. Primary touch controls use at least 20 px labels and 56 px hit
 targets. Do not shrink the web sidebar into a native control rail. Preserve
 an explicit return from investigation to the preceding survey or watch mode.
+
+All receiver categories, including USB, must use the same receiver list-item
+renderer, row geometry, spacing, typography, and badge/status positions. Adapt
+the content to the source; do not substitute centered buttons or custom cards.
+Keep established list layouts consistent throughout the app unless the user
+explicitly requests a layout change.
