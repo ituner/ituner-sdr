@@ -28600,7 +28600,11 @@ def main():
                         elif touch_started and gesture == "station_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
                                 station_workspace.tap(x,y)
-                                if not station_workspace.open:restore_navigation_parent('settings')
+                                if not station_workspace.open:
+                                    if station_workspace.navigation_parent == 'vhf':
+                                        vhf_workspace.open=True
+                                    else:
+                                        restore_navigation_parent(station_workspace.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "vhf_workspace":
                             if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:

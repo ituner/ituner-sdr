@@ -13,7 +13,8 @@ NUMERIC={k for k,_ in LOCATION}
 class StationWorkspace(DecoderStyle):
     def __init__(self,ui,station):
         self.ui=ui;self.station=station;self.open=False;self.page='identity';self.draft={};self.field=None;self.caps=False;self.value='';self.message='';self.actions=[];self.dirty=False
-    def show(self):
+    def show(self,parent='settings'):
+        self.navigation_parent=parent
         self.draft=dict(self.station.snapshot()['config']);self.open=True;self.field=None;self.message='';self.dirty=False
     def ink(self,cache,x,y,text,size=20,color=None,anchor='lm',width=None):
         text=str(text)

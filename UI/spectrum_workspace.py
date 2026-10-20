@@ -307,7 +307,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                 if action=='home':
                     self.overlay=None;self.exit_target='home';self.open=False
                 elif action=='back':
-                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'settings' if self.overlay in ('presets','usb','advanced') or self.overlay=='number' and self.edit_field!='focus' else None
+                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'advanced' if self.overlay=='number' and self.edit_field in ('gain','ppm') else 'settings' if self.overlay in ('presets','usb','advanced') or self.overlay=='number' and self.edit_field!='focus' else None
                     elif self.screen in ('activity','compare','watch','reports'):self.screen='tools';self.page=0
                     elif self.screen!='survey':self.screen='survey';self.page=0
                     else:self.exit_target='digi';self.open=False

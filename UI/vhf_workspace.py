@@ -21,6 +21,7 @@ class MapAdapter:
 class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
+        self.navigation_history=[]
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
         self.map=ADSBWorkspace(ui,MapAdapter(self))
         self.map.trail_seconds=86400  # Independent VHF map keeps its existing history window.
@@ -32,6 +33,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def session(self):return self.manager.sessions[self.mode]
 
     def show(self,mode):
+        self.navigation_history.clear()
         self.spectrum.open=mode=='spectrum'
         if mode=='spectrum':
             self.mode=mode;self.open=True;self.spectrum.show();return
@@ -54,6 +56,18 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             setattr(self,field,max(0,getattr(self,field)+(1 if y<sy else -1)));return True
         return self.map.swipe()
 
+    def navigate(self, view=None, overlay=None):
+        if (view is None or view == self.view) and overlay == self.overlay:return
+        self.navigation_history.append((self.view,self.overlay,self.page,self.overlay_page))
+        if view is not None:self.view=view;self.page=0
+        self.overlay=overlay;self.overlay_page=0
+
+    def back(self):
+        if self.navigation_history:
+            self.view,self.overlay,self.page,self.overlay_page=self.navigation_history.pop()
+        elif self.overlay:self.overlay=None
+        else:self.open=False
+
     def tap(self,x,y):
         if self.mode=='spectrum':
             self.spectrum.tap(x,y);self.open=self.spectrum.open;return
@@ -61,23 +75,22 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             if not self.ui.contains(box,x,y):continue
             try:
                 if action=='home':self.open=False
-                elif action=='back':
-                    if self.overlay:self.overlay=None
-                    else:self.open=False
-                elif action=='view':self.view=value;self.page=0;self.overlay=None
+                elif action=='back':self.back()
+                elif action=='view':
+                    if value!=self.view or self.overlay:self.navigate(view=value)
                 elif action=='overlay':
                     if value=='location' and getattr(self.ui,'station_settings',None):
-                        self.ui.station_settings.show();self.open=False;return
-                    self.overlay=value;self.overlay_page=0
+                        self.ui.station_settings.show(parent='vhf');self.open=False;return
+                    self.navigate(overlay=value)
                     if value=='location':self.station_edit=dict(self.manager.position or dict(lat=0,lon=0))
                     elif value=='profiles':self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if p['id']==self.session.settings['profile']),0)
                 elif action=='page':
                     field='overlay_page' if self.overlay in ('profiles','usb') else 'page';setattr(self,field,max(0,getattr(self,field)+value))
-                elif action=='profile':self.session.control('configure',profile=value);self.overlay=None
-                elif action=='assign':self.session.control('configure',selection=value);self.overlay=None
+                elif action=='profile':self.session.control('configure',profile=value);self.back()
+                elif action=='assign':self.session.control('configure',selection=value);self.back()
                 elif action=='number':
                     self.edit_field=value
-                    self.number=str(self.station_edit.get(value,0) if value in ('lat','lon') else self.session.settings[value]/1e6 if value=='frequency' else self.session.settings[value]);self.overlay='number'
+                    self.number=str(self.station_edit.get(value,0) if value in ('lat','lon') else self.session.settings[value]/1e6 if value=='frequency' else self.session.settings[value]);self.navigate(overlay='number')
                 elif action=='key':
                     if value=='DEL':self.number=self.number[:-1]
                     elif value=='CLEAR':self.number=''
@@ -86,19 +99,19 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
                         if self.edit_field in ('lat','lon'):
                             limit=90 if self.edit_field=='lat' else 180
                             if not -limit<=number<=limit:raise ValueError(f'Coordinate must be -{limit} to {limit} degrees')
-                            self.station_edit[self.edit_field]=number;self.overlay='location'
+                            self.station_edit[self.edit_field]=number;self.back()
                         else:
-                            self.session.control('configure',**{self.edit_field:number*1e6 if self.edit_field=='frequency' else number});self.overlay=None
+                            self.session.control('configure',**{self.edit_field:number*1e6 if self.edit_field=='frequency' else number});self.back()
                     elif len(self.number)<14:self.number+=value
                 elif action=='continuous':self.session.control('configure',continuous=not self.session.settings.get('continuous'));
-                elif action=='save_site':self.manager.control(self.mode,'location',position=self.station_edit);self.overlay=None
+                elif action=='save_site':self.manager.control(self.mode,'location',position=self.station_edit);self.back()
                 elif action=='zoom':self.map.zoom(value)
                 elif action=='fit':self.map.centered=False;self.map.following=False
                 elif action=='follow':
                     if self.map.selected:self.map.following=not self.map.following
                     else:self.message='Tap a target to follow it.'
                 elif action=='trails':self.map.trail_seconds=0 if self.map.trail_seconds else 900
-                elif action=='image':self.enlarged=value;self.overlay='image'
+                elif action=='image':self.enlarged=value;self.navigate(overlay='image')
                 else:self.session.control(action)
                 if action not in ('follow',):self.message=''
             except (ValueError,OSError) as exc:self.message=str(exc)

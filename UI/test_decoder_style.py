@@ -59,8 +59,19 @@ class DecoderThemeTests(unittest.TestCase):
                 self.assert_navigation_clear(w,rail=view!='coverage')
                 box=next(box for box,action in w.actions if action==('back',None))
                 w.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
-                self.assertFalse(w.open,view)
+                self.assertEqual(w.open, view != "map", view)
                 self.assertFalse(w.coverage_open or w.traffic_open or w.logs_open or w.usb_open)
+
+    def test_adsb_back_retraces_nested_views_before_leaving_decoder(self):
+        w,ui,manager,state=test_adsb.WorkspaceTests().dashboard()
+        w.open=True
+        def tap(kind):
+            w.actions=[((0,0,100,100),(kind,None))];w.tap(10,10)
+        tap('traffic');tap('logs');tap('coverage')
+        tap('back');self.assertTrue(w.logs_open);self.assertTrue(w.open)
+        tap('back');self.assertTrue(w.traffic_open);self.assertTrue(w.open)
+        tap('back');self.assertFalse(w.traffic_open);self.assertTrue(w.open)
+        tap('back');self.assertFalse(w.open)
 
     def test_adsb_uses_home_rail_buttons_clock_and_status_typography(self):
         import time

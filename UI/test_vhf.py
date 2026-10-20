@@ -286,6 +286,27 @@ class TouchTests(unittest.TestCase):
                     session.control.assert_not_called()
                     self.assertEqual(self.hub.broker.snapshot(),{})
 
+    def test_back_retraces_views_and_nested_editor_without_leaving_decoder(self):
+        from vhf_workspace import VHFWorkspace
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        ui.station_settings=None
+        w=VHFWorkspace(ui,self.hub);w.show('ais')
+        def press(action,value=None):
+            w.actions=[((0,0,100,100),(action,value))];w.tap(10,10)
+        press('view','data');press('overlay','location');press('number','lat')
+        press('back');self.assertEqual(w.overlay,'location');self.assertTrue(w.open)
+        press('back');self.assertIsNone(w.overlay);self.assertEqual(w.view,'data');self.assertTrue(w.open)
+        press('back');self.assertEqual(w.view,'map');self.assertTrue(w.open)
+        press('back');self.assertFalse(w.open)
+
+    def test_shared_station_settings_records_decoder_parent(self):
+        from vhf_workspace import VHFWorkspace
+        ui=Mock();ui.contains.return_value=True
+        w=VHFWorkspace(ui,self.hub);w.show('ais')
+        w.actions=[((0,0,100,100),('overlay','location'))];w.tap(10,10)
+        ui.station_settings.show.assert_called_once_with(parent='vhf')
+        self.assertFalse(w.open)
+
     def test_frequency_keypad_applies_mhz_and_station_coordinates_save(self):
         from vhf_workspace import VHFWorkspace
         ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]

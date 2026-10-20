@@ -24,6 +24,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.selected_plane = None
         self.following = False
         self.rx_footprint=True;self.rx_frame=None;self.rx_key=None;self.rx_regions=None
+        self.navigation_history = []
         self.coverage_open = False
         self.coverage_view = CoverageTouch(self)
         self.usb_open = False
@@ -53,9 +54,33 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
 
     def show(self, *args):
         if not self.open:
+            self.navigation_history.clear()
+            self._set_navigation_view('map')
             self.traffic_view = TrafficView(time.time())
             self.selected=self.selected_plane=None;self.following=False
         self.open = True
+
+    def _navigation_view(self):
+        return next((view for view in ('coverage','usb','logs','traffic')
+                     if getattr(self, view+'_open')), 'map')
+
+    def _set_navigation_view(self, view):
+        for name in ('coverage','usb','logs','traffic'):
+            setattr(self, name+'_open', name == view)
+
+    def navigate(self, view):
+        previous = self._navigation_view()
+        if previous != view:
+            self.navigation_history.append(previous)
+            self._set_navigation_view(view)
+
+    def back(self):
+        if self.navigation_history:
+            self._set_navigation_view(self.navigation_history.pop())
+        elif self._navigation_view() != 'map':
+            self._set_navigation_view('map')
+        else:
+            self.open = False
 
     def set_traffic_view(self, mode):
         self.traffic_view.mode=mode
@@ -108,12 +133,10 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             if not self.ui.contains(box,x,y): continue
             if kind.startswith('coverage_'):self.coverage_view.action(kind,value)
             elif kind=='coverage':
-                self.coverage_open=True;self.usb_open=self.logs_open=self.traffic_open=False;self.coverage_view.activate()
+                self.navigate('coverage');self.coverage_view.activate()
             elif kind=='home': self.open=False
-            elif kind=='back':
-                self.coverage_open=self.logs_open=self.traffic_open=self.usb_open=False
-                self.open=False
-            elif kind=='map_view':self.coverage_open=self.usb_open=self.logs_open=self.traffic_open=False
+            elif kind=='back':self.back()
+            elif kind=='map_view':self.navigate('map')
             elif kind=='traffic_view':self.set_traffic_view(value)
             elif kind=='start_fresh':
                 self.traffic_view.reset(time.time());self.traffic_view.ingest(self.manager.snapshot()['aircraft'],time.time());self.set_traffic_view('session')
@@ -129,10 +152,8 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                     self.yaw,self.pitch=math.radians(plane['lon']),max(math.radians(-82),min(math.radians(82),math.radians(plane['lat'])))
                     self.centered=True;self.following=False
             elif kind in ('usb','logs','traffic'):
-                self.coverage_open=False
-                showing = getattr(self,kind+'_open')
-                self.usb_open=self.logs_open=self.traffic_open=False
-                setattr(self,kind+'_open',not showing)
+                if self._navigation_view() == kind:self.back()
+                else:self.navigate(kind)
             elif kind=='page':
                 field='log_page' if self.logs_open else 'traffic_page' if self.traffic_open else 'usb_page'
                 setattr(self,field,max(0,getattr(self,field)+value))
