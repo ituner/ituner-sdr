@@ -92,6 +92,22 @@ class MenuIconTests(unittest.TestCase):
                 self.assertEqual(state.snapshot()[1],frequency)
                 self.assertEqual(lab.demod_snapshot()[0],'am')
 
+    def test_usb_selection_survives_worker_exit_until_explicit_stop(self):
+        state = ui.SharedState('http://example.test:8073', 7075., 4, -95., 142, 245, 3, 'am', True)
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), state, mock.Mock())
+        lab.source_inventory = {'rtl-sdr': dict(present=True, device='RTL-SDR')}
+        lab.select_source('rtl-sdr')
+        with mock.patch.object(ui.threading, 'Thread'):
+            self.assertTrue(lab.start(100100., 8))
+        saved = lab.remembered_receiver()
+        lab.thread.is_alive.return_value = False
+        # Worker cleanup restores the network view before shutdown saves again.
+        state.set_view(freq_khz=7075., zoom=4)
+        self.assertEqual(lab.remembered_receiver(), saved)
+        lab.stop()
+        self.assertIsNone(lab.remembered_receiver())
+
     def test_invalid_saved_usb_receiver_is_ignored(self):
         for saved in (None,{},dict(source_id='invalid'),dict(source_id='rtl-sdr',freq_khz=float('nan'),zoom=4)):
             self.assertIsNone(ui.RTLSDRLab.validate_remembered_receiver(saved))

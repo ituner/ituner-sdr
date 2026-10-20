@@ -30,3 +30,6 @@ explicitly requests a layout change.
 Active USB receivers must use exactly the same selected-row styling as active
 network receivers. Derive selection from the running receiver, not merely the
 open category or a saved network address. Browsing must not imply activation.
+On app restart or reboot, restore the last chosen receiver (including USB) and
+always open HOME. Preserve the USB choice across worker failures; transient
+audio-thread state must not overwrite the remembered receiver with LAN.

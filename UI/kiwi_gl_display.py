@@ -20109,6 +20109,7 @@ class RTLSDRLab:
         self._rtl_library = None
         self._airspy_library = None
         self._restore_view = None
+        self._remembered_usb_receiver = None
         self.waterfall_queue = queue.Queue(maxsize=2)
         self.waterfall_thread = None
         self.demod_mode = "wbfm"
@@ -20204,11 +20205,16 @@ class RTLSDRLab:
         return any(str(radio_mode).upper() in modes for _family, modes in self.capabilities.mode_families)
 
     def remembered_receiver(self):
-        if not self.is_running():
-            return None
-        _server, frequency, zoom, *_rest = self.state.snapshot()
-        return dict(source_id=self.source_id, freq_khz=frequency, zoom=zoom,
+        # Receiver choice is durable intent, not the worker's transient health.
+        with self.lock:
+            if self._remembered_usb_receiver is None:
+                return None
+            if self._restore_view is not None and self.is_running():
+                _server, frequency, zoom, *_rest = self.state.snapshot()
+                self._remembered_usb_receiver = dict(
+                    source_id=self.source_id, freq_khz=frequency, zoom=zoom,
                     preset_index=self.preset_indices[self.source_id])
+            return dict(self._remembered_usb_receiver)
 
     @staticmethod
     def validate_remembered_receiver(value):
@@ -20436,6 +20442,9 @@ class RTLSDRLab:
             self.detail = f"{name} {frequency_hz / 1e6:.3f} MHz · local I/Q"
             worker = self._airspyhf_worker if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else self._iq_worker
             worker_name = "airspy-hf-lab-iq" if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else "rtl-sdr-lab-iq"
+            self._remembered_usb_receiver = dict(
+                source_id=self.source_id, freq_khz=target_frequency, zoom=target_zoom,
+                preset_index=self.preset_indices[self.source_id])
             self.thread = threading.Thread(target=worker, args=(name, rate), name=worker_name, daemon=True)
             self.thread.start()
         return True
@@ -20770,6 +20779,7 @@ class RTLSDRLab:
                 except Exception:
                     pass
             with self.lock:
+                self.remembered_receiver()
                 restore_view, self._restore_view = self._restore_view, None
             if restore_view is not None:
                 self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
@@ -20911,6 +20921,7 @@ class RTLSDRLab:
                 except Exception:
                     pass
             with self.lock:
+                self.remembered_receiver()
                 restore_view, self._restore_view = self._restore_view, None
             if restore_view is not None:
                 # Return Kiwi to its last genuine radio state before waking
@@ -20926,6 +20937,8 @@ class RTLSDRLab:
             release_realtime_audio_thread()
 
     def stop(self):
+        with self.lock:
+            self._remembered_usb_receiver = None
         self.stop_event.set()
         with self.lock:
             thread = self.thread
