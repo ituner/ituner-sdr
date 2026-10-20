@@ -89,7 +89,6 @@ class CoverageTouch:
         meta=data.get('meta',{});count=meta.get('retained_positions',0)
         summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
         w.ink(cache,24,61,summary,18,w.MUTED)
-        w.draw_back(cache,('back',None))
         controls=(('Sky cells','coverage_mode','cells',self.mode=='cells'),
                   ('Sky trails','coverage_mode','trails',self.mode=='trails'),
                   ('True 3D distance','coverage_mode','space',self.mode=='space'),
@@ -118,3 +117,5 @@ class CoverageTouch:
         site=meta.get('reference');reference=f"{site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'SITE NOT SET'
         h=f"{meta.get('reference_height_m',0):g} m ellipsoid height" if meta.get('reference_height_known') else 'Height unknown; 0 m assumed · Settings / Radio info'
         w.draw_status(cache,self.detail,reference+' · '+h,full_width=True)
+        # Navigation is the final overlay, after the dome's GL pass and footer.
+        w.draw_back(cache,('back',None))
