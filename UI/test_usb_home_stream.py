@@ -19,6 +19,21 @@ class USBHomeStreamTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertTrue(ui.mode_annunciator_active('FM',mode,'DIG'))
 
+    def test_usb_unavailable_modes_are_dimmed_and_ignore_taps(self):
+        state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
+        receiver=Mock()
+        buttons=list(ui.lcd_home_mode_boxes())
+        with patch.object(ui,'draw_styled_button_frame') as frame, patch.object(ui,'draw_text') as text:
+            ui.draw_home_mode_buttons(Mock(),buttons,'AM','DIG',usb_receiver=True)
+            for (label,box),draw in zip(buttons,text.call_args_list):
+                enabled=label in ('AM','FM')
+                self.assertEqual(ui.home_mode_enabled(label,True),enabled)
+                self.assertTrue(ui.home_mode_enabled(label,False))
+                if not enabled:
+                    self.assertEqual(draw.args[4],ui.APP_UI_STYLE.button.palette.untested_text)
+                    self.assertIsNone(ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,local_receiver=receiver))
+            receiver.set_home_mode.assert_not_called()
+
     def test_usb_fast_source_and_presenter_agree(self):
         self.assertEqual(ui.local_waterfall_fps(4),30)
         for speed in range(1,5):

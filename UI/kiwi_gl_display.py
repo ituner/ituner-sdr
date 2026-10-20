@@ -15995,12 +15995,19 @@ def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
         yield label, (left, top, left + cell_w, top + cell_h)
 
 
+def home_mode_enabled(label, usb_receiver=False):
+    """Match HOME availability to the implemented local demodulators."""
+    return not usb_receiver or RTLSDRLab._demod_for_home_mode(label, 0) is not None
+
+
 def engage_home_mode(state, x, y, compact=True, local_receiver=None):
     """Commit a tapped Home mode before opening its options drawer."""
     if state.receiver_type_snapshot() == "fmdx" and local_receiver is None:
         return None
     for label, box in lcd_home_mode_boxes(compact):
         if contains(box, x, y):
+            if not home_mode_enabled(label, local_receiver is not None):
+                return None
             mode = "NBFM" if label == "FM" else label
             if local_receiver is not None:
                 if not local_receiver.set_home_mode(mode):
@@ -17258,24 +17265,25 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm, peak_dbm=None):
     draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
 
 
-def draw_home_mode_buttons(text_cache, buttons, mode, digital):
+def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=False):
     """Keep HOME and each Dual VFO's mode buttons visually identical."""
     exact_mode = str(mode).upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     for label, box in buttons:
-        active = mode_annunciator_active(label, active_mode, digital)
-        pressed = ui_button_pressed(box)
+        enabled = home_mode_enabled(label, usb_receiver)
+        active = enabled and mode_annunciator_active(label, active_mode, digital)
+        pressed = enabled and ui_button_pressed(box)
         visual = draw_styled_button_frame(box, active=active, pressed=pressed)
         bx0, by0, bx1, by1 = box
         draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  visual.text, 13, True, False, "cm",
+                  visual.text if enabled else APP_UI_STYLE.button.palette.untested_text, 13, True, False, "cm",
                   family=APP_UI_STYLE.button.font_family)
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
                                show_compact_readouts=True,
                                compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
-                               peak_dbm=None, show_compact_frequency=None):
+                               peak_dbm=None, show_compact_frequency=None, usb_receiver=False):
     """Lay out the rail meter independently of the frequency readout."""
     if show_compact_frequency is None:
         show_compact_frequency = show_compact_readouts
@@ -17311,7 +17319,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # instrument rather than touching either the band tag or mode grid.
         draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm, peak_dbm)
 
-    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital)
+    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital, usb_receiver)
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -19372,6 +19380,7 @@ def draw_ui(
     ruler_center_khz=None,
     sidebar_open=False,
     zoom_pressed=None,
+    usb_receiver=False,
 ):
     # Keep the large frequency's translucent strip aligned with the active
     # theme; RIGHT has no such strip over the RF canvas.
@@ -19506,6 +19515,7 @@ def draw_ui(
             show_compact_frequency=instrument_layout == "right",
             compact_frequency_font_family=compact_frequency_font_family,
             peak_dbm=smeter_peak_dbm,
+            usb_receiver=usb_receiver,
         )
         # Home instruments are painted last so the short mode surface can never
         # cover the passband and volume sitting directly under the mode buttons.
@@ -28344,8 +28354,9 @@ def main():
                                 # grid. Its empty space is not a control, so a
                                 # blank tap must not open the MODES drawer.
                                 on_mode_button = any(
-                                    contains(box, x, y)
-                                    for _label, box in lcd_home_mode_boxes(compact_layout)
+                                    contains(box, x, y) and home_mode_enabled(
+                                        label, state.external_waterfall_snapshot() or rtl_lab.is_running())
+                                    for label, box in lcd_home_mode_boxes(compact_layout)
                                 )
                                 if on_mode_button:
                                     selected_mode = engage_home_mode(
@@ -31111,6 +31122,7 @@ def main():
                     running_decoder_count=sum(decoder_counts.values()),
                     decoder_counts=decoder_counts,
                     receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
+                    usb_receiver=local_iq_active,
                     instrument_layout=instrument_layout,
                     # Font Review is a live specimen: arrowing through candidates
                     # must visibly update the Home frequency readout. ``USE`` is
