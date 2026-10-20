@@ -8982,7 +8982,7 @@ def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
 
 
 def draw_favorite_waterfall_button(favorited):
-    """Draw a fine-lined favorite star inside the shared touch target."""
+    """Fill the favorite star only when the receiver is saved."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -8991,7 +8991,7 @@ def draw_favorite_waterfall_button(favorited):
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    draw_logical_polyline(regular_star_points(cx, cy, 17), edge, 2)
+    draw_favorite_star(cx, cy, 17, edge, filled=favorited)
 
 
 def draw_audio_transport_graph(text_cache, history, box):
@@ -18207,6 +18207,21 @@ def draw_receiver_globe_icon(text_cache, box, color):
                        cx + width / 2, cy + height / 2, 0, 0, 1, 1)
 
 
+def draw_favorite_star(cx, cy, radius, color, filled=False):
+    """Shared star geometry for HOME and saved receiver rows."""
+    points = regular_star_points(cx, cy, radius)
+    if filled:
+        GL.glDisable(GL.GL_TEXTURE_2D)
+        GL.glColor4f(*rgba(color))
+        GL.glBegin(GL.GL_TRIANGLE_FAN)
+        GL.glVertex2f(*logical_to_native(cx, cy))
+        for point in points:
+            GL.glVertex2f(*logical_to_native(*point))
+        GL.glEnd()
+        GL.glEnable(GL.GL_TEXTURE_2D)
+    draw_logical_polyline(points, color, 2)
+
+
 def regular_star_points(cx, cy, outer_radius):
     """Return a closed, mathematically regular five-point star."""
     inner_radius = float(outer_radius) * 0.38196601125
@@ -18274,7 +18289,7 @@ def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
     show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
-    active_usb_source=None,
+    active_usb_source=None, favorite_servers=(),
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -18350,9 +18365,14 @@ def draw_station_picker(
             capacity, theme.label_size, (255, 255, 255), bold=False,
             family=theme.font_family,
         )[1]
+        favorited = not usb_receiver and server in favorite_servers
+        favorite_width = 32 if favorited else 0
         station_label = fit_receiver_name(
-            text_cache, station_label, max(60, right - left - capacity_width - 28), theme,
+            text_cache, station_label, max(60, right - left - capacity_width - 28 - favorite_width), theme,
         )
+        if favorited:
+            draw_favorite_star(right - capacity_width - 22, box[1] + 28, 11,
+                               APP_UI_STYLE.button.resolve(active=True).text, filled=True)
         draw_text(
             text_cache, left, box[1] + 28, station_label, text_color,
             theme.server_name_size, True, False, "lm", family=theme.font_family,
@@ -31299,6 +31319,7 @@ def main():
                         ),
                         usb_present=usb_present,
                         active_usb_source=rtl_lab.source_id if rtl_lab.is_running() else None,
+                        favorite_servers=favorite_servers,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
