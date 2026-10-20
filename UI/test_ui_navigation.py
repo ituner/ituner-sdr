@@ -64,6 +64,38 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_receiver_survives_saved_preferences_round_trip(self):
+        import tempfile
+        for source, capabilities in ui.LOCAL_RECEIVER_CAPABILITIES.items():
+            with self.subTest(source=source):
+                state = ui.SharedState('http://example.test:8073',7075.,4,-95.,142,245,3,'am',True)
+                with mock.patch.object(ui.RTLSDRLab,'probe'):
+                    lab=ui.RTLSDRLab(mock.Mock(),state,mock.Mock())
+                lab.source_inventory={source:dict(present=True,device=source)}
+                lab.select_source(source)
+                frequency=lab._presets()[0][1]/1000.
+                with mock.patch.object(ui.threading,'Thread'):
+                    self.assertTrue(lab.start(frequency,4))
+                saved=lab.remembered_receiver()
+                with tempfile.TemporaryDirectory() as directory:
+                    path=Path(directory)/'receiver.json'
+                    ui.save_remembered_view(path,'http://example.test:8073',7075.,4,'AM',True,{'usb_receiver':saved},'kiwi')
+                    loaded=ui.load_remembered_view(path)
+                self.assertEqual(loaded['freq_khz'],7075.)
+                restored=ui.RTLSDRLab.validate_remembered_receiver(loaded['preferences']['usb_receiver'])
+                self.assertEqual(restored['source_id'],source)
+                lab.thread=None;lab.source_inventory={}
+                self.assertFalse(lab.restore_receiver(restored))
+                lab.source_inventory={source:dict(present=True,device=source)}
+                with mock.patch.object(ui.threading,'Thread'):
+                    self.assertTrue(lab.restore_receiver(restored))
+                self.assertEqual(state.snapshot()[1],frequency)
+                self.assertEqual(lab.demod_snapshot()[0],'am')
+
+    def test_invalid_saved_usb_receiver_is_ignored(self):
+        for saved in (None,{},dict(source_id='invalid'),dict(source_id='rtl-sdr',freq_khz=float('nan'),zoom=4)):
+            self.assertIsNone(ui.RTLSDRLab.validate_remembered_receiver(saved))
+
     def test_usb_screen_controls_match_back_size_and_have_working_hit_targets(self):
         from contextlib import ExitStack
         ui.configure_output(True);ui.configure_popup_layout()

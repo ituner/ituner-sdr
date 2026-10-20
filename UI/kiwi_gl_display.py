@@ -20199,6 +20199,35 @@ class RTLSDRLab:
     def supports_home_mode(self, radio_mode):
         return any(str(radio_mode).upper() in modes for _family, modes in self.capabilities.mode_families)
 
+    def remembered_receiver(self):
+        if not self.is_running():
+            return None
+        _server, frequency, zoom, *_rest = self.state.snapshot()
+        return dict(source_id=self.source_id, freq_khz=frequency, zoom=zoom,
+                    preset_index=self.preset_indices[self.source_id])
+
+    @staticmethod
+    def validate_remembered_receiver(value):
+        if not isinstance(value, dict):return None
+        source = value.get('source_id')
+        if source not in LOCAL_RECEIVER_CAPABILITIES:return None
+        try:
+            frequency = float(value['freq_khz'])
+            zoom = int(value['zoom'])
+            preset = int(value.get('preset_index', 0))
+        except (KeyError, TypeError, ValueError, OverflowError):return None
+        if not math.isfinite(frequency) or not LOCAL_RECEIVER_CAPABILITIES[source].supports_frequency(frequency):return None
+        return dict(source_id=source, freq_khz=frequency,
+                    zoom=int(clamp(zoom, 0, kiwi.DISPLAY_MAX_ZOOM)), preset_index=max(0, preset))
+
+    def restore_receiver(self, saved):
+        with self.lock:
+            if self.probing or not self.source_inventory.get(saved['source_id'], {}).get('present'):
+                return False
+            if not self.select_source(saved['source_id']):return False
+            self.preset_indices[self.source_id] = saved['preset_index'] % len(self._presets())
+        return self.start(saved['freq_khz'], saved['zoom'])
+
     def receiver_rows(self):
         """Detected USB devices are browser rows, independent of playback."""
         with self.lock:
@@ -24260,6 +24289,12 @@ def main():
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
+    pending_usb_restore = rtl_lab.validate_remembered_receiver(remembered_preferences.get("usb_receiver"))
+    if pending_usb_restore:
+        # Reserve HOME for the saved USB source while the asynchronous probe runs.
+        rtl_lab.select_source(pending_usb_restore['source_id'])
+        state.set_external_audio(True)
+        state.set_external_waterfall(True)
     rc28_input = RC28Input()
     globe_mixer = GlobeAudioMixer(args, state)
     scout_probe = ConstellationScoutProbe(args, state)
@@ -25129,6 +25164,7 @@ def main():
         spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
         audio_controls, _audio_generation = state.audio_controls_snapshot()
         return {
+            "usb_receiver": pending_usb_restore or rtl_lab.remembered_receiver(),
             "audio": {
                 "squelch_level": audio_controls["squelch_level"],
                 "squelch_tail": audio_controls["squelch_tail"],
@@ -25251,8 +25287,8 @@ def main():
         save_remembered_view(
             args.receiver_state_file,
             server,
-            persisted_frequency_khz,
-            zoom,
+            (rtl_lab._restore_view or (args.freq_khz, args.zoom))[0] if preferences.get("usb_receiver") else persisted_frequency_khz,
+            (rtl_lab._restore_view or (args.freq_khz, args.zoom))[1] if preferences.get("usb_receiver") else zoom,
             radio_mode,
             manual_radio_mode,
             preferences,
@@ -25747,7 +25783,9 @@ def main():
     def connect_to_station(station):
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
-        nonlocal picker_map_selected_server
+        nonlocal picker_map_selected_server, pending_usb_restore
+        pending_usb_restore = None
+        rtl_lab.stop()
         if dual_vfo_receiver_list_target in ("A", "B"):
             target_vfo = dual_vfo_receiver_list_target
             if target_vfo == "A":
@@ -26758,6 +26796,18 @@ def main():
             start_dual_vfo_clients()
         while not stop_event.is_set():
             rtl_lab.refresh_usb_devices()
+            if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
+                pending_usb_restore = None
+                radio_mode = "AM"
+                manual_radio_mode = True
+                station_route_filter = "usb"
+                _server, display_freq, restored_zoom, *_rest = state.snapshot()
+                display_span = kiwi.zoom_to_span_khz(restored_zoom)
+                candidate_freq = display_freq
+                anim_start = 0.0
+                drain_queue(line_queue)
+                wf_texture.clear()
+                write_remembered_view(save_current_frequency=True, force=True)
             usb_present = bool(rtl_lab.receiver_rows())
             if station_route_filter == "usb" and not usb_present and not rtl_lab.snapshot()["probing"]:
                 station_route_filter = "local"
@@ -29116,6 +29166,8 @@ def main():
                                             drain_queue(line_queue)
                                             wf_texture.clear()
                                             rtl_lab_open = False
+                                            pending_usb_restore = None
+                                            write_remembered_view(save_current_frequency=True, force=True)
                                 elif choice == "back":
                                     rtl_lab.stop()
                                     rtl_lab_open = False
