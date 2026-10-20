@@ -124,8 +124,6 @@ class AirspaceDashboard:
                     ('stop' if state['enabled'] else 'start',None),active=state['enabled'])
         self.ink(cache,1034,110,'AIRCRAFT',20,width=180)
         self.ink(cache,1270,110,len(self.display_aircraft(state)),20,self.MUTED,anchor='rm')
-        sort={'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort]
-        self.button(cache,(1034,134,1270,198),sort,('sort',None))
         plane=self.selected_plane
         live=next((p for p in state['aircraft'] if p.get('hex')==self.selected),None)
         historical=next((p for p in self.display_aircraft(state) if p['hex']==self.selected and p.get('historical')),None)

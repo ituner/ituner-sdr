@@ -33,6 +33,20 @@ class ADSBListLayoutTests(unittest.TestCase):
             self.assertEqual(box[2] - box[0], 236)
             self.assertEqual(box[1:], (632, box[2], 688))
 
+    def test_paging_and_sort_stay_inside_list_panel(self):
+        state = dict(selection='auto', devices=[], aircraft=[])
+        self.manager.log_snapshot.return_value = dict(lines=[])
+        for draw in (lambda: self.workspace.draw_usb(self.cache, state),
+                     lambda: self.workspace.draw_logs(self.cache),
+                     lambda: self.workspace.draw_traffic(self.cache, state)):
+            self.workspace.actions = []
+            draw()
+            for box, (kind, _) in self.workspace.actions:
+                if kind in ('page', 'scan', 'sort', 'site'):
+                    self.assertGreaterEqual(box[0], 32)
+                    self.assertLessEqual(box[2], 992)
+                    self.assertEqual(box[2]-box[0], 236)
+
     def test_contacts_remain_reachable_without_overlapping_paging(self):
         planes = [dict(hex=f'{i:06x}', seen=0) for i in range(9)]
         seen = []

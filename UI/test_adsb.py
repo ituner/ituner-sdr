@@ -211,6 +211,7 @@ class WorkspaceTests(unittest.TestCase):
         workspace.draw(Mock());self.press(workspace,('select','abc'))
         workspace.draw(Mock());self.press(workspace,('follow',None))
         self.assertTrue(workspace.following)
+        workspace.navigate('traffic')
         for expected in ('altitude','callsign','recent'):
             workspace.draw(Mock());self.press(workspace,('sort',None))
             self.assertEqual(workspace.traffic_sort,expected)
