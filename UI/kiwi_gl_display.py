@@ -28693,7 +28693,9 @@ def main():
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
                                 station_workspace.tap(x,y)
                                 if not station_workspace.open:
-                                    if station_workspace.navigation_parent == 'vhf':
+                                    if station_workspace.navigation_parent == 'adsb':
+                                        adsb_workspace.open=True
+                                    elif station_workspace.navigation_parent == 'vhf':
                                         vhf_workspace.open=True
                                     else:
                                         restore_navigation_parent(station_workspace.navigation_parent)
@@ -28707,7 +28709,7 @@ def main():
                         elif touch_started and gesture == "adsb_workspace":
                             if not adsb_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 adsb_workspace.tap(x, y)
-                                if not adsb_workspace.open:
+                                if not adsb_workspace.open and not station_workspace.open:
                                     restore_navigation_parent('digi')
                             wake_controls()
                         elif touch_started and gesture == "cw_workspace":
@@ -31042,7 +31044,7 @@ def main():
                 wspr_tiles, sstv_manager.configs, hell_manager.configs,
                 qrss_manager.configs, cw_manager.configs,
             )
-            decoder_counts['adsb'] = int(adsb_manager.snapshot()['status'] == 'RECEIVING')
+            decoder_counts['adsb'] = int(adsb_manager.snapshot()['enabled'])
             with vhf_hub.spectrum.lock:
                 decoder_counts['spectrum'] = int(vhf_hub.spectrum.run_state()['phase'] == 'RUNNING')
             decoder_counts.update({mode: int(session.status in ('RECEIVING', 'LISTENING')) for mode, session in vhf_hub.sessions.items()})

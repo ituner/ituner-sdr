@@ -134,6 +134,10 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             if kind.startswith('coverage_'):self.coverage_view.action(kind,value)
             elif kind=='coverage':
                 self.navigate('coverage');self.coverage_view.activate()
+            elif kind=='site':
+                self.ui.station_settings.show(parent='adsb')
+                self.ui.station_settings.page='location'
+                self.open=False
             elif kind=='home': self.open=False
             elif kind=='back':self.back()
             elif kind=='map_view':self.navigate('map')
@@ -167,7 +171,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                     if self.traffic_view.mode=='history':self.history_seconds=self.trail_seconds
             elif kind=='rings':
                 if self.manager.snapshot().get('receiver_position'): self.rings=not self.rings
-                else: self.message='Set receiver latitude/longitude in the browser Receiver panel.'
+                else: self.message='Set antenna coordinates in RECEIVER / ANTENNA SITE.'
             elif kind=='follow':
                 live=next((p for p in self.manager.snapshot()['aircraft'] if p.get('hex')==self.selected),None)
                 if self.following: self.following=False
@@ -372,13 +376,14 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def draw_usb(self, cache, state):
         self.panel((16,158,1008,712));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)
         self.text(cache,34,224,'978 UAT · future second receiver · not installed',15,self.MUTED)
+        self.button(cache,(728,170,992,230),'ANTENNA SITE',('site',None))
         self.button(cache,(32,246,992,302),'AUTO · FIRST AVAILABLE DONGLE',('assign','auto'),active=state['selection']=='auto')
         devices=state['devices'];self.usb_page=min(self.usb_page,max(0,(len(devices)-1)//4))
         for i,device in enumerate(devices[self.usb_page*4:self.usb_page*4+4]):self.button(cache,(32,316+i*68,992,374+i*68),device['label'],('assign',device['id']),active=state['selection']==device['id'])
         if not devices:self.text(cache,34,358,'No RTL-SDR detected. Check USB power and connection.',18,self.MUTED,width=930)
-        site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET · CONFIGURE IN BROWSER / RECEIVER'
+        site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET · TAP ANTENNA SITE'
         self.ink(cache,34,598,location,14,self.MUTED,width=930)
-        self.text(cache,34,616,'Receiver settings and logs are shared with cm5.local:8090',14,self.MUTED,width=930)
+        self.text(cache,34,616,'Enter antenna coordinates or connect a separate GPS receiver.',14,self.MUTED,width=930)
         self.button(cache,(32,632,306,688),'SCAN USB',('scan',None));self.button(cache,(322,632,604,688),'PREVIOUS',('page',-1));self.button(cache,(620,632,992,688),'NEXT',('page',1))
 
     def close(self): self.manager.close()
