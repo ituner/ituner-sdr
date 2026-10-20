@@ -10,7 +10,7 @@ from adsb_footprint import projected_frame
 from adsb_coverage_gl import draw as draw_footprint_mesh
 from station_profile import distance_m
 from adsb_view import TrafficView, aged, freshness
-from adsb_layout import action_box, content_right_action, SCAN_USB_BOX, PREVIOUS_BOX, NEXT_BOX
+from adsb_layout import SCAN_USB_BOX, PREVIOUS_BOX, NEXT_BOX
 from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
 
@@ -349,7 +349,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def draw_logs(self, cache):
         self.panel((16,158,1008,712))
         for index,(kind,label) in enumerate((('flights','FLIGHTS'),('receiver','RECEIVER'),('diagnostics','DIAGNOSTICS'))):
-            self.button(cache,action_box(index,176),label,('log_kind',kind),active=kind==self.log_kind)
+            self.button(cache,(32+index*294,176,310+index*294,226),label,('log_kind',kind),active=kind==self.log_kind)
         data=self.manager.log_snapshot(self.log_kind)
         source=list(reversed(data.get('lines',[]))) if self.log_kind!='diagnostics' else data.get('lines',[])
         lines=[part for line in source for part in (textwrap.wrap(line,100) or [''])]
@@ -362,7 +362,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
 
     def draw_traffic(self, cache, state):
         self.panel((16,224,1008,712));self.ink(cache,34,253,self.traffic_view.label+' TRAFFIC',22)
-        self.button(cache,content_right_action(224),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
+        self.button(cache,(752,231,992,275),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
         planes=self.sorted_aircraft(state)
         # Four unchanged contact rows leave clear space above the shared actions.
         page_size=4
@@ -379,7 +379,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def draw_usb(self, cache, state):
         self.panel((16,158,1008,712));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)
         self.text(cache,34,224,'978 UAT · future second receiver · not installed',15,self.MUTED)
-        self.button(cache,content_right_action(170),'ANTENNA SITE',('site',None))
+        self.button(cache,(728,170,992,230),'ANTENNA SITE',('site',None))
         self.button(cache,(32,246,992,302),'AUTO · FIRST AVAILABLE DONGLE',('assign','auto'),active=state['selection']=='auto')
         devices=state['devices'];self.usb_page=min(self.usb_page,max(0,(len(devices)-1)//4))
         for i,device in enumerate(devices[self.usb_page*4:self.usb_page*4+4]):self.button(cache,(32,316+i*68,992,374+i*68),device['label'],('assign',device['id']),active=state['selection']==device['id'])

@@ -45,7 +45,10 @@ class ADSBListLayoutTests(unittest.TestCase):
                 if kind in ('page', 'scan', 'sort', 'site'):
                     self.assertGreaterEqual(box[0], 32)
                     self.assertLessEqual(box[2], 992)
-                    self.assertEqual(box[2]-box[0], 236)
+                    if kind == "sort":
+                        self.assertEqual((box[1]+box[3])/2, 253)
+                    elif kind in ("page", "scan"):
+                        self.assertEqual(box[2]-box[0], 236)
 
     def test_contacts_remain_reachable_without_overlapping_paging(self):
         planes = [dict(hex=f'{i:06x}', seen=0) for i in range(9)]

@@ -3,12 +3,11 @@ import unittest
 from unittest.mock import Mock
 
 from adsb_coverage_touch import CoverageTouch, BOX
-from adsb_layout import action_box
 from adsb_touch import AirspaceDashboard
 
 
 class AirspaceLayoutTests(unittest.TestCase):
-    def test_dome_controls_share_receiver_width_and_clear_scene_and_footer(self):
+    def test_dome_preserves_original_toolbar_and_side_controls(self):
         workspace = Mock()
         workspace.BG = (0, 0, 0)
         workspace.manager.coverage_error = ''
@@ -16,15 +15,15 @@ class AirspaceLayoutTests(unittest.TestCase):
         view.data = {'status': 'NO SITE', 'meta': {}}
         view.draw(Mock(), {})
         controls = [call.args for call in workspace.button.call_args_list]
+        self.assertEqual(BOX, (180,154,1100,712))
         self.assertEqual(len(controls), 10)
-        for _, box, _, _ in controls:
-            self.assertEqual((box[2]-box[0], box[3]-box[1]), (236, 56))
-            self.assertTrue(box[3] <= BOX[1] or box[1] >= BOX[3])
-        for index, (_, box, _, action) in enumerate(controls[-4:]):
-            self.assertEqual(box, action_box(index))
-            self.assertIn(action[0], ('coverage_turn', 'coverage_tilt'))
+        self.assertTrue(all(box[1:4:2] == (96,152) for _,box,_,_ in controls[:6]))
+        self.assertEqual([box for _,box,_,_ in controls[-4:]],
+                         [(24,568,152,624),(24,636,152,692),
+                          (1128,568,1256,624),(1128,636,1256,692)])
+        self.assertEqual([label for _,_,label,_ in controls[-4:]], ['− 30°','+ 30°','Tilt −','Tilt +'])
 
-    def test_dashboard_navigation_matches_receiver_action_columns(self):
+    def test_dashboard_navigation_retains_original_sizes(self):
         dashboard = AirspaceDashboard()
         dashboard.ui = Mock()
         dashboard.PANEL = dashboard.LINE = dashboard.MUTED = (0, 0, 0)
@@ -34,8 +33,8 @@ class AirspaceLayoutTests(unittest.TestCase):
         dashboard.header(Mock(), {'enabled': False, 'status': 'STOPPED', 'messages': 0}, [])
         buttons = [call.args for call in dashboard.button.call_args_list
                    if len(call.args) > 3 and isinstance(call.args[3], tuple)]
-        self.assertEqual([args[1] for args in buttons[-4:]], [action_box(i,y=88) for i in range(4)])
-        self.assertTrue(all(args[1][2]-args[1][0] == 236 for args in buttons))
+        self.assertEqual([args[1] for args in buttons[-4:]], [(16+i*250,88,258+i*250,144) for i in range(4)])
+        self.assertTrue(all(args[1][2]-args[1][0] == 242 for args in buttons[-4:]))
 
 
 if __name__ == '__main__':

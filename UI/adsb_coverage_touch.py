@@ -3,10 +3,9 @@ import math
 import threading
 from PIL import Image, ImageDraw
 import adsb_coverage_gl as dome_gl
-from adsb_layout import action_box
 
 BLUE=(76,157,255); MUTED=(145,170,193); TEXT=(220,236,255)
-BOX=(180,224,1100,616)
+BOX=(180,154,1100,712)
 GL_WIDTH,GL_HEIGHT=BOX[2]-BOX[0],BOX[3]-BOX[1]
 WIDTH,HEIGHT=1232,460
 
@@ -89,16 +88,11 @@ class CoverageTouch:
         meta=data.get('meta',{});count=meta.get('retained_positions',0)
         summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
         w.ink(cache,24,61,summary,18,w.MUTED)
-        controls=(('Sky cells','coverage_mode','cells',self.mode=='cells'),
-                  ('Sky trails','coverage_mode','trails',self.mode=='trails'),
-                  ('True 3D distance','coverage_mode','space',self.mode=='space'),
-                  ('Signal colour ON' if self.signal else 'Signal','coverage_signal',None,self.signal),
-                  ('All aircraft','coverage_reset',None,False),
-                  ('Site','site',None,False))
-        for index,(title,kind,value,active) in enumerate(controls):
-            self.button(cache,action_box(index % 4,y=88+(index // 4)*64),title,kind,value,active)
+        w.draw_back(cache,('back',None))
+        for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','site',None,False)):
+            self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')
-        for x,y,title,subtitle,value in ((24,248,'Horizontal','radius',f'{r:.2f} km'),(24,400,'Diameter','2 × radius',f'{2*r:.2f} km'),(1124,248,'Max slant','range',f"{meta.get('slant_range_max_km',0):.2f} km"),(1124,400,'Highest','received',f'{alt:,.0f} ft' if alt is not None else '—')):
+        for x,y,title,subtitle,value in ((24,216,'Horizontal','radius',f'{r:.2f} km'),(24,340,'Diameter','2 × radius',f'{2*r:.2f} km'),(1124,216,'Max slant','range',f"{meta.get('slant_range_max_km',0):.2f} km"),(1124,340,'Highest','received',f'{alt:,.0f} ft' if alt is not None else '—')):
             w.ink(cache,x,y,title,18,w.MUTED);w.ink(cache,x,y+24,subtitle,16,w.MUTED);w.ink(cache,x,y+60,value,24,w.CYAN,width=140)
         if frame is not None:
             key=(identity,self.yaw,self.tilt)
@@ -110,12 +104,10 @@ class CoverageTouch:
         if self.error or w.manager.coverage_error or data.get('status') in (None,'LOADING','EMPTY','NO SITE'):
             text=self.error or w.manager.coverage_error or {'EMPTY':'No positioned aircraft retained yet.','NO SITE':'Tap Site to enter antenna latitude / longitude.'}.get(data.get('status'),'Loading reception history…')
             w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=1100)
-        w.ink(cache,196,238,'TRUE DISTANCE · NO VERTICAL EXAGGERATION' if self.mode=='space' else 'ANGULAR SKY · 90° ZENITH',13,w.MUTED)
-        for index,(title,kind,value) in enumerate((('Rotate − 30°','coverage_turn',-30),('Rotate + 30°','coverage_turn',30),('Tilt −','coverage_tilt',-10),('Tilt +','coverage_tilt',10))):
-            self.button(cache,action_box(index),title,kind,value)
-        w.ink(cache,24,612,'BLUE · RECEIVED / GREY · UNKNOWN',13,w.MUTED,width=310)
+        w.ink(cache,196,176,'TRUE DISTANCE · NO VERTICAL EXAGGERATION' if self.mode=='space' else 'ANGULAR SKY · 90° ZENITH',13,w.MUTED)
+        for box,title,kind,value in (((24,568,152,624),'− 30°','coverage_turn',-30),((24,636,152,692),'+ 30°','coverage_turn',30),((1128,568,1256,624),'Tilt −','coverage_tilt',-10),((1128,636,1256,692),'Tilt +','coverage_tilt',10)):
+            self.button(cache,box,title,kind,value)
+        w.ink(cache,24,700,'BLUE · RECEIVED / GREY · UNKNOWN',13,w.MUTED,width=310)
         site=meta.get('reference');reference=f"{site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'SITE NOT SET'
         h=f"{meta.get('reference_height_m',0):g} m ellipsoid height" if meta.get('reference_height_known') else 'Height unknown; 0 m assumed · Settings / Radio info'
         w.draw_status(cache,self.detail,reference+' · '+h,full_width=True)
-        # Navigation is the final overlay, after the dome's GL pass and footer.
-        w.draw_back(cache,('back',None))

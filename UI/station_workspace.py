@@ -1,7 +1,7 @@
 """Touch-first shared Radio / User Information, with a local keyboard."""
 import time
-from decoder_style import DecoderStyle
-from adsb_layout import action_box
+from ui_chrome import draw_status_clock
+from decoder_style import DecoderStyle, footer_content_box
 from station_profile import FIELDS
 
 PAGES=(('identity','Identity'),('location','Location'),('gps','GPS & movement'))
@@ -63,10 +63,9 @@ class StationWorkspace(DecoderStyle):
             if not self.caps:row=row.lower()
             width=104;offset=(1280-len(row)*114+10)/2
             for col,key in enumerate(row):self.button(cache,(offset+col*114,190+r*88,offset+col*114+width,264+r*88),key,('key',key))
-        for box,label,key in (((24,560,172,630),'Space',' '),((184,560,324,630),'Shift','SHIFT'),((336,560,426,630),':',':'),((438,560,598,630),'Delete','DELETE'),((610,560,750,630),'Clear','CLEAR'),(action_box(3),'Done','DONE')):
+        for box,label,key in (((24,560,172,630),'Space',' '),((184,560,324,630),'Shift','SHIFT'),((336,560,426,630),':',':'),((438,560,598,630),'Delete','DELETE'),((610,560,750,630),'Clear','CLEAR'),((762,560,1256,630),'Done','DONE')):
             self.button(cache,box,label,('key',key),key=='DONE')
-        self.draw_status(cache,self.message or 'Blank numeric fields mean unknown. GPS may supply the antenna position.',
-                         'Done applies this field · Save applies radio information',full_width=True)
+        self.ink(cache,24,690,self.message or 'Blank numeric fields mean unknown. GPS may supply the antenna position.',18,self.MUTED,width=1230)
         self.draw_back(cache,('key','CANCEL'))
     def draw(self,cache):
         self.actions=[]
@@ -85,7 +84,7 @@ class StationWorkspace(DecoderStyle):
                 y=181+i*75;value=self.draft.get(key);display='Unknown' if key in NUMERIC and value is None else 'Optional · not set' if not value and key not in NUMERIC else str(value)
                 self.ink(cache,32,y+30,label,20,self.MUTED,width=480)
                 self.button(cache,(516,y,1256,y+61),display,('edit',key))
-            if self.page=='location':self.ink(cache,32,650,'Leave unknown heights blank; ellipsoid height differs from sea level.',17,self.MUTED,width=700)
+            if self.page=='location':self.ink(cache,32,642,'WGS84 ellipsoid height differs from sea-level elevation. Leave unknown values blank.',17,self.MUTED,width=1210)
         else:
             for box,label,key in (((24,184,626,248),'GPS receiver monitoring','gps_enabled'),((646,184,1256,248),'Automatic GPS location updates','gps_auto')):
                 self.button(cache,box,label+(' · ON' if self.draft[key] else ' · OFF'),('toggle',key),self.draft[key])
@@ -94,6 +93,8 @@ class StationWorkspace(DecoderStyle):
             for y,label,value in ((338,'Last fix',age),(394,'Fix / accuracy',(f"{g['mode']}D / " if g['mode']>=2 else "No fix / ")+(f"±{g['accuracy_m']:.1f} m" if g['accuracy_m'] is not None else 'unknown')),(450,'Satellites used / visible',f"{g['used'] if g['used'] is not None else '—'} / {g['satellites'] if g['satellites'] is not None else '—'}"),(506,'GPS device',', '.join(d['path'] for d in g['devices']) or 'No USB GPS receiver detected')):
                 self.ink(cache,32,y,label,20,self.MUTED);self.ink(cache,516,y,value,20,width=730)
             self.ink(cache,32,573,'Connect a gpsd-compatible USB GNSS receiver. No fix keeps the saved location.',18,self.MUTED,width=1210)
-        self.button(cache,action_box(3),'Save',('save',None),True)
-        self.draw_status(cache,self.message or 'Shared across local SDRs, decoder maps, satellite predictions and weather.',
-                         'Callsign optional · receive only',full_width=True)
+        self.ink(cache,24,669,self.message or 'Shared across local SDRs, decoder maps, satellite predictions and weather.',18,self.CYAN if self.message else self.MUTED,width=1220)
+        x0,_,x1,_=footer_content_box()
+        self.button(cache,(x1-436,728,x1,792),'Save radio information',('save',None),True)
+        self.ink(cache,x0,739,'Callsign optional · receive only',18,self.MUTED,width=x1-x0-460)
+        draw_status_clock(ui,cache,x0)
