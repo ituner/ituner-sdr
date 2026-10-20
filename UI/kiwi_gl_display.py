@@ -4699,6 +4699,20 @@ def waterfall_view_center_khz(tuned_khz, span_khz):
     return clamp(float(tuned_khz), half_span, TUNING_MAX_KHZ - half_span)
 
 
+def local_waterfall_center(tuned_khz, pinned_center_khz=None):
+    """A tap tunes USB hardware without moving the displayed RF window."""
+    return float(tuned_khz if pinned_center_khz is None else pinned_center_khz)
+
+
+def local_spectrum_in_view(values, source_center_khz, view_center_khz, span_khz):
+    """Place USB FFT bins at their absolute RF positions after a retune."""
+    if not len(values) or source_center_khz == view_center_khz:
+        return values
+    bins = np.arange(len(values), dtype=np.float64)
+    offset = (view_center_khz - source_center_khz) * len(values) / span_khz
+    return np.interp(bins + offset, bins, values, left=0.0, right=0.0)
+
+
 def waterfall_tap_frequency_khz(x, view_center_khz, span_khz, canvas_width=None):
     """Read the RF frequency under a waterfall tap without recentering it."""
     width = max(1.0, rf_canvas_width() if canvas_width is None else float(canvas_width))
@@ -20441,7 +20455,11 @@ class RTLSDRLab:
             except queue.Full:
                 pass
         if self.state.spectrum_enabled_snapshot():
-            self.state.update_spectrum_values(normalized)
+            tuned_khz = self.state.snapshot()[1]
+            view_center = local_waterfall_center(tuned_khz, self.state.waterfall_view_center_snapshot())
+            self.state.update_spectrum_values(local_spectrum_in_view(
+                normalized, center_khz, view_center, self.source_span_khz(),
+            ))
         # It is a useful relative S-meter estimate, not an RF calibrated dBm
         # measurement. The UI retains its usual smooth attack/release.
         self.state.set_smeter(-117.0 + (noise - levels[0]) * 1.8, source="snd")
@@ -20621,6 +20639,9 @@ class RTLSDRLab:
                         del pcm_pending[:AIRSPY_HF_AUDIO_PACKET_BYTES]
                 _server, requested_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
                 now = time.monotonic()
+                if now >= next_waterfall_at:
+                    self._queue_waterfall(samples, tuned_khz)
+                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
                 supported_khz = self._airspy_frequency_khz(requested_khz)
                 if abs(supported_khz - requested_khz) > 0.0005:
                     self.state.set_view(freq_khz=supported_khz)
@@ -20630,6 +20651,7 @@ class RTLSDRLab:
                     if library.airspyhf_set_freq(device, int(round(requested_khz * 1000.0))) < 0:
                         raise RuntimeError("Airspy HF+ retune failed")
                     tuned_khz = requested_khz
+                    drain_queue(iq_queue)
                     seen_generation = next_generation
                     last_tune_at = now
                     previous_sample = None
@@ -20637,9 +20659,6 @@ class RTLSDRLab:
                     drain_queue(self.line_queue)
                 elif next_generation != seen_generation:
                     seen_generation = next_generation
-                if now >= next_waterfall_at:
-                    self._queue_waterfall(samples, tuned_khz)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
         except Exception as exc:
             with self.lock:
                 if not self.stop_event.is_set():
@@ -20764,6 +20783,9 @@ class RTLSDRLab:
                     player.submit(self._apply_local_squelch(pcm))
                 _server, next_freq_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
                 now = time.monotonic()
+                if now >= next_waterfall_at:
+                    self._queue_waterfall(samples, tuned_hz / 1000.0)
+                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
                 desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
                 if desired_hz != tuned_hz and next_generation != seen_generation and now - last_tune_at >= 0.025:
                     if library.rtlsdr_set_center_freq(device, desired_hz) < 0:
@@ -20776,9 +20798,6 @@ class RTLSDRLab:
                     drain_queue(self.line_queue)
                 elif next_generation != seen_generation:
                     seen_generation = next_generation
-                if now >= next_waterfall_at:
-                    self._queue_waterfall(samples, tuned_hz / 1000.0)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
         except Exception as exc:
             with self.lock:
                 if not self.stop_event.is_set():
@@ -25453,7 +25472,7 @@ def main():
 
     def active_waterfall_center(tuned_khz, span_khz):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
-            return float(tuned_khz)
+            return local_waterfall_center(tuned_khz, state.waterfall_view_center_snapshot())
         return receiver_waterfall_center(
             tuned_khz, span_khz, state.receiver_type_snapshot(),
             state.waterfall_view_center_snapshot(),

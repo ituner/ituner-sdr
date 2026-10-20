@@ -64,6 +64,27 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_waterfall_tap_preserves_window_and_signal_position(self):
+        ui.configure_output(True)
+        center = 100100.0
+        span = 2400.0
+        width = ui.rf_canvas_width()
+        for fraction in (0.25, 0.75):
+            target = ui.waterfall_tap_frequency_khz(width * fraction, center, span)
+            state = ui.SharedState('http://example.test:8073', center, 4, -95., 142, 245, 3, 'am', True)
+            state.set_view(freq_khz=target, waterfall_center_khz=center)
+            view = ui.local_waterfall_center(state.snapshot()[1], state.waterfall_view_center_snapshot())
+            self.assertEqual(view, center)
+            # A signal at the new hardware center must remain under the tap,
+            # rather than jumping to the middle of the spectrum.
+            values = ui.np.zeros(1024)
+            values[512] = 1.0
+            remapped = ui.local_spectrum_in_view(values, target, view, span)
+            self.assertEqual(int(ui.np.argmax(remapped)), int(1024 * fraction))
+            self.assertAlmostEqual((target - view) / span + 0.5, fraction)
+            state.set_view(freq_khz=target)
+            self.assertEqual(ui.local_waterfall_center(target, state.waterfall_view_center_snapshot()), target)
+
     def test_usb_category_is_highlighted_and_draws_device_row(self):
         from contextlib import ExitStack
         with ExitStack() as stack:
