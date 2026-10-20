@@ -16792,21 +16792,21 @@ def lcd_nav_box(index, item_count=None, has_back=False):
         if index == item_count - 1:
             return lcd_drawer_back_box()
         if index < len(SPECTRUM_MENU_ITEMS):
-            return LCD_NAV_X0 + 10, 108, LOGICAL_W - 10, 172
+            return LCD_NAV_X0 + 10, 80, LOGICAL_W - 10, 144
         index -= len(SPECTRUM_MENU_ITEMS)
         if index < len(HF_DECODER_ITEMS):
             col, row = index % 2, index // 2
             x0 = LCD_NAV_X0 + 10 + col * 122
-            return x0, 200 + row * 58, x0 + 114, 256 + row * 58
+            return x0, 172 + row * 58, x0 + 114, 228 + row * 58
         vhf_index = index - len(HF_DECODER_ITEMS)
         if vhf_index >= len(VHF_UHF_DECODER_ITEMS):
             col=vhf_index-len(VHF_UHF_DECODER_ITEMS)
             x0=LCD_NAV_X0 + 10 + col * 122
-            return x0, 668, x0 + 114, 724
+            return x0, 640, x0 + 114, 696
         col, row = vhf_index % 2, vhf_index // 2
         x0 = LCD_NAV_X0 + 10 + col * 122
         x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
-        return x0, 408 + row * 58, x1, 464 + row * 58
+        return x0, 380 + row * 58, x1, 436 + row * 58
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
@@ -17228,9 +17228,9 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
-        draw_text(text_cache, LCD_NAV_X0 + 12, 184, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 392, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 652, "SATELLITE WEB APPS", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 156, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 364, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, 624, "SATELLITE WEB APPS", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -31632,13 +31632,12 @@ def main():
             web_notice = web_apps.notice
             if web_notice:
                 cx, cy = LOGICAL_W / 2, LOGICAL_H / 2
-                draw_logical_rounded_rect(cx - 280, cy - 66, cx + 280, cy + 66,
-                                          12, (16, 29, 41, 255), (85, 123, 143, 255))
+                draw_green_osd_panel((cx - 340, cy - 66, cx + 340, cy + 66), 235)
                 draw_text(text_cache, cx, cy - 22, web_notice[0],
-                          (228, 237, 245), 26, bold=True, anchor="cm")
-                detail = fit_station_text(text_cache, web_notice[1], 520, 20, False, False)
+                          APP_UI_STYLE.palette.notice, 26, bold=True, anchor="cm")
+                detail = fit_station_text(text_cache, web_notice[1], 640, 20, False, False)
                 draw_text(text_cache, cx, cy + 25, detail,
-                          (163, 186, 203), 20, anchor="cm")
+                          APP_UI_STYLE.palette.notice, 20, anchor="cm")
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

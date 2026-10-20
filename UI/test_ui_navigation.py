@@ -11,6 +11,11 @@ import kiwi_gl_display as ui  # noqa: E402
 
 
 class MenuIconTests(unittest.TestCase):
+    def test_decoder_rail_starts_16_pixels_below_divider(self):
+        box=ui.lcd_nav_box(0,len(ui.DIGITAL_MENU_ITEMS),True)
+        self.assertEqual(box[1]-ui.LCD_DRAWER_HEADER_H,16)
+        self.assertEqual(ui.lcd_nav_box(len(ui.DIGITAL_MENU_ITEMS)-1,len(ui.DIGITAL_MENU_ITEMS),True),ui.lcd_drawer_back_box())
+
     def test_cursor_hidden_only_on_touchscreen(self):
         with mock.patch.object(ui, 'pygame') as pygame, mock.patch.object(ui, 'GL'):
             pygame.OPENGL=1;pygame.NOFRAME=2;pygame.FULLSCREEN=4

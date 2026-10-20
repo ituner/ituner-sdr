@@ -38,3 +38,7 @@ button dimensions apply to rail controls, not every button throughout the app.
 Keep pagination inside its content panel and clear of rows and the side rail.
 Do not rename buttons unless the user explicitly requests it. Layout fixes must
 not redesign other screens; preserve the Dome's established arrangement.
+
+Side-rail content starts 16 px below the horizontal divider under the rail
+name. Apply this spacing to every titled side rail; retain the established
+bottom BACK position and existing button sizes.

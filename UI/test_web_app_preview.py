@@ -14,6 +14,9 @@ class PreviewTests(unittest.TestCase):
         platform = mock.patch('web_app_preview.sys', mock.Mock(platform='linux'))
         platform.start()
         self.addCleanup(platform.stop)
+        self.preflight=mock.patch.object(WebAppPreviews,"validate_destination")
+        self.preflight.start()
+        self.addCleanup(self.preflight.stop)
 
     def test_mac_uses_separate_chrome_profile_without_wayland(self):
         process=mock.Mock(pid=99999, returncode=None)
@@ -81,6 +84,30 @@ class PreviewTests(unittest.TestCase):
         with mock.patch('web_app_preview.subprocess.Popen') as launch:
             with self.assertRaises(ValueError):WebAppPreviews().open('https://example.org')
             launch.assert_not_called()
+
+    def test_missing_app_never_opens_browser_or_blocks_native_controls(self):
+        self.preflight.stop()
+        from urllib.error import URLError
+        shell=mock.MagicMock()
+        shell.__enter__.return_value.read.return_value=b'<button id="back">BACK</button>'
+        with mock.patch('web_app_preview.shutil.which',return_value='/usr/bin/chromium'), mock.patch('web_app_preview.urlopen',side_effect=[shell,URLError('refused')]), mock.patch('web_app_preview.subprocess.Popen') as launch:
+            previews=WebAppPreviews()
+            with self.assertRaisesRegex(ValueError,'not running'):previews.open('groundstation')
+            launch.assert_not_called()
+            self.assertFalse(previews.blocks_touch)
+            self.assertIn('not running',previews.notice[1])
+
+    def test_busy_port_uses_own_server_for_preview_and_return(self):
+        from vhf_monitor import VHFHub
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            a=VHFHub(root=first,port=0,scanner=lambda:[])
+            b=VHFHub(root=second,port=a.port,scanner=lambda:[])
+            try:
+                self.assertNotEqual(a.port,b.port)
+                self.assertEqual(b.web_apps.port,b.port)
+                with urlopen(f'http://127.0.0.1:{b.port}/apps/groundstation?touch=1') as r:
+                    self.assertIn(b'id="back"',r.read())
+            finally:b.close();a.close()
 
     def test_http_shell_and_control_authentication(self):
         from vhf_monitor import VHFHub
