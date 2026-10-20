@@ -283,7 +283,7 @@ def mode_annunciator_active(label, active_mode, digital):
     """Map compact panel labels onto Kiwi's internal demodulator names."""
     return (
         label == active_mode
-        or (label == "FM" and active_mode == "NBFM")
+        or (label == "FM" and active_mode in ("NBFM", "NFM", "WFM"))
         or (label == "FM" and active_mode == fmdx.MODE_LABEL)
         or (label == "IQ" and active_mode != fmdx.MODE_LABEL and str(digital).upper() == "IQ")
     )
@@ -19577,8 +19577,15 @@ def waterfall_stream_key(server_generation, view_generation, receiver_type, exte
     return server_generation, view_generation, receiver_type, bool(external)
 
 
-def waterfall_presentation_fps(receiver_type, speed, row_pixels=1):
+def local_waterfall_fps(speed):
+    """Match local IQ production and presentation to the selected speed."""
+    return {1: 1.0, 2: 5.0, 3: 13.0, 4: 30.0}.get(clamp(int(speed), 1, WATERFALL_MAX_SPEED), 30.0)
+
+
+def waterfall_presentation_fps(receiver_type, speed, row_pixels=1, external=False):
     """Return the real row cadence for Kiwi and decoded FM-DX sources."""
+    if external:
+        return local_waterfall_fps(speed)
     multiplier = max(1, int(row_pixels))
     if str(receiver_type).lower() == "fmdx":
         return (fmdx.AUDIO_SAMPLE_RATE / 2048.0) * multiplier
@@ -19964,7 +19971,6 @@ RTL_LAB_PRESETS = (
 # local source on the same packet cadence as the Kiwi audio transport.
 RTL_IQ_SAMPLE_RATE = 1_024_000
 RTL_IQ_BLOCK_BYTES = 32_768
-RTL_WATERFALL_INTERVAL_SECONDS = 0.10
 AIRSPY_HF_SAMPLE_RATE = 768_000
 AIRSPY_HF_AUDIO_RATE = 32_000
 AIRSPY_HF_AUDIO_PACKET_BYTES = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2
@@ -20182,7 +20188,7 @@ class RTLSDRLab:
         radio_mode = str(radio_mode).upper()
         if radio_mode == "AM":
             return "am"
-        if radio_mode == "NFM":
+        if radio_mode in ("NFM", "NBFM", "FM"):
             return "fm"
         if radio_mode == "WFM":
             return "wbfm"
@@ -20734,7 +20740,8 @@ class RTLSDRLab:
                 now = time.monotonic()
                 if now >= next_waterfall_at:
                     self._queue_waterfall(samples, tuned_khz)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
+                    interval = 1.0 / local_waterfall_fps(self.state.waterfall_snapshot()[2])
+                    next_waterfall_at = max(next_waterfall_at + interval, now)
                 supported_khz = self._airspy_frequency_khz(requested_khz)
                 if abs(supported_khz - requested_khz) > 0.0005:
                     self.state.set_view(freq_khz=supported_khz)
@@ -20879,7 +20886,8 @@ class RTLSDRLab:
                 now = time.monotonic()
                 if now >= next_waterfall_at:
                     self._queue_waterfall(samples, tuned_hz / 1000.0)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
+                    interval = 1.0 / local_waterfall_fps(self.state.waterfall_snapshot()[2])
+                    next_waterfall_at = max(next_waterfall_at + interval, now)
                 desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
                 if desired_hz != tuned_hz and next_generation != seen_generation and now - last_tune_at >= 0.025:
                     if library.rtlsdr_set_center_freq(device, desired_hz) < 0:
@@ -30844,6 +30852,7 @@ def main():
             )
             presentation_fps = waterfall_presentation_fps(
                 receiver_type, presentation_speed, args.wf_row_pixels,
+                external=state.external_waterfall_snapshot(),
             )
             for item in wf_presenter.take(line_queue, now, presentation_fps, presentation_key):
                 if isinstance(item, tuple):
