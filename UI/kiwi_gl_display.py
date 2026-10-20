@@ -6359,14 +6359,15 @@ class SharedState:
             # gradual decay. Keep the recent sweep maxima, then draw their
             # per-bin envelope behind the live trace.
             now = time.monotonic()
-            self.spectrum_peak_history.append((now, tuple(values)))
+            self.spectrum_peak_history.append((now, np.asarray(values, dtype=np.float64)))
             cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
             while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
                 self.spectrum_peak_history.popleft()
-            self.spectrum_peak_values = tuple(
-                max(frame[index] for _timestamp, frame in self.spectrum_peak_history)
-                for index in range(len(values))
-            )
+            # Reduce whole sweeps in NumPy: a Python scan of every bin in
+            # every retained frame blocks audio/UI on this shared lock.
+            self.spectrum_peak_values = tuple(np.maximum.reduce(
+                [frame for _timestamp, frame in self.spectrum_peak_history]
+            ).tolist())
 
     def update_spectrum_values(self, values):
         """Accept already-normalized bins from an external local I/Q source."""
@@ -6385,14 +6386,15 @@ class SharedState:
                 # the hold window before combining frames of different width.
                 self.spectrum_peak_history.clear()
             now = time.monotonic()
-            self.spectrum_peak_history.append((now, values))
+            self.spectrum_peak_history.append((now, np.asarray(values, dtype=np.float64)))
             cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
             while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
                 self.spectrum_peak_history.popleft()
-            self.spectrum_peak_values = tuple(
-                max(frame[index] for _timestamp, frame in self.spectrum_peak_history)
-                for index in range(len(values))
-            )
+            # Reduce whole sweeps in NumPy: a Python scan of every bin in
+            # every retained frame blocks audio/UI on this shared lock.
+            self.spectrum_peak_values = tuple(np.maximum.reduce(
+                [frame for _timestamp, frame in self.spectrum_peak_history]
+            ).tolist())
 
 
 TEXT_TEXTURE_CACHE_LIMIT = 2048

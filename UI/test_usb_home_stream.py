@@ -34,6 +34,20 @@ class USBHomeStreamTests(unittest.TestCase):
                     self.assertIsNone(ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,local_receiver=receiver))
             receiver.set_home_mode.assert_not_called()
 
+    def test_usb_peak_hold_expires_and_resets_on_resolution_change(self):
+        state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
+        with patch.object(ui.time,'monotonic',return_value=0):
+            state.update_spectrum_values([0.9,0.2])
+        with patch.object(ui.time,'monotonic',return_value=5):
+            state.update_spectrum_values([0.1,0.8])
+        self.assertEqual(state.spectrum_snapshot()[2],(0.9,0.8))
+        with patch.object(ui.time,'monotonic',return_value=11):
+            state.update_spectrum_values([0.3,0.4])
+        self.assertEqual(state.spectrum_snapshot()[2],(0.3,0.8))
+        with patch.object(ui.time,'monotonic',return_value=12):
+            state.update_spectrum_values([0.5]*1024)
+        self.assertEqual(state.spectrum_snapshot()[2],(0.5,)*1024)
+
     def test_usb_fast_source_and_presenter_agree(self):
         self.assertEqual(ui.local_waterfall_fps(4),30)
         for speed in range(1,5):
