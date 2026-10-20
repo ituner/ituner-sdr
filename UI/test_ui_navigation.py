@@ -64,6 +64,37 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_category_is_highlighted_and_draws_device_row(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
+            draws = {}
+            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_back_button', 'draw_picker_two_line_button'):
+                draws[name] = stack.enter_context(mock.patch.object(ui, name))
+            ui.draw_station_picker(mock.Mock(), [('rtl-sdr', 'RTL-SDR V3', 'USB')],
+                                   0, 'http://kiwisdr.local:8073', '', 'name_az', {},
+                                   route_filter='usb')
+            categories = draws['draw_receiver_filter_button'].call_args_list
+            self.assertTrue(next(call.args[3] for call in categories if call.args[2] == 'USB'))
+            self.assertFalse(next(call.args[3] for call in categories if call.args[2] == 'LAN'))
+            self.assertEqual(draws['draw_picker_two_line_button'].call_args.args[2], 'RTL-SDR V3')
+
+    def test_usb_browsing_does_not_require_starting_audio(self):
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), mock.Mock(), mock.Mock())
+        source = lab.source_id
+        lab.source_inventory = {source: {'present': True, 'device': 'RTL-SDR V3'}}
+        self.assertEqual(lab.receiver_rows()[0][1], 'RTL-SDR V3')
+        self.assertTrue(lab.select_source(source))
+        self.assertFalse(lab.is_running())
+        with mock.patch.object(lab, 'probe'):
+            lab.show('receivers')
+        self.assertEqual(lab.navigation_parent, 'receivers')
+        self.assertEqual(lab.receiver_rows()[0][1], 'RTL-SDR V3')
+        lab.state.set_external_audio.assert_not_called()
+
     def test_required_runtime_icons_exist_in_both_asset_roots(self):
         required = {
             "apps.png",

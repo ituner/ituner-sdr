@@ -18247,6 +18247,13 @@ def draw_station_picker(
         draw_picker_two_line_button(text_cache, PICKER_SORT_BOX, "SORT", sort_mode.upper(), 20)
         draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
 
+    if route_filter == "usb":
+        for idx, (_source, device, detail) in enumerate(stations):
+            box = station_tile(idx, scroll)
+            if box:
+                draw_picker_two_line_button(text_cache, box, device, detail)
+        return
+
     leading_rows = 1 if show_fmdx_notice else 0
     if show_fmdx_notice:
         draw_fmdx_disclaimer(text_cache, scroll)
@@ -20146,6 +20153,25 @@ class RTLSDRLab:
 
     def supports_home_mode(self, radio_mode):
         return any(str(radio_mode).upper() in modes for _family, modes in self.capabilities.mode_families)
+
+    def receiver_rows(self):
+        """Detected USB devices are browser rows, independent of playback."""
+        with self.lock:
+            return [
+                (source, inventory.get("device") or LOCAL_RECEIVER_CAPABILITIES[source].label,
+                 "USB · OPEN RECEIVER CONTROLS")
+                for source, inventory in self.source_inventory.items()
+                if inventory.get("present")
+            ]
+
+    def select_source(self, source):
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                return source == self.source_id
+            self.source_id = source
+            self.capabilities = LOCAL_RECEIVER_CAPABILITIES[source]
+            self._apply_source_inventory()
+            return True
 
     def cycle_source(self):
         with self.lock:
@@ -25817,6 +25843,7 @@ def main():
         station_query = ""
         station_route_filter = (
             "all" if dual_vfo_receiver_list_target else
+            "usb" if station_route_filter == "usb" or rtl_lab.is_running() else
             active_receiver_source(all_stations, active_server, receiver_type)
         )
         fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
@@ -25897,6 +25924,8 @@ def main():
 
     def current_receiver_rows():
         """Return the complete directory in the same focused order for draw and taps."""
+        if station_route_filter == "usb":
+            return rtl_lab.receiver_rows()
         active_state = receiver_list_active_state()
         active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
         receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
@@ -29921,14 +29950,6 @@ def main():
                                 station_scroll = 0
                                 picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
                                 picker_list_notice_until = time.monotonic() + args.zoom_osd_seconds
-                        elif touch_started and gesture == "picker_source_usb":
-                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
-                                station_pending_server = None
-                                station_connected_at = 0.0
-                                picker_open = False
-                                rtl_lab_open = True
-                                rtl_lab.show("receivers")
-                            wake_controls()
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -29936,6 +29957,8 @@ def main():
                                     "favorites" if gesture == "picker_route_favorites"
                                     else gesture.removeprefix("picker_source_")
                                 )
+                                if station_route_filter == "usb":
+                                    rtl_lab.probe()
                                 if gesture.startswith("picker_source_"):
                                     # A category tap is an explicit return to
                                     # that complete list, not a continuation
@@ -29987,7 +30010,13 @@ def main():
                                 )
                                 if idx is not None:
                                     wake_controls()
-                                    connect_to_station(visible_stations[idx])
+                                    if station_route_filter == "usb":
+                                        if rtl_lab.select_source(visible_stations[idx][0]):
+                                            picker_open = False
+                                            rtl_lab_open = True
+                                            rtl_lab.show("receivers")
+                                    else:
+                                        connect_to_station(visible_stations[idx])
                         elif touch_started and gesture == "waterfall":
                             wake_controls()
                             server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
