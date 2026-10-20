@@ -594,7 +594,7 @@ class VHFHandler(ADSBHandler):
                 hostname=urlsplit('http://'+self.headers.get('Host','localhost')).hostname or 'localhost'
                 rotation=int(query.get('rotation',['0'])[0])
                 if rotation not in (0,90,270):raise ValueError('Invalid preview rotation')
-                self.send(preview_html(key,hostname,manager.token,touch=query.get('touch')==['1'],rotation=rotation).encode(),'text/html; charset=utf-8')
+                self.send(preview_html(key,manager.web_apps.hostname or hostname,manager.token,touch=query.get('touch')==['1'],rotation=rotation).encode(),'text/html; charset=utf-8')
             elif path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum':self.send(json.dumps(dict(manager.spectrum.snapshot(),devices=manager.devices,leases=manager.broker.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())

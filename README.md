@@ -494,3 +494,9 @@ Reporter callsigns and locations for spot uploads remain separate settings.
 ### VHF/UHF Signal Observatory
 
 AIS, APRS, rtl_433, Meteor-M LRPT, CubeSat telemetry and RS41/DFM radiosondes are available under **Decoders → VHF/UHF**, with SoapySDR receiver assignment and shared ownership with ADS-B. The browser observatory is at [cm5.local:8092](http://cm5.local:8092/). See [setup, reception profiles and visible logs](docs/vhf-uhf.md). Install engines using `sudo bash scripts/install-vhf.sh` or the app-only installer's `--vhf` option.
+
+## Application updates
+
+Pi and Mac installations support **SYSTEM → UPDATES** with on-demand GitHub
+checks, release notes, confirmed installation and rollback. See
+[application updates](docs/application-updates.md) for one-time setup and scope.

@@ -92,3 +92,6 @@ ln -s /dev/null /etc/systemd/system/ituner-sdr-health.service
 systemctl daemon-reload
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 echo 'Installation complete. Reboot now so the display and touch overlays can load: sudo reboot'
+
+# Fixed-scope application updater; never changes board drivers.
+python3 "$repo_dir/scripts/install-updater.py" --user "$app_user"

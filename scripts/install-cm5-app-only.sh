@@ -217,6 +217,8 @@ systemctl daemon-reload
 if ((cm5_audio)); then
     bash "$repo/scripts/install-cm5-audio.sh" --no-restart
 fi
+# Fixed-scope application updater; never changes board drivers.
+python3 "$repo/scripts/install-updater.py" --user "$app_user"
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 systemctl restart ituner-sdr-touch-ready.service
 systemctl restart ituner-sdr.service
