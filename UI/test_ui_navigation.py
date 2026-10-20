@@ -64,6 +64,44 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_category_hidden_geometry_matches_touch_targets(self):
+        ui.configure_output(True)
+        visible = ui.receiver_source_segments(True)
+        hidden = ui.receiver_source_segments(False)
+        self.assertEqual([source for source, _ in hidden], ['local', 'kiwi', 'openwebrx', 'fmdx', 'all'])
+        self.assertEqual(hidden[0][1], visible[0][1])
+        for source, (x0, y0, x1, y1) in hidden:
+            self.assertEqual(ui.picker_source_segment_at((x0+x1)/2, (y0+y1)/2, False), source)
+        self.assertEqual(ui.receiver_source_segments(True), visible)
+
+    def test_usb_hotplug_rescans_only_when_topology_changes(self):
+        import tempfile
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), mock.Mock(), mock.Mock())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(lab, 'probe', return_value=True) as probe:
+            root = Path(directory)
+            lab.refresh_usb_devices(now=1, usb_root=root)
+            self.assertEqual(probe.call_count, 1)
+            lab.refresh_usb_devices(now=2, usb_root=root)
+            self.assertEqual(probe.call_count, 1)
+            device = root / '1-1'
+            device.mkdir()
+            for name, value in (('idVendor', '0bda'), ('idProduct', '2838'), ('devnum', '2')):
+                (device / name).write_text(value)
+            lab.refresh_usb_devices(now=3, usb_root=root)
+            self.assertEqual(probe.call_count, 2)
+            lab.refresh_usb_devices(now=4, usb_root=root)
+            self.assertEqual(probe.call_count, 2)
+            for path in device.iterdir():
+                path.unlink()
+            device.rmdir()
+            # Busy receivers defer the rescan until their worker releases it.
+            probe.return_value = False
+            lab.refresh_usb_devices(now=5, usb_root=root)
+            probe.return_value = True
+            lab.refresh_usb_devices(now=6, usb_root=root)
+            self.assertEqual(probe.call_count, 4)
+
     def test_usb_waterfall_tap_preserves_window_and_signal_position(self):
         ui.configure_output(True)
         center = 100100.0

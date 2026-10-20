@@ -2664,9 +2664,9 @@ RECEIVER_PICKER_BACK_BOX = (
 )
 
 
-def receiver_source_segments():
+def receiver_source_segments(usb_present=True):
     """Include direct USB radios alongside the network source categories."""
-    names = ("usb",) + receiver_catalog.SOURCE_FILTERS
+    names = (("usb",) if usb_present else ()) + receiver_catalog.SOURCE_FILTERS
     # This also seeds module-level geometry before configure_output() runs.
     x0 = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
     x1 = x0 + RECEIVER_PICKER_SIDEBAR_W - 2 * RECEIVER_PICKER_MARGIN
@@ -2705,11 +2705,11 @@ def boxes_overlap(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def picker_source_segment_at(x, y):
+def picker_source_segment_at(x, y, usb_present=True):
     """Return the source segment under a tap, or ``None``."""
     if not LCD_800_MODE:
         return None
-    for source, box in PICKER_SOURCE_SEGMENT_BOXES:
+    for source, box in receiver_source_segments(usb_present):
         if contains(box, x, y):
             return source
     return None
@@ -18227,7 +18227,7 @@ def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
-    show_fmdx_notice=False, notice="", notice_alpha=220,
+    show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -18244,7 +18244,7 @@ def draw_station_picker(
             text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", "favorite",
             route_filter == "favorites",
         )
-        for source, box in PICKER_SOURCE_SEGMENT_BOXES:
+        for source, box in receiver_source_segments(usb_present):
             draw_receiver_filter_button(
                 text_cache, box, receiver_source_label(source), route_filter == source, theme,
             )
@@ -20080,6 +20080,8 @@ class RTLSDRLab:
         self.demod_generation = 0
         self.control_notice = ""
         self.local_squelch_closed = False
+        self._usb_topology = None
+        self._usb_check_at = 0.0
         self.probe()
 
     def show(self, parent="apps"):
@@ -20242,6 +20244,26 @@ class RTLSDRLab:
         if closed and pcm:
             return bytes(len(pcm))
         return pcm
+
+    def refresh_usb_devices(self, now=None, usb_root=Path("/sys/bus/usb/devices")):
+        """Rescan on Linux USB hotplug without opening an active receiver."""
+        now = time.monotonic() if now is None else now
+        if now < self._usb_check_at or not usb_root.is_dir():
+            return
+        self._usb_check_at = now + 1.0
+        topology = []
+        for vendor in usb_root.glob("*/idVendor"):
+            device = vendor.parent
+            try:
+                topology.append((device.name, vendor.read_text().strip(),
+                                 (device / "idProduct").read_text().strip(),
+                                 (device / "devnum").read_text().strip()))
+            except OSError:
+                # A device can disappear between directory and attribute reads.
+                continue
+        topology = tuple(sorted(topology))
+        if topology != self._usb_topology and self.probe():
+            self._usb_topology = topology
 
     def probe(self):
         with self.lock:
@@ -26710,6 +26732,16 @@ def main():
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            rtl_lab.refresh_usb_devices()
+            usb_present = bool(rtl_lab.receiver_rows())
+            if station_route_filter == "usb" and not usb_present and not rtl_lab.snapshot()["probing"]:
+                station_route_filter = "local"
+                station_scroll = 0
+                station_query = ""
+                stations = filtered_stations(
+                    all_stations, station_query, station_sort, station_route_filter,
+                    favorite_servers, station_health, receiver_home_profile,
+                )
             if web_apps.return_to_decoders:
                 web_apps.return_to_decoders=False
                 digital_menu_open=True
@@ -27141,8 +27173,8 @@ def main():
                                 gesture = "picker_search"
                             elif picker_open and contains(PICKER_SORT_BOX, x, y):
                                 gesture = "picker_sort"
-                            elif picker_open and LCD_800_MODE and picker_source_segment_at(x, y):
-                                gesture = f"picker_source_{picker_source_segment_at(x, y)}"
+                            elif picker_open and LCD_800_MODE and picker_source_segment_at(x, y, usb_present):
+                                gesture = f"picker_source_{picker_source_segment_at(x, y, usb_present)}"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_FAVORITES_BOX, x, y):
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
@@ -31141,6 +31173,7 @@ def main():
                             picker_list_notice_until - time.monotonic(),
                             args.zoom_osd_seconds,
                         ),
+                        usb_present=usb_present,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
