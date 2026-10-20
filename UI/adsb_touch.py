@@ -43,7 +43,6 @@ class AirspaceDashboard:
     def header(self, cache, state, valid):
         ui=self.ui
         ui.draw_logical_rect(0,0,1024,146,self.PANEL)
-        ui.draw_logical_rect(0,145,1024,146,self.LINE)
         self.ink(cache,18,34,'ADS-B / AIRSPACE',27,bold=True)
         self.text(cache,18,66,'Aircraft received by your local radio',18,self.MUTED,width=450)
         self.button(cache,(500,12,740,76),'1090 ES',('usb',None),state['status'],active=state['enabled'])
