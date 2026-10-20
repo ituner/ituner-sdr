@@ -18,6 +18,22 @@ class MenuIconTests(unittest.TestCase):
                 ui.setup_gl(desktop=desktop)
                 pygame.mouse.set_visible.assert_called_with(desktop)
 
+    def test_usb_probe_survives_missing_other_receiver_tool(self):
+        def run(command, **kwargs):
+            if command[0]=='airspyhf_info':
+                raise FileNotFoundError('airspyhf_info')
+            return mock.Mock(stdout='Found 1 device(s):\n  0: Nooelec, NESDR, SN: 123\nFound Rafael Micro R820T tuner',stderr='')
+        def thread(**kwargs):
+            return mock.Mock(start=kwargs['target'])
+        with mock.patch.object(ui.subprocess,'run',side_effect=run), \
+             mock.patch.object(ui.threading,'Thread',side_effect=thread):
+            lab=ui.RTLSDRLab(mock.Mock(),mock.Mock(),mock.Mock())
+            self.assertTrue(lab.snapshot()['present'])
+            self.assertIn('Nooelec',lab.snapshot()['device'])
+            lab.show('receivers')
+            self.assertEqual(lab.navigation_parent,'receivers')
+            self.assertFalse(lab.snapshot()['probing'])
+
     def test_required_runtime_icons_exist_in_both_asset_roots(self):
         required = {
             "apps.png",
@@ -713,7 +729,7 @@ class ReceiverBrowserTests(unittest.TestCase):
         ui.configure_popup_layout()
         segments = ui.receiver_source_segments()
         self.assertEqual([source for source, _box in segments],
-                         ["local", "kiwi", "openwebrx", "fmdx", "all"])
+                         ["usb", "local", "kiwi", "openwebrx", "fmdx", "all"])
         for box in (box for _source, box in segments):
             self.assertEqual((box[0], box[2]),
                              (ui.PICKER_EXIT_BOX[0], ui.PICKER_EXIT_BOX[2]))

@@ -2662,8 +2662,8 @@ RECEIVER_PICKER_BACK_BOX = (
 
 
 def receiver_source_segments():
-    """Return the five source categories just below the rail title line."""
-    names = receiver_catalog.SOURCE_FILTERS
+    """Include direct USB radios alongside the network source categories."""
+    names = ("usb",) + receiver_catalog.SOURCE_FILTERS
     # This also seeds module-level geometry before configure_output() runs.
     x0 = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
     x1 = x0 + RECEIVER_PICKER_SIDEBAR_W - 2 * RECEIVER_PICKER_MARGIN
@@ -11901,10 +11901,10 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     )
     draw_tests_button(
         text_cache, RTL_LAB_RUN_BOX, "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
-        "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
+        "LISTEN ON THIS DEVICE" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
         running,
     )
-    draw_settings_leaf_sidebar(text_cache, "LOCAL SDR", "BACK TO APPS")
+    draw_settings_leaf_sidebar(text_cache, "USB RECEIVERS", "BACK TO " + rtl_lab.navigation_parent.upper())
     detail = fit_station_text(text_cache, snapshot["detail"], x1 - x0 - 48, 15, False, False, family="Liberation Sans")
     draw_text(text_cache, x0 + 24, y1 - 18, detail, (149, 190, 194), 15, False, True, "lm", family="Liberation Sans")
 
@@ -20012,6 +20012,7 @@ class RTLSDRLab:
         self.args = args
         self.state = state
         self.line_queue = line_queue
+        self.navigation_parent = "apps"
         self.source_id = RTL_SDR_CAPABILITIES.source_id
         self.capabilities = RTL_SDR_CAPABILITIES
         self.lock = threading.RLock()
@@ -20035,6 +20036,10 @@ class RTLSDRLab:
         self.demod_generation = 0
         self.control_notice = ""
         self.local_squelch_closed = False
+        self.probe()
+
+    def show(self, parent="apps"):
+        self.navigation_parent = parent
         self.probe()
 
     def _presets(self):
@@ -20185,19 +20190,18 @@ class RTLSDRLab:
 
         def worker():
             try:
-                rtl_result = subprocess.run(
-                    ["rtl_test", "-t"], capture_output=True, text=True,
-                    timeout=14, check=False,
-                )
-                output = (rtl_result.stdout or "") + "\n" + (rtl_result.stderr or "")
+                def probe_output(command, timeout):
+                    try:
+                        result = subprocess.run(command, capture_output=True, text=True,
+                                                timeout=timeout, check=False)
+                        return (result.stdout or "") + "\n" + (result.stderr or ""), ""
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        return "", str(exc)
+                output, rtl_error = probe_output(["rtl_test", "-t"], 14)
                 device_match = re.search(r"^\s*0:\s*(.+)$", output, re.MULTILINE)
                 tuner_match = re.search(r"Found\s+(.+?)\s+tuner", output, re.IGNORECASE)
                 rtl_present = "Found 1 device(s)" in output or device_match is not None
-                airspy_result = subprocess.run(
-                    ["airspyhf_info"], capture_output=True, text=True,
-                    timeout=12, check=False,
-                )
-                airspy_output = (airspy_result.stdout or "") + "\n" + (airspy_result.stderr or "")
+                airspy_output, airspy_error = probe_output(["airspyhf_info"], 12)
                 serial_match = re.search(r"S/N:\s*(0x[0-9A-F]+)", airspy_output, re.IGNORECASE)
                 firmware_match = re.search(r"Firmware Version:\s*([^\r\n]+)", airspy_output, re.IGNORECASE)
                 airspy_present = serial_match is not None
@@ -20207,13 +20211,13 @@ class RTLSDRLab:
                             "present": rtl_present,
                             "device": device_match.group(1).strip() if device_match else "NO RTL-SDR DETECTED",
                             "tuner": tuner_match.group(1).strip() if tuner_match else "",
-                            "detail": "Connect an RTL-SDR and tap SOURCE.",
+                            "detail": rtl_error or "Connect an RTL-SDR and reopen USB to rescan.",
                         },
                         AIRSPY_HF_CAPABILITIES.source_id: {
                             "present": airspy_present,
                             "device": f"AIRSPY HF+ {serial_match.group(1)}" if serial_match else "NO AIRSPY HF+ DETECTED",
                             "tuner": firmware_match.group(1).strip() if firmware_match else "",
-                            "detail": "Install libairspyhf or reconnect the Airspy HF+.",
+                            "detail": airspy_error or "Connect an Airspy HF+ and reopen USB to rescan.",
                         },
                     }
                     self._apply_source_inventory()
@@ -28913,6 +28917,7 @@ def main():
                                 elif choice == "rtl":
                                     tests_panel_open = False
                                     rtl_lab_open = True
+                                    rtl_lab.show("apps")
                                 elif choice == "font_lab":
                                     tests_panel_open = False
                                     font_lab_open = True
@@ -28952,6 +28957,7 @@ def main():
                                 choice = rtl_lab_option_at(x, y)
                                 if choice == "source":
                                     rtl_lab.cycle_source()
+                                    rtl_lab.probe()
                                 elif choice == "preset":
                                     rtl_lab.cycle_preset()
                                 elif choice == "run":
@@ -28985,14 +28991,14 @@ def main():
                                 elif choice == "back":
                                     rtl_lab.stop()
                                     rtl_lab_open = False
-                                    tests_panel_open = True
+                                    restore_navigation_parent(rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "rtl_lab_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 rtl_lab.stop()
                                 rtl_lab_open = False
-                                tests_panel_open = True
+                                restore_navigation_parent(rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -29896,6 +29902,14 @@ def main():
                                 station_scroll = 0
                                 picker_list_notice = f"SORTED BY {receiver_sort_label(station_sort)}"
                                 picker_list_notice_until = time.monotonic() + args.zoom_osd_seconds
+                        elif touch_started and gesture == "picker_source_usb":
+                            if max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
+                                station_pending_server = None
+                                station_connected_at = 0.0
+                                picker_open = False
+                                rtl_lab_open = True
+                                rtl_lab.show("receivers")
+                            wake_controls()
                         elif touch_started and (gesture == "picker_route_favorites" or gesture.startswith("picker_source_")):
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:

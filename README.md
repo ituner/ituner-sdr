@@ -500,3 +500,13 @@ AIS, APRS, rtl_433, Meteor-M LRPT, CubeSat telemetry and RS41/DFM radiosondes ar
 Pi and Mac installations support **SYSTEM → UPDATES** with on-demand GitHub
 checks, release notes, confirmed installation and rollback. See
 [application updates](docs/application-updates.md) for one-time setup and scope.
+
+### USB receivers on the Pi
+
+Open **RECEIVERS → USB** for the local RTL-SDR (including Nooelec NESDR)
+and Airspy HF+ controls. Opening the page rescans devices. SOURCE selects the
+receiver family; choose a preset and START LOCAL AUDIO to listen through HOME.
+BACK returns to RECEIVERS. USB devices are separate from LAN/network stations
+and have no location on the receiver globe. Install `rtl-sdr` / `airspyhf`
+tools on Linux for discovery. A receiver must first appear in `lsusb`; an empty
+USB bus cannot be resolved by changing the receiver list.
