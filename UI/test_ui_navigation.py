@@ -34,6 +34,36 @@ class MenuIconTests(unittest.TestCase):
             self.assertEqual(lab.navigation_parent,'receivers')
             self.assertFalse(lab.snapshot()['probing'])
 
+    def test_network_retry_yields_to_usb_before_handoff_deadline(self):
+        import threading
+        state = ui.SharedState('http://example.test:8073', 7075.0, 4, -95.0, 142, 245, 3, 'am', True)
+        for delay in (10.0, None):
+            state.set_external_audio(False)
+            stop = threading.Event()
+            entered = threading.Event()
+            finished = threading.Event()
+            def retry():
+                entered.set()
+                ui.wait_for_audio_retry(stop, state, state.snapshot()[5], delay)
+                finished.set()
+            worker = threading.Thread(target=retry)
+            worker.start()
+            self.assertTrue(entered.wait(1))
+            state.set_external_audio(True)
+            try:
+                self.assertTrue(finished.wait(0.5), 'USB must interrupt network retry and access-denied waits')
+            finally:
+                stop.set()
+                worker.join(1)
+
+    def test_usb_footer_identifies_device(self):
+        footer = ui.usb_receiver_footer({
+            'device': 'Realtek RTL2838, SN: 00000001',
+            'capabilities': mock.Mock(label='RTL-SDR'),
+            'preset': ('FM',),
+        })
+        self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
+
     def test_required_runtime_icons_exist_in_both_asset_roots(self):
         required = {
             "apps.png",

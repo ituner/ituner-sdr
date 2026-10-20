@@ -198,9 +198,12 @@ except ImportError:
 
 try:
     import numpy as np
-    import onnxruntime as ort
 except ImportError:
     np = None
+
+try:
+    import onnxruntime as ort
+except ImportError:
     ort = None
 
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
@@ -4722,6 +4725,26 @@ def main_receiver_retry_delay(failure_count):
     if failure_count <= MAIN_RECONNECT_MID_ATTEMPTS:
         return MAIN_RECONNECT_MID_SECONDS
     return MAIN_RECONNECT_STEADY_SECONDS
+
+
+def wait_for_audio_retry(stop_event, state, server_generation, delay=None):
+    """Yield back to the audio owner promptly when a receiver is changed."""
+    deadline = None if delay is None else time.monotonic() + delay
+    while not stop_event.is_set():
+        if (state.external_audio_snapshot() or state.stream_paused_snapshot()
+                or state.snapshot()[5] != server_generation):
+            return False
+        remaining = 0.05 if deadline is None else deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if stop_event.wait(min(0.05, remaining)):
+            return True
+    return True
+
+
+def usb_receiver_footer(snapshot):
+    device = snapshot["device"] or snapshot["capabilities"].label
+    return f"USB · {device} · {snapshot['preset'][0]}"
 
 
 def active_vosk_model_path():
@@ -23345,9 +23368,7 @@ def snd_meter_worker(
             if state.stream_paused_snapshot():
                 continue
             if state.connection_access_denied_snapshot(server_generation):
-                while not stop_event.wait(0.25):
-                    if state.snapshot()[5] != server_generation:
-                        break
+                wait_for_audio_retry(stop_event, state, server_generation)
                 continue
             # The retry delay is a known transport outage. Tell the clock
             # before waiting so an exhausted queue re-primes quietly instead
@@ -23364,9 +23385,7 @@ def snd_meter_worker(
                 state.connection_access_denied(server_generation)
                 persist_live_station_health(server, "audio", False)
                 print("gl SND stopped: choose a receiver that permits external app connections", flush=True)
-                while not stop_event.wait(0.25):
-                    if state.snapshot()[5] != server_generation:
-                        break
+                wait_for_audio_retry(stop_event, state, server_generation)
                 continue
             if state.connection_failed(server_generation, "audio"):
                 persist_live_station_health(server, "audio", False)
@@ -23375,7 +23394,7 @@ def snd_meter_worker(
             retry_seconds = main_receiver_retry_delay(retry_failures)
             state.connection_retry_scheduled(server_generation, "audio", retry_seconds)
             print(f"gl SND retry in {retry_seconds:.0f}s (failure {retry_failures})", flush=True)
-            if stop_event.wait(retry_seconds):
+            if wait_for_audio_retry(stop_event, state, server_generation, retry_seconds):
                 break
         finally:
             if ws:
@@ -30796,7 +30815,7 @@ def main():
             # tappable behind them. Full-canvas tools still own the view.
             control_alpha = 0.0 if menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE) or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or globe_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = (
-                f"LOCAL {rtl_lab.snapshot()['capabilities'].label} · {rtl_lab.snapshot()['preset'][0]}"
+                usb_receiver_footer(rtl_lab.snapshot())
                 if local_iq_active else "OPENWEBRX TEST · ON0LLV"
                 if owrx.is_openwebrx_endpoint(server) else next(
                     (
