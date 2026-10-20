@@ -64,6 +64,24 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_start_defaults_decoder_and_home_mode_to_am(self):
+        for capabilities in ui.LOCAL_RECEIVER_CAPABILITIES.values():
+            with self.subTest(source=capabilities.source_id):
+                state = ui.SharedState('http://example.test:8073', 7075., 4, -95., 142, 245, 3, 'usb', True)
+                with mock.patch.object(ui.RTLSDRLab, 'probe'):
+                    lab = ui.RTLSDRLab(mock.Mock(), state, mock.Mock())
+                lab.source_id = capabilities.source_id
+                lab.capabilities = capabilities
+                lab.present = True
+                for index, preset in enumerate(lab._presets()):
+                    lab.thread = None
+                    lab.preset_indices[lab.source_id] = index
+                    with mock.patch.object(ui.threading, 'Thread'):
+                        self.assertTrue(lab.start(preset[1] / 1000., 4))
+                    self.assertEqual(lab.demod_snapshot()[0], 'am')
+                    self.assertEqual(state.radio_snapshot()[0].upper(), 'AM')
+                    self.assertEqual(lab.preferred_home_mode(preset), 'AM')
+
     def test_usb_category_hidden_geometry_matches_touch_targets(self):
         ui.configure_output(True)
         visible = ui.receiver_source_segments(True)

@@ -20154,10 +20154,8 @@ class RTLSDRLab:
 
     @staticmethod
     def preferred_home_mode(preset):
-        _name, _frequency_hz, demod_mode, _rate = preset
-        if demod_mode == "am":
-            return "AM"
-        return "WFM" if demod_mode == "wbfm" else "NFM"
+        """Start every USB session in AM, independent of its frequency preset."""
+        return "AM"
 
     @staticmethod
     def shared_radio_mode(radio_mode):
