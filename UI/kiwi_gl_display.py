@@ -24862,19 +24862,15 @@ def main():
     if args.spectrum_preview:
         vhf_workspace.show('spectrum')
         vhf_workspace.spectrum.screen=args.spectrum_preview_view
-    elif vhf_hub.sessions['meteor'].enabled:
-        vhf_workspace.show('meteor')
-        vhf_workspace.view = 'products'
-    elif vhf_hub.sessions['ism'].enabled:
-        vhf_workspace.show('ism')
-        vhf_workspace.view = 'data'
     from station_workspace import StationWorkspace
     station_workspace=StationWorkspace(sys.modules[__name__],radio_profile)
     sys.modules[__name__].station_settings=station_workspace
     if args.radio_info_preview:station_workspace.show()
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
-    # Resume the active decoder workspace, matching Meteor startup behavior.
-    adsb_workspace.open = args.adsb_preview or args.adsb_coverage_preview or (adsb_manager.enabled and not vhf_workspace.open)
+    # Decoder services may resume in the background, but normal startup always
+    # lands on HOME with the remembered receiver. Only explicit preview flags
+    # may open a decoder screen during development.
+    adsb_workspace.open = args.adsb_preview or args.adsb_coverage_preview
     if args.adsb_coverage_preview:
         vhf_workspace.open=False
         vhf_workspace.spectrum.open=False
