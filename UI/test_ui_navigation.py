@@ -60,9 +60,9 @@ class MenuIconTests(unittest.TestCase):
         footer = ui.usb_receiver_footer({
             'device': 'Realtek RTL2838, SN: 00000001',
             'capabilities': mock.Mock(label='RTL-SDR'),
-            'preset': ('FM',),
+            'preset': ('FM BROADCAST',),
         })
-        self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
+        self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001')
 
     def test_usb_receiver_survives_saved_preferences_round_trip(self):
         import tempfile

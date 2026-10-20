@@ -4763,7 +4763,7 @@ def wait_for_audio_retry(stop_event, state, server_generation, delay=None):
 
 def usb_receiver_footer(snapshot):
     device = snapshot["device"] or snapshot["capabilities"].label
-    return f"USB · {device} · {snapshot['preset'][0]}"
+    return f"USB · {device}"
 
 
 def active_vosk_model_path():
