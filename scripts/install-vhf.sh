@@ -37,7 +37,7 @@ install -m 0644 "$sources/AIS-catcher/LICENSE" "$prefix/licenses/AIS-catcher-GPL
 cp -a "$sources/RS/LICENSE" "$prefix/licenses/RS1729-license.txt"
 install -d /opt/ituner-sdr/UI
 install -m 0644 "$repo"/UI/vhf_*.py "$repo"/UI/vhf_dashboard.{html,css,js} \
-  "$repo"/UI/{sdr_broker,soapy_rx,adsb_monitor,adsb_workspace,adsb_touch,kiwi_gl_display}.py \
+  "$repo"/UI/{sdr_broker,soapy_rx,kiwi_gl_display}.py \
   "$repo"/UI/adsb_*.py "$repo"/UI/adsb_*.js "$repo"/UI/adsb_*.css "$repo/UI/adsb_map.html" /opt/ituner-sdr/UI/
 install -m 0644 "$repo"/UI/{spectrum_monitor,spectrum_history,spectrum_analysis,spectrum_report,spectrum_workspace,soapy_survey}.py "$repo"/UI/spectrum.{html,css,js} "$repo"/UI/spectrum_tools.js "$repo"/UI/spectrum_allocations.json /opt/ituner-sdr/UI/
 dpkg-query -W soapysdr-tools soapysdr-module-rtlsdr rtl-433 direwolf gnuradio gr-satellites satdump > "$prefix/versions.txt"
