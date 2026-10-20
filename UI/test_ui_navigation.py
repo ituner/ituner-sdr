@@ -11,6 +11,19 @@ import kiwi_gl_display as ui  # noqa: E402
 
 
 class MenuIconTests(unittest.TestCase):
+    def test_decoder_tiles_have_eight_pixel_gaps_and_clear_back(self):
+        count = len(ui.DIGITAL_MENU_ITEMS)
+        offset = len(ui.SPECTRUM_MENU_ITEMS)
+        for group in (ui.HF_DECODER_ITEMS, ui.VHF_UHF_DECODER_ITEMS, ui.WEB_APP_MENU_ITEMS):
+            boxes = [ui.lcd_nav_box(offset + i, count, True) for i in range(len(group))]
+            for i, box in enumerate(boxes):
+                if i % 2:
+                    self.assertEqual(box[0] - boxes[i - 1][2], 8)
+                if i >= 2:
+                    self.assertEqual(box[1] - boxes[i - 2][3], 8)
+            offset += len(group)
+        self.assertGreaterEqual(ui.lcd_drawer_back_box()[1] - boxes[-1][3], 8)
+
     def test_decoder_rail_starts_16_pixels_below_divider(self):
         box=ui.lcd_nav_box(0,len(ui.DIGITAL_MENU_ITEMS),True)
         self.assertEqual(box[1]-ui.LCD_DRAWER_HEADER_H,16)

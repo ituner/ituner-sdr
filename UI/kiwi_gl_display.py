@@ -16800,16 +16800,17 @@ def left_smeter_box(text_cache, freq_khz, font_family=None, mirrored=None):
 
 
 def decoder_rail_groups():
-    """Eight pixels either side of each group heading; retain tile dimensions."""
+    """Keep 8 px between tiles and fit the groups above the fixed BACK button."""
     gap = 8
+    heading_gap = 6
     spectrum_top = LCD_DRAWER_HEADER_H + 16
-    hf_heading = spectrum_top + 64 + gap
+    hf_heading = spectrum_top + 64 + heading_gap
     hf_top = hf_heading + 16 + gap
-    hf_bottom = hf_top + ((len(HF_DECODER_ITEMS) + 1) // 2 - 1) * 58 + 56
-    vhf_heading = hf_bottom + gap
+    hf_bottom = hf_top + ((len(HF_DECODER_ITEMS) + 1) // 2 - 1) * 64 + 56
+    vhf_heading = hf_bottom + heading_gap
     vhf_top = vhf_heading + 16 + gap
-    vhf_bottom = vhf_top + ((len(VHF_UHF_DECODER_ITEMS) + 1) // 2 - 1) * 58 + 56
-    web_heading = vhf_bottom + gap
+    vhf_bottom = vhf_top + ((len(VHF_UHF_DECODER_ITEMS) + 1) // 2 - 1) * 64 + 56
+    web_heading = vhf_bottom + heading_gap
     return spectrum_top, hf_top, vhf_top, web_heading + 14 + gap, (hf_heading + 8, vhf_heading + 8, web_heading + 7)
 
 
@@ -16825,7 +16826,7 @@ def lcd_nav_box(index, item_count=None, has_back=False):
         if index < len(HF_DECODER_ITEMS):
             col, row = index % 2, index // 2
             x0 = LCD_NAV_X0 + 10 + col * 122
-            return x0, hf_top + row * 58, x0 + 114, hf_top + 56 + row * 58
+            return x0, hf_top + row * 64, x0 + 114, hf_top + 56 + row * 64
         vhf_index = index - len(HF_DECODER_ITEMS)
         if vhf_index >= len(VHF_UHF_DECODER_ITEMS):
             col=vhf_index-len(VHF_UHF_DECODER_ITEMS)
@@ -16834,7 +16835,7 @@ def lcd_nav_box(index, item_count=None, has_back=False):
         col, row = vhf_index % 2, vhf_index // 2
         x0 = LCD_NAV_X0 + 10 + col * 122
         x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
-        return x0, vhf_top + row * 58, x1, vhf_top + 56 + row * 58
+        return x0, vhf_top + row * 64, x1, vhf_top + 56 + row * 64
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
