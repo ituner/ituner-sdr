@@ -10,6 +10,7 @@ from adsb_footprint import projected_frame
 from adsb_coverage_gl import draw as draw_footprint_mesh
 from station_profile import distance_m
 from adsb_view import TrafficView, aged, freshness
+from adsb_layout import action_box, SCAN_USB_BOX, PREVIOUS_BOX, NEXT_BOX
 from adsb_traffic import TRAIL_RETENTION, TRAIL_WINDOWS, MAP_ZOOM_MIN, MAP_ZOOM_MAX, trail_label, startup_notice_visible, reception_summary, historical_aircraft, position_age
 
 
@@ -348,35 +349,37 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def draw_logs(self, cache):
         self.panel((16,158,1008,712))
         for index,(kind,label) in enumerate((('flights','FLIGHTS'),('receiver','RECEIVER'),('diagnostics','DIAGNOSTICS'))):
-            self.button(cache,(32+index*294,176,310+index*294,226),label,('log_kind',kind),active=kind==self.log_kind)
+            self.button(cache,action_box(index,176),label,('log_kind',kind),active=kind==self.log_kind)
         data=self.manager.log_snapshot(self.log_kind)
         source=list(reversed(data.get('lines',[]))) if self.log_kind!='diagnostics' else data.get('lines',[])
         lines=[part for line in source for part in (textwrap.wrap(line,100) or [''])]
         count=max(1,(len(lines)+15)//16);self.log_page=min(self.log_page,count-1)
         if not lines:self.text(cache,34,286,'No entries yet. Receiver and Diagnostics show radio activity.',18,self.MUTED,width=940)
         for i,line in enumerate(lines[self.log_page*16:(self.log_page+1)*16]):self.text(cache,34,256+i*24,line,14,width=940)
-        self.button(cache,(32,656,250,712),'PREVIOUS',('page',-1))
-        self.ink(cache,472,684,f'PAGE {self.log_page+1} / {count} · UTC',14,self.MUTED,anchor='cm')
-        self.button(cache,(694,656,992,712),'NEXT',('page',1))
+        self.button(cache,PREVIOUS_BOX,'PREVIOUS',('page',-1))
+        self.ink(cache,34,660,f'PAGE {self.log_page+1} / {count} · UTC',18,self.MUTED)
+        self.button(cache,NEXT_BOX,'NEXT',('page',1))
 
     def draw_traffic(self, cache, state):
         self.panel((16,224,1008,712));self.ink(cache,34,253,self.traffic_view.label+' TRAFFIC',22)
-        self.button(cache,(670,232,910,276),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
+        self.button(cache,action_box(3,224),{'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort],('sort',None))
         planes=self.sorted_aircraft(state)
-        self.traffic_page=min(self.traffic_page,max(0,(len(planes)-1)//5))
+        # Four unchanged contact rows leave clear space above the shared actions.
+        page_size=4
+        self.traffic_page=min(self.traffic_page,max(0,(len(planes)-1)//page_size))
         if not planes:self.text(cache,34,320,'No contacts in this viewing window. Saved observations remain in History.',18,self.MUTED,width=940)
-        for i,plane in enumerate(planes[self.traffic_page*5:self.traffic_page*5+5]):
+        for i,plane in enumerate(planes[self.traffic_page*page_size:(self.traffic_page+1)*page_size]):
             title=f"{(plane.get('flight') or plane['hex']).strip()} · ICAO {plane['hex'].upper()}"
             detail=freshness(plane)
             if self.traffic_view.arrival(plane['hex'],time.time()):title+=' · NEW'
             self.button(cache,(32,284+i*72,992,348+i*72),title,('select',plane['hex']),detail,active=plane['hex']==self.selected)
-        self.button(cache,(32,656,250,712),'PREVIOUS',('page',-1));self.button(cache,(694,656,992,712),'NEXT',('page',1))
-        self.ink(cache,472,684,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+4)//5)}',14,self.MUTED,anchor='cm')
+        self.button(cache,PREVIOUS_BOX,'PREVIOUS',('page',-1));self.button(cache,NEXT_BOX,'NEXT',('page',1))
+        self.ink(cache,34,660,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+page_size-1)//page_size)}',18,self.MUTED)
 
     def draw_usb(self, cache, state):
         self.panel((16,158,1008,712));self.ink(cache,34,191,'1090 ES · RECEIVER ASSIGNMENT',23)
         self.text(cache,34,224,'978 UAT · future second receiver · not installed',15,self.MUTED)
-        self.button(cache,(728,170,992,230),'ANTENNA SITE',('site',None))
+        self.button(cache,action_box(3,170),'ANTENNA SITE',('site',None))
         self.button(cache,(32,246,992,302),'AUTO · FIRST AVAILABLE DONGLE',('assign','auto'),active=state['selection']=='auto')
         devices=state['devices'];self.usb_page=min(self.usb_page,max(0,(len(devices)-1)//4))
         for i,device in enumerate(devices[self.usb_page*4:self.usb_page*4+4]):self.button(cache,(32,316+i*68,992,374+i*68),device['label'],('assign',device['id']),active=state['selection']==device['id'])
@@ -384,6 +387,6 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET · TAP ANTENNA SITE'
         self.ink(cache,34,598,location,14,self.MUTED,width=930)
         self.text(cache,34,616,'Enter antenna coordinates or connect a separate GPS receiver.',14,self.MUTED,width=930)
-        self.button(cache,(32,632,306,688),'SCAN USB',('scan',None));self.button(cache,(322,632,604,688),'PREVIOUS',('page',-1));self.button(cache,(620,632,992,688),'NEXT',('page',1))
+        self.button(cache,SCAN_USB_BOX,'SCAN USB',('scan',None));self.button(cache,PREVIOUS_BOX,'PREVIOUS',('page',-1));self.button(cache,NEXT_BOX,'NEXT',('page',1))
 
     def close(self): self.manager.close()

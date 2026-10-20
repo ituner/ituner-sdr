@@ -6,6 +6,7 @@ same instruments and touch actions as the browser without embedding a browser.
 import math
 import time
 from ui_chrome import RAIL_BACK_BOX
+from adsb_layout import action_box
 from ui_style import APP_UI_STYLE
 from adsb_traffic import historical_aircraft, position_age, reception_summary, trail_label
 from adsb_view import aged, freshness
@@ -46,12 +47,11 @@ class AirspaceDashboard:
         ui.draw_logical_rect(0,145,1024,146,self.LINE)
         self.ink(cache,18,34,'ADS-B / AIRSPACE',27,bold=True)
         self.text(cache,18,66,'Aircraft received by your local radio',18,self.MUTED,width=450)
-        self.button(cache,(500,12,740,76),'1090 ES',('usb',None),state['status'],active=state['enabled'])
-        self.button(cache,(752,12,1008,76),'978 UAT',('usb',None),'NOT INSTALLED',enabled=False)
+        self.button(cache,(528,12,764,76),'1090 ES',('usb',None),state['status'],active=state['enabled'])
+        self.button(cache,(780,12,1016,76),'978 UAT',('usb',None),'NOT INSTALLED',enabled=False)
         showing=self.logs_open or self.usb_open or self.traffic_open
         for i,(label,kind,active) in enumerate((('MAP','map_view',not showing),('TRAFFIC','traffic',self.traffic_open),('LOGS','logs',self.logs_open),('RECEIVER','usb',self.usb_open))):
-            x=16+i*250
-            self.button(cache,(x,88,x+242,144),label,(kind,None),active=active)
+            self.button(cache,action_box(i,y=88),label,(kind,None),active=active)
         if self.last_count is None or state['messages']<self.last_count:
             self.last_count,self.last_rate_time=state['messages'],time.monotonic();self.rate=0
         elapsed=time.monotonic()-self.last_rate_time
@@ -64,8 +64,8 @@ class AirspaceDashboard:
         self.ui.draw_logical_rect(0,146,1024,224,self.PANEL)
         for index,(box,label,action,active,enabled) in enumerate((
             ((16,156,92,212),'Live',('traffic_view','live'),view.mode=='live',True),
-            ((100,156,300,212),'Reception dome',('coverage',None),self.coverage_open,True),
-            ((308,156,504,212),'Since opened',('traffic_view','session'),view.mode=='session',True),
+            ((100,156,300,212),'Dome',('coverage',None),self.coverage_open,True),
+            ((308,156,504,212),'Session',('traffic_view','session'),view.mode=='session',True),
             ((512,156,616,212),'History',('traffic_view','history'),view.mode=='history',True),
             ((624,156,788,212),'Start fresh',('start_fresh',None),False,True),
             ((796,156,928,212),'Past trails',('backdrop',None),view.backdrop,view.mode!='history'))):
@@ -93,7 +93,7 @@ class AirspaceDashboard:
         for index,(label,kind,value,active) in enumerate((('+   ZOOM IN','zoom',1.6,False),('−   ZOOM OUT','zoom',1/1.6,False),('FIT VIEW','fit',None,False),(style,'style',None,False),('TRAILS · '+trail_label(self.trail_seconds),'trails',None,False),('LABELS '+('ON' if self.labels else 'OFF'),'labels',None,self.labels),('RANGE RINGS','rings',None,self.rings),('RX FOOTPRINT','rx_footprint',None,self.rx_footprint))):
             y=232+index*60
             if kind=='trails' and view.mode=='session':label='SINCE OPENED'
-            self.button(cache,(858,y,1008,y+56),label,(kind,value),active=active,enabled=not(kind=='trails' and view.mode=='session'))
+            self.button(cache,(772,y,1008,y+56),label,(kind,value),active=active,enabled=not(kind=='trails' and view.mode=='session'))
         if self.following:
             self.surface((240,666,714,710),self.PANEL,self.color('waiting'))
             live=next((p for p in state['aircraft'] if p['hex']==self.selected),None)

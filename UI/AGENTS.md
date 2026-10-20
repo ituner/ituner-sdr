@@ -33,3 +33,8 @@ open category or a saved network address. Browsing must not imply activation.
 On app restart or reboot, restore the last chosen receiver (including USB) and
 always open HOME. Preserve the USB choice across worker failures; transient
 audio-thread state must not overwrite the remembered receiver with LAN.
+Native ADS-B/Airspace action controls use the shared adsb_layout grid: 236 px
+width, 56 px height, 16 px gap, bottom actions at y632–688. Keep PREVIOUS/NEXT
+in the same columns across Receiver, Traffic, and Logs; keep rows clear of
+these controls. Dome and shared antenna-editor confirmation actions follow
+the same grid; BACK keeps HOME geometry.
