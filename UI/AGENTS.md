@@ -27,3 +27,6 @@ renderer, row geometry, spacing, typography, and badge/status positions. Adapt
 the content to the source; do not substitute centered buttons or custom cards.
 Keep established list layouts consistent throughout the app unless the user
 explicitly requests a layout change.
+Active USB receivers must use exactly the same selected-row styling as active
+network receivers. Derive selection from the running receiver, not merely the
+open category or a saved network address. Browsing must not imply activation.

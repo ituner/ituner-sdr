@@ -228,6 +228,35 @@ class MenuIconTests(unittest.TestCase):
             self.assertEqual(badge[1:3], (box[0] + 16, box[1] + 52))
             self.assertEqual(badge[3].label, 'USB')
 
+    def test_active_usb_row_uses_network_selection_style(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
+            draws = {}
+            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_back_button', 'draw_station_list_frame',
+                         'draw_logical_rounded_rect', 'draw_text', 'draw_receiver_badge'):
+                draws[name] = stack.enter_context(mock.patch.object(ui, name))
+            cache = mock.Mock()
+            cache.texture.return_value = (None, 80, 20)
+            draws['draw_receiver_badge'].return_value = 60
+            stack.enter_context(mock.patch.object(ui, 'ui_button_pressed', return_value=False))
+            stack.enter_context(mock.patch.object(ui, 'fit_receiver_name', side_effect=lambda cache, name, *args: name))
+            server = 'http://kiwisdr.local:8073'
+            def render(rows, route, active):
+                ui.draw_station_picker(cache, rows, 0, server, '', 'name_az', {},
+                                       route_filter=route, active_usb_source=active)
+                return draws['draw_station_list_frame'].call_args.args[1:]
+            network = [('Kiwi', '', server)]
+            usb = [('rtl-sdr', 'RTL-SDR V3', 'USB')]
+            selected_style = render(network, 'lan', None)
+            self.assertEqual(render(usb, 'usb', 'rtl-sdr'), selected_style)
+            inactive_style = render(usb, 'usb', None)
+            self.assertNotEqual(inactive_style, selected_style)
+            self.assertEqual(render(usb, 'usb', 'airspyhf'), inactive_style)
+            self.assertEqual(render(network, 'lan', 'rtl-sdr'), inactive_style)
+
     def test_usb_browsing_does_not_require_starting_audio(self):
         with mock.patch.object(ui.RTLSDRLab, 'probe'):
             lab = ui.RTLSDRLab(mock.Mock(), mock.Mock(), mock.Mock())

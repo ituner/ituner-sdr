@@ -18261,6 +18261,7 @@ def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
     show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
+    active_usb_source=None,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -18309,8 +18310,9 @@ def draw_station_picker(
         if not box:
             continue
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
-        selected = receiver_servers_match(server, selected_server)
-        pending = receiver_servers_match(server, pending_server)
+        selected = (server == active_usb_source if usb_receiver else
+                    not active_usb_source and receiver_servers_match(server, selected_server))
+        pending = not usb_receiver and receiver_servers_match(server, pending_server)
         receiver_type = "usb" if usb_receiver else station_receiver_type(station)
         pressed = ui_button_pressed(box)
         focused = selected or pending
@@ -18327,7 +18329,7 @@ def draw_station_picker(
             if listener_used is not None and listener_total is not None else "FREE ?"
         )
         if usb_receiver:
-            capacity = "CONNECTED"
+            capacity = "ACTIVE" if selected else "CONNECTED"
         left = box[0] + 16
         right = box[2] - 16
         station_label = " · ".join(part for part in (str(name).strip(), str(location).strip()) if part)
@@ -31257,6 +31259,7 @@ def main():
                             args.zoom_osd_seconds,
                         ),
                         usb_present=usb_present,
+                        active_usb_source=rtl_lab.source_id if rtl_lab.is_running() else None,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
