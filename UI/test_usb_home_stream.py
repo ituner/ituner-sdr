@@ -8,6 +8,7 @@ class USBHomeStreamTests(unittest.TestCase):
         state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
         with patch.object(ui.RTLSDRLab,'probe'):
             receiver=ui.RTLSDRLab(Mock(),state,Mock())
+        receiver.set_home_mode('AM')
         box=dict(ui.lcd_home_mode_boxes())['FM']
         mode=ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,local_receiver=receiver)
         self.assertIsNotNone(mode)
@@ -47,6 +48,19 @@ class USBHomeStreamTests(unittest.TestCase):
         with patch.object(ui.time,'monotonic',return_value=12):
             state.update_spectrum_values([0.5]*1024)
         self.assertEqual(state.spectrum_snapshot()[2],(0.5,)*1024)
+
+    def test_usb_nfm_family_cycles_wfm_and_reopening_preserves_it(self):
+        state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
+        with patch.object(ui.RTLSDRLab,'probe'):
+            receiver=ui.RTLSDRLab(Mock(),state,Mock())
+        modes=dict(receiver.mode_families())['NFM']
+        self.assertEqual(modes,('NFM','WFM'))
+        self.assertEqual(ui.next_radio_mode_variant('NFM',modes),'WFM')
+        self.assertEqual(ui.next_radio_mode_variant('WFM',modes),'NFM')
+        self.assertTrue(receiver.set_home_mode('WFM'))
+        box=dict(ui.lcd_home_mode_boxes())['FM']
+        self.assertEqual(ui.engage_home_mode(state,(box[0]+box[2])/2,(box[1]+box[3])/2,local_receiver=receiver),'WFM')
+        self.assertEqual(receiver.demod_snapshot()[0],'wbfm')
 
     def test_usb_fast_source_and_presenter_agree(self):
         self.assertEqual(ui.local_waterfall_fps(4),30)

@@ -16012,6 +16012,8 @@ def engage_home_mode(state, x, y, compact=True, local_receiver=None):
                 return None
             mode = "NBFM" if label == "FM" else label
             if local_receiver is not None:
+                if label == "FM":
+                    mode = "WFM" if local_receiver.demod_snapshot()[0] == "wbfm" else "NFM"
                 if not local_receiver.set_home_mode(mode):
                     return None
                 state.set_radio_mode(local_receiver.shared_radio_mode(mode))
@@ -20001,8 +20003,7 @@ AIRSPY_HF_MIN_ZOOM = kiwi.span_to_zoom(AIRSPY_HF_SAMPLE_RATE / 1000.0)
 # never claims a setting that cannot affect the audio path.
 RTL_MODE_FAMILIES = (
     ("AM", ("AM",)),
-    ("NFM", ("NFM",)),
-    ("WFM", ("WFM",)),
+    ("NFM", ("NFM", "WFM")),
 )
 RTL_HOME_MODE_CAPABILITIES = frozenset(mode for _family, modes in RTL_MODE_FAMILIES for mode in modes)
 
@@ -20073,8 +20074,7 @@ AIRSPY_HF_CAPABILITIES = ReceiverCapabilities(
     source_span_khz=AIRSPY_HF_SAMPLE_RATE / 1000.0,
     mode_families=(
         ("AM", ("AM",)),
-        ("NFM", ("NFM",)),
-        ("WFM", ("WFM",)),
+        ("NFM", ("NFM", "WFM")),
     ),
     controls=frozenset(("frequency", "zoom", "volume", "mode", "squelch", "gain", "waterfall")),
     required_driver="libairspyhf",
