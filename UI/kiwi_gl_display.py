@@ -17277,7 +17277,8 @@ def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=Fals
         pressed = enabled and ui_button_pressed(box)
         visual = draw_styled_button_frame(box, active=active, pressed=pressed)
         bx0, by0, bx1, by1 = box
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
+        display_label = "NFM" if usb_receiver and label == "FM" else label
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, display_label,
                   visual.text if enabled else APP_UI_STYLE.button.palette.untested_text, 13, True, False, "cm",
                   family=APP_UI_STYLE.button.font_family)
 
