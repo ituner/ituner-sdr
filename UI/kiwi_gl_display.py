@@ -27,7 +27,7 @@ import sys
 import tempfile
 import threading
 import time
-from ui_chrome import draw_status_clock, RAIL_BACK_BOX
+from ui_chrome import draw_status_clock, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
 import html
@@ -1976,6 +1976,9 @@ def configure_popup_layout():
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("rtl_lab")
+    if LCD_800_MODE:
+        # Keep the complete USB card above HOME's footer; BACK stays in its rail.
+        dy = min(dy, STATUS_TOP - 12 - POPUP_LAYOUT_BASE["rtl_lab"][0][3])
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
      RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["rtl_lab"]

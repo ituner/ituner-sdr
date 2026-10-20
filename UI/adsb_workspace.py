@@ -377,8 +377,8 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         for i,device in enumerate(devices[self.usb_page*4:self.usb_page*4+4]):self.button(cache,(32,316+i*68,992,374+i*68),device['label'],('assign',device['id']),active=state['selection']==device['id'])
         if not devices:self.text(cache,34,358,'No RTL-SDR detected. Check USB power and connection.',18,self.MUTED,width=930)
         site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET · CONFIGURE IN BROWSER / RECEIVER'
-        self.ink(cache,34,622,location,14,self.MUTED,width=930)
-        self.text(cache,34,640,'Receiver settings and logs are shared with cm5.local:8090',14,self.MUTED,width=930)
-        self.button(cache,(32,656,306,712),'SCAN USB',('scan',None));self.button(cache,(322,656,604,712),'PREVIOUS',('page',-1));self.button(cache,(620,656,992,712),'NEXT',('page',1))
+        self.ink(cache,34,598,location,14,self.MUTED,width=930)
+        self.text(cache,34,616,'Receiver settings and logs are shared with cm5.local:8090',14,self.MUTED,width=930)
+        self.button(cache,(32,632,306,688),'SCAN USB',('scan',None));self.button(cache,(322,632,604,688),'PREVIOUS',('page',-1));self.button(cache,(620,632,992,688),'NEXT',('page',1))
 
     def close(self): self.manager.close()
