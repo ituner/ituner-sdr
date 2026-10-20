@@ -336,6 +336,7 @@ class ThemeSystemTests(unittest.TestCase):
             with patch.object(ui, "draw_logical_rounded_rect") as frame, \
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
+                    patch.object(ui, "GL"), \
                     patch.object(ui, "ui_button_pressed", return_value=False):
                 ui.draw_zoom_button(None, ui.ZOOM_MINUS_BOX, "-")
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+")
@@ -348,6 +349,7 @@ class ThemeSystemTests(unittest.TestCase):
             with patch.object(ui, "draw_logical_rounded_rect") as frame, \
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
+                    patch.object(ui, "GL"), \
                     patch.object(ui, "ui_button_pressed", return_value=True):
                 ui.draw_stream_waterfall_button(None, True)
                 ui.draw_favorite_waterfall_button(True)

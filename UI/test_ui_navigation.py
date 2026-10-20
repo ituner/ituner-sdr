@@ -1787,11 +1787,12 @@ class ReceiverListStyleTests(unittest.TestCase):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         with mock.patch.object(ui, "ui_button_pressed", return_value=False), \
                 mock.patch.object(ui, "draw_styled_button_frame", return_value=active) as frame, \
-                mock.patch.object(ui, "draw_logical_polyline") as star, \
+                mock.patch.object(ui, "draw_favorite_star") as star, \
                 mock.patch.object(ui, "draw_logical_circle") as gold_fill:
             ui.draw_favorite_waterfall_button(True)
         self.assertTrue(frame.call_args.kwargs["active"])
-        self.assertEqual(star.call_args.args[1], active.text)
+        self.assertEqual(star.call_args.args[3], active.text)
+        self.assertTrue(star.call_args.kwargs["filled"])
         gold_fill.assert_not_called()
 
     def test_distance_follows_the_badges_under_the_server_name(self):
