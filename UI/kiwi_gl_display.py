@@ -1976,16 +1976,18 @@ def configure_popup_layout():
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
 
     dy = offset("rtl_lab")
-    if LCD_800_MODE:
-        # Keep the complete USB card above HOME's footer; BACK stays in its rail.
-        dy = min(dy, STATUS_TOP - 12 - POPUP_LAYOUT_BASE["rtl_lab"][0][3])
     (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
      RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["rtl_lab"]
     )
 
     if LCD_800_MODE:
+        RTL_LAB_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
         RTL_LAB_BACK_BOX = lcd_drawer_back_box()
+        rail_left, _, rail_right, _ = RTL_LAB_BACK_BOX
+        RTL_LAB_PROBE_BOX = (rail_left, 128, rail_right, 192)
+        RTL_LAB_PRESET_BOX = (rail_left, 208, rail_right, 272)
+        RTL_LAB_RUN_BOX = (rail_left, 288, rail_right, 352)
 
     dy = offset("wspr")
     (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, base_wspr_windows,
@@ -11917,6 +11919,32 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     name, frequency_hz, mode, _rate = snapshot["preset"]
     running = snapshot["running"]
     status = snapshot["status"]
+    if LCD_800_MODE:
+        palette = APP_UI_STYLE.palette
+        source_label = snapshot["capabilities"].label
+        draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, palette.background)
+        draw_settings_leaf_sidebar(text_cache, "USB RECEIVER", source_label)
+        draw_text(text_cache, 24, 48, source_label, palette.text, 32, True, False, "lm", family="Liberation Sans")
+        device = fit_station_text(text_cache, snapshot["device"], 976, 20, False, False, family="Liberation Sans")
+        draw_text(text_cache, 24, 92, device, palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
+        draw_logical_rounded_rect(24, 136, 1000, 352, APP_UI_STYLE.button.radius,
+                                  palette.section_surface, palette.border, 1)
+        draw_text(text_cache, 48, 176, name, palette.section_heading, 22, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, 48, 238, f"{frequency_hz / 1e6:.3f} MHz", palette.text, 38, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, 48, 306, "LOCAL AUDIO ACTIVE" if running else "STARTS IN AM", palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
+        tuner = snapshot["tuner"] or "Tuner information unavailable"
+        tuner = fit_station_text(text_cache, tuner, 976, 18, False, False, family="Liberation Sans")
+        draw_text(text_cache, 24, 398, tuner, palette.secondary_text, 18, False, False, "lm", family="Liberation Sans")
+        draw_tests_button(text_cache, RTL_LAB_PROBE_BOX, "SOURCE", source_label, snapshot["probing"])
+        draw_tests_button(text_cache, RTL_LAB_PRESET_BOX, "PRESET", name)
+        draw_tests_button(text_cache, RTL_LAB_RUN_BOX,
+                          "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
+                          "LISTEN ON THIS DEVICE", running)
+        draw_logical_rect(0, STATUS_TOP, 1024, 800, palette.footer_background)
+        detail = fit_station_text(text_cache, f"{status} · {snapshot['detail']}", 988, 18, True, False, family="Liberation Sans")
+        draw_text(text_cache, 18, 739, detail, palette.footer_primary, 18, True, False, "lm", family="Liberation Sans")
+        draw_status_clock(sys.modules[__name__], text_cache)
+        return
     status_color = {
         "READY": (111, 234, 177), "LIVE": (111, 234, 177),
         "STARTING": (244, 193, 104), "PROBING": (244, 193, 104),

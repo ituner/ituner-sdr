@@ -64,6 +64,29 @@ class MenuIconTests(unittest.TestCase):
         })
         self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001 · FM')
 
+    def test_usb_screen_controls_match_back_size_and_have_working_hit_targets(self):
+        from contextlib import ExitStack
+        ui.configure_output(True);ui.configure_popup_layout()
+        back = ui.RTL_LAB_BACK_BOX
+        for box, action in ((ui.RTL_LAB_PROBE_BOX,'source'),(ui.RTL_LAB_PRESET_BOX,'preset'),
+                            (ui.RTL_LAB_RUN_BOX,'run'),(back,'back')):
+            self.assertEqual((box[2]-box[0],box[3]-box[1]),(back[2]-back[0],back[3]-back[1]))
+            x,y=(box[0]+box[2])/2,(box[1]+box[3])/2
+            self.assertTrue(ui.contains(ui.RTL_LAB_PANEL_BOX,x,y))
+            self.assertEqual(ui.rtl_lab_option_at(x,y),action)
+        snapshot=dict(preset=('AIR AM',118e6,'am',32000),running=False,status='READY',
+                      capabilities=ui.RTL_SDR_CAPABILITIES,device='RTL-SDR V3',tuner='R820T',
+                      probing=False,detail='Ready to listen')
+        lab=mock.Mock();lab.snapshot.return_value=snapshot
+        with ExitStack() as stack:
+            for name in ('draw_logical_rect','draw_logical_rounded_rect','draw_settings_leaf_sidebar','draw_tests_button'):
+                stack.enter_context(mock.patch.object(ui,name))
+            text=stack.enter_context(mock.patch.object(ui,'draw_text'))
+            stack.enter_context(mock.patch.object(ui,'fit_station_text',side_effect=lambda cache,value,*a,**k:value))
+            ui.draw_rtl_lab_panel(mock.Mock(),lab)
+            title=next(call for call in text.call_args_list if call.args[3]=='RTL-SDR')
+            self.assertLess(title.args[2],ui.RTL_LAB_PROBE_BOX[1])
+
     def test_usb_start_defaults_decoder_and_home_mode_to_am(self):
         for capabilities in ui.LOCAL_RECEIVER_CAPABILITIES.values():
             with self.subTest(source=capabilities.source_id):
