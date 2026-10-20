@@ -30810,9 +30810,11 @@ def main():
                         visible_span_khz=display_span,
                     ),
                 )
-            if not local_iq_active:
-                overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
-            passband_stream_ready = not local_iq_active and state.rf_stream_ready_snapshot()
+            overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
+            passband_stream_ready = (
+                rtl_lab.snapshot()["status"] == "LIVE" if local_iq_active
+                else state.rf_stream_ready_snapshot()
+            )
             if waterfall_visible and passband_stream_ready:
                 draw_filter_overlay(
                     text_cache,
