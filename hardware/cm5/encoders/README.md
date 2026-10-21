@@ -70,9 +70,10 @@ sudo reboot
 
 After reboot, list and test the new input devices. Each rotation should emit
 one signed relative event per logical click; each available push switch should
-emit a press and release. The main TUNE shaft should report approximately 600
-logical clicks per complete revolution if the fitted encoder matches the
-original control design.
+emit a press and release. The fitted main TUNE encoder is an LPD3806-360BM-G5-24C optical encoder,
+rated at 360 pulses per revolution. With the current one-step-per-period
+setting, expect approximately 360 signed logical counts per complete turn
+(not 600). Four-edge decoding would instead give 1440 counts per turn.
 
 ```bash
 grep -A6 -B2 -E 'ituner-.*-encoder|iTuner encoder buttons' /proc/bus/input/devices
@@ -112,3 +113,43 @@ The application currently does not consume these new events. Its three-knob
 controller and desktop simulation were developed in the separate, unmerged
 `pr/knob-ui` branch. After hardware event validation, the input reader and
 current UI integration must be ported and tested on this branch.
+
+## Debounce and the TXS0102 translator
+
+The main TUNE A/B signals pass through a Texas Instruments TXS0102DCUR.
+This is an automatic bidirectional level translator, not an encoder controller
+or a debounce filter. The LPD3806 has NPN open-collector A/B outputs. Verify
+the actual board pull-ups, OE, supply rails and wiring against the schematic;
+the encoder's 5–24 V supply rating is not a permitted TXS0102 signal voltage.
+
+Keep the two `gpio-keys` push switches at `debounce-interval = <25>` ms.
+Rotation uses the Linux quadrature state machine. In Raspberry Pi's 6.12
+`rotary_encoder.c`, there is no configurable timed debounce or glitch-filter
+property; adding `debounce-interval` to the rotary nodes does nothing.
+Do not claim that the rotary A/B GPIOs have timed debounce enabled.
+
+TUNE is optical, so contact-bounce timing from a mechanical push switch is
+inappropriate. At one revolution per second, its 360 periods are 2.78 ms
+apart, with nominal quadrature transitions every 694 microseconds. At ten
+revolutions per second these intervals become 278 and 69.4 microseconds.
+A blanket millisecond lockout would lose legitimate movement. VIEW/NAV are
+mechanical and need separate assessment from TUNE.
+
+Before enabling radio actions, capture slow/fast rotation, reversals and an
+idle period. Verify 360 TUNE counts per turn and the small-knob detent counts.
+If spurious counts appear, inspect both A/B signals at the CM5 side of the
+translator with a logic analyser or oscilloscope. Event-device logs report
+already decoded counts and cannot establish raw glitch widths. Choose a
+bounded GPIO-level filter only after measuring glitches and the fastest valid
+pulses; preserve A/B phase order. Userspace throttling of decoded events is
+not a substitute for GPIO debounce.
+
+TI describes approximately 30 ns edge accelerators and warns that excessive
+trace/connector capacitance and reflections can cause retriggering, contention
+or oscillations. Do not add arbitrary debounce capacitors to the translator
+outputs without checking those load limits.
+
+References:
+- [TI TXS0102 datasheet, sections 7.3.1–7.3.5](https://www.ti.com/lit/ds/symlink/txs0102.pdf)
+- [LPD3806-360BM encoder datasheet](https://kitsandparts.com/tutorials/encoders/LPD3806-360BM-ETC.pdf)
+- [Raspberry Pi 6.12 rotary encoder driver](https://github.com/raspberrypi/linux/blob/rpi-6.12.y/drivers/input/misc/rotary_encoder.c)

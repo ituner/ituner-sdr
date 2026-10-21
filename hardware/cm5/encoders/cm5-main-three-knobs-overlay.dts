@@ -24,6 +24,10 @@
                 linux,axis = <7>; /* REL_DIAL */
                 rotary-encoder,relative-axis;
                 rotary-encoder,encoding = "gray";
+                /* LPD3806-360BM: 360 periods/rev through TXS0102DCUR.
+                 * No rotary debounce property is supported by this driver.
+                 * Do not apply the push switches' 25 ms delay to optical A/B.
+                 */
                 rotary-encoder,steps-per-period = <1>;
                 status = "okay";
             };
