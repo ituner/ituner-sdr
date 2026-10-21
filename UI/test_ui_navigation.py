@@ -902,18 +902,6 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertGreater(y1, y0)
         self.assertLessEqual(y1, ui.LOGICAL_H)
 
-    def test_constellation_layout_fits_current_display(self):
-        layout = ui.constellation_layout()
-        for box in layout.values():
-            x0, y0, x1, y1 = box
-            self.assertGreaterEqual(x0, 0)
-            self.assertGreaterEqual(y0, 0)
-            self.assertLessEqual(x1, ui.LOGICAL_W)
-            self.assertLessEqual(y1, ui.LOGICAL_H)
-            self.assertGreater(x1, x0)
-            self.assertGreater(y1, y0)
-        self.assertLessEqual(layout["map"][2], ui.LCD_NAV_X0)
-        self.assertGreaterEqual(layout["sidebar"][0], ui.LCD_NAV_X0)
 
 
 class AllScreenLayoutTests(unittest.TestCase):

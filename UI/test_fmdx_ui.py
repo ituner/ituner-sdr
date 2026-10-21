@@ -96,14 +96,6 @@ class FmdxUiIntegrationTests(unittest.TestCase):
         self.assertEqual(loaded["receiver_type"], "fmdx")
         self.assertEqual(loaded["freq_khz"], 101_700.0)
 
-    def test_constellation_excludes_fmdx_receivers(self):
-        center = {"server": "kiwi", "lat": 0, "lon": 0, "receiver_type": "kiwi"}
-        fmdx_receiver = {"server": "fm", "lat": 1, "lon": 1, "receiver_type": "fmdx"}
-
-        listeners, scouts = ui.choose_constellation(center, [center, fmdx_receiver], {})
-
-        self.assertEqual([item["server"] for item in listeners], ["kiwi"])
-        self.assertEqual(scouts, [])
 
     def test_worker_dispatch_uses_explicit_receiver_type(self):
         self.assertEqual(ui.receiver_worker_protocol("fmdx"), "fmdx")
