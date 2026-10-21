@@ -43,7 +43,6 @@ class AirspaceDashboard:
     def header(self, cache, state, valid):
         ui=self.ui
         ui.draw_logical_rect(0,0,1024,146,self.PANEL)
-        ui.draw_logical_rect(0,145,1024,146,self.LINE)
         self.ink(cache,18,34,'ADS-B / AIRSPACE',27,bold=True)
         self.text(cache,18,66,'Aircraft received by your local radio',18,self.MUTED,width=450)
         self.button(cache,(500,12,740,76),'1090 ES',('usb',None),state['status'],active=state['enabled'])
@@ -124,8 +123,6 @@ class AirspaceDashboard:
                     ('stop' if state['enabled'] else 'start',None),active=state['enabled'])
         self.ink(cache,1034,110,'AIRCRAFT',20,width=180)
         self.ink(cache,1270,110,len(self.display_aircraft(state)),20,self.MUTED,anchor='rm')
-        sort={'recent':'LATEST RECEIVED','altitude':'HIGHEST ALTITUDE','callsign':'CALLSIGN A–Z'}[self.traffic_sort]
-        self.button(cache,(1034,134,1270,198),sort,('sort',None))
         plane=self.selected_plane
         live=next((p for p in state['aircraft'] if p.get('hex')==self.selected),None)
         historical=next((p for p in self.display_aircraft(state) if p['hex']==self.selected and p.get('historical')),None)

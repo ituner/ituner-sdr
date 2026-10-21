@@ -89,7 +89,7 @@ class CoverageTouch:
         summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
         w.ink(cache,24,61,summary,18,w.MUTED)
         w.draw_back(cache,('back',None))
-        for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','usb',None,False)):
+        for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','site',None,False)):
             self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')
         for x,y,title,subtitle,value in ((24,216,'Horizontal','radius',f'{r:.2f} km'),(24,340,'Diameter','2 × radius',f'{2*r:.2f} km'),(1124,216,'Max slant','range',f"{meta.get('slant_range_max_km',0):.2f} km"),(1124,340,'Highest','received',f'{alt:,.0f} ft' if alt is not None else '—')):
@@ -102,7 +102,7 @@ class CoverageTouch:
             dome_gl.draw(ui,self.projected,BOX)
             for x,y,text,size,color in self.projected['labels']:w.ink(cache,BOX[0]+x,BOX[1]+y,text,size,color,anchor='cm')
         if self.error or w.manager.coverage_error or data.get('status') in (None,'LOADING','EMPTY','NO SITE'):
-            text=self.error or w.manager.coverage_error or {'EMPTY':'No positioned aircraft retained yet.','NO SITE':'Set antenna latitude / longitude in Receiver.'}.get(data.get('status'),'Loading reception history…')
+            text=self.error or w.manager.coverage_error or {'EMPTY':'No positioned aircraft retained yet.','NO SITE':'Tap Site to enter antenna latitude / longitude.'}.get(data.get('status'),'Loading reception history…')
             w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=1100)
         w.ink(cache,196,176,'TRUE DISTANCE · NO VERTICAL EXAGGERATION' if self.mode=='space' else 'ANGULAR SKY · 90° ZENITH',13,w.MUTED)
         for box,title,kind,value in (((24,568,152,624),'− 30°','coverage_turn',-30),((24,636,152,692),'+ 30°','coverage_turn',30),((1128,568,1256,624),'Tilt −','coverage_tilt',-10),((1128,636,1256,692),'Tilt +','coverage_tilt',10)):

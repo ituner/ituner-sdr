@@ -185,6 +185,21 @@ class WorkspaceTests(unittest.TestCase):
         manager.log_snapshot.return_value=dict(lines=[],entries=[])
         return ADSBWorkspace(ui,manager),ui,manager,state
 
+    def test_receiver_site_opens_shared_location_editor_and_preserves_view(self):
+        workspace, ui, manager, state = self.dashboard()
+        workspace.show()
+        workspace.navigate('usb')
+        workspace.actions=[]
+        workspace.draw_usb(Mock(), state)
+        self.press(workspace, ('site', None))
+        ui.station_settings.show.assert_called_once_with(parent='adsb')
+        self.assertEqual(ui.station_settings.page, 'location')
+        self.assertFalse(workspace.open)
+        workspace.open=True
+        self.assertEqual(workspace._navigation_view(), 'usb')
+        workspace.back()
+        self.assertEqual(workspace._navigation_view(), 'map')
+
     @staticmethod
     def press(workspace, action):
         box=next(box for box,item in workspace.actions if item==action)
@@ -196,6 +211,7 @@ class WorkspaceTests(unittest.TestCase):
         workspace.draw(Mock());self.press(workspace,('select','abc'))
         workspace.draw(Mock());self.press(workspace,('follow',None))
         self.assertTrue(workspace.following)
+        workspace.navigate('traffic')
         for expected in ('altitude','callsign','recent'):
             workspace.draw(Mock());self.press(workspace,('sort',None))
             self.assertEqual(workspace.traffic_sort,expected)

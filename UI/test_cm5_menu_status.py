@@ -27,10 +27,13 @@ class MenuStatusTests(unittest.TestCase):
                 self.assertLessEqual(cache.font(size,bold=True,family=ui.APP_UI_STYLE.button.font_family).size(caption)[0],108)
 
     def test_decoder_subtitle_tracks_available_modes(self):
-        count=sum(kind!='digital_back' for kind,_ in ui.DIGITAL_MENU_ITEMS)
+        count=(len(ui.SPECTRUM_MENU_ITEMS) + len(ui.HF_DECODER_ITEMS)
+               + len(ui.VHF_UHF_DECODER_ITEMS))
         self.assertEqual(ui.menu_subtitle('digital'),f'{count} MODES')
-        with patch.object(ui,'DIGITAL_MENU_ITEMS',ui.DIGITAL_MENU_ITEMS+(('new_mode','NEW'),)):
+        with patch.object(ui,'HF_DECODER_ITEMS',ui.HF_DECODER_ITEMS+(('new_mode','NEW'),)):
             self.assertEqual(ui.menu_subtitle('digital'),f'{count+1} MODES')
+        with patch.object(ui,'WEB_APP_MENU_ITEMS',ui.WEB_APP_MENU_ITEMS+(('new_app','NEW'),)):
+            self.assertEqual(ui.menu_subtitle('digital'),f'{count} MODES')
 
     def test_footer_shows_valid_occupancy_and_reserves_space_for_it(self):
         cache=Mock()
