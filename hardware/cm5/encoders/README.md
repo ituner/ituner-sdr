@@ -75,7 +75,7 @@ logical clicks per complete revolution if the fitted encoder matches the
 original control design.
 
 ```bash
-grep -A6 -B2 -E 'rotary-encoder|iTuner encoder buttons' /proc/bus/input/devices
+grep -A6 -B2 -E 'ituner-.*-encoder|iTuner encoder buttons' /proc/bus/input/devices
 sudo evtest
 ```
 
@@ -86,6 +86,27 @@ of one full turn for each shaft before connecting these events to the app.
 If input fails, remove the new `dtoverlay` line, restore the backed-up boot
 configuration if needed, and reboot. This overlay does not replace or modify
 the existing LCD, touch, or audio overlays.
+
+## Non-invasive event check
+
+After enabling the overlay, run from the repository root:
+
+```bash
+python3 scripts/check-cm5-knobs.py --duration 120
+```
+
+The reader discovers only the three named encoder devices and the named button
+bank. It never saves event numbers or grabs the devices, and it does not open
+the touchscreen or unrelated mouse wheels. Run as the application user so a
+missing input-group permission is visible. It reconnects after device removal,
+uses monotonic kernel timestamps for holds, and cancels pending presses after
+lost synchronization or disconnect. This check makes no tuning changes.
+
+Turn TUNE once clockwise, then VIEW and NAV five detents clockwise each.
+Record net counts and direction, then test a short press and a hold on both
+small knobs. TUNE has no press action. A hold is emitted once and does not
+also activate a short click on release. Do not apply another quadrature divisor
+in userspace: the kernel already emits logical clicks.
 
 The application currently does not consume these new events. Its three-knob
 controller and desktop simulation were developed in the separate, unmerged
