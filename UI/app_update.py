@@ -34,6 +34,8 @@ PROTOCOL = 1
 MAX_DOWNLOAD = 80 * 1024 * 1024
 MAX_EXPANDED = 200 * 1024 * 1024
 HELPER = '/usr/local/sbin/ituner-update'
+# Keep the existing helper protocol; the product has one update source: main.
+UPDATE_CHANNEL = 'development'
 
 
 def atomic_json(path, value):
@@ -118,7 +120,8 @@ def check_release(channel):
         notes = release.get('body') or 'No release notes supplied.'
     else:
         commit = request_json(API + '/commits/main')
-        name = 'main · ' + commit['sha'][:8]
+        date = commit['commit'].get('committer', {}).get('date', '')[:10]
+        name = 'Build ' + commit['sha'][:8] + (' · ' + date if date else '')
         notes = commit['commit']['message']
     sha = commit['sha']
     if not SHA.fullmatch(sha):
@@ -483,9 +486,11 @@ class UpdateController:
     """Render-thread facade: network and filesystem operations never block UI."""
     def __init__(self):
         self.open = False
-        self.channel = 'stable'
+        self.channel = UPDATE_CHANNEL
         self.release = None
-        self.message = 'Press CHECK FOR UPDATES to contact GitHub.'
+        self.message = 'Check for the latest iTuner build on GitHub main.'
+        self.phase = 'idle'
+        self.recovery = False
         self.busy = False
         self.confirm = None
         self.notes_page = 0
@@ -493,7 +498,15 @@ class UpdateController:
         self.last_status_time = 0
         try:
             self.cfg = load_config()
+            # Ignore old completed jobs when opening this app; active jobs and
+            # failures still need to be visible after a restart.
+            state = read_json(Path(self.cfg['state']) / 'status.json')
+            if state.get('phase') == 'complete':
+                self.last_status_time = state.get('time', 0)
+            else:
+                self.poll()
         except RuntimeError as exc:
+            self.phase = 'error'
             self.message = str(exc)
 
     def current(self):
@@ -506,7 +519,8 @@ class UpdateController:
         if state.get('time', 0) > self.last_status_time:
             self.last_status_time = state['time']
             self.message = state.get('message', '')
-            self.busy = state.get('phase') in ('downloading', 'installing')
+            self.phase = state.get('phase', 'idle')
+            self.busy = self.phase in ('downloading', 'installing')
 
     def rollback_available(self):
         return bool(self.cfg and read_json(Path(self.cfg['state']) / 'rollback.json').get('available'))
@@ -514,15 +528,22 @@ class UpdateController:
     def check(self):
         if self.busy or not self.cfg:
             return
+        self.poll()
+        if self.busy:
+            return
         self.busy = True; self.confirm = None; self.release = None
-        self.message = 'Checking GitHub...'
+        self.recovery = False; self.phase = 'checking'
+        self.message = 'Checking the latest build on GitHub main...'
         def task():
             try:
-                self.release = check_release(self.channel)
+                self.release = check_release(UPDATE_CHANNEL)
                 self.notes_page = 0
-                self.message = ('Already up to date.' if self.release['commit'] == self.current().get('commit')
-                                else 'Update available. Review the notes, then choose INSTALL UPDATE.')
+                current = self.release['commit'] == self.current().get('commit')
+                self.phase = 'current' if current else 'available'
+                self.message = ('You have the latest build on main.' if current
+                                else 'A new build is available. Install it when you are ready.')
             except Exception as exc:
+                self.phase = 'error'
                 self.message = 'Could not check updates: ' + str(exc)
             finally:
                 self.busy = False
@@ -531,12 +552,20 @@ class UpdateController:
     def launch(self, operation):
         if self.busy or not self.cfg:
             return
-        if operation == 'install' and not self.release:
+        if operation not in ('install', 'rollback'):
             return
-        channel = self.release['channel'] if self.release else self.channel
+        if operation == 'install' and (not self.release or self.release['commit'] == self.current().get('commit')):
+            return
+        if operation == 'rollback' and not self.rollback_available():
+            return
+        self.poll()
+        if self.busy:
+            return
+        channel = UPDATE_CHANNEL
         sha = self.release['commit'] if self.release else ''
-        self.busy = True; self.confirm = None
-        self.message = 'Starting updater...'
+        self.busy = True; self.confirm = None; self.recovery = False
+        self.phase = 'starting'
+        self.message = 'Starting update. The app will restart automatically...'
         def task():
             try:
                 if self.cfg['platform'] == 'linux':
@@ -552,6 +581,7 @@ class UpdateController:
                                          cwd=str(Path.home()))
                 # Busy remains true until the worker reports a terminal state.
             except Exception as exc:
+                self.phase = 'error'
                 self.message = str(exc); self.busy = False
         threading.Thread(target=task, daemon=True).start()
 

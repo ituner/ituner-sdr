@@ -1,9 +1,15 @@
 # Application updates (Raspberry Pi and macOS)
 
-Open **SYSTEM → UPDATES**. Select **Stable** (published GitHub releases) or
-**Development** (latest `main`), then **Check for updates**. Review the notes,
-press **Install update**, and confirm. Checking is on demand; opening the screen
-does not poll GitHub or contact receivers. The app restarts after installation.
+Open **SYSTEM → UPDATES** and press **Check for updates**. Every Pi and Mac
+checks the latest code on GitHub **main**, including changes pushed between
+numbered releases. There is no Stable/Development selector.
+
+The screen shows the installed build and either **Up to date** or **Update
+available**. Review the latest change, press **Install update**, then **Confirm
+install** (or **Cancel**). The app restarts automatically. **Recovery** contains
+**Restore previous** if you need to undo an update.
+
+Checking is on demand; opening the screen does not contact GitHub or receivers.
 
 The updater downloads from `ituner/ituner-sdr` at the exact commit shown. It
 stages and imports the candidate using the existing Python environment before
@@ -60,10 +66,12 @@ Normal quitting/reopening does not install updates.
 
 ## Publishing
 
-Stable uses the latest non-prerelease GitHub release; Development uses `main`.
-Publish release notes and tag the tested commit to make it available to Stable.
-The installed commit is displayed alongside VERSION, so installations can be
-distinguished even between numbered releases. A check makes one GitHub API call
-for Development, or two for Stable. Installation rechecks that target before
-downloading; if it changed, the user must check again. No periodic background
-check or silent installation is performed.
+Push tested changes to `main` to make them available through **Check for updates**.
+The short commit ID identifies the build even when VERSION has not changed.
+Each check makes one GitHub API request; installation rechecks that commit
+before downloading. If main changes in between, check again before installing.
+No periodic background check or silent installation is performed.
+
+For compatibility with already installed Pi helpers, the internal command uses
+`development` to mean main. The helper still accepts legacy `stable` commands,
+but the application UI always requests main regardless of old installed metadata.
