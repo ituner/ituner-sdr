@@ -144,6 +144,67 @@ class UpdateTests(unittest.TestCase):
             controller = u.UpdateController(); controller.open = True; controller.poll()
             check.assert_not_called()
 
+    def controller(self):
+        with mock.patch.object(u, 'load_config', return_value=self.cfg):
+            return u.UpdateController()
+
+    @staticmethod
+    def immediate_thread(**kwargs):
+        return mock.Mock(start=kwargs['target'])
+
+    def test_check_always_uses_main_even_with_old_stable_metadata(self):
+        u.atomic_json(self.root / '.ituner-installed.json', dict(version='0.1.1', commit='a'*40, channel='stable'))
+        controller = self.controller()
+        release = dict(commit='b'*40, channel='development', name='Build bbbbbbbb', notes='Change')
+        with mock.patch.object(u.threading, 'Thread', side_effect=self.immediate_thread), \
+             mock.patch.object(u, 'check_release', return_value=release) as check:
+            controller.check()
+        check.assert_called_once_with('development')
+        self.assertEqual(controller.phase, 'available')
+        self.assertFalse(controller.busy)
+
+    def test_old_completed_job_does_not_override_check(self):
+        u.atomic_json(self.state / 'status.json', dict(time=1, phase='complete', message='Old update'))
+        controller = self.controller()
+        controller.phase = 'checking'; controller.busy = True
+        controller.message = 'Checking'
+        controller.poll()
+        self.assertEqual(controller.message, 'Checking')
+        self.assertTrue(controller.busy)
+
+    def test_current_build_and_network_error(self):
+        controller = self.controller()
+        with mock.patch.object(u.threading, 'Thread', side_effect=self.immediate_thread), \
+             mock.patch.object(u, 'check_release', return_value={'commit':'a'*40}):
+            controller.check()
+        self.assertEqual(controller.phase, 'current')
+        with mock.patch.object(u.threading, 'Thread', side_effect=self.immediate_thread), \
+             mock.patch.object(u, 'check_release', side_effect=OSError('offline')):
+            controller.check()
+        self.assertEqual(controller.phase, 'error')
+        self.assertFalse(controller.busy)
+        self.assertIsNone(controller.release)
+
+    def test_active_update_is_restored_and_blocks_new_check(self):
+        u.atomic_json(self.state / 'status.json', dict(time=1, phase='installing', message='Installing'))
+        controller = self.controller()
+        with mock.patch.object(u, 'check_release') as check:
+            controller.check()
+        check.assert_not_called()
+        self.assertTrue(controller.busy)
+        u.atomic_json(self.state / 'status.json', dict(time=2, phase='complete', message='Installed'))
+        controller.poll()
+        self.assertFalse(controller.busy)
+        self.assertEqual(controller.phase, 'complete')
+
+    def test_main_check_is_one_request_with_build_date(self):
+        with mock.patch.object(u, 'request_json', return_value={
+            'sha':'b'*40, 'commit':{'message':'Change', 'committer':{'date':'2026-10-21T00:00:00Z'}}
+        }) as request:
+            release = u.check_release(u.UPDATE_CHANNEL)
+        request.assert_called_once_with(u.API + '/commits/main')
+        self.assertEqual(release['name'], 'Build bbbbbbbb · 2026-10-21')
+
     def test_dead_mac_process_does_not_block_restore(self):
         platform = u.Platform(self.cfg)
         with mock.patch.object(u, 'process_alive', return_value=False), mock.patch.object(u.os, 'kill') as kill:

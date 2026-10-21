@@ -206,6 +206,11 @@ All current and future UI updates are made to the **OpenGL implementation**. The
 
 The install is idempotent. It rebuilds the display module for the currently running kernel, stores the original module under `/var/lib/ituner-sdr/`, installs the display and touch overlays, configures the required boot settings in one marked block, installs Python/OpenGL/PipeWire dependencies, and enables all boot services.
 
+The experimental Constellation/SNR Map is removed from Pi and Mac builds.
+There are no Constellation prewarmed streams, rotating receiver probes, or
+background scouting timers. The normal receiver Globe remains available for
+browsing and choosing a receiver.
+
 The public receiver configured by default is the established working initial endpoint. To use a receiver you are authorized to access, configure it after reboot:
 
 ```bash
