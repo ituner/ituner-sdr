@@ -10,6 +10,30 @@ def plane(key='a', heard=100, position=100):
 
 
 class ViewTests(unittest.TestCase):
+    def test_live_button_confirms_then_cycles_and_history_preserves_duration(self):
+        view=TrafficView(100);self.assertFalse(view.press_live());self.assertEqual(view.live_seconds,15)
+        for seconds in (30,60,120,300,15):
+            self.assertTrue(view.press_live());self.assertEqual(view.live_seconds,seconds)
+            self.assertEqual(view.trail_seconds,300)
+        view.live_seconds=60;view.mode='history'
+        self.assertFalse(view.press_live());self.assertEqual(view.live_seconds,60)
+        self.assertTrue(view.press_live());self.assertEqual(view.live_seconds,120)
+
+    def test_extended_live_keeps_last_known_positions_but_speed_does_not_extend_them(self):
+        view=TrafficView(100);view.ingest([plane()],100)
+        view.press_live();view.press_live()
+        rows=view.aircraft([],{},120,True)
+        self.assertEqual(len(rows),1);self.assertTrue(rows[0]['historical']);self.assertEqual(rows[0]['seen_pos'],20)
+        self.assertTrue(view.trail_visible('a',[],120));self.assertEqual(view.counts([],120)['live'],0)
+        speed=plane(heard=129,position=None);view.ingest([speed],129)
+        self.assertEqual(view.aircraft([speed],{},129,True)[0]['position_time'],100)
+        self.assertEqual(view.aircraft([speed],{},130,True),[])
+        self.assertFalse(view.trail_visible('a',[speed],130))
+        tracks={'a':[dict(time=120,lat=44,lon=26)]}
+        self.assertTrue(view.aircraft([],tracks,140,True)[0]['historical'])
+        view.start_fresh(141)
+        self.assertEqual(view.aircraft([],tracks,142,True),[])
+
     def test_live_contacts_and_positions_age_independently(self):
         view=TrafficView(100)
         planes=[plane('fresh'),plane('speed',110,80),plane('gone',90)]
@@ -76,6 +100,18 @@ class ViewTests(unittest.TestCase):
         self.assertEqual(len(rows),1)
         self.assertIn('Last heard 1m ago · No position',freshness(rows[0]))
         self.assertEqual(view.aircraft([],{},180,True),[])
+
+    def test_fresh_live_filters_old_positions_trails_and_coverage_until_history(self):
+        view=TrafficView(90);view.backdrop=True;view.start_fresh(110)
+        self.assertEqual(view.mode,'live');self.assertFalse(view.backdrop)
+        old=plane(heard=111,position=109);fresh=plane('new',112,112)
+        self.assertEqual(view.aircraft([old],{},112,True),[])
+        self.assertEqual(view.counts([old],112)['positions'],0)
+        self.assertEqual(view.aircraft([fresh],{},112,True)[0]['hex'],'new')
+        self.assertEqual(view.cutoff(112),110);self.assertEqual(view.coverage_since(112),110)
+        view.mode='history';view.trail_seconds=86400
+        self.assertLess(view.coverage_since(112),110)
+        self.assertEqual(view.aircraft([old],{},112,True)[0]['hex'],'a')
 
     def test_session_retention_and_invalid_track_endpoints(self):
         view=TrafficView(0);view.mode='session'

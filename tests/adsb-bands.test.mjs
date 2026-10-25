@@ -1,0 +1,11 @@
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const source=await readFile(new URL('../UI/adsb_bands.js',import.meta.url),'utf8');
+const {bandReadings}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const state={bands:[{id:'1090',status:'RECEIVING',messages:2537,aircraft_count:8,last_message_at:159},{id:'978',status:'WAITING FOR SECOND DONGLE',messages:1,aircraft_count:0,last_message_at:100}]};
+let [es,uat]=bandReadings(state,160);
+assert.equal(es.status,'Receiving');assert.equal(es.tone,'good');assert.match(es.details,/2,537 packets · 8 live/);
+assert.equal(uat.status,'USB disconnected');assert.equal(uat.tone,'warning');assert.equal(uat.details,'1 packet · 0 live · heard 1m ago');
+state.bands[1].status='LISTENING';uat=bandReadings(state,160)[1];assert.equal(uat.status,'Listening');assert.equal(uat.live,0);
+assert.ok(bandReadings({...state,status:'OFFLINE'},160).every(b=>b.status==='Offline'));
+console.log('PASS: separate band reception, disconnected USB, persistent counters and offline state');

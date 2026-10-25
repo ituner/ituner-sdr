@@ -54,6 +54,7 @@ def historical_aircraft(tracks, live, window, now):
 
 def point_metadata(plane):
     result={}
+    if plane.get('band') in ('1090','978'):result['band']=plane['band']
     if isinstance(plane.get('flight'),str):result['flight']=plane['flight'][:32]
     for key in ('track','gs','baro_rate'):
         value=plane.get(key)
@@ -62,7 +63,7 @@ def point_metadata(plane):
 
 BANDS = (
     dict(id='1090', name='1090 ES', frequency_mhz=1090, installed=True, description='ADS-B / Mode S'),
-    dict(id='978', name='978 UAT', frequency_mhz=978, installed=False, description='Future UAT receiver'),
+    dict(id='978', name='978 UAT', frequency_mhz=978, installed=False, description='ADS-B / TIS-B · dump978-fa'),
 )
 
 

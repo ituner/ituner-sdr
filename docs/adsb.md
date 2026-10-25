@@ -35,6 +35,39 @@ Optional environment variables are `ITUNER_READSB_BIN`, `ITUNER_ADSB_MAP`,
 The local web controls require a same-origin page token, matching the existing
 LAN decoder control pattern. Use this on the trusted receiver LAN.
 
+## Simultaneous 978 UAT
+
+Run `sudo ./scripts/install-uat.sh` to add the pinned FlightAware dump978-fa
+and skyaware978 binaries. A small pinned-source correction makes SkyAware
+export geometric altitude from its GNSS value rather than its barometric value.
+The app supervises both programs and connects them
+only over an ephemeral loopback TCP port; there are no external feeds.
+
+In Settings → Receiver & dongles, select **978 UAT**, assign the second RTL-SDR,
+then Start. Both the native touchscreen and browser show independent band
+status, assignment and Start/Stop controls. Auto uses a spare receiver and never
+takes the 1090 dongle or another decoder's lease. A unique USB serial is required
+for the SoapySDR driver; duplicate dongles can be renamed under Manage dongles.
+Assignments and enabled state survive restart in `uat-settings.json`.
+
+The decoder tunes 978 MHz at 2.083333 Msps using the tuner's maximum manual gain
+(49.6 dB on R820T). **Listening** means the process is running with fresh JSON
+but no recently decoded aircraft packets; **Receiving** requires new UAT packets.
+Disconnected dongles, occupied receivers and decoder failures have separate
+statuses. Losing UAT does not stop the 1090 receiver. Settings → Logs includes
+UAT diagnostics (`uat.txt`), and shared flight logs identify each observation's
+band and dongle.
+
+Both bands share the map, 24-hour trails and saved reception geometry. Aircraft
+heard on both frequencies appear once, using the freshest valid position and
+its matching source/RSSI. UAT TIS-B relayed positions can appear on the map but
+are excluded from the antenna reception dome and footprint, since their aircraft
+locations do not describe the RF path from the ground transmitter.
+
+The optional upstream `/map/` still shows the 1090 readsb feed; use the default
+Airspace view for combined traffic. This integration displays UAT aircraft and
+TIS-B traffic; a FIS-B weather-product viewer is not included.
+
 ## Custom CM5 carrier USB power
 
 **Only for this iTuner custom CM5 carrier:** the USB2 and USB3 sockets have
@@ -218,3 +251,117 @@ installed.
 - https://github.com/wiedehopf/tar1090
 
 In History and Since opened, aircraft with stale positions remain as grey, selectable icons at retained trail endpoints within the chosen viewing window. Labels and selection details show the position age; they are excluded from live counts and cannot start Follow. They follow the selected trail duration (up to 24 hours), and disappear when trails are off. Live positions replace the historical icon. No position is extrapolated from speed reports. Callsign, heading and speed are saved with new trail points; older history uses the ICAO identifier.
+
+The live map includes passive 1090 ES and 978 UAT readouts with receiver state,
+packet count, fresh contact count, and last-heard age. The Receivers button
+opens both bands' controls without entering Settings. UAT-origin aircraft carry
+an UAT suffix on map labels and a 978 UAT source label in the aircraft list.
+UAT's packet total and last-heard timestamp persist in `uat-reception.json`
+across restarts and USB disconnects; they do not make old aircraft live again.
+The UAT Receiver panel distinguishes saved totals from the current decoder run.
+
+## UAT Weather
+
+Install `sudo scripts/install-fisb.sh` after the UAT decoder. It pins
+`rand-projects/fisb-decode` at `c3d3b0473429336b1a98672b2e8b276c24d49765`.
+Only its pure Python capture/assembly/product layers are installed, plus its
+license. No MongoDB, GDAL, cloud weather, feeders, or extra SDR stream is used.
+The installer corrects an upstream assignment error in the north-of-60-degree
+radar block split. `adsb_weather_worker.py` reads the existing private dump978
+raw port. Its failure/restart does not stop either aircraft decoder.
+
+Open **Weather** on the live map, or `/weather`. The native touchscreen has
+Reports, Radar, and Ground stations tabs, with the shared Back/footer controls.
+Received METARs, TAFs, PIREPs, winds and text advisories are assembled by the
+upstream engine. Regional and CONUS NEXRAD blocks are placed on the same
+GLOBE map as the traffic view. Report issue/receive/expiry times are shown.
+Cancelled reports are removed. Each radar block retains its own issue/expiry
+and geographical footprint. Regional zero (<5 dBZ) has a faint blue tint;
+CONUS zero (unavailable) is transparent. Intensity seven (>=55 dBZ) is purple.
+Unknown coverage is never filled as clear weather. Weather is delayed and
+this is a hobby display.
+
+The runtime `weather-live.json` publishes updates in RAM every five seconds;
+`weather-state.json` is checkpointed every 30 seconds and on clean shutdown.
+It stores at most 500 unexpired reports, 4,096 unexpired
+radar blocks and 64 station records. A worker heartbeat distinguishes a live
+connection from saved data. Ground uplinks have separate counters from
+ordinary UAT aircraft packets; aircraft reception alone cannot set the
+weather/ground-station status to Receiving. Weather collection pauses when
+UAT stops or its receiver is used for comparison.
+
+## Multi-receiver comparison
+
+Open **Settings → Receiver comparison** in Airspace, or `/compare` on the web.
+Start pauses UAT, remembers whether it should be restored, and runs a separate
+copy of the same readsb executable on each connected spare receiver with a unique serial.
+The receiver roster is saved at Start; a missing dongle never silently changes
+a three-way test into a two-way test. Stop and Start to change the group.
+All use `readsb_command()` for identical frequency, automatic gain policy,
+sample-rate defaults, CRC policy and JSON cadence. The primary receiver stays
+running. Built-in preamps/filters and automatic tuner gain differences remain
+part of the hardware's practical performance; actual gain and relative
+signal/noise are shown. RSSI is not an absolute sensitivity calibration.
+
+Start also enables the primary 1090 receiver. If USB enumeration is delayed
+at boot, the request stays queued using the saved serial assignments and
+starts automatically once the receivers appear. The waiting status shows
+the primary receiver's USB diagnosis rather than requiring a separate Start
+on the main map.
+
+All selected receivers run continuously. Live packet counts update every two seconds
+in the browser and every second in the native view. A simultaneous five-minute
+window records new valid packets, unique aircraft, positioned aircraft,
+observed position updates, maximum range from the shared antenna location,
+actual tuner gain and sample drops. Counts begin only after every decoder
+output is fresh, subtract earlier lifetime totals, and reset together at
+window boundaries. Loss/restart of any receiver marks the partial window
+invalid; invalid/partial results are excluded from the comparison chart.
+
+A five-minute line graph shows differential reception rates (new valid
+packets per second) for each receiver, using a time-weighted rolling average that grows during startup to
+30 seconds. Each new sample updates the curve; interpolating the counter at
+the window edge handles irregular sample times without changing weighting.
+The vertical scale automatically fits the highest rate in the selected view,
+including low traffic below one packet/second, with 20% headroom and rounded
+steps to reduce resizing. Old peaks outside the selected range or before Reset
+do not hold the scale up. The colored legend shows each
+receiver’s current rate; scorecards and saved windows retain total packets.
+Choose **5 minutes**, **30 minutes**, **1 hour**, **12 hours**, or **24 hours** for a rolling graph.
+Graph history continues across five-minute result boundaries. It is stored
+separately in `comparison-rates.json`, with up to 24 hours of measured rates,
+30-second checkpoints, and a final checkpoint on a clean shutdown. The latest
+hour retains detailed samples; older data uses one-minute averages of those
+samples. Outages and reset boundaries remain separate during compaction.
+Storage and native drawing stay bounded. Receiver
+changes start fresh graph history; interruptions and restarts create gaps.
+The longer views fill as actual rate samples accumulate; completed packet
+totals are never fabricated into detailed historical curves.
+The native touchscreen renders this graph directly with OpenGL primitives;
+it does not embed the web page. Historical bars and tables only show the
+matching receiver group; two-way results are retained but never relabeled as
+three-way results.
+
+**Reset graphs** clears all displayed time ranges, the displayed completed-window
+chart/table, and the current five-minute counters while the decoders keep running.
+**Start comparison** also starts fresh graphs/counters. Retained measurements,
+completed results and CSV exports are preserved; a saved reset timestamp keeps
+older records hidden from the fresh view after a restart. New rate averages
+build from samples collected after Reset.
+Both interfaces briefly confirm **Graphs reset**. The web page fetches a fresh
+control token for each action, so Reset continues working in tabs left open
+across service restarts. Control errors remain visible until the next successful
+action instead of disappearing on the next live-data refresh.
+
+Completed results and chosen serials persist in `comparison.json` (576 windows,
+about 48 hours). The browser shows a recent chart/table and provides
+`/api/comparison.csv` for all retained results. Closing either interface leaves
+the comparison running. Stop & restore UAT releases the extra 1090 processes and
+restores its previous UAT enabled state. UAT assignment/start is blocked while
+comparison owns that dongle. No receiver packets are fed to an external service.
+
+Validation includes binary DLAC METAR and run-length radar APDUs through the
+actual pinned engine, radar placement/row direction and extreme echoes,
+report expiry/cancellation, native navigation, simultaneous packet deltas,
+five-minute rollover and interrupted-window rejection. Test inputs use isolated
+roots and never enter production receiver logs or weather products.

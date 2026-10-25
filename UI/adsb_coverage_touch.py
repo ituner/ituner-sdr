@@ -1,6 +1,7 @@
 """Full-screen native reception dome with cached geometry and batched OpenGL."""
 import math
 import threading
+import time
 from PIL import Image, ImageDraw
 import adsb_coverage_gl as dome_gl
 
@@ -36,6 +37,7 @@ class CoverageTouch:
         self.w=workspace;self.mode='cells';self.yaw=0;self.tilt=55;self.signal=False;self.aircraft=None;self.detail='Drag to rotate · tap a cell or position to inspect'
         self.frame=None;self.frame_id=0;self.uploaded=-1;self.texture=None;self.labels=[];self.hits=[];self.data={};self.error=''
         self.lock=threading.Lock();self.wake=threading.Event();self.worker=None;self.origin=(0,55);self.projected=None;self.project_key=None
+        self.last_key=None;self.pending=False;self.pulse_until=0
 
     def activate(self):
         if self.worker is None:
@@ -43,18 +45,28 @@ class CoverageTouch:
         self.wake.set()
 
     def run(self):
-        last=None
         while not self.w.manager.closed.is_set():
             self.wake.wait(.15);self.wake.clear()
             if not self.w.open or not self.w.coverage_open:continue
-            data=self.w.manager.coverage.snapshot();settings=(self.mode,self.signal,self.aircraft)
-            key=(id(data),settings)
-            if key==last:continue
             try:
-                frame=dome_gl.prepare(data,*settings)
-                with self.lock:self.frame=frame;self.data=data;self.frame_id+=1;self.error=''
-                last=key
+                self.update_data(self.w.manager.coverage.snapshot(self.w.traffic_view.coverage_since(time.time())))
             except Exception as exc:self.error=str(exc)
+
+    def update_data(self,data):
+        self.pending=data.get('status')=='LOADING'
+        if self.pending:
+            if self.frame is None:return False
+            data=self.data
+        settings=(self.mode,self.signal,self.aircraft);key=(id(data),settings)
+        if key==self.last_key:return False
+        added=dome_gl.new_point_keys(self.data,data)
+        frame=dome_gl.prepare(data,*settings,new_points=added)
+        # Publish a complete scene in one swap. Never expose an empty loading scene.
+        with self.lock:
+            self.frame=frame;self.data=data;self.frame_id+=1;self.error=''
+            self.pulse_until=time.monotonic()+.8 if len(frame['highlights']) else 0
+        self.last_key=key
+        return True
 
     def drag_begin(self,x,y):self.origin=(self.yaw,self.tilt)
 
@@ -86,23 +98,25 @@ class CoverageTouch:
         w.ink(cache,24,27,'AIRSPACE / RECEPTION DOME',25,w.TEXT)
         with self.lock:data=self.data;frame=self.frame;labels=self.labels;identity=self.frame_id
         meta=data.get('meta',{});count=meta.get('retained_positions',0)
-        summary=f"{count:,} positions · {meta.get('positioned_aircraft',0)} aircraft · up to 90 days"
+        summary=f"{'HISTORY' if self.w.traffic_view.mode=='history' else 'LIVE · ACCUMULATING'} · {count:,} positions · {meta.get('positioned_aircraft',0)} aircraft"+(' · updating…' if self.pending else '')
         w.ink(cache,24,61,summary,18,w.MUTED)
         w.draw_back(cache,('back',None))
+        for box,label,mode in (((700,10,890,72),'Live','live'),((906,10,1110,72),'History','history')):
+            w.button(cache,box,label,('traffic_view',mode),active=w.traffic_view.mode==mode)
         for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','usb',None,False)):
             self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')
-        for x,y,title,subtitle,value in ((24,216,'Horizontal','radius',f'{r:.2f} km'),(24,340,'Diameter','2 × radius',f'{2*r:.2f} km'),(1124,216,'Max slant','range',f"{meta.get('slant_range_max_km',0):.2f} km"),(1124,340,'Highest','received',f'{alt:,.0f} ft' if alt is not None else '—')):
-            w.ink(cache,x,y,title,18,w.MUTED);w.ink(cache,x,y+24,subtitle,16,w.MUTED);w.ink(cache,x,y+60,value,24,w.CYAN,width=140)
+        for x,y,title,value in ((24,244,'Radius',f'{r:.1f} km'),(24,312,'Diameter',f'{2*r:.1f} km'),(1124,244,'Slant range',f"{meta.get('slant_range_max_km',0):.1f} km"),(1124,312,'Highest',f'{alt:,.0f} ft' if alt is not None else '—')):
+            w.ink(cache,x,y,title,14,w.MUTED);w.ink(cache,x,y+25,value,19,w.TEXT,width=140)
         if frame is not None:
             key=(identity,self.yaw,self.tilt)
             if key!=self.project_key:
                 self.projected=dome_gl.project(frame,self.yaw,self.tilt,GL_WIDTH,GL_HEIGHT);self.project_key=key
                 with self.lock:self.hits=self.projected['hits']
-            dome_gl.draw(ui,self.projected,BOX)
+            dome_gl.draw(ui,self.projected,BOX,max(0,min(1,(self.pulse_until-time.monotonic())/.8)))
             for x,y,text,size,color in self.projected['labels']:w.ink(cache,BOX[0]+x,BOX[1]+y,text,size,color,anchor='cm')
         if self.error or w.manager.coverage_error or data.get('status') in (None,'LOADING','EMPTY','NO SITE'):
-            text=self.error or w.manager.coverage_error or {'EMPTY':'No positioned aircraft retained yet.','NO SITE':'Set antenna latitude / longitude in Receiver.'}.get(data.get('status'),'Loading reception history…')
+            text=self.error or w.manager.coverage_error or {'EMPTY':'No aircraft positions in this viewing window yet.','NO SITE':'Set antenna latitude / longitude in Receiver.'}.get(data.get('status'),'Loading reception history…')
             w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=1100)
         w.ink(cache,196,176,'TRUE DISTANCE · NO VERTICAL EXAGGERATION' if self.mode=='space' else 'ANGULAR SKY · 90° ZENITH',13,w.MUTED)
         for box,title,kind,value in (((24,568,152,624),'− 30°','coverage_turn',-30),((24,636,152,692),'+ 30°','coverage_turn',30),((1128,568,1256,624),'Tilt −','coverage_tilt',-10),((1128,636,1256,692),'Tilt +','coverage_tilt',10)):

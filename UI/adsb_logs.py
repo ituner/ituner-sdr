@@ -2,12 +2,12 @@
 from datetime import datetime, timezone
 import json
 
-LOG_FILES = {'flights': 'flights.jsonl', 'receiver': 'receiver.jsonl', 'diagnostics': 'readsb.txt'}
-LOG_TITLES = {'flights': 'FLIGHTS', 'receiver': 'RECEIVER', 'diagnostics': 'DIAGNOSTICS'}
+LOG_FILES = {'flights': 'flights.jsonl', 'receiver': 'receiver.jsonl', 'diagnostics': 'readsb.txt', 'uat_diagnostics': 'uat.txt'}
+LOG_TITLES = {'flights': 'FLIGHTS', 'receiver': 'RECEIVER', 'diagnostics': '1090 DIAGNOSTICS', 'uat_diagnostics': 'UAT DIAGNOSTICS'}
 
 
 def log_line(item, kind):
-    if kind == 'diagnostics':
+    if kind.endswith('diagnostics'):
         return str(item)
     stamp = item.get('time')
     try: clock = datetime.fromtimestamp(float(stamp), timezone.utc).strftime('%m-%d %H:%M:%S UTC')
@@ -16,6 +16,7 @@ def log_line(item, kind):
         plane = item.get('aircraft') or {}
         call = str(plane.get('flight') or '').strip()
         label = f"{clock}  {call or plane.get('hex', '?')}  ICAO {plane.get('hex', '?')}"
+        label += '  '+('978 UAT' if plane.get('band')=='978' else '1090 ES')
         label += f"  ALT {plane.get('alt_baro', '—')} ft  SPEED {plane.get('gs', '—')} kt"
         if 'lat' in plane and 'lon' in plane:
             label += f"  POS {plane['lat']}, {plane['lon']}"
@@ -32,7 +33,7 @@ def read_log_tail(root, kind, limit=160, max_bytes=65536):
     filename = LOG_FILES[kind]
     records = []
     limit = max(1, min(200, int(limit)))
-    for suffix in ('', '.1', '.2', '.3', '.4', '.5', '.6') if kind != 'diagnostics' else ('',):
+    for suffix in ('', '.1', '.2', '.3', '.4', '.5', '.6') if not kind.endswith('diagnostics') else ('',):
         path = root/(filename+suffix)
         try:
             with path.open('rb') as stream:
@@ -48,7 +49,7 @@ def read_log_tail(root, kind, limit=160, max_bytes=65536):
         for line in lines:
             text = line.decode('utf-8', 'replace')
             if not text: continue
-            if kind == 'diagnostics': current.append(text)
+            if kind.endswith('diagnostics'): current.append(text)
             else:
                 try:
                     item = json.loads(text)

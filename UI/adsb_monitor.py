@@ -1,8 +1,6 @@
 """Local 1090 MHz readsb receiver, RTL allocation, bounded logs and tar1090 HTTP."""
 import ctypes
 import ctypes.util
-from collections import Counter
-import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -18,14 +16,18 @@ import tempfile
 import time
 from urllib.parse import unquote, urlsplit, parse_qs
 from station_web import station_get, station_post
+from dongle_web import dongle_get, dongle_post
 from station_profile import distance_m
 from adsb_coverage import ReceptionCoverage
 from adsb_logs import LOG_FILES, read_log_tail
 from adsb_globe import GlobeAssets
 from adsb_traffic import BANDS, TrafficHistory, receiver_position
+from adsb_uat import UATReceiver, age_aircraft, merge_aircraft
+from adsb_weather import WeatherService
+from adsb_compare import ReceiverComparison, readsb_command
 
 
-def rtl_devices():
+def _read_rtl_devices():
     """Query descriptors without claiming an SDR or interrupting another decoder."""
     lib = ctypes.CDLL(ctypes.util.find_library('rtlsdr') or 'librtlsdr.so.0')
     lib.rtlsdr_get_device_count.restype = ctypes.c_uint32
@@ -37,25 +39,22 @@ def rtl_devices():
         manufacturer, product, serial = [b.value.decode('utf-8', 'replace') for b in buffers]
         rows.append(dict(index=index, name=(lib.rtlsdr_get_device_name(index) or b'RTL-SDR').decode('utf-8', 'replace'),
                          manufacturer=manufacturer, product=product, serial=serial if result == 0 else ''))
-    # Duplicate factory serials cannot safely identify a receiver across USB changes.
-    # Retain an explicit slot only while the physical USB inventory stays identical.
-    topology = []
-    for path in sorted(Path('/sys/bus/usb/devices').glob('*')):
-        try:
-            topology.append((path.name, (path/'idVendor').read_text().strip(),
-                             (path/'idProduct').read_text().strip(), (path/'devnum').read_text().strip()))
-        except OSError:
-            pass
-    signature = hashlib.sha256(repr((topology, rows)).encode()).hexdigest()[:16]
-    counts = Counter(r['serial'] for r in rows)
-    for row in rows:
-        unique = bool(row['serial']) and counts[row['serial']] == 1
-        row['id'] = 'serial:'+row['serial'] if unique else f"slot:{row['index']}:{signature}"
-        row['persistent'] = unique
-        row['label'] = f"USB {row['index']} · {row['product'] or row['name']} · {row['serial'] or 'no serial'}"
-        if not unique:
-            row['label'] += ' · shared serial (reselect after USB changes)'
-    return rows
+    from rtl_registry import REGISTRY, identify, usb_inventory, usb_order
+    try: physical, order = usb_inventory(), usb_order()
+    except OSError: physical, order = [], []
+    return REGISTRY.remember(identify(rows, physical, order, REGISTRY.shared_serials()))
+
+
+def rtl_devices():
+    from rtl_registry import REGISTRY
+    with REGISTRY.lock:
+        if REGISTRY.operation and REGISTRY.operation.get('running'):
+            return [dict(row) for row in REGISTRY.current_rows]
+    return _read_rtl_devices()
+
+
+rtl_devices.fresh = _read_rtl_devices
+
 
 
 def aircraft_rows(payload, now=None):
@@ -78,7 +77,7 @@ class ADSBManager:
         self.binary = binary or os.environ.get('ITUNER_READSB_BIN', '/opt/ituner-sdr/decoders/adsb/readsb')
         self.port = int(port if port is not None else os.environ.get('ITUNER_ADSB_PORT', '8090'))
         self.broker = broker
-        if broker: broker.register("adsb", lambda: self.control("stop"))
+        if broker: broker.register("adsb", lambda: self.control("stop"),lambda:self.control("start"),lambda:self.enabled)
         self.scanner = scanner
         self.lock = threading.RLock()
         self.wake = threading.Event()
@@ -101,6 +100,7 @@ class ADSBManager:
         self.server = None
         self.token = secrets.token_urlsafe(32)
         self.globe = GlobeAssets()
+        self.weather = WeatherService(self.root,self.data)
         self.log_cache = {kind: read_log_tail(self.root, kind) for kind in LOG_FILES}
         self.next_logs = 0
         try:
@@ -126,6 +126,9 @@ class ADSBManager:
         if station:station.subscribe(self._station_changed)
         self.flight_log = self._logger('flights', 10*1024*1024, 6)
         self.events = self._logger('receiver', 2*1024*1024, 3)
+        self.uat = UATReceiver(self.root, self.data, broker, self._event)
+        self.comparison = ReceiverComparison(self.root,self.data,self.binary,broker)
+        self.last_uat_log = -float('inf')
         self.thread = threading.Thread(target=self._worker, name='adsb-receiver', daemon=True)
         self.thread.start()
         if self.port >= 0:
@@ -169,13 +172,60 @@ class ADSBManager:
         if event in ('start','stop','released','assigned','readsb_exited','location'):
             self.coverage.mark_break(stamp)
 
-    def control(self, action, selection=None, position=None, height_m=None):
+    def control(self, action, selection=None, position=None, height_m=None, band=None):
+        if action in ('comparison_start','comparison_stop','comparison_reset'):
+            with self.lock:
+                if action=='comparison_reset':
+                    self.comparison.reset_graphs()
+                elif action=='comparison_start':
+                    primary_id=self.assigned['id'] if self.assigned else self.selection
+                    if primary_id=='auto':
+                        candidate=next((d for d in self.devices if d.get('persistent') and d['id']!=selection
+                                        and (not self.broker or self.broker.available('adsb',d['id']))),None)
+                        if candidate:self.selection=primary_id=candidate['id']
+                    spare=[d for d in self.devices if d['id']!=primary_id and d.get('persistent') and (selection in (None,'auto','all') or d['id']==selection)]
+                    requested=[d['id'] for d in spare]
+                    # Keep receiver letters/colors stable when USB indices reorder at boot.
+                    requested=[k for k in self.comparison.selections if k in requested]+[k for k in requested if k not in self.comparison.selections]
+                    if not requested:
+                        if selection not in (None,'auto','all'):
+                            if selection not in self.comparison.selections:raise ValueError('Reconnect the selected comparison receiver or choose a saved receiver')
+                            requested=[selection]
+                        else:requested=[key for key in self.comparison.selections if key!=primary_id]
+                    if not self.comparison.enabled:self.comparison.restore_uat=self.uat.enabled
+                    self.uat.control('stop')
+                    self.comparison.reset_graphs()
+                    self.comparison.control('start',requested or 'all')
+                    # Start is one action even when USB enumeration is still pending.
+                    if not self.enabled or not self.assigned:self.control('start')
+                    self.next_scan=0
+                else:
+                    self.comparison.control('stop')
+                    if self.comparison.restore_uat:
+                        self.uat.control('start');self.comparison.restore_uat=False;self.comparison.save()
+                self._event(action,selection=self.comparison.selection)
+            self.wake.set();return
+        if band == '978':
+            with self.lock:
+                if self.comparison.enabled and action in ('start','assign'):
+                    raise ValueError('Stop the 1090 receiver comparison first; it is using the UAT dongle')
+                excluded = [self.assigned['id']] if self.assigned else []
+                if self.enabled and self.selection != 'auto': excluded.append(self.selection)
+                self.uat.control(action, selection, self.devices, excluded)
+                self.next_scan = 0
+            self.wake.set()
+            return
+        if band not in (None, '1090'): raise ValueError('Unknown receiver band')
         if action == "start" and self.broker:
             self.broker.request("adsb", self.devices, self.selection)
         with self.lock:
             if action == 'assign':
+                if self.comparison.enabled and self.comparison.contains(selection):
+                    raise ValueError('This dongle is being compared; stop comparison before reassigning it')
                 if selection != 'auto' and not any(d['id'] == selection for d in self.devices):
                     raise ValueError('Dongle no longer available; scan again')
+                if self.uat.assigned and selection == self.uat.assigned['id']:
+                    raise ValueError('This dongle is assigned to 978 UAT; choose the other receiver')
                 self.selection = selection
             elif action == 'location':
                 if self.station:
@@ -209,14 +259,25 @@ class ADSBManager:
                 if isinstance(p.get('seen_pos'),(int,float)):
                     row['position_time']=stamp-p['seen_pos'];row['seen_pos']=max(0,now-row['position_time'])
                 if row['seen']<15:planes.append(row)
-            return dict(now=now, enabled=self.enabled, selection=self.selection, devices=[dict(d) for d in self.devices],
-                        assigned=dict(assigned) if assigned else None, status=self.status, detail=self.detail,
-                        aircraft=planes, messages=self.messages, port=self.port,
-                        started_at=self.started_at,last_message_at=self.last_message_at,
+            uat = self.uat.snapshot(now)
+            if self.comparison.enabled:
+                uat.update(status='PAUSED FOR COMPARISON',detail='Receivers are testing 1090 MHz. Stop comparison to restore UAT.')
+            uat['aircraft_count']=len(uat['aircraft'])
+            es_count=len(planes)
+            planes = merge_aircraft(planes, uat.pop('aircraft'))
+            latest = lambda values: max((v for v in values if v is not None), default=None)
+            band1090 = dict(BANDS[0], status=self.status, enabled=self.enabled, selection=self.selection,
+                            assigned=dict(assigned) if assigned else None, messages=self.messages,
+                            detail=self.detail, last_message_at=self.last_message_at)
+            band1090['aircraft_count']=es_count
+            return dict(now=now, enabled=self.enabled or self.uat.enabled, enabled_1090=self.enabled,
+                        selection=self.selection, devices=[dict(d) for d in self.devices],
+                        assigned=dict(assigned) if assigned else None, status=self.status if self.enabled else uat['status'] if self.uat.enabled else self.status, detail=self.detail,
+                        aircraft=planes, messages=self.messages+self.uat.total_messages, port=self.port,
+                        started_at=latest([self.started_at,self.uat.started_at]),last_message_at=latest([self.last_message_at,self.uat.last_packet_at]),
                         last_position_at=self.history.latest_position_time(time.time()),
                         receiver_position=dict(self.position) if self.position else None,
-                        bands=[dict(band, status=self.status if band['installed'] else 'NOT INSTALLED',
-                            enabled=self.enabled if band['installed'] else False) for band in BANDS],
+                        bands=[band1090, uat],
                         map_installed=(self.map_root/'index.html').is_file(), log=str(self.root/'flights.jsonl'))
 
     def track_snapshot(self):
@@ -269,11 +330,8 @@ class ADSBManager:
             return
         for path in self.data.glob('*.json*'):
             path.unlink(missing_ok=True)
-        command = [self.binary, '--device-type=rtlsdr', f"--device={device['index']}", '--gain=auto', '--quiet',
-                   '--write-json='+str(self.data), '--write-json-every=1', '--json-trace-interval=5']
         self.active_position = dict(self.position) if self.position else None
-        if self.active_position:
-            command.extend([f"--lat={self.active_position['lat']}", f"--lon={self.active_position['lon']}"])
+        command = readsb_command(self.binary,device,self.data,self.active_position)
         # No external feed or listening receiver ports; map reads local JSON.
         stderr = self.root/'readsb.txt'
         stderr.write_text('')
@@ -298,6 +356,9 @@ class ADSBManager:
             stderr.write_text('')
         if now >= self.next_scan:
             self.devices = self.scanner()
+            from rtl_registry import REGISTRY
+            selection=REGISTRY.resolve(self.selection,self.devices)
+            if selection!=self.selection:self.control('assign',selection)
             self.next_scan = now+5
         if self.process and (not self.enabled or self._location_restart_needed() or
                 (self.selection != 'auto' and self.assigned['id'] != self.selection) or
@@ -319,6 +380,7 @@ class ADSBManager:
             return
         if not self.process:
             candidates = [d for d in self.devices if (self.selection == 'auto' or d['id'] == self.selection)
+                          and (not self.uat.assigned or d['id'] != self.uat.assigned['id'])
                           and self.retry.get(d['id'], 0) <= now
                           and (not self.broker or self.broker.available("adsb", d["id"]))]
             if candidates:
@@ -329,6 +391,9 @@ class ADSBManager:
                 elif self.selection != 'auto' and not any(d['id'] == self.selection for d in self.devices):
                     self.detail = 'Assigned dongle is missing or USB order changed. Select a dongle again.'
                 return
+        # Nicknames can change while the same USB receiver stays open.
+        current_device=next((d for d in self.devices if d['id']==self.assigned['id']),None)
+        if current_device:self.assigned.update({k:current_device[k] for k in ('label','nickname') if k in current_device})
         try:
             payload = json.loads((self.data/'aircraft.json').read_text())
         except (OSError, ValueError):
@@ -357,6 +422,28 @@ class ADSBManager:
             self.retry[failed] = now+10
             self.status = 'RETRYING'
 
+    def _step_uat(self):
+        excluded = [self.assigned['id']] if self.assigned else []
+        if self.enabled and self.selection != 'auto': excluded.append(self.selection)
+        payload = self.uat.step(self.devices, excluded, self.position)
+        # Weather consumes a second loopback connection, never a second RF stream.
+        self.weather.step(self.uat.raw_port, self.uat.enabled)
+        self.weather.comparison_paused = self.comparison.enabled
+        if not payload: return
+        planes = age_aircraft(payload, '978', payload['now'])
+        with self.lock: self.history.ingest(planes, payload['now'])
+        now = time.monotonic()
+        if now-self.last_uat_log < 5: return
+        self.last_uat_log = now
+        observations = []
+        for plane in planes:
+            if plane.get('seen', 100) >= 5: continue
+            observation = dict(time=payload['now'], device=self.uat.assigned, aircraft=plane,
+                               receiver_position=dict(self.position) if self.position else None)
+            self.flight_log.info(json.dumps(observation))
+            observations.append(observation)
+        self.coverage.add(observations)
+
     def _worker(self):
         while not self.closed.is_set():
             try: self._step()
@@ -365,6 +452,18 @@ class ADSBManager:
                 with self.lock:
                     self.status, self.detail = 'ERROR', str(exc)
                 self._event('error', detail=str(exc))
+            try: self._step_uat()
+            except Exception as exc:
+                self.uat.stop()
+                self.uat.status, self.uat.detail = 'ERROR', str(exc)
+                self.uat.next_retry = time.monotonic()+15
+                self._event('uat_error', detail=str(exc))
+            try:
+                self.comparison.primary_detail=self.detail
+                self.comparison.step(self.devices,self.assigned if self.process else None,self.data,self.position)
+            except Exception as exc:
+                self.comparison.stop();self.comparison.status='ERROR';self.comparison.detail=str(exc)
+                self._event('comparison_error',detail=str(exc))
             try: self._refresh_logs()
             except OSError: pass
             self._save_history()
@@ -380,11 +479,14 @@ class ADSBManager:
         self._save_history(force=True)
         self.coverage.close()
         self._stop()
+        self.uat.stop()
+        self.weather.stop()
+        self.comparison.stop()
 
     def close(self):
         self.closed.set()
         self.wake.set()
-        self.thread.join(timeout=8)
+        self.thread.join(timeout=16)
         if self.server:
             self.server.shutdown()
             self.server.server_close()
@@ -410,18 +512,24 @@ class ADSBHandler(BaseHTTPRequestHandler):
         request = urlsplit(self.path)
         path = unquote(request.path)
         query = parse_qs(request.query)
-        if station_get(self,path):return
+        if station_get(self,path) or dongle_get(self,path):return
         try:
             if path == '/api/state':
                 self.send(json.dumps(dict(manager.snapshot(), control_token=manager.token)).encode())
             elif path == '/api/coverage':
                 state=manager.snapshot()
-                self.send(json.dumps(dict(manager.coverage.snapshot(), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
+                self.send(json.dumps(dict(manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
             elif path == '/api/footprint':
-                data=manager.coverage.snapshot();meta=data.get('meta',{})
-                self.send(json.dumps(dict(status=data.get('status'),error=manager.coverage_error,footprint=data.get('footprint'),retained_positions=meta.get('retained_positions',0),first_position=meta.get('first_position'),last_position=meta.get('last_position'))).encode())
+                data=manager.coverage.maximum_snapshot() if query.get('scope')==['maximum'] else manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None);meta=data.get('meta',{})
+                self.send(json.dumps(dict(status=data.get('status'),scope=data.get('scope','selected window'),error=manager.coverage_error,footprint=data.get('footprint'),retained_positions=meta.get('retained_positions',0),first_position=meta.get('first_position'),last_position=meta.get('last_position'))).encode())
             elif path == '/api/tracks':
                 self.send(json.dumps(manager.track_snapshot()).encode())
+            elif path == '/api/weather':
+                self.send(json.dumps(dict(manager.weather.snapshot(), receiver_position=manager.snapshot()['receiver_position'])).encode())
+            elif path == '/api/comparison':
+                self.send(json.dumps(manager.comparison.snapshot()).encode())
+            elif path == '/api/comparison.csv':
+                self.send(manager.comparison.csv(),'text/csv; charset=utf-8')
             elif path == '/api/logs':
                 self.send(json.dumps(manager.log_snapshot(query.get('kind', ['flights'])[0])).encode())
             elif path == '/api/log':
@@ -440,10 +548,14 @@ class ADSBHandler(BaseHTTPRequestHandler):
             elif path.startswith('/globe/tiles/'):
                 tile = manager.globe.tile(path)
                 self.send(tile or b'', 'image/jpeg', status=200 if tile else 404)
-            elif path in ('/adsb_globe.js', '/adsb_controls.js', '/adsb_view.js', '/adsb_coverage.js', '/adsb_map.css', '/adsb_coverage.css'):
+            elif path in ('/adsb_globe.js', '/adsb_controls.js', '/adsb_view.js', '/adsb_bands.js', '/adsb_coverage.js', '/adsb_map.css', '/adsb_coverage.css', '/adsb_weather.js', '/adsb_weather.css', '/adsb_compare.js', '/adsb_compare.css'):
                 self.send(Path(__file__).with_name(path[1:]).read_bytes(), 'text/css; charset=utf-8' if path.endswith('.css') else 'text/javascript; charset=utf-8')
             elif path == '/':
                 self.send(Path(__file__).with_name('adsb_map.html').read_bytes(), 'text/html; charset=utf-8')
+            elif path == '/weather':
+                self.send(Path(__file__).with_name('adsb_weather.html').read_bytes(), 'text/html; charset=utf-8')
+            elif path == '/compare':
+                self.send(Path(__file__).with_name('adsb_compare.html').read_bytes(), 'text/html; charset=utf-8')
             elif path == '/map/data/receiver.json':
                 payload = json.loads((manager.data/'receiver.json').read_text())
                 # Local traffic is small; JSON avoids a WebAssembly requirement.
@@ -468,6 +580,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError): self.send(b'Unavailable', 'text/plain', 503)
 
     def do_POST(self):
+        if self.path=='/api/dongles':dongle_post(self);return
         if self.path=='/api/station':station_post(self);return
         manager = self.server.manager
         # Same-origin page token is required; no permissive CORS or query tokens.
@@ -480,7 +593,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= 4096: raise ValueError('Invalid request size')
             data = json.loads(self.rfile.read(size))
-            manager.control(data.get('action'), data.get('selection'), data.get('position'), data.get('height_m'))
+            manager.control(data.get('action'), data.get('selection'), data.get('position'), data.get('height_m'), data.get('band'))
             self.send(b'{"ok":true}')
         except (ValueError, TypeError, AttributeError) as exc:
             self.send(json.dumps(dict(error=str(exc))).encode(), status=400)

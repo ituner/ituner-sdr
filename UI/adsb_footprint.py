@@ -23,7 +23,12 @@ def build_footprint(site,rows):
         radius=distance_m(site,dict(lat=lat,lon=lon))
         if radius<1:continue
         index=int(bearing//SECTOR_DEGREES);cell=buckets.setdefault(index,[0,0]);cell[0]=max(cell[0],radius);cell[1]+=1
-    if not buckets:return empty
+    return footprint_from_peaks(site,buckets)
+
+
+def footprint_from_peaks(site,buckets):
+    """Render persisted maxima without needing to retain every old observation."""
+    if not site or not buckets:return dict(sector_degrees=SECTOR_DEGREES,site=site,sectors=[],regions=[])
     count=360//SECTOR_DEGREES
     # Start after an unobserved direction so a run crossing north stays joined.
     start=next(((i+1)%count for i in range(count) if i not in buckets),0)

@@ -71,7 +71,7 @@ install -m 0644 "${repo_dir}/VERSION" /opt/ituner-sdr/VERSION
 install -m 0644 "${repo_dir}"/UI/*.py "${repo_dir}"/UI/*.json /opt/ituner-sdr/UI/
 cp -a "${repo_dir}/UI/sstv_vendor" "${repo_dir}/UI/cw_vendor" /opt/ituner-sdr/UI/
 cp -a "${repo_dir}/licenses" /opt/ituner-sdr/
-install -m 0644 "${repo_dir}"/UI/*.html "${repo_dir}"/UI/*.js /opt/ituner-sdr/UI/
+install -m 0644 "${repo_dir}"/UI/*.html "${repo_dir}"/UI/*.js "${repo_dir}"/UI/*.css /opt/ituner-sdr/UI/
 install -d -m 0755 /opt/ituner-sdr/UI/assets
 cp -a "${repo_dir}/UI/assets/." /opt/ituner-sdr/UI/assets/
 install -m 0755 "${repo_dir}/scripts/start-opengl.sh" /usr/local/lib/ituner-sdr/start-opengl.sh

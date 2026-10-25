@@ -1,0 +1,12 @@
+diff --git a/skyaware_writer.cc b/skyaware_writer.cc
+--- a/skyaware_writer.cc
++++ b/skyaware_writer.cc
+@@ -95,7 +95,7 @@ void SkyAwareWriter::WriteAircraftJson() {
+             ac_json["alt_baro"] = aircraft.pressure_altitude.Value();
+         }
+         if (aircraft.geometric_altitude.UpdateAge(now) < max_age) {
+-            ac_json["alt_geom"] = aircraft.pressure_altitude.Value();
++            ac_json["alt_geom"] = aircraft.geometric_altitude.Value();
+         }
+         if (aircraft.nic.UpdateAge(now) < max_age) {
+             ac_json["nic"] = aircraft.nic.Value();

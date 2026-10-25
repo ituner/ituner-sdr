@@ -83,6 +83,7 @@ class NativeSpectrumTests(unittest.TestCase):
         from vhf_workspace import VHFWorkspace
         # Exercise the host's real dispatch rather than closing only the child.
         host=object.__new__(VHFWorkspace);host.mode='spectrum';host.open=True;host.spectrum=self.workspace
+        host.dongles=SimpleNamespace(open=False)
         w=self.workspace;w.open=True;w.overlay='advanced';w.screen='activity'
         w.actions=[((0,0,100,100),('home',None))];host.tap(10,10)
         self.assertFalse(w.open);self.assertFalse(host.open)
