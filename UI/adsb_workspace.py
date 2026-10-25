@@ -56,6 +56,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.history_draft=self.history_seconds
         self.rings = False
         self.labels = True
+        self.aircraft_icons = True
         self.traffic_sort = 'recent'
         self.dashboard = False
         self.overlay_boxes = []
@@ -94,6 +95,8 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         return (('history_window','history_window_open'),('options','view_options'),('settings','settings_open'),('weather','weather_open'),('comparison','comparison_open'),('coverage','coverage_open'),('logs','logs_open'),('traffic','traffic_open'),('usb','usb_open'))
 
     def go_back(self):
+        if self.coverage_open and self.coverage_view.window_open:
+            self.coverage_view.window_open=False;return
         if self.weather_open and self.weather_view.report is not None:
             self.weather_view.action('weather_close_report',None);return
         if self.navigation:self.navigate(self.navigation.pop(),remember=False)
@@ -219,7 +222,13 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             elif kind=='start_fresh':
                 self.traffic_view.start_fresh(time.time());self.set_traffic_view('live');self.navigation=[];self.navigate('map',remember=False);self.coverage_view.wake.set()
             elif kind=='backdrop':self.traffic_view.backdrop=not self.traffic_view.backdrop
-            elif kind=='labels':self.labels=not self.labels
+            elif kind=='history_trails':self.traffic_view.history_trails=not self.traffic_view.history_trails
+            elif kind=='labels':
+                if self.traffic_view.mode=='history':self.traffic_view.history_labels=not self.traffic_view.history_labels
+                else:self.labels=not self.labels
+            elif kind=='aircraft_icons':
+                if self.traffic_view.mode=='history':self.traffic_view.history_icons=not self.traffic_view.history_icons
+                else:self.aircraft_icons=not self.aircraft_icons
             elif kind=='rx_footprint':self.rx_footprint=not self.rx_footprint
             elif kind=='sort':
                 sorts=('recent','altitude','callsign');self.traffic_sort=sorts[(sorts.index(self.traffic_sort)+1)%3]
@@ -324,35 +333,45 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             if self.dashboard:self.draw_footprint(state)
             if self.rings and state.get('receiver_position'): self.draw_rings(state['receiver_position'])
             now=time.time();view=self.traffic_view if self.dashboard else None
+            labels_visible=view.labels_visible(self.labels) if view else self.labels
+            icons_visible=view.icons_visible(self.aircraft_icons) if view else self.aircraft_icons
             cutoff=view.cutoff(now) if view else now-self.trail_seconds
-            def draw_trace(trace,color,alpha,cutoff,until=None):
-                points=[];previous_time=None
+            def draw_trace(trace,color,alpha,cutoff,until=None,selected=False):
+                points=[];dots=[];last_dot=None;last_visible=None;previous_time=None
                 for item in trace:
                     if item.get('time',0)<cutoff or (until is not None and item.get('time',0)>=until): continue
                     if previous_time is not None and item.get('time',0)-previous_time>120:
                         if len(points)>1:ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
-                        points=[]
+                        points=[];last_dot=None
                     previous_time=item.get('time',0)
                     p=ui.radiogarden_project(item,self.yaw,self.pitch,self.MAP,self.scale)
                     # The map scissor clips segments crossing the viewport;
                     # their endpoints need not both be inside a close view.
-                    if p: points.append(p[:2])
+                    if p:
+                        point=p[:2];points.append(point)
+                        if x0-3<=point[0]<=x1+3 and y0-3<=point[1]<=y1+3:
+                            last_visible=point
+                            if last_dot is None or math.hypot(point[0]-last_dot[0],point[1]-last_dot[1])>=6:
+                                dots.append(point);last_dot=point
                     elif points:
                         if len(points)>1: ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
-                        points=[]
+                        points=[];last_dot=None
                 if len(points)>1: ui.draw_logical_polyline(points,(*color,alpha),1 if alpha<100 else 2)
+                if last_visible is not None and (not dots or last_visible!=dots[-1]):dots.append(last_visible)
+                if dots:ui.draw_logical_points(dots,(*color,70 if alpha<100 else 240 if selected else 220),2.4 if alpha<100 else 6 if selected else 4)
             if view and view.backdrop and view.mode!='history':
                 for trace in self.tracks.values():draw_trace(trace,self.MUTED,45,now-TRAIL_RETENTION,cutoff if view.mode=='session' else None)
             if self.trail_seconds or (view and view.mode=='session'):
                 for key,trace in self.tracks.items():
                     if view and not view.trail_visible(key,state['aircraft'],now,trace):continue
-                    draw_trace(trace,self.GOLD if key==self.selected else self.CYAN,150,cutoff)
+                    draw_trace(trace,self.GOLD if key==self.selected else self.CYAN,150,cutoff,selected=key==self.selected)
             self.points=[]
             historical=([p for p in self.display_aircraft(state,True) if p.get('historical')] if view else historical_aircraft(self.tracks,valid,self.trail_seconds,now)) if 'empty_title' not in state else []
             selected_history=next((p for p in historical if p['hex']==self.selected),None)
             if selected_history:self.selected_plane=selected_history
             label_boxes=[]
             for plane in sorted(valid+historical,key=lambda p:p['hex']!=self.selected):
+                if not icons_visible and not labels_visible:continue
                 point=ui.radiogarden_project(plane,self.yaw,self.pitch,self.MAP,self.scale)
                 if not point or not ui.contains(self.MAP,*point[:2]): continue
                 x,y=point[:2];self.points.append((x,y,plane))
@@ -360,10 +379,11 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                 if view and not plane.get('historical') and plane['hex']!=self.selected:
                     color=tuple(int(c*max(.25,1-plane.get('seen_pos',0)/20)) for c in color)
                 angle=math.radians(plane.get('track') or 0)
-                if view and view.arrival(plane['hex'],now):
+                if icons_visible and view and view.arrival(plane['hex'],now):
                     ui.draw_logical_polyline([(x+20*math.cos(a*math.pi/18),y+20*math.sin(a*math.pi/18)) for a in range(37)],(*self.CYAN,180),2)
                 def vertex(dx,dy): return x+dx*math.cos(angle)-dy*math.sin(angle),y+dx*math.sin(angle)+dy*math.cos(angle)
-                if plane.get('kind')=='ship':
+                if not icons_visible:pass
+                elif plane.get('kind')=='ship':
                     ui.draw_logical_polyline([vertex(0,-12),vertex(6,-3),vertex(6,9),vertex(-6,9),vertex(-6,-3),vertex(0,-12)],(*color,255),2)
                 elif plane.get('kind') in ('station','balloon'):
                     ui.draw_logical_polyline([vertex(0,-8),vertex(7,0),vertex(0,8),vertex(-7,0),vertex(0,-8)],(*color,255),2)
@@ -375,7 +395,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                 if plane.get('historical'):label+=' · '+position_age(plane['seen_pos'])
                 label_box=(x+14,y-22,x+14+len(label)*7.3,y-2)
                 overlaps=any(label_box[0]<box[2] and label_box[2]>box[0] and label_box[1]<box[3] and label_box[3]>box[1] for box in label_boxes)
-                if (self.labels or plane['hex']==self.selected) and not overlaps and x<self.MAP[2]-154 and y>self.MAP[1]+22:
+                if (labels_visible or icons_visible and plane['hex']==self.selected) and not overlaps and x<self.MAP[2]-154 and y>self.MAP[1]+22:
                     self.text(cache,x+14,y-10,label,14,color);label_boxes.append(label_box)
         finally: ui.GL.glPopAttrib()
         if self.dashboard:self.draw_map_hud(cache,state,valid)

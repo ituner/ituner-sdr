@@ -9,6 +9,7 @@ import math
 import sqlite3
 import threading
 import time
+from bisect import bisect_right
 from station_profile import distance_m
 from adsb_footprint import build_footprint, footprint_from_peaks, SECTOR_DEGREES
 from pathlib import Path
@@ -16,6 +17,24 @@ from pathlib import Path
 RETENTION = 90 * 86400
 MAX_POINTS = 250000
 DISPLAY_POINTS = 20000
+
+
+def retained_trail_links(points, keep, breaks, base):
+    """Join thinned samples only when every original reception link was valid."""
+    last={};retained={};links=[];component=0;output=0
+    for index,p in enumerate(points):
+        previous=last.get(p[1]);connected=False
+        if previous:
+            a,group=previous;dt=p[0]-a[0]
+            connected=(0<dt<=15 and math.dist(a[2:5],p[2:5])<=500+400*dt
+                       and bisect_right(breaks,base+p[0])==bisect_right(breaks,base+a[0]))
+        if not connected:component+=1;group=component
+        last[p[1]]=(p,group)
+        if index not in keep:continue
+        old=retained.get(p[1])
+        if old and old[1]==group:links.append([old[0],output])
+        retained[p[1]]=(output,group);output+=1
+    return links
 
 
 def finite(v):
@@ -281,13 +300,14 @@ class ReceptionCoverage:
                     horizontal_range_max_km=max_range/1000, slant_range_max_km=max_slant/1000, altitude_sources=sources,
                     cells_observed=len(cells), rssi_min=min(levels) if levels else -40, rssi_max=max(levels) if levels else 0)
         # All cells and extrema use the complete history. Bound only rendered dots.
-        if len(points)>DISPLAY_POINTS:
-            keep=set(range(0,len(points),math.ceil(len(points)/DISPLAY_POINTS))) | {max_alt_index,max_range_index,len(points)-1}
-            points=[p for i,p in enumerate(points) if i in keep]
-        meta['displayed_positions']=len(points)
         breaks = [r[0] for r in self.db.execute('SELECT time FROM breaks WHERE time >= ? ORDER BY time', (base,))]
+        keep=(set(range(0,len(points),math.ceil(len(points)/DISPLAY_POINTS))) | {max_alt_index,max_range_index,len(points)-1}
+              if len(points)>DISPLAY_POINTS else set(range(len(points))))
+        segments=retained_trail_links(points,keep,breaks,base)
+        points=[p for i,p in enumerate(points) if i in keep]
+        meta.update(displayed_positions=len(points),trail_segments=len(segments))
         return dict(status='READY', meta=meta, base=base, aircraft=[dict(hex=a,label=names.get(a,a)) for a in addresses], points=points,
-                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,
+                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,segments=segments,
                     footprint=build_footprint(site,((r[2],r[3]) for r in rows)))
 
     def mark_break(self, stamp):

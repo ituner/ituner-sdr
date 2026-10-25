@@ -81,11 +81,11 @@ class AirspaceDashboard:
             self.ink(cache,x,176,band['name'],20,color)
             self.ink(cache,x+128,176,band['status'],18,color,width=284)
             self.ink(cache,x,202,band['details'],16,self.MUTED,width=412)
-        view=self.traffic_view;notice_key=(view.mode,view.fresh_at,self.trail_seconds,view.live_seconds);now=time.monotonic()
+        view=self.traffic_view;notice_key=(view.mode,view.fresh_at,self.trail_seconds,view.live_seconds,view.history_trails);now=time.monotonic()
         if notice_key!=getattr(self,'view_notice_key',None):
             self.view_notice_key=notice_key;self.view_notice_until=now+5
         if now<self.view_notice_until:
-            self.ink(cache,24,150,view.label+' · trails '+trail_label(self.trail_seconds)+((' · keep '+view.live_label) if view.mode=='live' else ''),15,self.CYAN)
+            self.ink(cache,24,150,view.label+' · trails '+('off' if view.mode=='history' and not view.history_trails else trail_label(self.trail_seconds))+((' · keep '+view.live_label) if view.mode=='live' else ''),15,self.CYAN)
             self.overlay_boxes.append((16,134,670,164))
         for box,title,value in (((548,634,608,690),'−',1/1.6),((620,634,788,690),'Fit view',None),((800,634,860,690),'+',1.6)):
             self.button(cache,box,title,('fit',None) if value is None else ('zoom',value))
@@ -115,9 +115,13 @@ class AirspaceDashboard:
         style={'both':'Satellite + borders','satellite':'Satellite','borders':'Borders'}[self.map_style]
         self.button(cache,(258,218,626,290),'Aircraft list',('traffic',None))
         self.button(cache,(642,218,1022,290),style,('style',None))
-        for index,(title,kind,active) in enumerate((('Labels','labels',self.labels),('Range rings','rings',self.rings),('RX footprint','rx_footprint',self.rx_footprint))):
+        labels=self.traffic_view.labels_visible(self.labels)
+        icons=self.traffic_view.icons_visible(self.aircraft_icons)
+        for index,(title,kind,active) in enumerate((('Labels '+('on' if labels else 'off'),'labels',labels),('Aircraft icons '+('on' if icons else 'off'),'aircraft_icons',icons),('Dots & trails '+('on' if self.traffic_view.history_trails else 'off'),'history_trails',self.traffic_view.history_trails))):
             x=258+index*260;self.button(cache,(x,308,x+244,372),title,(kind,None),active=active)
-        self.button(cache,(258,390,1022,462),'History window',('history_window',None),'All recorded · trails up to 24 h' if self.history_seconds>86400 else trail_label(self.history_seconds))
+        self.button(cache,(258,390,502,462),'Range rings',('rings',None),active=self.rings)
+        self.button(cache,(518,390,762,462),'RX footprint',('rx_footprint',None),active=self.rx_footprint)
+        self.button(cache,(778,390,1022,462),'History window',('history_window',None),'All recorded' if self.history_seconds>86400 else trail_label(self.history_seconds))
         self.button(cache,(258,480,626,544),'Start fresh',('start_fresh',None))
         self.button(cache,(642,480,1022,544),'Reset panel',('reset_card',None))
         self.text(cache,258,574,'Start fresh clears the view; saved history stays available.',18,self.MUTED,width=760)

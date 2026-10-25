@@ -29,6 +29,18 @@ def vector(az,el,r=1):
     return (r*math.sin(a)*math.cos(e),r*math.cos(a)*math.cos(e),r*math.sin(e))
 
 
+def sky_arc(a,b):
+    """Keep trail connectors on the sky shell rather than cutting through it."""
+    angle=math.acos(max(-1,min(1,sum(x*y for x,y in zip(a,b)))))
+    steps=max(1,math.ceil(math.degrees(angle)/3));result=[]
+    for i in range(steps+1):
+        t=i/steps;sine=math.sin(angle)
+        wa,wb=(math.sin((1-t)*angle)/sine,math.sin(t*angle)/sine) if abs(sine)>1e-7 else (1-t,t)
+        v=tuple(wa*x+wb*y for x,y in zip(a,b));length=math.sqrt(sum(x*x for x in v))
+        result.append(tuple(x/length for x in v) if length>1e-8 else (0,0,1))
+    return result
+
+
 def distance_step(radius, divisions):
     """Choose a readable metric interval rather than labelling every 5 km."""
     target=radius/max(1,divisions);unit=10**math.floor(math.log10(target))
@@ -43,6 +55,23 @@ def distance_ticks(radius, pixels):
     return ticks+[radius]
 
 
+def space_height_scale(radius, highest, expanded):
+    return max(1,min(12,math.floor(.7*radius/max(1000,highest)*2)/2)) if expanded else 1
+
+
+def space_frame(vertices, highest, yaw, tilt, width, height):
+    """Fit the ground disk, height axis and every aircraft with one uniform zoom."""
+    a,t=math.radians(yaw),math.radians(tilt);sa,ca,st,ct=math.sin(a),math.cos(a),math.sin(t),math.cos(t)
+    low=np.asarray((-1.1,-1.1*st),dtype=float);high=-low
+    if len(vertices):
+        v=np.asarray(vertices);q=np.stack((v[:,0]*ca-v[:,1]*sa,-(v[:,0]*sa+v[:,1]*ca)*st-v[:,2]*ct),axis=1)
+        low=np.minimum(low,q.min(axis=0));high=np.maximum(high,q.max(axis=0))
+    low[1]=min(low[1],-highest*ct)
+    scale=min(max(1,width-72)/(high[0]-low[0]),max(1,height-140)/max(.1,high[1]-low[1]))
+    center=np.asarray((width/2,height/2),dtype=np.float32)-(low+high)*scale/2
+    return scale,center
+
+
 @lru_cache(maxsize=1)
 def sky_grid():
     cells=[(az,el) for el in range(0,90,2) for az in range(0,360,4)]
@@ -50,15 +79,19 @@ def sky_grid():
     return cells,vertices
 
 
-def prepare(data,mode,signal=False,aircraft=None,new_points=()):
+def prepare(data,mode,signal=False,aircraft=None,new_points=(),expanded=True):
     """Build immutable world coordinates only when history or filters change."""
     meta=data.get('meta',{});names=data.get('aircraft',[]);height=meta.get('reference_height_m',0)
     radius=max(5000,math.ceil(max(meta.get('horizontal_range_max_km',0),(meta.get('max_altitude_ft') or 0)*.0003048)/5)*5000)
+    selected=[p for p in data.get('points',[]) if not aircraft or names[p[1]]['hex']==aircraft]
+    if aircraft:radius=max(5000,math.ceil(max([0]+[math.hypot(p[2],p[3])/1000 for p in selected])/5)*5000)
+    highest=max([1000]+[p[4]-height for p in selected]);axis_height=math.ceil(highest/1000)*1000
+    height_scale=space_height_scale(radius,axis_height,expanded) if mode=='space' else 1
     points=[];cells={};lines=[];line_colours=[];labels=[];highlights=[]
     for p in data.get('points',[]):
         if aircraft and names[p[1]]['hex']!=aircraft:continue
         up=p[4]-height;distance=math.hypot(p[2],p[3]);az=math.degrees(math.atan2(p[2],p[3]))%360;el=math.degrees(math.atan2(up,distance))
-        world=(p[2]/radius,p[3]/radius,up/radius) if mode=='space' else vector(az,el)
+        world=(p[2]/radius,p[3]/radius,up/radius*height_scale) if mode=='space' else vector(az,el)
         label=f"{p[8] or names[p[1]]['label']} · {p[5]:,.0f} ft {'GNSS' if p[7] else 'BARO ≈'} · {distance/1000:.1f} km · {az:.0f}° az / {el:.1f}° el"
         points.append((p,world,el,label,names[p[1]]['hex']))
         if (mode=='space' or el>=0) and point_key(data,p) in new_points:highlights.append(world)
@@ -85,15 +118,19 @@ def prepare(data,mode,signal=False,aircraft=None,new_points=()):
         for el in (30,60):labels.append((vector(90,el),f'{el}°',18,(145,170,193)))
     if mode!='cells':
         last={};breaks=data.get('breaks',[])
+        indexes={id(p):i for i,p in enumerate(data.get('points',[]))}
+        confirmed={tuple(pair) for pair in data.get('segments',[])} if 'segments' in data else None
         for p,world,el,_,_ in points:
             previous=last.get(p[1]);last[p[1]]=(p,world)
             if previous:
                 a,av=previous;dt=p[0]-a[0]
-                if 0<dt<=15 and math.dist(a[2:5],p[2:5])<=500+400*dt and not any(data['base']+a[0]<t<=data['base']+p[0] for t in breaks):
-                    if mode=='space' or el>=0:path([av,world],(37/255,88/255,151/255,1))
+                joined=((indexes[id(a)],indexes[id(p)]) in confirmed if confirmed is not None else
+                        0<dt<=15 and math.dist(a[2:5],p[2:5])<=500+400*dt and not any(data['base']+a[0]<t<=data['base']+p[0] for t in breaks))
+                if joined and (mode=='space' or el>=0 and av[2]>=0):
+                    path([av,world] if mode=='space' else sky_arc(av,world),(.24,.53,.9,1))
     for name,az in (('N',0),('E',90),('S',180),('W',270)):labels.append((vector(az,0,1.10),name,23,(220,236,255)))
     labels.append(((0,0,-.08),'RECEIVER',16,(145,170,193)))
-    result=dict(mode=mode,lines=np.asarray(lines,dtype=np.float32).reshape(-1,2,3),line_colours=np.asarray(line_colours,dtype=np.float32),labels=labels,meta=meta,radius=radius,highlights=np.asarray(highlights[-256:],dtype=np.float32).reshape(-1,3),highest=max([1000]+[p[4]-height for p,_,_,_,_ in points])/radius if mode=='space' else 1.06)
+    result=dict(mode=mode,lines=np.asarray(lines,dtype=np.float32).reshape(-1,2,3),line_colours=np.asarray(line_colours,dtype=np.float32),labels=labels,meta=meta,radius=radius,height_scale=height_scale,axis_height=axis_height,highlights=np.asarray(highlights[-256:],dtype=np.float32).reshape(-1,3),highest=highest/radius*height_scale if mode=='space' else 1.06)
     if mode=='cells':
         keys,verts=sky_grid();colors=[];hits=[]
         for az,el in keys:
@@ -111,6 +148,8 @@ def project(scene,yaw,tilt,width,height):
     a,t=math.radians(yaw),math.radians(tilt);sa,ca,st,ct=math.sin(a),math.cos(a),math.sin(t),math.cos(t)
     matrix=np.asarray(((ca,-sa,0),(-sa*st,-ca*st,-ct),(-sa*ct,-ca*ct,st)),dtype=np.float32)
     scale=min((width-72)/2,(height-94)/(1+st));center=np.asarray((width/2,height/2+scale*(1-st)/2+16),dtype=np.float32)
+    if scene['mode']=='space':
+        scale,center=space_frame(scene.get('dots',[]),scene['axis_height']/scene['radius']*scene['height_scale'],yaw,tilt,width,height)
     def rotate(vertices):return vertices@matrix.T
     def screen(vertices):return rotate(vertices)[...,:2]*scale+center
     batches=[];hits=[]
@@ -146,11 +185,18 @@ def project(scene,yaw,tilt,width,height):
         labels.append((x+scale/2,y+43,'Ground range · km',16,(145,170,193)))
         vertices=np.asarray(ruler,dtype=np.float32).reshape(-1,2)
         batches.append(('lines',vertices,np.tile((.57,.67,.76,.85),(len(vertices),1)).astype(np.float32)))
+        axis=scene['axis_height'];axis_world=axis/scene['radius']*scene['height_scale']
+        top=screen(np.asarray((0,0,axis_world),dtype=np.float32));axis_pixels=abs(float(top[1])-y)
+        if axis_pixels>90:
+            for d in distance_ticks(axis,axis_pixels):
+                px,py=screen(np.asarray((0,0,d/scene['radius']*scene['height_scale']),dtype=np.float32))
+                labels.append((float(px)+38,float(py),f'{d/1000:g} km',16,(145,170,193)))
     meta=scene['meta'];alt=meta.get('max_altitude_ft')
     if alt is not None:
         world=np.asarray((0,0,scene['highest']),dtype=np.float32);x,y=screen(world)
         if scene['mode']=='space':
-            batches.append(('lines',screen(np.asarray(((0,0,0),world),dtype=np.float32)),np.asarray(((.35,.48,.62,1),)*2,dtype=np.float32)))
+            axis_top=(0,0,scene['axis_height']/scene['radius']*scene['height_scale'])
+            batches.append(('lines',screen(np.asarray(((0,0,0),axis_top),dtype=np.float32)),np.asarray(((.35,.48,.62,1),)*2,dtype=np.float32)))
         labels.extend(((width/2,max(28,float(y)-38),f'MAX ALT {alt:,.0f} ft / {alt*.0003048:.2f} km',23,(176,213,255)),(width/2,max(54,float(y)-12),f"{meta.get('max_altitude_source','')} · {meta.get('max_altitude_aircraft','')} · not necessarily overhead",15,(145,170,193))))
     pulse=np.empty((0,2),dtype=np.float32)
     if len(scene['highlights']):

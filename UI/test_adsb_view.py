@@ -10,6 +10,36 @@ def plane(key='a', heard=100, position=100):
 
 
 class ViewTests(unittest.TestCase):
+    def test_history_icons_can_be_hidden_without_changing_names_trails_or_records(self):
+        view=TrafficView(100);view.mode='history';tracks={'old':[dict(time=90,lat=44,lon=26)]}
+        self.assertTrue(view.icons_visible(False))
+        view.history_icons=False;self.assertFalse(view.icons_visible(True))
+        self.assertFalse(view.history_labels);self.assertFalse(view.history_trails)
+        self.assertEqual(view.aircraft([],tracks,110,True)[0]['hex'],'old')
+        view.mode='live';self.assertTrue(view.icons_visible(True))
+        view.mode='history';self.assertFalse(view.icons_visible(True))
+
+    def test_history_labels_default_off_and_have_a_separate_live_preference(self):
+        view=TrafficView(100)
+        self.assertTrue(view.labels_visible(True));self.assertFalse(view.labels_visible(False))
+        view.mode='history';self.assertFalse(view.labels_visible(True))
+        view.history_labels=True;self.assertTrue(view.labels_visible(False))
+        self.assertFalse(view.history_trails)
+        view.mode='live';self.assertFalse(view.labels_visible(False))
+        view.mode='history';self.assertTrue(view.labels_visible(False))
+
+    def test_history_trails_default_off_without_hiding_aircraft_or_affecting_live(self):
+        view=TrafficView(100);tracks={'old':[dict(time=90,lat=44,lon=26)]}
+        view.mode='history'
+        self.assertFalse(view.trail_visible('old',[],110,tracks['old']))
+        self.assertEqual([p['hex'] for p in view.aircraft([],tracks,110,True)],['old'])
+        view.history_trails=True
+        self.assertTrue(view.trail_visible('old',[],110,tracks['old']))
+        view.mode='live';p=plane(heard=110,position=110)
+        self.assertTrue(view.trail_visible('a',[p],110))
+        view.mode='history';self.assertTrue(view.trail_visible('old',[],110))
+        self.assertEqual(tracks['old'][0]['time'],90)
+
     def test_live_button_confirms_then_cycles_and_history_preserves_duration(self):
         view=TrafficView(100);self.assertFalse(view.press_live());self.assertEqual(view.live_seconds,15)
         for seconds in (30,60,120,300,15):

@@ -1,4 +1,4 @@
-import {TrafficView,aged,positioned,freshness} from './adsb_view.js';
+import {TrafficView,CoverageWindow,COVERAGE_WINDOWS,aged,positioned,freshness} from './adsb_view.js';
 import {bandReadings} from './adsb_bands.js';
 import {mountCoverage} from './adsb_coverage.js';
 import {ADSBGlobe,startupNoticeVisible,receptionSummary} from './adsb_globe.js';
@@ -63,8 +63,11 @@ function renderView(){
   $('traffic-view-label').textContent=view.label.toUpperCase()+' TRAFFIC';
   const since=new Date((view.openedAt-clockOffset)*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   const historyLabel=[...$('trails').options].find(o=>Number(o.value)===historySeconds)?.textContent||'All recorded';
-  const windowLabel=view.mode==='history'?'HISTORY · '+historyLabel+(historySeconds>86400?' · trails up to 24 h':''):'LIVE · LAST 5 MIN'+(view.freshAt!==null?' · SINCE '+new Date((view.freshAt-clockOffset)*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'');
-  const noticeKey=[view.mode,view.freshAt,view.trailSeconds,historySeconds,view.liveSeconds].join(':');
+  const windowLabel=view.mode==='history'?'HISTORY · '+historyLabel+(!view.historyTrails?' · trails off':historySeconds>86400?' · trails up to 24 h':''):'LIVE · LAST 5 MIN'+(view.freshAt!==null?' · SINCE '+new Date((view.freshAt-clockOffset)*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'');
+  const noticeKey=[view.mode,view.freshAt,view.trailSeconds,historySeconds,view.liveSeconds,view.historyTrails].join(':');
+  $('history-trails').textContent='History dots & trails '+(view.historyTrails?'on':'off');$('history-trails').setAttribute('aria-pressed',String(view.historyTrails));
+  const labels=view.labelsVisible(globe?.labels??true);$('labels').textContent='Labels '+(labels?'on':'off');$('labels').setAttribute('aria-pressed',String(labels));
+  const icons=view.iconsVisible(globe?.aircraftIcons??true);$('aircraft-icons').textContent='Aircraft icons '+(icons?'on':'off');$('aircraft-icons').setAttribute('aria-pressed',String(icons));
   $('window-summary').textContent=windowLabel+(view.mode==='live'?' · keep positions '+view.liveLabel:'');
   for(const button of document.querySelectorAll('[data-traffic-view="live"]')){const dome=$('coverage-panel').contains(button);button.textContent=dome?'Live':'Live · '+view.liveLabel;button.title=dome?'Accumulate new reception without expiring earlier dome observations.':'Tap again to cycle aircraft visibility: 15 s, 30 s, 1 min, 2 min, 5 min. Older positions show their age.';}
   if(noticeKey!==windowNoticeKey){windowNoticeKey=noticeKey;$('window-summary').hidden=false;clearTimeout(windowNoticeTimer);windowNoticeTimer=setTimeout(()=>{$('window-summary').hidden=true;},5000);}
@@ -123,7 +126,9 @@ $('settings-menu').addEventListener('toggle',()=>{if($('settings-menu').open)clo
 document.addEventListener('pointerdown',e=>{if(!e.target.closest('#view-options,#settings-menu')){closeViewOptions();$('settings-menu').open=false;}});
 $('cancel-view-options').onclick=closeViewOptions;
 $('apply-history').onclick=()=>{historySeconds=Number($('trails').value);closeViewOptions();if(view.mode==='history')setView('history');else renderView();};
-$('labels').onclick=()=>{if(!globe)return;globe.labels=!globe.labels;$('labels').textContent=globe.labels?'LABELS ON':'LABELS OFF';$('labels').setAttribute('aria-pressed',String(globe.labels));globe.render();};
+$('labels').onclick=()=>{if(!globe)return;if(view.mode==='history')view.historyLabels=!view.historyLabels;else globe.labels=!globe.labels;globe.render();renderView();};
+$('aircraft-icons').onclick=()=>{if(!globe)return;if(view.mode==='history')view.historyIcons=!view.historyIcons;else globe.aircraftIcons=!globe.aircraftIcons;globe.render();renderView();};
+$('history-trails').onclick=()=>{view.historyTrails=!view.historyTrails;globe?.render();renderView();};
 $('rings').onclick=()=>{if(!globe)return;if(!state?.receiver_position){showDrawer('receiver',true);error('Set the antenna position to enable range rings.');return;}globe.rings=!globe.rings;$('rings').setAttribute('aria-pressed',String(globe.rings));globe.render();};
 const aircraftPanel=$('aircraft-overlay'),aircraftHandle=$('drag-aircraft');let panelLocation=null,panelDrag=null;
 try{const saved=JSON.parse(localStorage.getItem('adsb-aircraft-panel')||'null');if(saved&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))panelLocation=saved;}catch{}
@@ -162,7 +167,13 @@ async function refreshFootprint(){
 function toggleFootprint(){if(!globe)return;globe.footprintEnabled=!globe.footprintEnabled;globe.save();footprintLegend();globe.render();if(globe.footprintEnabled)refreshFootprint();}
 for(const button of document.querySelectorAll('[data-layer-rx]'))button.onclick=toggleFootprint;
 footprintLegend();refreshFootprint();setInterval(refreshFootprint,10000);
-const reloadCoverage=mountCoverage($('coverage-panel'),()=>view.coverageSince(viewNow()));
+const domeWindow=new CoverageWindow(),domeTimespan=$('dome-timespan');
+domeTimespan.replaceChildren(...COVERAGE_WINDOWS.map(([value,label])=>new Option(label,value)));
+domeTimespan.value=String(domeWindow.seconds);
+const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()));
+function renderDomeWindow(){document.querySelector('[data-dome-window-label]').textContent=domeWindow.seconds?'LAST '+domeWindow.label.toUpperCase()+' · LIVE UPDATES':'ALL RECORDED · LIVE UPDATES';}
+domeTimespan.onchange=()=>{domeWindow.select(Number(domeTimespan.value));renderDomeWindow();reloadCoverage();};
+renderDomeWindow();
 function coverageVisible(show){document.body.classList.toggle('coverage-open',show);$('coverage-panel').hidden=!show;$('coverage').setAttribute('aria-expanded',String(show));if(show){history.replaceState(null,'',location.pathname+'#coverage');showDrawer('logs',false,false);showDrawer('receiver',false,false);closeViewOptions();$('settings-menu').open=false;reloadCoverage();}if(location.hash==='#coverage'&&!show)history.replaceState(null,'',location.pathname);}
 $('coverage').onclick=()=>coverageVisible($('coverage-panel').hidden);$('close-coverage').onclick=()=>coverageVisible(false);
 $('traffic-toggle').addEventListener('click',()=>coverageVisible(false));

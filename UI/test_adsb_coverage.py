@@ -8,8 +8,9 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 from urllib.request import urlopen, Request
-from adsb_coverage import ReceptionCoverage, ecef, enu, observation
+from adsb_coverage import ReceptionCoverage, ecef, enu, observation, retained_trail_links
 from adsb_coverage_touch import paint, CoverageTouch
+from adsb_view import CoverageWindow, COVERAGE_WINDOWS
 import adsb_coverage_gl as dome_gl
 from adsb_monitor import ADSBManager
 from adsb_workspace import ADSBWorkspace
@@ -23,6 +24,36 @@ def row(stamp=None,**fields):
 
 
 class CoverageTests(unittest.TestCase):
+    def test_sky_trails_stay_on_the_dome_shell(self):
+        arc=dome_gl.sky_arc(dome_gl.vector(0,10),dome_gl.vector(180,10))
+        self.assertGreater(len(arc),2)
+        for p in arc:self.assertAlmostEqual(math.sqrt(sum(v*v for v in p)),1)
+        self.assertGreater(max(p[2] for p in arc),.9)
+
+    def test_thinned_trails_preserve_continuity_without_joining_real_gaps(self):
+        points=[[t,0,t*100,0,10000,35000,-20,1,'A'] for t in (0,10,20,30,80,90)]
+        self.assertEqual(retained_trail_links(points,{0,3,5},[],1000),[[0,1]])
+        self.assertEqual(retained_trail_links(points,{0,3,5},[1015],1000),[])
+        points[1][2]=1000000
+        self.assertEqual(retained_trail_links(points,{0,3},[],1000),[])
+
+    def test_space_view_fits_all_aircraft_and_labels_height_expansion(self):
+        points=[[0,0,-80000,0,10000,35000,-20,1,'A'],[10,0,80000,20000,14000,45000,-20,1,'A']]
+        data=dict(base=1000,meta=dict(horizontal_range_max_km=100,max_altitude_ft=45000),aircraft=[dict(hex='a',label='A')],points=points,segments=[[0,1]])
+        expanded=dome_gl.prepare(data,'space');true=dome_gl.prepare(data,'space',expanded=False)
+        self.assertGreater(expanded['height_scale'],1)
+        self.assertEqual(true['height_scale'],1)
+        np.testing.assert_allclose(expanded['dots'][:,:2],true['dots'][:,:2])
+        np.testing.assert_allclose(expanded['dots'][:,2],true['dots'][:,2]*expanded['height_scale'])
+        for size in ((340,360),(920,558),(1232,460)):
+            for yaw in (0,95,210):
+                for tilt in (8,25,55,90):
+                    frame=dome_gl.project(expanded,yaw,tilt,*size)
+                    for x,y,*_ in frame['hits']:
+                        self.assertTrue(30<=x<=size[0]-30,(x,size))
+                        self.assertTrue(60<=y<=size[1]-60,(y,size))
+        self.assertEqual(points[1][5],45000)
+
     def test_other_cells_do_not_dim_existing_reception(self):
         data=dict(meta=dict(rssi_min=-40,rssi_max=-20),points=[],aircraft=[],cells=[[0,0,1,-30,1,1000],[4,0,1,-30,1,1000]])
         busier=dict(data,meta=dict(rssi_min=-50,rssi_max=0),cells=[[0,0,1,-30,1,1000],[4,0,1000,-10,3,2000]])
@@ -210,6 +241,28 @@ class CoverageTests(unittest.TestCase):
                 self.assertTrue(any('MAX ALT 10,000 ft' in item[2] for item in labels))
                 self.assertTrue(hits)
             c.close()
+
+    def test_dome_timespan_defaults_to_hour_rolls_and_supports_all_recorded(self):
+        window=CoverageWindow();self.assertEqual(window.seconds,3600)
+        self.assertEqual(window.since(10000),6360)
+        self.assertEqual(window.since(10019),6360)
+        self.assertEqual(window.since(10020),6420)
+        for seconds,label in COVERAGE_WINDOWS:
+            window.select(seconds);self.assertEqual(window.label,label)
+            self.assertEqual(window.since(10000000),9999960-seconds if seconds else 0)
+        with self.assertRaises(ValueError):window.select(1)
+
+    def test_native_dome_window_is_independent_and_back_cancels_picker(self):
+        w=ADSBWorkspace(Mock(),Mock());w.coverage_open=True
+        dome=w.coverage_view
+        w.set_traffic_view('history');w.traffic_view.start_fresh(100)
+        self.assertEqual(dome.window.seconds,3600)
+        dome.action('coverage_window',None);self.assertTrue(dome.window_open)
+        w.go_back();self.assertFalse(dome.window_open);self.assertTrue(w.coverage_open)
+        dome.action('coverage_window',None);dome.action('coverage_span',300)
+        self.assertFalse(dome.window_open);self.assertEqual(dome.window.seconds,300)
+        self.assertTrue(dome.pending)
+        dome.action('coverage_span',0);self.assertEqual(dome.window.since(10000),0)
 
     def test_native_coverage_navigation_and_drag_stay_in_coverage(self):
         ui=Mock();ui.contains.side_effect=lambda box,x,y:box[0]<=x<=box[2] and box[1]<=y<=box[3]

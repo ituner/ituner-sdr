@@ -306,6 +306,31 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(w.trail_seconds,300)
         manager.control.assert_not_called()
 
+    def test_history_trails_have_an_explicit_native_view_toggle(self):
+        w,ui,manager,_=self.dashboard();w.show();w.set_traffic_view('history');w.navigate('options')
+        self.assertFalse(w.traffic_view.history_trails);self.assertFalse(w.traffic_view.labels_visible(w.labels))
+        w.draw(Mock());self.press(w,('labels',None))
+        self.assertTrue(w.traffic_view.history_labels);self.assertFalse(w.traffic_view.history_trails)
+        w.draw(Mock());self.press(w,('history_trails',None))
+        self.assertTrue(w.traffic_view.history_trails)
+        w.draw(Mock());self.press(w,('history_trails',None))
+        self.assertFalse(w.traffic_view.history_trails);self.assertTrue(w.traffic_view.history_labels)
+        w.draw(Mock());self.press(w,('aircraft_icons',None))
+        self.assertFalse(w.traffic_view.history_icons);self.assertTrue(w.traffic_view.history_labels)
+        w.set_traffic_view('live');self.assertTrue(w.labels)
+        self.assertTrue(w.aircraft_icons)
+        manager.control.assert_not_called()
+
+    def test_hidden_history_symbols_have_no_native_map_click_targets(self):
+        w,ui,manager,state=self.dashboard();w.dashboard=True;w.centered=True;w.rx_footprint=False;w.map_style='satellite'
+        w.draw_map_hud=Mock()
+        w.set_traffic_view('history');w.traffic_view.history_icons=False
+        manager.track_snapshot.return_value={'old':[dict(time=time.time()-60,lat=44,lon=26)]}
+        w.draw_map(Mock(),state,[])
+        self.assertEqual(w.points,[])
+        ui.draw_logical_polyline.assert_not_called();ui.draw_logical_points.assert_not_called()
+        self.assertIn('old',w.tracks)
+
     def test_dashboard_saved_target_can_be_located_but_cannot_start_follow(self):
         workspace,ui,manager,state=self.dashboard()
         manager.track_snapshot.return_value={'old':[dict(time=time.time()-60,lat=44.5,lon=26.2,alt=4000)]}
@@ -466,6 +491,7 @@ class WorkspaceTests(unittest.TestCase):
         workspace=ADSBWorkspace(ui,manager);workspace.scale=12000
         workspace.draw_map(Mock(),dict(enabled=True,started_at=now-100,aircraft=[]),[])
         ui.draw_logical_polyline.assert_called_once_with([(-100,300),(400,300)],(*workspace.CYAN,150),2)
+        ui.draw_logical_points.assert_called_once_with([(400,300)],(*workspace.CYAN,220),4)
 
     def test_manual_zoom_passes_imagery_detail_limit_and_stays_selected(self):
         from adsb_workspace import ADSBWorkspace

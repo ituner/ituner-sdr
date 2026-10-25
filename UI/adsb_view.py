@@ -3,6 +3,24 @@ import math
 from adsb_traffic import TRAIL_RETENTION, position_age
 
 LIVE_WINDOWS=(15,30,60,120,300)
+COVERAGE_WINDOWS=((300,'5 min'),(900,'15 min'),(1800,'30 min'),(3600,'1 hour'),
+                  (10800,'3 hours'),(21600,'6 hours'),(43200,'12 hours'),
+                  (86400,'24 hours'),(604800,'7 days'),(2592000,'30 days'),(0,'All recorded'))
+
+
+class CoverageWindow:
+    """Independent rolling dome window, with minute buckets for snapshot reuse."""
+    def __init__(self):self.seconds=3600
+
+    def select(self, seconds):
+        if seconds not in dict(COVERAGE_WINDOWS):raise ValueError('Invalid dome timespan')
+        self.seconds=seconds
+
+    @property
+    def label(self):return dict(COVERAGE_WINDOWS)[self.seconds]
+
+    def since(self, now):
+        return max(0,math.floor(now/60)*60-self.seconds) if self.seconds else 0
 
 
 def number(value):
@@ -38,6 +56,9 @@ def freshness(p):
 class TrafficView:
     def __init__(self, now):
         self.mode, self.trail_seconds, self.backdrop = 'live', 300, False
+        self.history_trails = False
+        self.history_labels = False
+        self.history_icons = True
         self.live_seconds=15;self.live_armed=False
         self.fresh_at=None
         self.reset(now)
@@ -156,7 +177,14 @@ class TrafficView:
         return bool(v and v['new'] and 0 <= now-v['arrived'] < 12)
 
     def trail_visible(self, key, planes, now, trace=None):
+        if self.mode == 'history':return self.history_trails
         return self.mode != 'live' or key in self.live_positions([p for p in planes if p.get('hex')==key],{key:trace} if trace else {},now,key)
+
+    def labels_visible(self, live_labels=True):
+        return self.history_labels if self.mode == 'history' else live_labels
+
+    def icons_visible(self, live_icons=True):
+        return self.history_icons if self.mode == 'history' else live_icons
 
     @property
     def label(self):
