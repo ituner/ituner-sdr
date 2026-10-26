@@ -175,7 +175,7 @@ class AirspaceDashboard:
                     (x+16,y+20,'SELECT AN AIRCRAFT',style.title_size,'lm'),
                     (x+width-16,y+20,'DRAG',style.subtitle_size,'rm'),
                     (x+16,y+44,'Tap a plane on the map to inspect it.',style.subtitle_size,'lm')):
-                self.ui.draw_text(cache,tx,ty,label,(255,255,255),size,True,False,anchor,family=style.font_family)
+                self.ui.draw_text(cache,tx,ty,label,style.resolve().text,size,True,False,anchor,family=style.font_family)
             return
         self.ink(cache,x+16,y+22,(plane.get('flight') or plane['hex']).strip(),23,self.GOLD,width=250)
         self.ink(cache,x+width-16,y+22,'DRAG',11,self.MUTED,anchor='rm')
