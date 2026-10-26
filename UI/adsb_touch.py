@@ -125,7 +125,7 @@ class AirspaceDashboard:
                     ('Logs & diagnostics',('logs',None),'Flights and receiver'),
                     ('Receiver comparison',('comparison',None),'Live graph / results'),
                     ('Stop 1090 ES' if primary_enabled else 'Start 1090 ES',('stop' if primary_enabled else 'start',None),'1090 ES receiver'))]
-        self.draw_options_rail(cache,'SETTINGS',options)
+        self.draw_options_rail(cache,'ADS-B SETTINGS',options)
 
     def draw_view_options(self,cache):
         style={'both':'Satellite + borders','satellite':'Satellite','borders':'Borders'}[self.map_style]
@@ -141,7 +141,7 @@ class AirspaceDashboard:
                  ('History window',('history_window',None),'All recorded' if self.history_seconds>86400 else trail_label(self.history_seconds),False,True),
                  ('Start fresh',('start_fresh',None),'Saved history stays available',False,True),
                  ('Reset panel',('reset_card',None),'',False,True)]
-        self.draw_options_rail(cache,'VIEW',options,self.options_page)
+        self.draw_options_rail(cache,'ADS-B VIEW',options,self.options_page)
 
     def sorted_aircraft(self, state):
         return sorted(self.display_aircraft(state),key=(lambda p:-(p.get('alt_baro') if isinstance(p.get('alt_baro'),(int,float)) else -1e6)) if self.traffic_sort=='altitude' else (lambda p:(p.get('flight') or p['hex']).strip().lower()) if self.traffic_sort=='callsign' else (lambda p:p.get('seen',100)))
