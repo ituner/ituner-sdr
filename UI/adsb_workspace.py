@@ -37,6 +37,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.dongles = DongleWorkspace(ui,manager) if hasattr(manager,"scanner") else None
         self.radio_info=StationWorkspace(ui,manager.station) if getattr(manager,'station',None) is not None else None
         self.view_options=False
+        self.options_page=0
         self.settings_open=False
         self.history_window_open=False
         self.navigation=[]
@@ -209,9 +210,10 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                     previous=self.traffic_view.mode;self.traffic_view.press_live()
                     if previous!='live':self.set_traffic_view('live')
                 else:self.set_traffic_view(value)
+            elif kind=='options_page':self.options_page=max(0,min(1,self.options_page+value))
             elif kind=='view_options':
                 if self.current_screen() in ('options','history_window'):self.go_back()
-                else:self.navigate('options')
+                else:self.options_page=0;self.navigate('options')
             elif kind=='settings':
                 if self.settings_open:self.go_back()
                 else:self.navigate('settings')
