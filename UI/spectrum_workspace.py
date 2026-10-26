@@ -8,6 +8,9 @@ import threading
 import time
 import theme_system
 from decoder_style import DecoderStyle, footer_content_box
+from dongle_workspace import DongleWorkspace
+from usb_radio_controls import receiver_rows
+from usb_radios import choices as radio_choices
 import textwrap
 
 import numpy as np
@@ -64,6 +67,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
     TABS=(('survey','Scan'),('signals','Signals'),('tools','Tools'))
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
+        self.dongles=DongleWorkspace(ui,hub)
         self.survey=hub.spectrum;self.state={};self.view=None;self.view_key=None;self.frame_view=None;self.frame_kind=None
         self.screen='survey';self.display='spectrum';self.activity_mode='activity';self.report_mode='reports';self.watch_mode='frequencies';self.exit_target='digi'
         self.overlay=None;self.draft={};self.number='';self.edit_field='low';self.overlay_page=0;self.label_value='';self.label_target='watch_label'
@@ -301,6 +305,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
         self.view=(low,low+span);self.inspection=None;self.history_page=0;self.wake.set()
 
     def tap(self,x,y):
+        if self.dongles.open:return self.dongles.tap(x,y)
         for box,(action,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             try:
@@ -350,6 +355,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                     _,low,high,width=PRESETS[value];self.draft.update(low=low,high=high,bin=width);self.overlay='settings'
                 elif action=='toggle':self.draft[value]=not self.draft.get(value,False)
                 elif action=='bin':self.draft['bin']={100000:25000,25000:5000,5000:100000}.get(self.draft['bin'],100000)
+                elif action=='usb_manage':self.dongles.show()
                 elif action=='assign':self.draft['selection']=value;self.overlay='settings'
                 elif action=='baseline':self.request('baseline',id=value);self.overlay=None
                 elif action=='save':self.request('save',label='Antenna baseline '+time.strftime('%d %b %H:%M UTC',time.gmtime()))
@@ -426,7 +432,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                 self.text(cache,40,236,'Saved measurements and history will remain available.',24,self.MUTED)
                 self.button(cache,(40,310,760,404),'Stop and edit settings',('stop',None),active=True);return
             self.text(cache,24,144,'Choose what to survey.',30,self.CYAN)
-            for i,(label,action,sub) in enumerate((('Range preset',('overlay','presets'),'Full / FM / Airband / VHF / UHF'),('USB receiver',('overlay','usb'),self.draft.get('selection','auto')),
+            for i,(label,action,sub) in enumerate((('Range preset',('overlay','presets'),'Full / FM / Airband / VHF / UHF'),('USB radio',('overlay','usb'),next((r['name'] for r in radio_choices(self.manager.devices,selection=self.draft.get('selection','auto')) if r['selected']),'Auto')),
                  ('Start frequency',('number','low'),f"{self.draft['low']/1e6:g} MHz"),('End frequency',('number','high'),f"{self.draft['high']/1e6:g} MHz"))):
                 x=24+i%2*624;y=180+i//2*108;self.button(cache,(x,y,x+608,y+92),label,action,sub)
             self.button(cache,(24,408,616,496),'Repeat: '+('On' if self.draft.get('repeat') else 'Off'),('toggle','repeat'),active=self.draft.get('repeat',False))
@@ -435,7 +441,13 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
             self.button(cache,(24,608,616,688),'Apply settings',('apply',False));self.button(cache,(640,608,1256,688),'Apply and start survey',('apply',True),active=True);return
         choices=[]
         if self.overlay=='presets':choices=[(p[0],('preset',i)) for i,p in enumerate(PRESETS)]
-        elif self.overlay=='usb':choices=[('Auto · prefer a free receiver',('assign','auto'))]+[(d['label'],('assign',d['id'])) for d in self.manager.devices if d.get('persistent')]
+        elif self.overlay=='usb':
+            self.text(cache,24,142,'Choose a USB radio',30,self.CYAN)
+            self.overlay_page,last=receiver_rows(self,cache,self.manager.devices,self.manager.broker.snapshot(),'spectrum',self.draft.get('selection','auto'),self.overlay_page,top=186)
+            self.button(cache,(24,648,420,712),'USB-Radios',('usb_manage',None))
+            if last:
+                self.button(cache,(436,648,824,712),'Previous',('page',-1));self.button(cache,(840,648,1256,712),'Next',('page',1))
+            return
         elif self.overlay=='baselines':choices=[('No baseline',('baseline',''))]+[(d['label'],('baseline',d['id'])) for d in self.state.get('saved',[])]
         self.text(cache,24,142,{'presets':'Survey ranges','usb':'Choose a receiver','baselines':'Choose antenna reference A'}.get(self.overlay,self.overlay),30,self.CYAN)
         last=max(0,math.ceil(len(choices)/8)-1);self.overlay_page=min(self.overlay_page,last)
@@ -444,6 +456,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
         self.button(cache,(24,648,616,712),'Previous',('page',-1));self.button(cache,(640,648,1256,712),'Next',('page',1))
 
     def draw(self,cache):
+        if self.dongles.open:return self.dongles.draw(cache)
         ui=self.ui;self.actions=[]
         with self.lock:state=self.state;frame=self.frame;identity=self.frame_id;frame_view=self.frame_view
         data=state.get('data',{});config=data.get('settings',state.get('settings',self.survey.settings));purpose=state.get('settings',{}).get('purpose','survey');phase=state.get('run',{}).get('phase','CONNECTING')

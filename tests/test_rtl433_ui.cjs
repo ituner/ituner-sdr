@@ -143,3 +143,17 @@ test('events retain receiver and serial provenance without cross-receiver dedupl
   await adapter.poll();await adapter.poll();assert.equal(output.length,2);assert.deepEqual(new Set(output.map(r=>r.rx_serial)),new Set(['789','222']));
   assert.equal(adapter.getReceiver().scan.bands.reduce((n,b)=>n+b.packets,0),2);
 });
+
+test('every listening band tunes immediately without starting or changing the assigned USB',async t=>{
+  const {adapter,s,calls}=await hub(t);await adapter.poll();
+  const selection=s.sessions.ism.settings.selection;
+  const bands=adapter.getReceiver().bands;assert.ok(bands.length>6);
+  assert.match(bands.find(b=>b.frequency===433920000).name,/US.*EU/);
+  for(const band of bands){
+    await adapter.setFrequency(band.frequency);
+    assert.equal(s.sessions.ism.settings.frequency,band.frequency);
+    assert.equal(s.sessions.ism.settings.selection,selection);
+    assert.equal(s.sessions.ism.enabled,false);
+  }
+  assert.ok(calls.every(c=>c.action==='configure'));
+});

@@ -4,6 +4,7 @@ Uses a separate broker lease and unique Soapy serial. Auto never displaces the
 1090 receiver or another decoder. The ADS-B worker owns both child processes.
 """
 import json
+from rtl_registry import same_usb_attachment
 import math
 import os
 from pathlib import Path
@@ -170,7 +171,7 @@ class UATReceiver:
         now = time.monotonic()
         if self.processes and (not self.enabled or self.assigned['id'] in excluded or
                 (self.selection != 'auto' and self.assigned['id'] != self.selection) or
-                not any(d['id'] == self.assigned['id'] for d in devices)):
+                not any(same_usb_attachment(d,self.assigned) for d in devices)):
             self.stop()
         if self.processes and any(p.poll() is not None for p in self.processes):
             self.detail = (self.root/'uat.txt').read_text(errors='replace')[-1800:]

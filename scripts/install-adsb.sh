@@ -48,7 +48,7 @@ readsb 8afcc22de2de81be38231695285070603af78ef4
 tar1090 e784ee5ae82948f41efe3ef5c235ade0943ab8ff
 tar1090-db 17679e257733ad808a417cf4a5d52f3b00238887
 EOF
-install -m 0644 "$repo"/UI/{rtl_registry,rtl_eeprom_access,dongle_web,dongle_workspace}.py "$repo"/UI/dongles.{html,css,js} /opt/ituner-sdr/UI/
+install -m 0644 "$repo"/UI/{rtl_registry,rtl_eeprom_access,dongle_web,dongle_workspace,dongle_notice,dongle_notice_touch,usb_radios,usb_radio_controls}.py "$repo"/UI/dongles.{html,css,js} "$repo"/UI/dongle-notice.{css,js} "$repo/UI/usb-radio-select.js" /opt/ituner-sdr/UI/
 install -m 0644 "$repo"/UI/station*.py "$repo"/UI/station.{html,css,js} /opt/ituner-sdr/UI/
 systemctl restart ituner-sdr.service
 printf '%s\n' 'ADS-B installed. Open Decoders > VHF/UHF > ADS-B, assign USB and Start.'

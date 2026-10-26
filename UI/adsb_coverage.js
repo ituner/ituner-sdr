@@ -1,6 +1,19 @@
 // Shared real-history reception view. No external aircraft feeds.
 export const coverageScope=data=>JSON.stringify([data.meta?.window_since,data.meta?.reference?.lat,data.meta?.reference?.lon,data.meta?.reference_height_m]);
 export const coveragePointKey=(data,p)=>((data.base+p[0]).toFixed(3))+':'+data.aircraft[p[1]].hex;
+export function coverageObservation(data,index){
+  const p=data.points[index],a=data.aircraft[p[1]],up=p[4]-(data.meta?.reference_height_m||0),horizontal=Math.hypot(p[2],p[3]);
+  return {hex:a.hex,label:p[8]||a.label,time:data.base+p[0],altitude:p[5],gnss:!!p[7],rssi:p[6],east:p[2],north:p[3],up,horizontal:horizontal/1000,slant:Math.hypot(horizontal,up)/1000,azimuth:(Math.atan2(p[2],p[3])*180/Math.PI+360)%360,elevation:Math.atan2(up,horizontal)*180/Math.PI};
+}
+export function nearestCoverageHit(hits,x,y,radius=22){
+  const scored=[];
+  for(const hit of hits){let d=Math.hypot(hit.x-x,hit.y-y),point=hit.point;
+    if(hit.path){d=Infinity;for(let i=1;i<hit.path.length;i++){const a=hit.path[i-1],b=hit.path[i],vx=b.x-a.x,vy=b.y-a.y,t=Math.max(0,Math.min(1,((x-a.x)*vx+(y-a.y)*vy)/(vx*vx+vy*vy||1))),distance=Math.hypot(a.x+t*vx-x,a.y+t*vy-y);if(distance<d){d=distance;point=(i-1+t)/(hit.path.length-1)<.5?hit.segment.a:hit.segment.b;}}}
+    if(d<radius)scored.push({...hit,d,point});
+  }
+  scored.sort((a,b)=>a.d-b.d||b.depth-a.depth);
+  return scored.find(h=>h.kind==='point'&&h.d<8)||scored[0]||null;
+}
 export function newCoveragePoints(previous,data){
   if(!previous||coverageScope(previous)!==coverageScope(data))return new Set();
   const old=new Set(previous.points.map(p=>coveragePointKey(previous,p))),latest=Math.max(previous.meta.last_position||0,data.meta.last_position||0);
@@ -28,25 +41,27 @@ function distanceTicks(radius,pixels){
   if(ticks.length&&(radius-ticks.at(-1))/radius*pixels<72)ticks.pop();
   return [...ticks,radius];
 }
-export function mountCoverage(root,getSince=()=>null,createView=setup){
+export function mountCoverage(root,getSince=()=>null,createView=setup,getLive=()=>[]){
   let update=null,busy=false,last='';
   async function reload(){
     if(root.hidden||busy)return;busy=true;
     const since=getSince();try{const r=await fetch('/api/coverage'+(since===null?'':'?since='+since));if(!r.ok)throw Error('Coverage unavailable');const body=await r.text(),data=JSON.parse(body);if(since!==getSince())return;
       if(data.error)throw Error(data.error);
       if(data.status==='LOADING'){root.querySelector('[data-summary]').textContent=update?'Updating reception window…':'Loading reception history…';return;}
-      if(body!==last){if(update)update(data);else update=createView(root,data,reload);last=body;}
+      if(body!==last){if(update)update(data);else update=createView(root,data,reload,getLive);last=body;}
     }catch(e){root.querySelector('[data-summary]').textContent='Coverage: '+e.message+' · retrying';}finally{busy=false;}
   }
   setInterval(reload,5000);return reload;
 }
-function setup(root,initial,reload){
+function setup(root,initial,reload,getLive){
 
     const $=name=>root.querySelector('[data-'+name+']'),canvas=root.querySelector('canvas'),display=canvas.getContext('2d'),surface=document.createElement('canvas'),c=surface.getContext('2d');
     let data=initial,meta=data.meta;const rad=Math.PI/180;
     let sceneRevision=0,baseKey='',freshKeys=new Set(),pulseUntil=0,pulseTimer;
+    let selectedObservation=null,detailsHex=null,details=null,detailsGeneration=0;
+    let groundInfo=null,groundImage=null,groundVersion='',groundDesired='',groundBusy=false,groundTimer,lastGroundRequest=0;
     const fmtTime=t=>new Date(t*1000).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false});
-    let state={view:'cells',aircraft:'all',colour:'visits',yaw:0,tilt:65,height:0,gaps:false,spaceScale:'expanded'},points=[],cells=[],segments=[],allCells=[],hits=[],drag=null,pinned=false,width=0,height=0,scale=1,cx=0,cy=0,colours={},frame=0,cosYaw=1,sinYaw=0,cosTilt=1,sinTilt=0,scaffolds=[],unknownGrid=[];
+    let state={view:'cells',aircraft:'all',colour:'visits',yaw:0,tilt:65,height:0,gaps:false,spaceScale:'expanded',groundMap:false},points=[],cells=[],segments=[],allCells=[],hits=[],drag=null,pinned=false,width=0,height=0,scale=1,cx=0,cy=0,colours={},frame=0,cosYaw=1,sinYaw=0,cosTilt=1,sinTilt=0,scaffolds=[],unknownGrid=[];
     const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),median=a=>{const v=a.filter(Number.isFinite).sort((x,y)=>x-y);if(!v.length)return null;return v.length%2?v[(v.length-1)/2]:(v[v.length/2-1]+v[v.length/2])/2;};
     try{state={...state,...JSON.parse(localStorage.getItem("adsb-coverage-view")||"{}")};}catch{}
     state.height=meta.reference_height_m||0;
@@ -67,7 +82,61 @@ function setup(root,initial,reload){
       if(document.activeElement!==$('height'))$('height').value=meta.reference_height_known?meta.reference_height_m:'';
     }
     function save(){try{localStorage.setItem("adsb-coverage-view",JSON.stringify(state));}catch{}}
-    function sync(){$('space-scale-wrap').hidden=state.view!=='space';for(const k of ['view','aircraft','colour','yaw','tilt','spaceScale'])(k==='spaceScale'?$('space-scale'):$(k)).value=state[k];$('gaps').checked=state.gaps;$('yaw-value').value=Math.round(state.yaw)+'°';$('tilt-value').value=Math.round(state.tilt)+'°';$('gap-legend').hidden=!state.gaps||state.view==='cells';$('colour-label').textContent=state.colour==='signal'?'Received · stronger signal is more opaque':'Received · brighter = more samples';}
+    function identityCard(){
+      if(!selectedObservation)return;
+      const info=details||{},photo=info.photo,link=$('selected-photo-link'),img=$('selected-photo');
+      $('selected-maker').textContent=info.manufacturer||((info.status==='loading'||!details)?'Looking up aircraft…':'Aircraft');
+      $('selected-model').textContent=info.model||info.icao_type||(!details||info.status==='loading'?'':'Model unavailable');
+      $('selected-model').title=[info.manufacturer,info.model,info.icao_type,info.source].filter(Boolean).join(' · ');
+      $('selected-registration').textContent=[info.registration,info.icao_type].filter(Boolean).join(' · ');
+      link.hidden=!photo;if(photo){link.href=photo.link;link.title=photo.credit;const src=info.photo_cached?'/api/aircraft/photo?hex='+detailsHex:photo.url;if(img.getAttribute('src')!==src){img.alt='Aircraft '+(info.registration||detailsHex.toUpperCase());img.onerror=()=>{link.hidden=true;};img.src=src;}}
+      else {img.removeAttribute('src');link.removeAttribute('href');}
+    }
+    function aircraftIdentity(hex){
+      if(detailsHex===hex)return;detailsHex=hex;details=null;const generation=++detailsGeneration;
+      async function load(attempt=0){
+        try{const response=await fetch('/api/aircraft?hex='+encodeURIComponent(hex));if(!response.ok)throw Error();const info=await response.json();if(generation!==detailsGeneration||selectedObservation?.hex!==hex)return;details=info;identityCard();if(info.status==='loading'&&attempt<20)setTimeout(()=>load(attempt+1),800);}
+        catch{if(generation!==detailsGeneration||selectedObservation?.hex!==hex)return;details={status:'unavailable'};identityCard();}
+      }
+      load();
+    }
+    function aircraftCard(){
+      const card=$('aircraft-card'),p=selectedObservation;card.hidden=!p;if(!p){detailsHex=null;detailsGeneration++;return;}aircraftIdentity(p.hex);identityCard();
+      $('selected-name').textContent=p.label;$('selected-icao').textContent='ICAO '+p.hex.toUpperCase()+(p.context.includes('cell')?' · latest cell sample':'');
+      $('selected-time').textContent=new Date(p.time*1000).toLocaleString()+' · recorded';
+      const fields=[['Alt',p.altitude.toLocaleString()+' ft '+(p.gnss?'GNSS':'BARO ≈')],['RSSI',p.rssi==null?'—':p.rssi.toFixed(1)+' dBFS'],['Horiz.',p.horizontal.toFixed(2)+' km'],['Slant',p.slant.toFixed(2)+' km'],['Az',p.azimuth.toFixed(1)+'°'],['El',p.elevation.toFixed(1)+'°']];
+      $('selected-fields').replaceChildren(...fields.map(([label,value])=>{const row=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;row.append(dt,dd);return row;}));
+      const live=getLive().find(a=>a.hex===p.hex),fmt=v=>Number.isFinite(v)?Math.round(v).toLocaleString():'—';
+      $('selected-live').textContent=live?'LIVE NOW · '+fmt(live.gs)+' kt · '+fmt(live.track)+'°'+(live.squawk?' · SQ '+live.squawk:''):'No current radio contact';
+      $('filter-aircraft').textContent=state.aircraft===p.hex?'Show all aircraft':'Only this aircraft';
+    }
+    $('close-aircraft').onclick=()=>{selectedObservation=null;pinned=false;aircraftCard();schedule();};
+    $('filter-aircraft').onclick=()=>{if(!selectedObservation)return;state.aircraft=state.aircraft===selectedObservation.hex?'all':selectedObservation.hex;geometry();sync();schedule();aircraftCard();save();};
+    root.addEventListener('keydown',e=>{if(e.key==='Escape'&&selectedObservation){e.stopPropagation();$('close-aircraft').click();}});
+    async function requestGround(){
+      clearTimeout(groundTimer);
+      const enabled=state.view==='space'&&state.groundMap&&!root.hidden,site=meta.reference;
+      $('ground-status').hidden=!enabled;
+      if(!enabled||!site){groundDesired='';if(enabled)$('ground-status').textContent='Set the receiver site to align the ground map.';return;}
+      const desired=[site.lat,site.lon,range].join(':');
+      if(groundBusy||desired===groundDesired&&performance.now()-lastGroundRequest<2000){groundTimer=setTimeout(requestGround,2200);return;}
+      groundDesired=desired;groundBusy=true;lastGroundRequest=performance.now();
+      try{
+        const response=await fetch('/api/coverage/ground?'+new URLSearchParams({lat:site.lat,lon:site.lon,radius:range}));if(!response.ok)throw Error();const info=await response.json();
+        if(groundDesired!==desired||!state.groundMap||state.view!=='space')return;
+        $('ground-status').textContent=info.status==='READY'?info.attribution+' · flat ground reference · aircraft heights in 3D':'Loading satellite ground map…';
+        const version=info.key+':'+info.revision;
+        if(info.status==='READY'&&version!==groundVersion){const image=new Image();image.onload=()=>{if(groundDesired!==desired||!state.groundMap)return;groundInfo=info;groundImage=image;groundVersion=version;baseKey='';schedule();};image.onerror=()=>{$('ground-status').textContent='Ground imagery unavailable · retrying';};image.src='/api/coverage/ground.png?'+new URLSearchParams({key:info.key,revision:info.revision});}
+      }catch{$('ground-status').textContent='Ground map unavailable · retrying';}
+      finally{groundBusy=false;if(state.groundMap&&state.view==='space'&&!root.hidden)groundTimer=setTimeout(requestGround,2500);}
+    }
+    function groundBase(){
+      if(state.view!=='space'||!state.groundMap||!groundImage||!meta.reference||groundInfo.reference.lat!==Number(meta.reference.lat.toFixed(5))||groundInfo.reference.lon!==Number(meta.reference.lon.toFixed(5)))return;
+      const r=groundInfo.radius/range,q=project([-r,r,0]),a=project([r,r,0]),b=project([-r,-r,0]);
+      c.save();path(Array.from({length:121},(_,i)=>vector(i*3,0)));c.closePath();c.clip();c.globalAlpha=.72;
+      c.transform((a.x-q.x)/groundImage.width,(a.y-q.y)/groundImage.width,(b.x-q.x)/groundImage.height,(b.y-q.y)/groundImage.height,q.x,q.y);c.drawImage(groundImage,0,0);c.restore();
+    }
+    function sync(){$('space-scale-wrap').hidden=state.view!=='space';$('ground-wrap').hidden=state.view!=='space';$('ground-map').value=state.groundMap?'on':'off';requestGround();for(const k of ['view','aircraft','colour','yaw','tilt','spaceScale'])(k==='spaceScale'?$('space-scale'):$(k)).value=state[k];$('gaps').checked=state.gaps;$('yaw-value').value=Math.round(state.yaw)+'°';$('tilt-value').value=Math.round(state.tilt)+'°';$('gap-legend').hidden=!state.gaps||state.view==='cells';$('colour-label').textContent=state.colour==='signal'?'Received · stronger signal is more opaque':'Received · brighter = more samples';}
     function vector(az,el,r=1){return [r*Math.sin(az*rad)*Math.cos(el*rad),r*Math.cos(az*rad)*Math.cos(el*rad),r*Math.sin(el*rad)];}
     function geometry(resetSelection=false){
       sceneRevision++;
@@ -94,11 +163,11 @@ function setup(root,initial,reload){
     function label(text,v,alpha=1){const p=project(v);c.globalAlpha=alpha;c.fillStyle=colours.text;c.textAlign='center';c.textBaseline='middle';c.fillText(text,clamp(p.x,30,width-30),clamp(p.y,14,height-14));}
     function intensity(level,count){return state.colour==='signal'?(level==null?.5:.3+.7*clamp((level+45)/45,0,1)):.55+.45*(1-Math.exp(-count/8));}
     function draw(){
-      const started=performance.now();frame=0;width=canvas.clientWidth;height=canvas.clientHeight;if(!width||!height)return;const dpr=drag?.moved?1:Math.min(2,window.devicePixelRatio||1),pixelWidth=Math.round(width*dpr),pixelHeight=Math.round(height*dpr);const key=[width,height,dpr,sceneRevision,state.view,state.yaw,state.tilt,state.colour,state.gaps].join(':');
+      const started=performance.now();frame=0;width=canvas.clientWidth;height=canvas.clientHeight;if(!width||!height)return;const dpr=drag?.moved?1:Math.min(2,window.devicePixelRatio||1),pixelWidth=Math.round(width*dpr),pixelHeight=Math.round(height*dpr);const key=[width,height,dpr,sceneRevision,state.view,state.yaw,state.tilt,state.colour,state.gaps,state.groundMap,groundVersion,selectedObservation?.time,selectedObservation?.hex].join(':');
       if(key!==baseKey){baseKey=key;if(surface.width!==pixelWidth||surface.height!==pixelHeight){surface.width=pixelWidth;surface.height=pixelHeight;}c.setTransform(dpr,0,0,dpr,0,0);c.globalAlpha=1;c.fillStyle='#000';c.fillRect(0,0,width,height);cosYaw=Math.cos(state.yaw*rad);sinYaw=Math.sin(state.yaw*rad);cosTilt=Math.cos(state.tilt*rad);sinTilt=Math.sin(state.tilt*rad);
       colours={received:'#4c9dff',muted:'#98adbf',text:'#dcecff',gap:'#ffca78'};
       c.font=getComputedStyle($('summary')).font;const t=state.tilt*rad;scale=Math.min((width-64)/2,(height-88)/(1+Math.sin(t)));cx=width/2;cy=height/2+scale*(1-Math.sin(t))/2;if(state.view==='space')({scale,cx,cy}=spaceFrame(points.map(world),axisHeight/range*heightScale,state.yaw,state.tilt,width,height));hits=[];
-      const ring=Array.from({length:121},(_,i)=>vector(i*3,0));path(ring);c.closePath();c.globalAlpha=.06;c.fillStyle=colours.muted;c.fill();
+      const ring=Array.from({length:121},(_,i)=>vector(i*3,0));path(ring);c.closePath();c.globalAlpha=.06;c.fillStyle=colours.muted;c.fill();groundBase();
       if(state.view==='cells'){
         // A faint wire shell represents unknown sky; only received cells need filled polygons.
         c.beginPath();for(const line of unknownGrid){line.forEach((v,i)=>{const p=project(v);if(i)c.lineTo(p.x,p.y);else c.moveTo(p.x,p.y);});}c.strokeStyle=colours.muted;c.globalAlpha=.09;c.lineWidth=.5;c.stroke();
@@ -110,11 +179,15 @@ function setup(root,initial,reload){
       if(state.view==='space')for(let az=0;az<360;az+=45){path([[0,0,0],vector(az,0)]);c.stroke();}
       if(state.view!=='cells'){
         const geometryToDraw=segments.filter(s=>(!s.gap||state.gaps)&&(state.view==='space'||s.a.el>=0&&s.b.el>=0)).map(s=>({...s,depth:(project(world(s.a)).depth+project(world(s.b)).depth)/2})).sort((a,b)=>a.depth-b.depth);
-        for(const s of geometryToDraw){path(state.view==='space'?[world(s.a),world(s.b)]:s.skyPath);c.strokeStyle=s.gap?colours.gap:colours.received;c.globalAlpha=s.gap?.65:.8;c.lineWidth=s.gap?1:2;c.setLineDash(s.gap?[4,5]:[]);c.stroke();if(s.gap){const a=project(world(s.a)),b=project(world(s.b));hits.push({x:(a.x+b.x)/2,y:(a.y+b.y)/2,depth:s.depth,kind:'gap',segment:s});}}
+        for(const s of geometryToDraw){const vertices=state.view==='space'?[world(s.a),world(s.b)]:s.skyPath;path(vertices);c.strokeStyle=s.gap?colours.gap:colours.received;c.globalAlpha=s.gap?.65:.8;c.lineWidth=s.gap?1:2;c.setLineDash(s.gap?[4,5]:[]);c.stroke();hits.push({depth:s.depth,kind:s.gap?'gap':'trail',segment:s,path:vertices.map(project)});}
         c.setLineDash([]);
         for(const p of [...points].sort((a,b)=>project(world(a)).depth-project(world(b)).depth)){
           const q=project(world(p));if(p.el<0&&state.view!=='space')continue;c.globalAlpha=intensity(p.rssi,1);c.fillStyle=colours.received;c.strokeStyle=colours.received;c.lineWidth=1.5;c.beginPath();c.arc(q.x,q.y,state.aircraft==='all'?2.5:3.5,0,Math.PI*2);if(p.gnss)c.fill();else c.stroke();hits.push({...q,kind:'point',point:p});
         }
+      }
+      if(state.view==='space'&&state.groundMap&&selectedObservation){
+        const p=selectedObservation,foot=[p.east/range,p.north/range,0],top=[...foot.slice(0,2),p.up/range*heightScale];
+        c.globalAlpha=.9;c.strokeStyle='#ffd675';c.lineWidth=1.4;c.setLineDash([3,4]);path([foot,top]);c.stroke();c.setLineDash([]);const q=project(foot);c.beginPath();c.arc(q.x,q.y,4,0,Math.PI*2);c.stroke();
       }
       c.globalAlpha=.55;c.strokeStyle=colours.muted;c.lineWidth=1.2;path(ring);c.stroke();
       for(const [name,az] of [['N',0],['E',90],['S',180],['W',270]])label(name,vector(az,0,1.11));
@@ -148,9 +221,9 @@ function setup(root,initial,reload){
     }
     function schedule(){if(!frame)frame=requestAnimationFrame(draw);}
     function selectAt(x,y,pin=false){
-      const candidates=hits.map(h=>({...h,d:Math.hypot(h.x-x,h.y-y)})).filter(h=>h.d<18).sort((a,b)=>a.d-b.d||b.depth-a.depth);const observed=candidates.find(h=>(h.kind!=='cell'||h.cell.points)&&h.d<9),near=observed||candidates[0]||(state.view==='cells'?allCells.map(cell=>({...project(cell.center),kind:'cell',cell,d:0})).map(h=>({...h,d:Math.hypot(h.x-x,h.y-y)})).filter(h=>h.d<18).sort((a,b)=>a.d-b.d||b.depth-a.depth)[0]:null);if(!near)return;
+      const near=nearestCoverageHit(hits,x,y)||(state.view==='cells'?allCells.map(cell=>({...project(cell.center),kind:'cell',cell,d:0})).map(h=>({...h,d:Math.hypot(h.x-x,h.y-y)})).filter(h=>h.d<18).sort((a,b)=>a.d-b.d||b.depth-a.depth)[0]:null);if(!near)return;
       if(pin)pinned=true;let text='';
-      if(near.kind==='point'){
+      if(near.kind==='point'||near.kind==='trail'){
         const p=near.point;text=p.aircraft.label+' · '+p.aircraft.hex.toUpperCase()+' · '+p.az.toFixed(1)+'° az / '+p.el.toFixed(1)+'° el · '+(p.distance/1000).toFixed(1)+' km horizontal · '+p.alt.toLocaleString()+' ft '+(p.gnss?'GNSS':'barometric ≈')+' · '+(p.rssi==null?'—':p.rssi.toFixed(1))+' dBFS · '+fmtTime(p.time)+' local';
       }else if(near.kind==='gap')text=near.segment.a.aircraft.label+' · '+near.segment.dt.toFixed(0)+' s between retained positions · dashed connector is inferred; no reception or obstruction is proven along it.';
       else{
@@ -159,8 +232,10 @@ function setup(root,initial,reload){
         else text+=' · no retained observations · obstruction status unknown';
       }
       $('detail').textContent=text;
+      if(pin){const p=near.point||(near.kind==='cell'?near.cell.points?.reduce((latest,p)=>!latest||p.time>latest.time?p:latest,null):null);if(p){selectedObservation={...coverageObservation(data,p.id),context:near.kind==='cell'?'Latest retained sample in sky cell':'Recorded reception'};aircraftCard();schedule();$('close-aircraft').focus({preventScroll:true});}}
     }
     for(const k of ['view','aircraft','colour'])$(k).addEventListener('change',()=>{if(k==='view'&&state.view!==$(k).value)state.tilt=$(k).value==='space'?25:55;state[k]=$(k).value;geometry(true);sync();schedule();save();});
+    $('ground-map').addEventListener('change',()=>{state.groundMap=$('ground-map').value==='on';sync();schedule();save();});
     $('space-scale').addEventListener('change',()=>{state.spaceScale=$('space-scale').value;geometry();sync();schedule();save();});
     for(const k of ['yaw','tilt']){$(k).addEventListener('input',()=>{state[k]=Number($(k).value);sync();schedule();});$(k).addEventListener('change',save);}
     $('height').addEventListener('change',async()=>{try{const r=await fetch('/api/state'),auth=await r.json();const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json','X-ADSB-Token':auth.control_token},body:JSON.stringify({action:'coverage_height',height_m:$('height').value===''?null:Number($('height').value)})});if(!response.ok)throw Error((await response.json()).error);reload();}catch(e){$('detail').textContent=e.message;}});
@@ -171,5 +246,5 @@ function setup(root,initial,reload){
     canvas.addEventListener('pointercancel',()=>{drag=null;schedule();});
     new ResizeObserver(schedule).observe(canvas.parentElement);
     metadata();geometry();sync();schedule();for(const control of root.querySelectorAll('select,input'))control.disabled=false;
-    return next=>{if(next.status==='LOADING')return;const resetSelection=coverageScope(data)!==coverageScope(next);freshKeys=newCoveragePoints(data,next);data=next;meta=data.meta;state.height=meta.reference_height_m||0;range=rangeFor();metadata();geometry(resetSelection);pulseUntil=freshKeys.size?performance.now()+800:0;sync();schedule();};
+    return next=>{if(next.status==='LOADING')return;const resetSelection=coverageScope(data)!==coverageScope(next);freshKeys=newCoveragePoints(data,next);data=next;meta=data.meta;state.height=meta.reference_height_m||0;range=rangeFor();metadata();geometry(resetSelection);pulseUntil=freshKeys.size?performance.now()+800:0;sync();schedule();aircraftCard();};
 }

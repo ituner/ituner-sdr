@@ -102,7 +102,7 @@ assert.equal(receptionFootprintRegions(footprint,null).length,0);
 view.footprintEnabled=true;view.footprint=footprint;view.site=footprintSite;
 let fills=0,strokes=0;
 view.ctx={save(){},restore(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){fills++;},stroke(){strokes++;}};
-view.locate(footprintSite);view.drawFootprint();assert.equal(fills,1);assert.equal(strokes,1);
+view.locate(footprintSite);view.drawFootprint();assert.equal(fills,1);assert.equal(strokes,2);
 view.footprintEnabled=false;view.drawFootprint();assert.equal(fills,1,'Footprint off must leave map unshaded');
 view.footprintEnabled=true;view.planes=[];view.traces.clear();view.fitTraffic();
 assert.ok(view.scale>35,'Fit view must frame nearby reception, rather than the old distant zoom cap');

@@ -1,3 +1,4 @@
+const usbRadiosLink=document.getElementById('usb-radios');if(usbRadiosLink){const url=new URL('/usb-radios',location.href);url.port='8092';usbRadiosLink.href=url.href;}
 const form=document.getElementById('station-form'),notice=document.getElementById('notice');let token='',dirty=false,busy=false;
 const numeric=new Set(['latitude','longitude','elevation_m','antenna_height_m','ellipsoid_height_m','gps_height_offset_m']);
 function render(data){const p=data.position,g=data.gps;token=data.control_token;

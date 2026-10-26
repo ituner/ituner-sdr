@@ -106,6 +106,15 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(session.target,'auto')
         self.assertEqual(self.hub.broker.snapshot(),{})
 
+    def test_hub_reenumeration_restarts_same_serial_without_stopping_user_intent(self):
+        session=self.hub.sessions['aprs'];session.settings['selection']=D1['id'];session.target=D1['id']
+        session.enabled=True;session.assigned=dict(D1,bus=3,address=10,usb_path='3-1')
+        session.active_generation=session.generation;child=Mock();child.poll.return_value=None;session.processes=[child]
+        returning=dict(D1,bus=3,address=11,usb_path='3-1');self.hub.devices=[returning,D2];session.launch=Mock()
+        with patch('vhf_monitor.os.killpg'):session.step()
+        session.launch.assert_called_once_with(returning)
+        self.assertTrue(session.enabled);self.assertEqual(session.target,D1['id'])
+
     def test_continuous_meteor_restarts_after_successful_capture(self):
         session=self.hub.sessions['meteor'];session.settings['continuous']=True
         session.enabled=True;session.assigned=D1;session.active_generation=session.generation
@@ -219,7 +228,7 @@ class ManagerTests(unittest.TestCase):
 
     def test_sensor_rate_and_log_frequency_follow_actual_tuning(self):
         session=self.hub.sessions['ism'];session.child=Mock()
-        for frequency,rate in ((433920000,'250000'),(868300000,'1000000'),(915000000,'1000000')):
+        for frequency,rate in ((433920000,'250000'),(868300000,'1000000'),(915000000,'1000000'),(868950000,'1200000')):
             session.control('configure',frequency=frequency);session.launch(D1)
             command=session.child.call_args.args[0]
             self.assertEqual(command[command.index('-s')+1],rate)
@@ -285,6 +294,29 @@ class TouchTests(unittest.TestCase):
                     self.assertEqual(session.enabled,enabled)
                     session.control.assert_not_called()
                     self.assertEqual(self.hub.broker.snapshot(),{})
+
+    def test_sensor_band_buttons_tune_directly_and_all_bands_are_reachable(self):
+        from vhf_workspace import VHFWorkspace
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        ui.fit_station_text.side_effect=lambda cache,text,*args:text
+        workspace=VHFWorkspace(ui,self.hub);workspace.show('ism')
+        session=workspace.session;session.settings['selection']=D2['id']
+        def press(action,value):
+            workspace.draw(Mock())
+            box=next(box for box,item in workspace.actions if item==(action,value))
+            workspace.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
+        press('band',915000000)
+        self.assertEqual(session.settings['frequency'],915000000)
+        self.assertEqual(session.settings['selection'],D2['id']);self.assertFalse(session.enabled)
+        press('overlay','bands')
+        reachable=set()
+        for page in range(3):
+            workspace.overlay_page=page;workspace.draw(Mock())
+            reachable.update(value for _,(action,value) in workspace.actions if action=='band')
+        self.assertEqual(reachable,{p['frequency'] for p in self.hub.catalog['ism']['presets']})
+        press('band',917200000)
+        self.assertIsNone(workspace.overlay);self.assertEqual(session.settings['frequency'],917200000)
+        self.assertEqual(self.hub.broker.snapshot(),{})
 
     def test_frequency_keypad_applies_mhz_and_station_coordinates_save(self):
         from vhf_workspace import VHFWorkspace

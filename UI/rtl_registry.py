@@ -59,6 +59,11 @@ def usb_order():
     return order
 
 
+def same_usb_attachment(a,b):
+    """A stable receiver ID can reappear with a new USB address after a hub cycle."""
+    return bool(a and b and a.get('id')==b.get('id') and all(a.get(k) is None or b.get(k) is None or a[k]==b[k] for k in ('bus','address','usb_path')))
+
+
 def identify(rows, physical, order, shared=()):
     """Enrich exact port matches; unknown descriptors must never imply uniqueness."""
     signature=hashlib.sha256(repr((rows,physical,order)).encode()).hexdigest()[:16]
@@ -78,7 +83,9 @@ def identify(rows, physical, order, shared=()):
     for row in rows:
         serial=row.get('serial','')
         collision=bool(serial) and max(counts[serial],physical_counts[serial])>1
-        duplicate=bool(serial) and (serial in shared or collision)
+        # Saved history is not a present-day collision. A sole factory ID is
+        # usable until another connected receiver actually shares it.
+        duplicate=collision
         unique=bool(serial) and not duplicate and not unknown
         row.update(duplicate=duplicate,collision=collision,persistent=unique,
             id='serial:'+serial if unique else 'port:'+row['usb_path'] if row.get('usb_path') else f"slot:{row['index']}:{signature}")
@@ -122,15 +129,27 @@ class DongleRegistry:
             changed=False;now=time.time()
             for row in rows:
                 key=row['id'];record=self.records.get(key)
+                serialkey='serial:'+row.get('serial','')
+                serial_record=self.records.get(serialkey)
+                if record is None and row.get('collision') and serial_record and serial_record.get('usb_path')==row.get('usb_path'):
+                    record=dict(serial_record,id=key,duplicate=True);self.records[key]=record
+                    self.records.pop(serialkey);self.aliases[serialkey]=key;changed=True
                 portkey='port:'+(row.get('usb_path') or '')
                 prior=self.records.get(portkey)
                 if row.get('persistent') and prior and portkey!=key and prior.get('serial')==row.get('serial'):
                     merged={**prior,**(record or {}),'id':key,'duplicate':False}
                     if prior.get('nickname') and not merged.get('nickname'):merged['nickname']=prior['nickname']
-                    self.records[key]=record=merged;self.records.pop(portkey);self.aliases[portkey]=key;changed=True
+                    self.records[key]=record=merged
+                    active=self.operation and self.operation.get('running') and self.operation.get('id')==portkey
+                    if not active:self.records.pop(portkey)
+                    # Keep an already verified EEPROM replacement authoritative
+                    # while USB still advertises the pre-reconnect descriptor.
+                    if not prior.get('replacement_id'):self.aliases[portkey]=key
+                    else:self.aliases[key]=prior['replacement_id']
+                    changed=True
                 if row.get('collision') and row.get('serial'):self.shared.add(row['serial'])
                 for old in list(self.records):
-                    if self.records[old].get('replacement_id')==key:
+                    if self.records[old].get('replacement_id')==key and not (self.operation and self.operation.get('running') and self.operation.get('id')==old):
                         self.records.pop(old);changed=True
                 if record and record.get('eeprom',{}).get('serial')==row.get('serial') and record.get('eeprom',{}).get('status')=='verified':
                     record['eeprom']=dict(record['eeprom'],message='Unique ID assigned · verified')
@@ -180,14 +199,16 @@ class DongleRegistry:
             if serial not in used:return serial
         raise ValueError('No free receiver IDs remain')
 
-    def assign_id(self,key,nickname,scanner,broker,busy=lambda:False):
+    def assign_id(self,key,nickname,scanner,broker,busy=lambda:False,allow_unique=False):
         self.validate_nickname(nickname)
         with self.lock:
             if self.operation and self.operation.get('running'):raise ValueError('A receiver update is already running')
             rows=scanner();device=next((r for r in rows if r['id']==key),None)
-            if len(rows)!=1:raise ValueError('Leave only the receiver being assigned connected, then try again')
             if not device or not device.get('usb_path'):raise ValueError('Receiver identity is unavailable; scan USB again')
-            if not device.get('duplicate'):raise ValueError('This receiver already has a unique ID. Use Rename for its nickname.')
+            e=self.records.get(key,{}).get('eeprom',{})
+            if e.get('status')=='verified' and e.get('serial') and e['serial']!=device.get('serial'):
+                raise ValueError('New ID already saved. Unplug and reconnect this receiver first.')
+            if not allow_unique and not device.get('duplicate') and device.get('serial') not in ('00000000','00000001'):raise ValueError('This receiver already has a unique ID. Use Rename for its nickname.')
             serial=self.next_serial();self.operation=dict(running=True,id=key,action='assign_id',message='Assigning new ID…')
         def run():
             resume=lambda:None
@@ -205,7 +226,8 @@ class DongleRegistry:
     def snapshot(self,rows):
         with self.lock:
             online={r['id']:r for r in rows}
-            records=[dict(r,connected=k in online,device=online.get(k)) for k,r in self.records.items()]
+            records=[dict(r,connected=k in online,device=online.get(k),duplicate=bool(online.get(k,{}).get('duplicate')),
+                needs_reconnect=bool(k in online and r.get('eeprom',{}).get('status')=='verified' and r.get('eeprom',{}).get('serial') and r['eeprom']['serial']!=online[k].get('serial'))) for k,r in self.records.items()]
             return dict(dongles=sorted(records,key=lambda r:(not r['connected'],-r.get('last_seen',0))),operation=self.operation)
 
     @staticmethod
@@ -246,7 +268,6 @@ class DongleRegistry:
             if broker and broker.snapshot() or busy():raise ValueError('Stop SDR reception before EEPROM operations')
             if not device.get('usb_path'):raise ValueError('Physical USB identity could not be verified')
             if action=='program':
-                if len(rows)!=1:raise ValueError('Leave only the receiver you want to program connected, then Scan USB')
                 if any(r.get('serial')==serial for r in self.records.values()):raise ValueError('That serial is already in the saved dongle list')
                 if self.records[key].get('eeprom',{}).get('status')!='readable':raise ValueError('Run Test EEPROM successfully first')
             self.operation=dict(running=True,id=key,action=action,message='Testing EEPROM…' if action=='probe' else 'Backing up and programming…')
@@ -259,7 +280,6 @@ class DongleRegistry:
             if broker and not broker.acquire('dongle-maintenance',key):raise ValueError('Receiver became busy; stop it and retry')
             current=getattr(scanner,'fresh',scanner)();target=next((r for r in current if r['id']==key),None)
             if not target or (target.get('bus'),target.get('address'))!=(device['bus'],device['address']) or busy():raise ValueError('USB inventory or reception changed; scan and retry')
-            if action=='program' and len(current)!=1:raise ValueError('Connect only the receiver being programmed')
             self.root.joinpath('backups').mkdir(parents=True,exist_ok=True)
             backup=self.root/'backups'/(uuid.uuid4().hex+'.bin')
             self.tool(target['index'],'-r',backup)
@@ -268,7 +288,8 @@ class DongleRegistry:
             info=dict(status='readable',checked_at=time.time(),backup=str(backup),message='EEPROM readable; write support is unverified')
             if action=='program':
                 latest=getattr(scanner,'fresh',scanner)()
-                if len(latest)!=1 or latest[0]['id']!=key or latest[0].get('address')!=target['address']:raise ValueError('USB inventory changed; programming cancelled')
+                verified=next((r for r in latest if r['id']==key),None)
+                if not verified or any(verified.get(k)!=target.get(k) for k in ('index','bus','address','usb_path')):raise ValueError('USB inventory changed; programming cancelled')
                 serial_image(raw,serial)  # Validate the complete layout before any write.
                 self.program(target,backup,serial)
                 info.update(status='verified',serial=serial,message='Serial written and read back. Unplug/reconnect this receiver to use '+serial)

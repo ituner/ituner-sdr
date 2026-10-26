@@ -441,6 +441,7 @@ MENU_ICON_FILENAMES = {
     "tests": "apps.png",
     "system": "info.png",
     "radio_info": "info.png",
+    "usb_radios": "receivers.png",
 }
 
 
@@ -2506,6 +2507,7 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
     return None, None
 SETTINGS_MENU_ITEMS = (
     ("radio_info", "RADIO / USER"),
+    ("usb_radios", "USB-RADIOS"),
     ("network", "NETWORK"),
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
@@ -2536,6 +2538,7 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 SETTINGS_MENU_SUBTITLES = {
     "radio_info": "IDENTITY, SITE & GPS",
+    "usb_radios": "RADIOS & DECODERS",
     "network": "NETWORK",
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
@@ -11265,6 +11268,7 @@ def receiver_home_drawer_boxes():
         "fan": (x0 + 10, 258, x1 - 10, 326),
         "locate": (x0 + 10, 346, x1 - 10, 414),
         "fallback": (x0 + 10, 426, x1 - 10, 494),
+        "usb_radios": (x0 + 10, 518, x1 - 10, 586),
     }
 
 
@@ -11294,6 +11298,7 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     else:
         draw_lcd_audio_tile(text_cache, boxes["locate"], "LOCATE FROM IP", "WORKING…" if locating else "REFRESH", locating)
         draw_lcd_audio_tile(text_cache, boxes["fallback"], "USE SAN JOSE", "DEFAULT", profile.get("source") == "fallback")
+    draw_lcd_audio_tile(text_cache,boxes["usb_radios"],"USB-RADIOS","RADIOS → DECODERS",False)
     draw_sidebar_header(text_cache, "INFO")
 
 
@@ -24135,6 +24140,16 @@ def main():
     receiver_broker = ReceiverBroker()
     adsb_manager = ADSBManager(broker=receiver_broker,station=radio_profile)
     vhf_hub = VHFHub(broker=receiver_broker,station=radio_profile)
+    import dongle_notice
+    from dongle_notice_touch import USBNoticePopup, NoticeTouchCapture
+    from rtl_registry import REGISTRY
+    usb_notices=dongle_notice.USBNotices(adsb_manager.scanner,REGISTRY,receiver_broker,(adsb_manager,vhf_hub)).start()
+    dongle_notice.SERVICE=usb_notices
+    import usb_radios
+    usb_radios.SERVICE=usb_radios.RadioManagement(REGISTRY,receiver_broker,adsb_manager,vhf_hub)
+    usb_popup=USBNoticePopup(sys.modules[__name__],usb_notices)
+    usb_notice_touch=NoticeTouchCapture()
+    usb_notice_desktop=None
     web_apps = vhf_hub.web_apps
     web_apps.rotation = (90 if args.orientation == 'normal' else 270) if LCD_NATIVE_TOUCH else 0
     vhf_workspace = VHFWorkspace(sys.modules[__name__], vhf_hub)
@@ -24150,6 +24165,9 @@ def main():
     from station_workspace import StationWorkspace
     station_workspace=StationWorkspace(sys.modules[__name__],radio_profile)
     sys.modules[__name__].station_settings=station_workspace
+    from dongle_workspace import DongleWorkspace
+    usb_radios_workspace=DongleWorkspace(sys.modules[__name__],adsb_manager)
+    usb_radios_parent="settings"
     if args.radio_info_preview:station_workspace.show()
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
     # Resume the active decoder workspace, matching Meteor startup behavior.
@@ -25256,6 +25274,7 @@ def main():
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
+        nonlocal usb_radios_parent
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
@@ -25273,6 +25292,7 @@ def main():
         if kind != "dual":
             dual_vfo_receiver_list_target = None
         station_workspace.open=False
+        usb_radios_workspace.open=False
         application_update.open = False
         adsb_workspace.open = False
         vhf_workspace.open = False
@@ -25370,6 +25390,11 @@ def main():
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = False
             receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
+        elif kind == "usb_radios":
+            usb_radios_workspace.show();usb_radios_parent=parent
+            settings_menu_open=digital_menu_open=False
+            picker_open=radio_setup_open=display_setup_open=filter_drawer_open=receiver_home_panel_open=fan_curve_panel_open=audio_panel_open=asr_panel_open=False
+            tests_panel_open=dj_tune_open=filter_panel_open=False
         elif kind == "radio_info":
             station_workspace.show()
             settings_menu_open=digital_menu_open=False
@@ -25784,8 +25809,8 @@ def main():
             and not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not (adsb_workspace.open or station_workspace.open
-                     or (vhf_workspace.open and vhf_workspace.mode == 'spectrum'))
+            and not (adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+                     or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open))
         )
@@ -26014,6 +26039,21 @@ def main():
                 ):
                     stop_event.set()
                     break
+                if not web_apps.blocks_touch and usb_popup.visible():
+                    if event.type==pygame.KEYDOWN:
+                        if event.key==pygame.K_ESCAPE:usb_popup.dismiss()
+                        continue
+                    if args.desktop and event.type in (pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION,pygame.MOUSEWHEEL):
+                        if event.type==pygame.MOUSEBUTTONDOWN and event.button==1:usb_notice_desktop=desktop_logical_point(event.pos)
+                        elif event.type==pygame.MOUSEBUTTONUP and event.button==1 and usb_notice_desktop is not None:
+                            px,py=desktop_logical_point(event.pos)
+                            if max(abs(px-usb_notice_desktop[0]),abs(py-usb_notice_desktop[1]))<=args.tap_px:usb_popup.tap(px,py)
+                            usb_notice_desktop=None
+                        if event.type==pygame.MOUSEBUTTONUP:
+                            desktop_pointer_down=False;touch_started=False;gesture=None;set_ui_press_point()
+                        continue
+                if usb_notice_desktop is not None and event.type==pygame.MOUSEBUTTONUP:
+                    usb_notice_desktop=None;continue
                 if web_apps.blocks_touch:
                     continue
                 if event.type == pygame.QUIT:
@@ -26033,6 +26073,14 @@ def main():
                     if deepgram_key_error:
                         last_vosc_error_key = ()
                     wake_controls()
+                elif event.type == pygame.KEYDOWN and usb_radios_workspace.open:
+                    if event.key==pygame.K_ESCAPE:
+                        if usb_radios_workspace.field is not None:usb_radios_workspace.key('CANCEL')
+                        elif usb_radios_workspace.selected:usb_radios_workspace.selected=None
+                        else:usb_radios_workspace.open=False;restore_navigation_parent(usb_radios_parent)
+                    elif event.key==pygame.K_RETURN:usb_radios_workspace.key('DONE')
+                    elif event.key==pygame.K_BACKSPACE:usb_radios_workspace.key('DELETE')
+                    elif getattr(event,'unicode','') and event.unicode.isprintable():usb_radios_workspace.key(event.unicode)
                 elif event.type == pygame.KEYDOWN and station_workspace.open:
                     if event.key==pygame.K_ESCAPE:
                         if station_workspace.field is not None:station_workspace.key('CANCEL')
@@ -26240,6 +26288,11 @@ def main():
                     if rail_relocation_active() and not is_active and raw_x is not None:
                         x = theme_system.display_to_logical_x(x)
 
+                    if usb_notice_touch.handle(is_active,x,y,usb_popup,args.tap_px,touch_started):
+                        touch_started=False;gesture=None
+                        set_ui_press_point(x,y) if is_active else set_ui_press_point()
+                        continue
+
                     # Shared renderers read this point during the next frame
                     # to give every visible button immediate press feedback.
                     set_ui_press_point(x, y) if is_active else set_ui_press_point()
@@ -26362,6 +26415,8 @@ def main():
                                 gesture = "application_update"
                             elif theme_editor.open:
                                 gesture = "theme"
+                            elif usb_radios_workspace.open:
+                                gesture="usb_radios_workspace"
                             elif station_workspace.open:
                                 gesture="station_workspace"
                             elif vhf_workspace.open:
@@ -27720,6 +27775,11 @@ def main():
                                 if app_update_ui.action(application_update, sys.modules[__name__], x, y) == "back":
                                     restore_navigation_parent("settings")
                             wake_controls()
+                        elif touch_started and gesture == "usb_radios_workspace":
+                            if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
+                                usb_radios_workspace.tap(x,y)
+                                if not usb_radios_workspace.open:restore_navigation_parent(usb_radios_parent)
+                            wake_controls()
                         elif touch_started and gesture == "station_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
                                 station_workspace.tap(x,y)
@@ -28472,6 +28532,8 @@ def main():
                                 if contains(home_boxes["close"], x, y):
                                     receiver_home_panel_open = False
                                     restore_navigation_parent(receiver_home_parent)
+                                elif contains(home_boxes["usb_radios"], x, y):
+                                    receiver_home_panel_open=False;usb_radios_parent="info";usb_radios_workspace.show()
                                 elif contains(home_boxes["fan"], x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
@@ -30407,6 +30469,8 @@ def main():
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
             if station_workspace.open:
                 station_workspace.draw(text_cache)
+            if usb_radios_workspace.open:
+                usb_radios_workspace.draw(text_cache)
             if theme_editor.open:
                 # Capture the complete Home render, including its actual live meter
                 # and sidebar, before drawing any appearance-picker controls.
@@ -30435,6 +30499,7 @@ def main():
                     application_update.poll()
                     update_poll_at = now + 0.5
                 app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
+            if not web_apps.blocks_touch:usb_popup.draw(text_cache)
             if rail_relocation_active():
                 if sidebar_composer is None:
                     sidebar_composer = SidebarComposer()
@@ -30501,6 +30566,8 @@ def main():
         hell_manager.stop()
         hell_workspace.close()
         sstv_manager.stop()
+        usb_notices.close()
+        dongle_notice.SERVICE=None
         vhf_workspace.close()
         adsb_workspace.close()
         sstv_workspace.close()

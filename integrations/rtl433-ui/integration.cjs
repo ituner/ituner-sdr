@@ -1,6 +1,10 @@
 'use strict';
 const express=require('express');
 const receiver=require('./rtl433proc');
+const {DecoderActivity,allowActivityOrigin}=require('./activity.cjs');
+const activity=new DecoderActivity();
+activity.poll();
+process.on('exit',()=>activity.close());
 module.exports=function install(app){
   app.use('/api',(req,res,next)=>{
     const origin=req.headers.origin;
@@ -12,6 +16,10 @@ module.exports=function install(app){
   });
   const json=express.json({limit:'8kb'});
   const action=fn=>async(req,res)=>{try{await fn(req);res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}};
+  app.get('/api/ituner/activity',async(req,res)=>{
+    if(allowActivityOrigin(req.headers.origin,req.headers.host)){res.setHeader('Access-Control-Allow-Origin',req.headers.origin);res.setHeader('Vary','Origin');}
+    res.setHeader('Cache-Control','no-store');res.json(activity.snapshot());
+  });
   app.get('/api/ituner/receiver',(_req,res)=>res.json(receiver.getReceiver()));
   app.post('/api/ituner/receiver',json,action(req=>receiver.configure(req.body||{})));
   app.post('/api/ituner/scan/start',action(()=>receiver.startScan()));

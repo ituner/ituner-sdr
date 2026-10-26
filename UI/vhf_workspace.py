@@ -4,6 +4,7 @@ import textwrap
 import time
 from decoder_style import DecoderStyle
 from dongle_workspace import DongleWorkspace
+from usb_radio_controls import receiver_rows
 from types import SimpleNamespace
 from adsb_workspace import ADSBWorkspace
 from sstv_workspace import SSTVWorkspace
@@ -55,7 +56,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
         if self.mode=='spectrum':return self.spectrum.swipe(sx,sy,x,y)
         if sx is None:return self.map.swipe()
         if abs(y-sy)>60 and abs(y-sy)>abs(x-sx)*1.5:
-            field='overlay_page' if self.overlay in ('profiles','usb') else 'page'
+            field='overlay_page' if self.overlay in ('profiles','bands','usb') else 'page'
             setattr(self,field,max(0,getattr(self,field)+(1 if y<sy else -1)));return True
         return self.map.swipe()
 
@@ -77,10 +78,11 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
                         self.ui.station_settings.show();self.open=False;return
                     self.overlay=value;self.overlay_page=0
                     if value=='location':self.station_edit=dict(self.manager.position or dict(lat=0,lon=0))
-                    elif value=='profiles':self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if p['id']==self.session.settings['profile']),0)
+                    elif value in ('profiles','bands'):self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if (p['frequency']==self.session.settings['frequency'] if value=='bands' else p['id']==self.session.settings['profile'])),0)
                 elif action=='page':
-                    field='overlay_page' if self.overlay in ('profiles','usb') else 'page';setattr(self,field,max(0,getattr(self,field)+value))
+                    field='overlay_page' if self.overlay in ('profiles','bands','usb') else 'page';setattr(self,field,max(0,getattr(self,field)+value))
                 elif action=='profile':self.session.control('configure',profile=value);self.overlay=None
+                elif action=='band':self.session.control('configure',frequency=value);self.overlay=None
                 elif action=='assign':self.session.control('configure',selection=value);self.overlay=None
                 elif action=='number':
                     self.edit_field=value
@@ -146,6 +148,14 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
 
     def draw_data(self,cache,state):
         records=list(reversed(state['records']));start_y=106
+        if self.mode=='ism':
+            for i,frequency in enumerate((433920000,868300000,915000000,315000000)):
+                x=20+i*198
+                label=f'{frequency/1e6:g} MHz'
+                region='US / EU' if i==0 else 'EU' if i==1 else 'US'
+                self.button(cache,(x,98,x+186,166),label,('band',frequency),region,active=state['settings']['frequency']==frequency)
+            self.button(cache,(812,98,1004,166),'MORE BANDS',('overlay','bands'),'US / EU · tap to tune')
+            start_y=194
         if self.mode in ('meteor','cubesat'):
             orbit=state.get('orbit') or {};self.panel((20,96,1004,218))
             if orbit.get('elevation') is not None:
@@ -169,9 +179,9 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             self.text(cache,132,start_y+102,title,26,self.CYAN)
             for i,line in enumerate(textwrap.wrap(MODES[self.mode]['hint'],85)):
                 self.text(cache,132,start_y+148+i*26,line,18,self.MUTED)
-            self.text(cache,132,start_y+222,'Choose PROFILE / USB, then START.',17)
+            self.text(cache,132,start_y+222,'Choose a band and USB, then START.' if self.mode=='ism' else 'Choose PROFILE / USB, then START.',17)
             return
-        size=4 if start_y==106 else 2;pages=max(1,(len(records)+size-1)//size);self.page=min(self.page,pages-1)
+        size=4 if start_y in (106,194) else 2;pages=max(1,(len(records)+size-1)//size);self.page=min(self.page,pages-1)
         for index,row in enumerate(records[self.page*size:(self.page+1)*size]):
             col,r=index%2,index//2;x=20+col*500;y=start_y+r*237
             self.panel((x,y,x+484,y+219));self.text(cache,x+18,y+28,row['label'],20,self.CYAN,width=450)
@@ -228,18 +238,23 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             if self.mode=='meteor':self.button(cache,(40,550,974,640),'CONTINUOUS RECEPTION',('continuous',None),'ON · SAVE EACH PASS' if state['settings'].get('continuous') else 'OFF · SINGLE CAPTURE',active=state['settings'].get('continuous',False))
             return
         if self.overlay=='usb':
-            self.button(cache,(40,626,506,684),'DONGLES / RENAME',('dongles',None))
-            for i,(label,action) in enumerate((('GAIN',('number','gain')),('PPM',('number','ppm')),('SITE',('overlay','location')))):
-                self.button(cache,(590+i*130,108,712+i*130,150),label,action)
-        title='RECEPTION PROFILES' if self.overlay=='profiles' else 'USB RECEIVER ASSIGNMENT'
+            self.text(cache,40,130,'USB RADIO',24,self.CYAN)
+            self.overlay_page,last=receiver_rows(self,cache,self.manager.devices,self.manager.broker.snapshot(),self.session.owner,state['settings']['selection'],self.overlay_page,top=166,left=40,right=984)
+            self.button(cache,(40,626,398,684),'USB-Radios',('dongles',None))
+            self.button(cache,(414,626,588,684),'Gain',('number','gain'))
+            self.button(cache,(604,626,778,684),'PPM',('number','ppm'))
+            if last:
+                self.button(cache,(600,104,782,160),'Previous',('page',-1));self.button(cache,(798,104,984,160),'Next',('page',1))
+            return
+        title='LISTEN NOW · TAP A BAND TO TUNE' if self.overlay=='bands' else 'RECEPTION PROFILES' if self.overlay=='profiles' else 'USB RECEIVER ASSIGNMENT'
         self.text(cache,40,130,title,22,self.CYAN)
-        choices=self.manager.catalog[self.mode]['presets'] if self.overlay=='profiles' else [dict(id='auto',label='Auto · available receiver')]+self.manager.devices
+        choices=self.manager.catalog[self.mode]['presets'] if self.overlay in ('profiles','bands') else [dict(id='auto',label='Auto · available receiver')]+self.manager.devices
         pages=max(1,(len(choices)+7)//8);self.overlay_page=min(self.overlay_page,pages-1)
         for index,item in enumerate(choices[self.overlay_page*8:(self.overlay_page+1)*8]):
             x=40+(index%2)*480;y=166+(index//2)*112
-            key='profile' if self.overlay=='profiles' else 'assign';label=item.get('name',item.get('label'))
-            subtitle=f"{item['frequency']/1e6:.6f} MHz" if 'frequency' in item else self.manager.broker.snapshot().get(item['id'],'available')
-            self.button(cache,(x,y,x+458,y+96),label,(key,item['id']),subtitle)
+            key='band' if self.overlay=='bands' else 'profile' if self.overlay=='profiles' else 'assign';label=item.get('name',item.get('label'))
+            subtitle=item['description'] if key=='band' else f"{item['frequency']/1e6:.6f} MHz" if 'frequency' in item else self.manager.broker.snapshot().get(item['id'],'available')
+            self.button(cache,(x,y,x+458,y+96),label,(key,item['frequency'] if key=='band' else item['id']),subtitle,active=key=='band' and item['frequency']==state['settings']['frequency'])
         self.text(cache,40,616,f'PAGE {self.overlay_page+1} / {pages}',14,self.MUTED)
         self.button(cache,(526,626,740,684),'PREVIOUS',('page',-1));self.button(cache,(754,626,968,684),'NEXT',('page',1))
 
@@ -257,7 +272,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
         self.text(cache,1038,32,MODES[self.mode]['label'].upper(),23,self.CYAN)
         self.text(cache,1038,62,state['status'],12,self.MUTED,width=226)
         items=[('START' if not state['enabled'] else 'STOP',('start' if not state['enabled'] else 'stop',None),state['status']),
-            ('PROFILE',('overlay','profiles'),self.session.profile()['name']),
+            (('LISTENING BAND' if self.mode=='ism' else 'PROFILE'),('overlay','bands' if self.mode=='ism' else 'profiles'),f"{state['settings']['frequency']/1e6:g} MHz" if self.mode=='ism' else self.session.profile()['name']),
             ('USB RECEIVER',('overlay','usb'),state['assigned']['serial'] if state['assigned'] else 'AUTO / SELECT'),
             ('FREQUENCY',('number','frequency'),f"{state['settings']['frequency']/1e6:.6f} MHz")]
         for index,(label,action,sub) in enumerate(items):self.button(cache,(1034,82+index*78,1270,150+index*78),label,action,sub,active=index==0 and state['enabled'])

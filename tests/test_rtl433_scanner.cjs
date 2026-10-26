@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {IntelligentScanner,BANDS}=require('../integrations/rtl433-ui/scanner.cjs');
+const {IntelligentScanner,BANDS,PROFILES}=require('../integrations/rtl433-ui/scanner.cjs');
 function clock(saved){let time=1000000;return {scanner:new IntelligentScanner({now:()=>time,saved}),advance:(s=1)=>time+=s*1000,now:()=>time/1000};}
 function finish(c,packets=0){
   const s=c.scanner;s.tick(true);
@@ -18,8 +18,8 @@ test('productive revisit cannot starve quieter bands and stale activity loses pr
   const c=clock(),s=c.scanner;s.start();
   for(let i=0;i<BANDS.length;i++)finish(c,i===0?20:0);
   const visits=[];
-  for(let i=0;i<40;i++){visits.push(s.current.frequency);finish(c);}
-  for(const frequency of BANDS){const indices=visits.map((f,i)=>f===frequency?i:-1).filter(i=>i>=0);assert.ok(indices.length>=4);for(let i=1;i<indices.length;i++)assert.ok(indices[i]-indices[i-1]<=9);}
+  for(let i=0;i<BANDS.length*8;i++){visits.push(s.current.frequency);finish(c);}
+  for(const frequency of BANDS){const indices=visits.map((f,i)=>f===frequency?i:-1).filter(i=>i>=0);assert.ok(indices.length>=4);for(let i=1;i<indices.length;i++)assert.ok(indices[i]-indices[i-1]<=BANDS.length+Math.ceil(BANDS.length/3));}
   assert.equal(s.score(s.bands[0]),0);assert.equal(s.current.dwell,60);
 });
 test('USB settling, downtime and wrong-band packets do not inflate scan results',()=>{
@@ -38,14 +38,20 @@ test('saved enabled state and learned totals survive restart without counting of
   r.next();r.tick(true);assert.equal(r.current.listened,0);
   r.stop('Manual hold');assert.equal(r.snapshot().enabled,false);assert.equal(r.snapshot().reason,'Manual hold');
 });
-test('six receivers cover six different frequencies continuously without collisions',()=>{
+test('six receivers rotate the expanded catalog without frequency collisions',()=>{
  const c=clock(),s=c.scanner,ids=['ism','ism-2','ism-3','ism-4','ism-5','ism-6'];s.start(ids);
- for(let visit=0;visit<8;visit++){
+ const visited=new Set();
+ for(let visit=0;visit<BANDS.length*2;visit++){
   assert.equal(new Set(s.snapshot().receivers.map(r=>r.frequency)).size,6);
-  const before=new Map([...s.slots].map(([id,r])=>[id,r.frequency]));
-  for(const id of ids){s.tick(true,id);c.advance(1);s.tick(true,id);s.next(id);assert.equal(s.slots.get(id).frequency,before.get(id));}
+  for(const id of ids){visited.add(s.slots.get(id).frequency);s.tick(true,id);c.advance(1);s.tick(true,id);s.next(id);}
  }
+ assert.deepEqual([...visited].sort(),[...BANDS].sort());
  s.reconcile(ids.slice(0,2));assert.equal(s.slots.size,2);
- const visited=new Set();for(let i=0;i<18;i++){for(const id of ids.slice(0,2)){visited.add(s.slots.get(id).frequency);s.next(id);}assert.equal(new Set(s.snapshot().receivers.map(r=>r.frequency)).size,2);}
- assert.equal(visited.size,6);
+ for(let i=0;i<BANDS.length;i++){for(const id of ids.slice(0,2))s.next(id);assert.equal(new Set(s.snapshot().receivers.map(r=>r.frequency)).size,2);}
+});
+test('scanner uses every UI band exactly once and migrates old six-band history',()=>{
+ assert.deepEqual(BANDS,PROFILES.map(p=>p.frequency));assert.equal(new Set(BANDS).size,BANDS.length);
+ const s=new IntelligentScanner({saved:{enabled:true,bands:[{frequency:433920000,packets:27,seconds:120,devices:['Weather:7']}]}});
+ assert.equal(s.bands.length,PROFILES.length);assert.equal(s.bands[0].packets,27);
+ assert.equal(s.bands.find(b=>b.frequency===319500000).packets,0);
 });

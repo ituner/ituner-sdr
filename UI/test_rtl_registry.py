@@ -39,17 +39,50 @@ class InventoryTests(unittest.TestCase):
         rows=identify(raw_rows(),[physical('1-1',1,6)],[(1,6)])
         self.assertNotIn('usb_path',rows[0])
 
-    def test_saved_duplicate_and_nickname_survive_disconnect_and_restart(self):
+    def test_saved_nickname_survives_but_disconnected_history_is_not_a_collision(self):
         with tempfile.TemporaryDirectory() as tmp:
             reg=DongleRegistry(tmp)
             rows=reg.remember(identify(raw_rows(),[physical('1-1',1,6),physical('3-1',3,2)],[(3,2),(1,6)]))
             reg.rename(rows[0]['id'],'Roof receiver')
             reg=DongleRegistry(tmp)
             single=reg.remember(identify([raw_rows()[0]],[physical('3-1',3,8)],[(3,8)],reg.shared_serials()))
-            self.assertEqual(single[0]['nickname'],'Roof receiver');self.assertFalse(single[0]['persistent'])
+            self.assertEqual(single[0]['nickname'],'Roof receiver');self.assertTrue(single[0]['persistent']);self.assertFalse(single[0]['duplicate'])
             history=reg.snapshot(single)['dongles']
             self.assertEqual(len(history),2);self.assertEqual(sum(r['connected'] for r in history),1)
             self.assertEqual(len(reg.snapshot([])['dongles']),2)
+
+    def test_history_ghost_records_do_not_flag_a_sole_factory_serial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp);reg.shared.add('00000001')
+            reg.records['slot:old']=dict(id='slot:old',serial='00000001',duplicate=True)
+            rows=reg.remember(identify([dict(index=0,name='V4L',serial='00000001')],[physical('1-1',1,6,'00000001')],[(1,6)],reg.shared_serials()))
+            self.assertFalse(rows[0]['duplicate']);self.assertTrue(rows[0]['persistent'])
+            self.assertTrue(all(not r['duplicate'] for r in reg.snapshot(rows)['dongles']))
+
+    def test_new_collision_preserves_the_original_receiver_nickname_and_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp)
+            rows=reg.remember(identify([dict(index=0,name='RTL',serial='00000001')],[physical('1-1',1,6,'00000001')],[(1,6)]))
+            reg.rename(rows[0]['id'],'Original antenna')
+            rows=reg.remember(identify([dict(index=i,name='RTL',serial='00000001') for i in range(2)],[physical('1-1',1,6,'00000001'),physical('1-2',1,7,'00000001')],[(1,6),(1,7)]))
+            self.assertEqual(rows[0]['nickname'],'Original antenna');self.assertEqual(rows[1]['nickname'],'')
+            self.assertEqual(reg.resolve('serial:00000001',rows),'port:1-1')
+
+    def test_pending_write_is_not_repeated_and_selection_follows_reconnect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp)
+            reg.records['port:1-1']=dict(id='port:1-1',usb_path='1-1',serial='00000001',replacement_id='serial:10000014',eeprom=dict(status='verified',serial='10000014'))
+            reg.records['serial:10000014']=dict(id='serial:10000014',usb_path='1-1',serial='10000014',eeprom=dict(status='verified',serial='10000014'))
+            reg.aliases['port:1-1']='serial:10000014'
+            rows=reg.remember(identify([dict(index=0,name='RTL',serial='00000001')],[physical('1-1',1,6,'00000001')],[(1,6)]))
+            self.assertTrue(next(r for r in reg.snapshot(rows)['dongles'] if r['connected'])['needs_reconnect'])
+            with patch('rtl_registry.threading.Thread.start') as launch:
+                with self.assertRaisesRegex(ValueError,'already saved'):reg.assign_id(rows[0]['id'],'',lambda:rows,None)
+                launch.assert_not_called()
+            rows=reg.remember(identify([dict(index=0,name='RTL',serial='10000014')],[physical('1-1',1,7,'10000014')],[(1,7)]))
+            self.assertEqual(reg.resolve('serial:00000001',rows),'serial:10000014')
+            self.assertEqual(reg.resolve('port:1-1',rows),'serial:10000014')
+            self.assertFalse(reg.snapshot(rows)['dongles'][0]['needs_reconnect'])
 
     def test_maintenance_blocks_every_decoder_and_releases(self):
         broker=ReceiverBroker();self.assertTrue(broker.acquire('dongle-maintenance','port:3-1'))
@@ -60,7 +93,7 @@ class InventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             reg=DongleRegistry(tmp);rows=reg.remember(identify(raw_rows(),[physical('1-1',1,6),physical('3-1',3,2)],[(3,2),(1,6)]))
             with patch('rtl_registry.threading.Thread.start') as launch:
-                with self.assertRaisesRegex(ValueError,'only the receiver'):reg.start(rows[0]['id'],'program',lambda:rows,ReceiverBroker(),'10000011')
+                with self.assertRaisesRegex(ValueError,'Test EEPROM'):reg.start(rows[0]['id'],'program',lambda:rows,ReceiverBroker(),'10000011')
                 with self.assertRaisesRegex(ValueError,'eight digits'):reg.start(rows[0]['id'],'program',lambda:rows,ReceiverBroker(),'00000000')
                 with self.assertRaisesRegex(ValueError,'Stop SDR'):reg.start(rows[0]['id'],'probe',lambda:rows,ReceiverBroker(),busy=lambda:True)
                 launch.assert_not_called()
@@ -135,7 +168,7 @@ class InventoryTests(unittest.TestCase):
                     self.assertEqual(error.exception.code,403)
                     headers={'X-Dongle-Token':state['control_token'],'Content-Type':'application/json'}
                     result=json.load(urlopen(Request(base+'/api/dongles',body,headers)))
-                    self.assertEqual(result['dongles'][0]['nickname'],'Roof')
+                    self.assertEqual(next(r for r in result['dongles'] if r['id']==rows[0]['id'])['nickname'],'Roof')
                     with self.assertRaises(HTTPError) as error:urlopen(Request(base+'/api/dongles',body,dict(headers,Origin='https://other.example')))
                     self.assertEqual(error.exception.code,403)
             finally:manager.close()
@@ -171,13 +204,13 @@ class InventoryTests(unittest.TestCase):
     def test_quick_assign_generates_unused_serial_pauses_resumes_and_preserves_optional_name(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as tmp:
-            reg=DongleRegistry(tmp);rows=reg.remember(identify([raw_rows()[0]],[physical('1-1',1,6)],[(1,6)],{'00001000'}))
+            reg=DongleRegistry(tmp);rows=reg.remember(identify([raw_rows()[0]],[physical('1-1',1,6,'00000001')],[(1,6)],{'00001000'}))
             reg.records['serial:10000011']=dict(serial='10000011',id='serial:10000011')
             broker=ReceiverBroker();enabled=[True];broker.acquire('adsb',rows[0]['id'])
             def stop():enabled[0]=False;broker.release('adsb')
             def resume():enabled[0]=True
             broker.register('adsb',stop,resume,lambda:enabled[0])
-            def tool(index,*args):Path(args[1]).write_bytes(image())
+            def tool(index,*args):Path(args[1]).write_bytes(image('00000001'))
             with patch('rtl_registry.threading.Thread') as thread,patch.object(reg,'tool',side_effect=tool),patch.object(reg,'program') as program:
                 reg.assign_id(rows[0]['id'],'',lambda:rows,broker,lambda:enabled[0])
                 thread.call_args.kwargs['target']()
@@ -212,6 +245,57 @@ class InventoryTests(unittest.TestCase):
             result.stdout='Failed to read EEPROM'
             with patch('rtl_registry.subprocess.run',return_value=result):
                 with self.assertRaises(ValueError):DongleRegistry.tool(0,'-r',backup)
+
+    def test_quick_assign_targets_one_of_multiple_duplicates_and_retains_other_receiver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp);rows=reg.remember(identify(raw_rows(),[physical('1-1',1,6),physical('3-1',3,2)],[(3,2),(1,6)]))
+            other=dict(reg.records[rows[1]['id']]);broker=ReceiverBroker()
+            def tool(index,*args):self.assertEqual(index,0);Path(args[1]).write_bytes(image())
+            with patch('rtl_registry.threading.Thread') as thread,patch.object(reg,'tool',side_effect=tool),patch.object(reg,'program') as program:
+                reg.assign_id(rows[0]['id'],'V4L A',lambda:rows,broker)
+                thread.call_args.kwargs['target']()
+                self.assertEqual(program.call_args.args[0]['usb_path'],'3-1')
+            self.assertTrue(reg.operation['ok']);self.assertEqual(reg.records[rows[1]['id']],other);self.assertEqual(broker.snapshot(),{})
+
+    def test_factory_serial_can_be_assigned_after_its_duplicate_has_been_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp);rows=reg.remember(identify([dict(index=0,name='V4',serial='00000001')],[physical('3-1',3,2,'00000001')],[(3,2)]))
+            self.assertFalse(rows[0]['duplicate'])
+            def tool(index,*args):Path(args[1]).write_bytes(image('00000001'))
+            with patch('rtl_registry.threading.Thread') as thread,patch.object(reg,'tool',side_effect=tool),patch.object(reg,'program') as program:
+                reg.assign_id(rows[0]['id'],'V4 B',lambda:rows,ReceiverBroker())
+                thread.call_args.kwargs['target']();program.assert_called_once()
+            self.assertTrue(reg.operation['ok'])
+
+    def test_inventory_change_before_programming_cancels_with_backup(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as tmp:
+            reg=DongleRegistry(tmp);rows=reg.remember(identify(raw_rows(),[physical('1-1',1,6),physical('3-1',3,2)],[(3,2),(1,6)]));d=rows[0]
+            changed=[dict(r,address=r['address']+1) if r['id']==d['id'] else r for r in rows]
+            scanner=Mock(side_effect=[rows,changed],spec=[])
+            def tool(index,*args):Path(args[1]).write_bytes(image())
+            with patch.object(reg,'tool',side_effect=tool),patch.object(reg,'program') as program:
+                reg._operate(d['id'],d,'program','10000011',scanner,ReceiverBroker(),lambda:False)
+                program.assert_not_called()
+            self.assertFalse(reg.operation['ok']);self.assertTrue(Path(reg.records[d['id']]['eeprom']['backup']).is_file())
+
+    def test_multi_receiver_handle_is_verified_before_eeprom_access(self):
+        from unittest.mock import Mock
+        from rtl_eeprom_access import EepromDevice
+        lib=Mock();lib.rtlsdr_get_device_count.return_value=2;lib.rtlsdr_open.return_value=0
+        rows=[physical('3-1',3,2),physical('1-1',1,6)]
+        with patch('rtl_eeprom_access.ctypes.CDLL',return_value=lib),patch('rtl_eeprom_access.usb_order',return_value=[(3,2),(1,6)]),patch('rtl_eeprom_access.usb_inventory',return_value=rows),patch('rtl_eeprom_access.usb_handles',side_effect=[{},{9:'/dev/bus/usb/003/002'},{9:'/dev/bus/usb/003/002'},{9:'/dev/bus/usb/001/006'}]):
+            device=EepromDevice(0,3,2)
+            with self.assertRaisesRegex(ValueError,'changed or disconnected'):device.write(43,b'bad')
+            lib.rtlsdr_write_eeprom.assert_not_called();device.close()
+        lib.reset_mock()
+        with patch('rtl_eeprom_access.ctypes.CDLL',return_value=lib),patch('rtl_eeprom_access.usb_order',return_value=[(3,2),(1,6)]),patch('rtl_eeprom_access.usb_inventory',return_value=rows),patch('rtl_eeprom_access.usb_handles',side_effect=[{},{9:'/dev/bus/usb/001/006'}]):
+            with self.assertRaisesRegex(ValueError,'does not match'):EepromDevice(0,3,2)
+            lib.rtlsdr_close.assert_called_once();lib.rtlsdr_write_eeprom.assert_not_called()
+        lib.reset_mock()
+        with patch('rtl_eeprom_access.ctypes.CDLL',return_value=lib),patch('rtl_eeprom_access.usb_order',return_value=[(1,6),(3,2)]),patch('rtl_eeprom_access.usb_inventory',return_value=rows):
+            with self.assertRaisesRegex(ValueError,'USB order changed'):EepromDevice(0,3,2)
+            lib.rtlsdr_open.assert_not_called()
 
     def test_serial_image_only_changes_serial_bytes(self):
         original=image();expected=serial_image(original,'10000011')

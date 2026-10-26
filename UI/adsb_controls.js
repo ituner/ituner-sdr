@@ -9,8 +9,8 @@ const enteredAt=performance.now();let clockOffset=0,clockReady=false,historySeco
 const viewNow=()=>Date.now()/1000+clockOffset,view=new TrafficView();
 let globe,uatEditing=false;
 try {globe=new ADSBGlobe($('globe'),plane=>{if(plane){selected=plane;selectedAt=Date.now();}renderDetails(plane);},error);globe.trafficView=view;globe.trafficNow=viewNow;globe.setStyle('both');globe.trailSeconds=Number($('trails').value);globe.onFollowChange=()=>renderDetails(currentPlane());} catch(e){error('The globe could not start: '+e.message);}
-$('usb').onchange=()=>editing=true;
-$('uat-usb').onchange=()=>uatEditing=true;
+$('usb').onchange=()=>{editing=true;control('assign');};
+$('uat-usb').onchange=()=>{uatEditing=true;control('assign',{band:'978'});};
 const savedTracks=()=>Object.fromEntries([...(globe?.traces||[])].map(([key,v])=>[key,v.points]));
 const shownAircraft=()=>view.aircraft(state?.aircraft||[],savedTracks(),viewNow());
 function currentPlane(){return shownAircraft().find(p=>p.hex===selected?.hex)||null;}
@@ -92,15 +92,14 @@ async function refresh(){if(refreshBusy)return;refreshBusy=true;try{
   const primary=state.bands?.find(b=>b.id==='1090')||state,uat=state.bands?.find(b=>b.id==='978')||{};
   $('band1090-status').textContent=primary.status;$('source-status').textContent=primary.status;
   $('band978-status').textContent=uat.status||'NOT INSTALLED';$('uat-status').textContent=uat.status||'NOT INSTALLED';
-  $('uat-detail').textContent=uat.detail||'';$('uat-stats').textContent='UAT aircraft packets · saved '+fmt(uat.messages||0)+' · this run '+fmt(uat.session_messages||0)+' · '+(uat.assigned?.label||(uat.enabled?'Waiting for assigned receiver':'Receiver stopped'));
-  const uatChosen=uatEditing?$('uat-usb').value:uat.selection||'auto',uatChoices=[{id:'auto',label:'Auto · spare dongle (keeps 1090 receiver)'},...state.devices];
-  if(!uatChoices.some(d=>d.id===uatChosen))uatChoices.push({id:uatChosen,label:'Assigned UAT dongle unavailable'});
-  $('uat-usb').replaceChildren(...uatChoices.map(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=d.label;o.disabled=d.id!=='auto'&&(d.id===primary.assigned?.id||d.duplicate||d.collision);return o;}));$('uat-usb').value=uatChosen;
-  $('uat-start').disabled=!!uat.enabled||!uat.installed;$('uat-stop').disabled=!uat.enabled;
+  $('uat-detail').textContent=uat.detail||'';$('uat-stats').textContent='UAT aircraft packets · saved '+fmt(uat.messages||0)+' · this run '+fmt(uat.session_messages||0)+' · '+(uat.assigned?USB_Radios.name(uat.assigned):(uat.enabled?'Waiting for assigned receiver':'Receiver stopped'));
+  const uatChosen=uatEditing?$('uat-usb').value:uat.selection||'auto';
+  USB_Radios.fill($('uat-usb'),state.devices,{leases:state.leases,owner:'uat',selection:uatChosen,blocked:primary.assigned?[primary.assigned.id]:[],auto:'Auto · spare radio'});
+  $('uat-start').disabled=!uat.installed;$('uat-start').hidden=!!uat.enabled;$('uat-stop').hidden=!uat.enabled;
   $('connection').textContent='● CONNECTED';$('last-update').textContent='UPDATED '+new Date().toLocaleTimeString();$('detail').textContent=state.detail;
-  const chosen=editing?$('usb').value:state.selection,choices=[{id:'auto',label:'Auto · first available RTL-SDR'},...state.devices];if(!choices.some(d=>d.id===chosen))choices.push({id:chosen,label:'Assigned dongle unavailable'});
-  $('usb').replaceChildren(...choices.map(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=d.label;return o;}));$('usb').value=chosen;
-  $('start').disabled=primary.enabled;$('stop').disabled=!primary.enabled;
+  const chosen=editing?$('usb').value:state.selection;
+  USB_Radios.fill($('usb'),state.devices,{leases:state.leases,owner:'adsb',selection:chosen,unique:false});
+  $('start').hidden=!!primary.enabled;$('stop').hidden=!primary.enabled;
   $('site-status').textContent=state.receiver_position?`${state.receiver_position.lat.toFixed(5)}°, ${state.receiver_position.lon.toFixed(5)}°`:'Site not configured';
   if(state.receiver_position&&document.activeElement!==$('site-lat')&&document.activeElement!==$('site-lon')&&!$('site-form').dataset.editing){$('site-lat').value=state.receiver_position.lat;$('site-lon').value=state.receiver_position.lon;}
   error('');globe?.update(state);footprintLegend();renderTraffic();if(selected)renderDetails(currentPlane());
@@ -114,6 +113,8 @@ let drawerParent=null;
 function showDrawer(kind,show,returnToParent=true){const node=$(kind+'-panel'),wasVisible=!node.hidden;if(show&&!wasVisible)drawerParent=$('settings-menu').open?'settings':null;node.hidden=!show;$(kind).setAttribute('aria-expanded',String(show));if(kind==='receiver')$('live-receivers').setAttribute('aria-expanded',String(show));if(show){$('settings-menu').open=false;closeViewOptions();const other=kind==='logs'?'receiver':'logs';$(other+'-panel').hidden=true;$(other).setAttribute('aria-expanded','false');if(kind==='logs')refreshLogs();}else if(wasVisible&&returnToParent&&drawerParent==='settings'){$('settings-menu').open=true;drawerParent=null;}}
 for(const kind of ['logs','receiver']){$(kind).onclick=()=>showDrawer(kind,$(kind+'-panel').hidden);$('close-'+kind).onclick=()=>showDrawer(kind,false);}
 $('live-receivers').onclick=()=>showDrawer('receiver',$('receiver-panel').hidden);
+function receiverBand(id){for(const band of ['1090','978']){$('source'+band).hidden=band!==id;$('band'+band).setAttribute('aria-pressed',String(band===id));$('band'+band).classList.toggle('accent',band===id);}}
+$('band1090').onclick=()=>receiverBand('1090');$('band978').onclick=()=>receiverBand('978');receiverBand('1090');
 for(const [id,source] of [['band1090','source1090'],['band978','source978']])$(id).onclick=()=>$(source).scrollIntoView({block:'start',behavior:'smooth'});
 function trafficVisible(show){$('traffic-panel').hidden=!show;$('traffic-toggle').setAttribute('aria-expanded',String(show));$('traffic-toggle').classList.toggle('active',show);if(show)renderTraffic();}
 $('traffic-toggle').onclick=()=>{trafficVisible($('traffic-panel').hidden);closeViewOptions();};$('close-traffic').onclick=()=>trafficVisible(false);trafficVisible(false);
@@ -170,7 +171,7 @@ footprintLegend();refreshFootprint();setInterval(refreshFootprint,10000);
 const domeWindow=new CoverageWindow(),domeTimespan=$('dome-timespan');
 domeTimespan.replaceChildren(...COVERAGE_WINDOWS.map(([value,label])=>new Option(label,value)));
 domeTimespan.value=String(domeWindow.seconds);
-const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()));
+const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()),undefined,()=>view.live(state?.aircraft||[],viewNow()));
 function renderDomeWindow(){document.querySelector('[data-dome-window-label]').textContent=domeWindow.seconds?'LAST '+domeWindow.label.toUpperCase()+' · LIVE UPDATES':'ALL RECORDED · LIVE UPDATES';}
 domeTimespan.onchange=()=>{domeWindow.select(Number(domeTimespan.value));renderDomeWindow();reloadCoverage();};
 renderDomeWindow();

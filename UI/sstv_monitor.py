@@ -1,6 +1,7 @@
 """Independent SSTV receiver sessions, durable gallery and LAN web access."""
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from dongle_notice import inject_notice, notice_get, notice_post
 import json
 import os
 from pathlib import Path
@@ -549,6 +550,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path)
+        if notice_get(self,path.path):return
         try:
             if path.path in ('/search', '/search/'):
                 data = Path(__file__).with_name('log_search.html').read_bytes()
@@ -699,6 +701,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             self.send_error(404)
             return
+        if content_type.startswith('text/html'):data=inject_notice(data)
         self.send_response(200)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
@@ -709,6 +712,7 @@ class GalleryHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if notice_post(self):return
         try:
             path = urlsplit(self.path).path
             if path not in ('/api/sstv/control', '/api/wspr/control', '/api/wspr/reporting', '/api/hell/control', '/api/hell/reporting', '/api/qrss/control', '/api/cw/control'):

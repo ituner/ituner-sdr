@@ -4,6 +4,7 @@ from datetime import datetime
 import copy
 from http.server import ThreadingHTTPServer
 import json
+from rtl_registry import same_usb_attachment
 import logging
 from logging.handlers import RotatingFileHandler
 import math
@@ -25,11 +26,12 @@ from urllib.request import urlopen
 from station_web import station_get, station_post
 from adsb_monitor import ADSBHandler, rtl_devices
 from dongle_web import dongle_get, dongle_post
+from dongle_notice import notice_post
 from adsb_globe import GlobeAssets
 from adsb_traffic import receiver_position
 from web_app_preview import WebAppPreviews, WEB_APPS, preview_html
 from sdr_broker import ReceiverBroker, soapy_args
-from vhf_catalog import MODES, profiles, write_satellite_profile
+from vhf_catalog import rtl433_sample_rate, MODES, profiles, write_satellite_profile
 from vhf_satellite import prediction, refresh_tle
 
 ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
@@ -89,7 +91,7 @@ class DecoderSession:
         self.runtime=hub.runtime/self.owner; self.runtime.mkdir(exist_ok=True)
         self.lock=threading.RLock(); self.wake=threading.Event(); self.closed=threading.Event()
         self.processes=[]; self.assigned=None; self.generation=0; self.active_generation=-1; self.active_frequency=None
-        self.status='STOPPED'; self.detail='Choose a profile and press Start.'; self.messages=0
+        self.status='STOPPED'; self.detail='Choose a band and press Start.' if self.mode=='ism' else 'Choose a profile and press Start.'; self.messages=0
         self.records=OrderedDict(); self.tracks={}; self.events=deque(maxlen=160); self.output=deque(maxlen=120)
         self.rf={}; self.decoder_stats={}; self.orbit=None; self.started=0; self.retry=0; self.device_retry={}; self.run=None; self.kiss_offset=0; self.kiss_pending=b''
         self.reception={};self.last_reception_sample=0;self.next_reception_log=0
@@ -244,7 +246,7 @@ class DecoderSession:
             self.child([str(BIN/'AIS-catcher'),'-d','SOAPYSDR','-gu','DEVICE',args,'AGC','off','GAIN','TUNER='+gain,
                 '-s','1536K','-o','5','-M','DT','-N','8101','STATION','iTuner Maritime','-v','10'])
         elif self.mode=='ism':
-            rate='1000000' if freq>=600000000 else '250000'
+            rate=str(rtl433_sample_rate(freq))
             self.child([str(BIN/'rtl_433'),'-c','0','-d',args,'-f',str(freq),'-s',rate,'-g',gain,'-p',ppm,'-F','json','-M','time:unix','-M','level'])
         else:
             format={'aprs':'pcm','cubesat':'iq','sonde':'iq16','meteor':'tcp'}[self.mode]
@@ -388,10 +390,10 @@ class DecoderSession:
     def step(self):
         now=time.monotonic()
         if self.processes and (not self.enabled or self.active_generation!=self.generation or
-            not any(d['id']==self.assigned['id'] for d in self.hub.devices)):
+            not any(same_usb_attachment(d,self.assigned) for d in self.hub.devices)):
             self.stop()
         if not self.enabled:
-            self.status='STOPPED';self.detail='Ready. Choose a profile and press Start.'; return
+            self.status='STOPPED';self.detail='Ready. Choose a band and press Start.' if self.mode=='ism' else 'Ready. Choose a profile and press Start.'; return
         if self.processes:
             failed=next((p for p in self.processes if p.poll() is not None),None)
             if failed:
@@ -648,6 +650,7 @@ class VHFHandler(ADSBHandler):
         except (ValueError,OSError,KeyError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)
 
     def do_POST(self):
+        if notice_post(self):return
         if self.path=='/api/dongles':dongle_post(self);return
         if self.path=='/api/station':station_post(self);return
         manager=self.server.manager
