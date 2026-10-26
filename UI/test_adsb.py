@@ -31,6 +31,67 @@ class ReceiverTests(unittest.TestCase):
         self.manager.coverage.close()  # The supervisor thread is mocked in these tests.
         self.tmp.cleanup()
 
+    def test_comparison_start_includes_all_spares_and_restores_uat(self):
+        third=dict(id='serial:789',index=2,serial='789',label='Third RTL',persistent=True)
+        duplicate=dict(id='port:duplicate',index=3,label='Duplicate RTL',persistent=False)
+        self.manager.devices=[DEVICE,OTHER,third,duplicate]
+        self.manager.assigned=DEVICE
+        self.manager.uat.enabled=True
+        self.manager.control('comparison_start')
+        self.assertEqual(self.manager.comparison.selections,[OTHER['id'],third['id']])
+        self.assertTrue(self.manager.comparison.restore_uat);self.assertFalse(self.manager.uat.enabled)
+        with self.assertRaises(ValueError):self.manager.control('assign',third['id'])
+        self.manager.control('comparison_stop')
+        self.assertFalse(self.manager.comparison.enabled);self.assertTrue(self.manager.uat.enabled)
+
+    def test_reset_and_fresh_start_are_explicit_graph_actions(self):
+        self.manager.assigned=DEVICE
+        with patch.object(self.manager.comparison,'reset_graphs') as reset:
+            self.manager.control('comparison_start');self.assertEqual(reset.call_count,1)
+            self.manager.control('comparison_reset');self.assertEqual(reset.call_count,2)
+            self.assertTrue(self.manager.comparison.enabled)
+            self.manager.control('comparison_stop');self.assertEqual(reset.call_count,2)
+            self.manager.control('comparison_start');self.assertEqual(reset.call_count,3)
+
+    def test_comparison_start_queues_saved_receivers_when_usb_is_missing_after_boot(self):
+        self.manager.devices=[];self.manager.scanner=lambda:[];self.manager.assigned=None
+        self.manager.enabled=False;self.manager.selection=DEVICE['id']
+        self.manager.comparison.selections=[OTHER['id'],'serial:789']
+        self.manager.control('comparison_start')
+        self.assertTrue(self.manager.enabled);self.assertTrue(self.manager.comparison.enabled)
+        self.assertEqual(self.manager.comparison.selections,[OTHER['id'],'serial:789'])
+        saved=json.loads((Path(self.tmp.name)/'settings.json').read_text())
+        self.assertTrue(saved['enabled']);self.assertEqual(saved['selection'],DEVICE['id'])
+        self.manager._step();self.assertEqual(self.manager.status,'WAITING FOR USB')
+
+    def test_comparison_start_also_enables_the_stopped_primary(self):
+        self.manager.devices=[DEVICE,OTHER];self.manager.assigned=None;self.manager.enabled=False
+        self.manager.control('comparison_start')
+        self.assertTrue(self.manager.enabled);self.assertTrue(self.manager.comparison.enabled)
+        self.assertEqual(self.manager.selection,DEVICE['id'])
+        self.assertEqual(self.manager.comparison.selections,[OTHER['id']])
+
+    def test_comparison_keeps_saved_receiver_order_after_usb_reenumeration(self):
+        third=dict(id='serial:789',index=2,serial='789',label='Third RTL',persistent=True)
+        self.manager.devices=[DEVICE,third,OTHER];self.manager.assigned=DEVICE
+        self.manager.comparison.selections=[OTHER['id'],third['id']]
+        self.manager.control('comparison_start')
+        self.assertEqual(self.manager.comparison.selections,[OTHER['id'],third['id']])
+
+    def test_comparison_first_start_can_wait_for_usb_without_saved_assignments(self):
+        self.manager.devices=[];self.manager.assigned=None;self.manager.enabled=False
+        self.manager.comparison.selections=[]
+        self.manager.control('comparison_start')
+        self.assertTrue(self.manager.enabled);self.assertTrue(self.manager.comparison.enabled)
+        self.assertEqual(self.manager.comparison.selection,'all')
+        with self.assertRaises(ValueError):self.manager.control('comparison_start','serial:unknown')
+
+    def test_comparison_can_still_target_one_explicit_receiver(self):
+        third=dict(id='serial:789',index=2,serial='789',label='Third RTL',persistent=True)
+        self.manager.devices=[DEVICE,OTHER,third];self.manager.assigned=DEVICE
+        self.manager.control('comparison_start',third['id'])
+        self.assertEqual(self.manager.comparison.selections,[third['id']])
+
     def test_snapshot_ages_cached_rf_and_position_from_observation_time(self):
         self.manager.aircraft_stamp=100
         self.manager.planes=[dict(hex='abc',seen=1,seen_pos=10,lat=44,lon=26)]
@@ -196,9 +257,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(ui.station_settings.page, 'location')
         self.assertFalse(workspace.open)
         workspace.open=True
-        self.assertEqual(workspace._navigation_view(), 'usb')
-        workspace.back()
-        self.assertEqual(workspace._navigation_view(), 'map')
+        self.assertEqual(workspace.current_screen(), 'usb')
+        workspace.go_back()
+        self.assertEqual(workspace.current_screen(), 'map')
 
     @staticmethod
     def press(workspace, action):
@@ -208,13 +269,15 @@ class WorkspaceTests(unittest.TestCase):
     def test_dashboard_actions_select_follow_sort_and_clear_without_restarting_receiver(self):
         planes=[dict(hex='abc',flight='TEST',lat=44,lon=26,seen=0,seen_pos=0,alt_baro=3000),dict(hex='def',flight='OTHER',seen=2,alt_baro=9000)]
         workspace,ui,manager,state=self.dashboard(planes)
-        workspace.draw(Mock());self.press(workspace,('select','abc'))
+        workspace.draw(Mock());self.press(workspace,('view_options',None));workspace.draw(Mock())
+        self.press(workspace,('traffic',None));workspace.draw(Mock());self.press(workspace,('select','abc'))
         workspace.draw(Mock());self.press(workspace,('follow',None))
         self.assertTrue(workspace.following)
-        workspace.navigate('traffic')
+        self.press(workspace,('view_options',None));workspace.draw(Mock());self.press(workspace,('traffic',None))
         for expected in ('altitude','callsign','recent'):
             workspace.draw(Mock());self.press(workspace,('sort',None))
             self.assertEqual(workspace.traffic_sort,expected)
+        self.press(workspace,('back',None));workspace.draw(Mock());self.press(workspace,('close_options',None))
         workspace.draw(Mock());self.press(workspace,('clear',None))
         self.assertIsNone(workspace.selected);self.assertIsNone(workspace.selected_plane);self.assertFalse(workspace.following)
         manager.control.assert_not_called()
@@ -227,10 +290,61 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace.points,[])
         self.press(workspace,('traffic_view','history'));workspace.draw(Mock())
         self.assertEqual(len(workspace.points),1);self.assertEqual(workspace.trail_seconds,86400)
+        self.press(workspace,('view_options',None));workspace.draw(Mock())
         self.press(workspace,('start_fresh',None));workspace.draw(Mock())
-        self.assertEqual(workspace.traffic_view.mode,'session');self.assertEqual(workspace.points,[])
+        self.assertEqual(workspace.traffic_view.mode,'live');self.assertEqual(workspace.points,[])
         self.assertIn('old',workspace.tracks);manager.control.assert_not_called()
         workspace.open=False;workspace.show();self.assertEqual(workspace.traffic_view.mode,'live')
+
+    def test_comparison_reset_touch_dispatches_and_confirms_without_stopping(self):
+        w,ui,manager,_=self.dashboard();w.navigate('comparison')
+        frame=dict(now=110,enabled=True,status='RUNNING',current=None,receivers=[DEVICE,OTHER],
+                   graph_reset_at=0,history=[],rate_history=[],rate_history_ids=[])
+        manager.comparison.snapshot.return_value=frame
+        w.draw(Mock())
+        for seconds in (300,1800,3600,43200,86400):
+            self.press(w,('comparison_range',seconds));self.assertEqual(w.comparison_view.span,seconds)
+        self.press(w,('comparison_control','comparison_reset'))
+        manager.control.assert_called_once_with('comparison_reset')
+        self.assertEqual(w.comparison_view.next_read,0)
+        manager.comparison.snapshot.return_value=dict(frame,graph_reset_at=110)
+        ui.draw_styled_two_line_button.reset_mock();w.draw(Mock())
+        labels=[call.args[2] for call in ui.draw_styled_two_line_button.call_args_list]
+        self.assertIn('GRAPHS RESET',labels)
+        self.assertIn(('comparison_control','comparison_reset'),[action for _,action in w.actions])
+
+    def test_repeated_live_taps_confirm_then_cycle_without_resetting_selection(self):
+        w,ui,manager,state=self.dashboard();w.show();w.selected='a';w.selected_plane={'hex':'a'}
+        for seconds in (15,30,60,120,300,15):
+            w.draw(Mock());self.press(w,('traffic_view','live'))
+            self.assertEqual(w.traffic_view.live_seconds,seconds);self.assertEqual(w.selected,'a')
+            self.assertEqual(w.trail_seconds,300)
+        manager.control.assert_not_called()
+
+    def test_history_trails_have_an_explicit_native_view_toggle(self):
+        w,ui,manager,_=self.dashboard();w.show();w.set_traffic_view('history');w.navigate('options')
+        self.assertFalse(w.traffic_view.history_trails);self.assertFalse(w.traffic_view.labels_visible(w.labels))
+        w.draw(Mock());self.press(w,('labels',None))
+        self.assertTrue(w.traffic_view.history_labels);self.assertFalse(w.traffic_view.history_trails)
+        w.draw(Mock());self.press(w,('history_trails',None))
+        self.assertTrue(w.traffic_view.history_trails)
+        w.draw(Mock());self.press(w,('history_trails',None))
+        self.assertFalse(w.traffic_view.history_trails);self.assertTrue(w.traffic_view.history_labels)
+        w.draw(Mock());self.press(w,('aircraft_icons',None))
+        self.assertFalse(w.traffic_view.history_icons);self.assertTrue(w.traffic_view.history_labels)
+        w.set_traffic_view('live');self.assertTrue(w.labels)
+        self.assertTrue(w.aircraft_icons)
+        manager.control.assert_not_called()
+
+    def test_hidden_history_symbols_have_no_native_map_click_targets(self):
+        w,ui,manager,state=self.dashboard();w.dashboard=True;w.centered=True;w.rx_footprint=False;w.map_style='satellite'
+        w.draw_map_hud=Mock()
+        w.set_traffic_view('history');w.traffic_view.history_icons=False
+        manager.track_snapshot.return_value={'old':[dict(time=time.time()-60,lat=44,lon=26)]}
+        w.draw_map(Mock(),state,[])
+        self.assertEqual(w.points,[])
+        ui.draw_logical_polyline.assert_not_called();ui.draw_logical_points.assert_not_called()
+        self.assertIn('old',w.tracks)
 
     def test_dashboard_saved_target_can_be_located_but_cannot_start_follow(self):
         workspace,ui,manager,state=self.dashboard()
@@ -246,11 +360,41 @@ class WorkspaceTests(unittest.TestCase):
         labels=[str(call.args[3]) for call in ui.draw_text.call_args_list]
         self.assertTrue(any('Position old' in label for label in labels))
 
+    def test_back_returns_to_parent_and_history_can_cancel_or_apply(self):
+        w,ui,manager,state=self.dashboard();w.show()
+        with patch.object(w.coverage_view,'activate'):
+            w.navigate('coverage');w.navigate('usb')
+            w.draw(Mock());self.press(w,('back',None))
+            self.assertEqual(w.current_screen(),'coverage');self.assertTrue(w.open)
+            w.draw(Mock());self.press(w,('back',None))
+        self.assertEqual(w.current_screen(),'map');self.assertTrue(w.open)
+        w.navigate('traffic');w.navigate('options');w.draw(Mock())
+        self.press(w,('history_window',None));w.draw(Mock())
+        original=w.history_seconds
+        self.press(w,('history_choice',3600));w.draw(Mock())
+        self.press(w,('cancel_history',None));self.assertEqual(w.history_seconds,original)
+        self.assertEqual(w.current_screen(),'options');self.assertTrue(w.open)
+        w.draw(Mock());self.press(w,('history_window',None));w.draw(Mock())
+        self.assertEqual(w.history_draft,original)
+        self.press(w,('history_choice',3600));w.draw(Mock())
+        self.press(w,('history_apply',None));self.assertEqual(w.history_seconds,3600)
+        self.assertEqual(w.current_screen(),'options')
+        w.draw(Mock());self.press(w,('close_options',None));self.assertEqual(w.current_screen(),'traffic')
+        w.draw(Mock());self.press(w,('back',None));self.assertEqual(w.current_screen(),'map')
+        self.assertTrue(w.open)
+        w.draw(Mock());self.press(w,('back',None));self.assertFalse(w.open)
+        manager.control.assert_not_called()
+
+    def test_back_from_each_nested_screen_stays_in_adsb(self):
+        for page in ('traffic','logs','usb','settings','options','history_window'):
+            w,ui,manager,state=self.dashboard();w.show();w.navigate(page)
+            w.draw(Mock());self.press(w,('back',None))
+            self.assertEqual(w.current_screen(),'map',page);self.assertTrue(w.open,page)
+
     def test_dashboard_controls_do_not_overlap_or_intercept_other_targets(self):
         workspace,ui,manager,state=self.dashboard()
-        for drawer in (None,'usb_open','logs_open','traffic_open'):
-            workspace.usb_open=workspace.logs_open=workspace.traffic_open=False
-            if drawer:setattr(workspace,drawer,True)
+        for page in ('map','usb','logs','traffic','settings','options','history_window'):
+            workspace.navigate(page,remember=False)
             workspace.draw(Mock())
             boxes=[box for box,_ in workspace.actions]
             for i,box in enumerate(boxes):
@@ -260,15 +404,56 @@ class WorkspaceTests(unittest.TestCase):
                 for other in boxes[i+1:]:
                     self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(box,other))
 
+    def test_shared_radio_information_returns_to_airspace_settings(self):
+        w,ui,manager,state=self.dashboard();w.show();w.navigate('settings')
+        w.radio_info.station.snapshot.return_value={'config':{}}
+        w.draw(Mock());self.press(w,('radio_info',None));self.assertTrue(w.radio_info.open)
+        w.radio_info.actions=[((0,0,10,10),('back',None))];w.tap(5,5)
+        self.assertFalse(w.radio_info.open);self.assertEqual(w.current_screen(),'settings');self.assertTrue(w.open)
+
     def test_dashboard_hud_does_not_select_or_drag_an_aircraft_behind_it(self):
         workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen=0,seen_pos=0)])
-        ui.radiogarden_project.return_value=(50,200,1)
-        workspace.draw(Mock());workspace.tap(50,200)
+        ui.radiogarden_project.return_value=(50,100,1)
+        workspace.draw(Mock());workspace.tap(50,100)
         self.assertIsNone(workspace.selected)
-        workspace.drag_begin(50,200);workspace.drag_move(50,200,100,210)
+        workspace.drag_begin(50,100);workspace.drag_move(50,100,100,110)
         ui.radiogarden_pan_angles.assert_not_called()
         workspace.traffic_open=True;workspace.draw(Mock())
         self.assertEqual(workspace.points,[])
+
+    def test_full_width_map_and_movable_card_do_not_pan_or_activate_covered_controls(self):
+        plane=dict(hex='abc',flight='TEST',lat=44,lon=26,seen=0,seen_pos=0,alt_baro=3000)
+        w,ui,manager,state=self.dashboard([plane]);w.selected='abc';w.selected_plane=plane
+        w.draw(Mock());self.assertEqual(w.MAP,(0,0,1280,712))
+        self.assertNotIn(('logs',None),[action for _,action in w.actions])
+        self.assertIn(('usb',None),[action for _,action in w.actions])  # Direct receiver status/control shortcut.
+        x0,y0,x1,y1=w.card_handle;sx,sy=(x0+x1)/2,(y0+y1)/2
+        w.drag_begin(sx,sy);w.drag_move(sx,sy,sx-300,sy-180)
+        self.assertIsNotNone(w.card_position);self.assertTrue(w.dragged)
+        ui.radiogarden_pan_angles.assert_not_called();w.swipe()
+        w.card_position=(500,400);w.draw(Mock());scale=w.scale
+        self.assertTrue(any(c.args[5][-1]<255 for c in ui.draw_logical_rounded_rect.call_args_list if len(c.args[5])==4))
+        # The floating Follow control covers part of the zoom bar: the top layer wins.
+        w.tap(580,654);self.assertTrue(w.following);self.assertEqual(w.scale,scale)
+        manager.control.assert_not_called()
+
+    def test_view_announcement_expires_without_being_extended_by_refresh(self):
+        workspace,ui,manager,state=self.dashboard()
+        workspace.dashboard=True
+        with patch('adsb_touch.time.monotonic',return_value=100):
+            workspace.draw_map_hud(Mock(),state,[])
+        self.assertTrue(any('LIVE · trails' in str(c.args[3]) for c in ui.draw_text.call_args_list))
+        for now in (103,106):
+            ui.reset_mock()
+            with patch('adsb_touch.time.monotonic',return_value=now):
+                workspace.draw_map_hud(Mock(),state,[])
+            shown=any('LIVE · trails' in str(c.args[3]) for c in ui.draw_text.call_args_list)
+            self.assertEqual(shown,now<105)
+        self.assertFalse(any(box[1]==134 for box in workspace.overlay_boxes))
+        workspace.set_traffic_view('history');ui.reset_mock()
+        with patch('adsb_touch.time.monotonic',return_value=107):
+            workspace.draw_map_hud(Mock(),state,[])
+        self.assertTrue(any('HISTORY · trails' in str(c.args[3]) for c in ui.draw_text.call_args_list))
 
     def test_saved_endpoint_is_visible_selectable_and_not_followable(self):
         from adsb_workspace import ADSBWorkspace
@@ -321,6 +506,7 @@ class WorkspaceTests(unittest.TestCase):
         workspace=ADSBWorkspace(ui,manager);workspace.scale=12000
         workspace.draw_map(Mock(),dict(enabled=True,started_at=now-100,aircraft=[]),[])
         ui.draw_logical_polyline.assert_called_once_with([(-100,300),(400,300)],(*workspace.CYAN,150),2)
+        ui.draw_logical_points.assert_called_once_with([(400,300)],(*workspace.CYAN,220),4)
 
     def test_manual_zoom_passes_imagery_detail_limit_and_stays_selected(self):
         from adsb_workspace import ADSBWorkspace
@@ -369,7 +555,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(values,list(TRAIL_WINDOWS))
         self.assertEqual(trail_label(86400),'24 H')
 
-    def test_start_stop_are_accessible_on_map_and_every_drawer(self):
+    def test_receiver_controls_are_available_through_settings_from_each_screen(self):
         from adsb_workspace import ADSBWorkspace
         ui=Mock()
         ui.fit_station_text.side_effect=lambda cache,text,*args:text
@@ -385,7 +571,9 @@ class WorkspaceTests(unittest.TestCase):
         workspace=ADSBWorkspace(ui,manager);workspace.show()
         for drawer in (None,'usb_open','logs_open','traffic_open'):
             workspace.usb_open=workspace.logs_open=workspace.traffic_open=False
+            workspace.settings_open=False;workspace.navigation=[]
             if drawer:setattr(workspace,drawer,True)
+            workspace.draw(Mock());self.press(workspace,('settings',None))
             for action in ('start','stop'):
                 workspace.draw(Mock())
                 box=next(box for box,item in workspace.actions if item==(action,None))
@@ -509,16 +697,18 @@ class LogsAndHistoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):receiver_position(value)
         self.assertEqual(receiver_position(dict(lat=0,lon=0)),dict(lat=0,lon=0))
 
-    def test_site_persists_and_future_band_cannot_appear_as_installed(self):
+    def test_site_persists_and_uat_reports_actual_installed_binaries(self):
         with tempfile.TemporaryDirectory() as root:
             manager=ADSBManager(root=root,scanner=lambda:[],port=-1)
             try:
                 manager.control('location',position=dict(lat=44.4,lon=26.1))
                 self.assertEqual(json.loads((Path(root)/'settings.json').read_text())['position'],dict(lat=44.4,lon=26.1))
+                manager.uat.binary=str(Path(root)/'missing-dump978')
                 bands=manager.snapshot()['bands']
                 self.assertEqual([b['id'] for b in bands],['1090','978'])
                 self.assertFalse(bands[1]['installed'])
-                self.assertEqual(bands[1]['status'],'NOT INSTALLED')
+                manager.uat.binary=manager.uat.tracker=shutil.which('true')
+                self.assertTrue(manager.snapshot()['bands'][1]['installed'])
             finally:manager.close()
 
     def test_visible_log_endpoint_and_download_are_the_same_saved_data(self):

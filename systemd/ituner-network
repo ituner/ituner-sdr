@@ -4,6 +4,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 
 WLAN_DEVICE = "wlan0"
@@ -39,63 +40,118 @@ def profile_name(ssid):
     return f"{PROFILE_PREFIX}{ssid}"
 
 
-def ensure_persistent_profile(ssid, password):
+def ensure_persistent_profile(ssid, password, saved_uuid=None, open_network=False):
     name = profile_name(ssid)
-    if not connection_exists(name):
-        result = run(
-            "--wait",
-            "30",
-            "device",
-            "wifi",
-            "connect",
-            ssid,
-            "password",
-            password,
-            "ifname",
-            WLAN_DEVICE,
-            "name",
-            name,
-            timeout=38,
-        )
-        if result.returncode:
-            return None, message(result, "Could not join this Wi-Fi network.")
+    if saved_uuid:
+        # Only activate the saved Wi-Fi profile that belongs to the selected SSID.
+        check = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", saved_uuid, timeout=8)
+        if check.returncode or check.stdout.rstrip("\n") != ssid:
+            return None, "Saved network no longer matches. Scan again."
+        target = ("uuid", saved_uuid)
+    else:
+        if not open_network and not 8 <= len(password) <= 63:
+            return None, "Enter a password with 8–63 characters."
+        if not connection_exists(name):
+            args = ["--wait", "30", "device", "wifi", "connect", ssid, "ifname", WLAN_DEVICE, "name", name]
+            if not open_network:
+                args += ["password", password]
+            result = run(*args, timeout=38)
+            if result.returncode:
+                return None, "Could not connect. Check the password and signal, then try again."
+        target = ("id", name)
+        if not open_network:
+            # Preserve NetworkManager's WPA2/WPA3 choice rather than forcing WPA2.
+            result = run("connection", "modify", *target,
+                         "802-11-wireless-security.psk", password,
+                         "802-11-wireless-security.psk-flags", "0", timeout=15)
+            if result.returncode:
+                return None, "Could not save the Wi-Fi password."
 
-    result = run(
-        "connection",
-        "modify",
-        name,
-        "connection.permissions",
-        "",
-        "connection.autoconnect",
-        "yes",
-        "connection.autoconnect-priority",
-        "100",
-        "802-11-wireless-security.key-mgmt",
-        "wpa-psk",
-        "802-11-wireless-security.psk",
-        password,
-        "802-11-wireless-security.psk-flags",
-        "0",
-        timeout=15,
-    )
+    result = run("connection", "modify", *target,
+                 "connection.permissions", "", "connection.autoconnect", "yes",
+                 "connection.autoconnect-priority", "100", timeout=15)
     if result.returncode:
-        return None, message(result, "Could not save this Wi-Fi network.")
-
-    # Enable device-level autoconnect too: it survives a manually interrupted
-    # connection and lets NetworkManager recover after an AP reboot.
+        return None, "Could not save this Wi-Fi network."
     run("device", "set", WLAN_DEVICE, "managed", "yes", timeout=8)
     run("device", "set", WLAN_DEVICE, "autoconnect", "yes", timeout=8)
-    result = run("--wait", "30", "connection", "up", name, "ifname", WLAN_DEVICE, timeout=38)
+    result = run("--wait", "30", "connection", "up", *target, "ifname", WLAN_DEVICE, timeout=38)
     if result.returncode:
-        return None, message(result, "Wi-Fi profile saved, but it could not connect now.")
-    return name, "Wi-Fi saved. It will reconnect automatically after reboot."
+        return None, "Could not connect. Check the password and signal, then try again."
+    return name, f"Connected to {ssid}. Saved for automatic reconnection."
+
+
+def split_nmcli(line):
+    """nmcli escapes colons and backslashes in SSIDs and connection names."""
+    fields, value, escaped = [], "", False
+    for char in line:
+        if escaped:
+            value += char
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append(value)
+            value = ""
+        else:
+            value += char
+    fields.append(value)
+    return fields
+
+
+def saved_networks():
+    result = run("-t", "-f", "UUID,TYPE", "connection", "show", timeout=8)
+    saved = {}
+    for line in result.stdout.splitlines():
+        fields = split_nmcli(line)
+        if len(fields) != 2 or fields[1] != "802-11-wireless":
+            continue
+        ssid = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", fields[0], timeout=8)
+        if ssid.returncode == 0:
+            saved[ssid.stdout.rstrip("\n")] = fields[0]
+    return saved
+
+
+def wifi_countries():
+    try:
+        rows = Path("/usr/share/zoneinfo/iso3166.tab").read_text().splitlines()
+    except OSError:
+        return [{"code": "US", "name": "United States"}, {"code": "RO", "name": "Romania"}]
+    countries = []
+    for row in rows:
+        if row and not row.startswith("#"):
+            code, name = row.split("\t", 1)
+            countries.append({"code": code, "name": name})
+    return sorted(countries, key=lambda c: (c["code"] not in ("US", "RO"), c["name"]))
+
+
+def wifi_country():
+    try:
+        result = subprocess.run(["raspi-config", "nonint", "get_wifi_country"],
+                                text=True, capture_output=True, timeout=8, check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def set_wifi_country(code):
+    if code not in {c["code"] for c in wifi_countries()}:
+        return {"ok": False, "error": "Choose a valid Wi-Fi country."}
+    try:
+        result = subprocess.run(["raspi-config", "nonint", "do_wifi_country", code],
+                                text=True, capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False, "error": "Wi-Fi country setup is unavailable on this system."}
+    if result.returncode:
+        return {"ok": False, "error": "Could not change the Wi-Fi country."}
+    return {"ok": True, "country": code,
+            "message": f"Wi-Fi country set to {code}. Scan again; a reboot may be needed."}
 
 
 def network_status():
     devices = {}
     result = run("-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status", timeout=10)
     for line in result.stdout.splitlines():
-        parts = line.split(":", 3)
+        parts = split_nmcli(line)
         if len(parts) != 4 or parts[0] not in ("eth0", WLAN_DEVICE):
             continue
         device, _kind, state, connection = parts
@@ -105,7 +161,11 @@ def network_status():
             "connection": connection or "NOT CONNECTED",
             "addresses": [address.split("/", 1)[0] for address in addresses if address],
         }
-    return {"ok": result.returncode == 0, "devices": devices}
+        if device == WLAN_DEVICE and state == "connected":
+            connected = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "id", connection, timeout=8)
+            if connected.returncode == 0:
+                devices[device]["ssid"] = connected.stdout.rstrip("\n")
+    return {"ok": result.returncode == 0, "devices": devices, "country": wifi_country(), "countries": wifi_countries()}
 
 
 def scan_networks():
@@ -123,25 +183,58 @@ def scan_networks():
         timeout=25,
     )
     networks = []
-    seen = set()
+    saved = saved_networks()
     for line in result.stdout.splitlines():
-        parts = line.split(":", 3)
+        parts = split_nmcli(line)
         if len(parts) != 4:
             continue
         active, ssid, security, signal = parts
-        if not ssid or ssid in seen:
+        if not ssid:
             continue
-        seen.add(ssid)
         try:
             strength = int(signal)
         except ValueError:
             strength = 0
-        networks.append({"ssid": ssid, "security": security, "signal": strength, "active": active == "*"})
-    return {"ok": result.returncode == 0, "networks": networks, "message": "Wi-Fi scan complete."}
+        networks.append({"ssid": ssid, "security": security, "signal": strength, "active": active == "*", "saved_uuid": saved.get(ssid)})
+    networks.sort(key=lambda n: (not n["active"], -n["signal"], n["ssid"].casefold()))
+    unique = {}
+    for network in networks:
+        unique.setdefault(network["ssid"], network)
+    return {"ok": result.returncode == 0, "networks": list(unique.values()), "message": "Wi-Fi scan complete."}
+
+
+def manage_saved_network(action, payload):
+    ssid = str(payload.get("ssid") or "")
+    uuid = str(payload.get("saved_uuid") or "")
+    if not ssid or not uuid:
+        return {"ok": False, "error": "Network details changed. Scan again."}
+    check = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", uuid, timeout=8)
+    if check.returncode or check.stdout.rstrip("\n") != ssid:
+        return {"ok": False, "error": "Saved network no longer matches. Scan again."}
+    if action == "disconnect":
+        current = run("-g", "GENERAL.CON-UUID", "device", "show", WLAN_DEVICE, timeout=8)
+        if current.returncode or current.stdout.strip() != uuid:
+            return {"ok": False, "error": "This network is no longer connected."}
+        # Device disconnect suppresses automatic reconnection until the user
+        # explicitly connects again (or reboots), without deleting the profile.
+        result = run("--wait", "15", "device", "disconnect", WLAN_DEVICE, timeout=20)
+        message = "Disconnected. Password kept; tap the saved network to reconnect."
+    elif action == "forget":
+        result = run("connection", "delete", "uuid", uuid, timeout=15)
+        message = "Saved network removed. Select it to set up a connection again."
+    else:
+        return {"ok": False, "error": "Unsupported network request."}
+    if result.returncode:
+        return {"ok": False, "error": "Could not change this network. Please try again."}
+    response = network_status()
+    response.update(ok=True, message=message)
+    if action == "forget":
+        response["forgotten_uuid"] = uuid
+    return response
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "scan", "connect"}:
+    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "scan", "connect", "country", "disconnect", "forget"}:
         json_reply({"ok": False, "error": "Unsupported network request."}, 2)
     action = sys.argv[1]
     if action == "status":
@@ -156,15 +249,21 @@ def main():
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, TypeError):
         json_reply({"ok": False, "error": "Invalid Wi-Fi request."}, 2)
-    ssid = str(payload.get("ssid") or "").strip()
+    if action in ("disconnect", "forget"):
+        response = manage_saved_network(action, payload)
+        json_reply(response, 0 if response["ok"] else 1)
+    if action == "country":
+        response = set_wifi_country(str(payload.get("country") or ""))
+        json_reply(response, 0 if response["ok"] else 1)
+    ssid = str(payload.get("ssid") or "")
     password = str(payload.get("password") or "")
-    if not ssid or not password:
-        json_reply({"ok": False, "error": "Choose a network and enter its Wi-Fi key."}, 2)
-    name, result_message = ensure_persistent_profile(ssid, password)
+    if not ssid:
+        json_reply({"ok": False, "error": "Choose a Wi-Fi network."}, 2)
+    name, result_message = ensure_persistent_profile(ssid, password, payload.get("saved_uuid"), payload.get("open") is True)
     if name is None:
         json_reply({"ok": False, "error": result_message}, 1)
     response = network_status()
-    response.update({"ok": True, "message": result_message, "profile": name})
+    response.update({"ok": True, "message": result_message, "profile": name, "connected_ssid": ssid})
     json_reply(response)
 
 

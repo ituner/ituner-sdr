@@ -55,7 +55,7 @@ class SpectrumSurvey:
         self.insights=SpectrumInsights(self.root);self.insights.seed(self.history,self.data)
         try:self.parents=json.loads((self.root/'survey-return.json').read_text())[-2:]
         except (ValueError,OSError,TypeError):self.parents=[]
-        hub.broker.register('spectrum',lambda:self.stop('Receiver handed to another decoder'))
+        hub.broker.register('spectrum',lambda:self.stop('Receiver handed to another decoder'),lambda:self.control('start'),lambda:self.enabled)
 
     def event(self,action,detail):
         row=dict(time=time.time(),action=action,detail=str(detail)[:1000])

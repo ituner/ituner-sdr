@@ -99,10 +99,11 @@ class ThemeSystemTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect") as rectangles, patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_styled_text_button"), patch.object(ui, "draw_settings_leaf_sidebar"), \
                 patch.object(ui, "draw_network_status_card"), patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_styled_button_frame", return_value=APP_UI_STYLE.button.resolve()), \
                 patch.object(ui, "fit_station_text", side_effect=lambda _cache, value, *_args, **_kwargs: value), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_network_manager(None, {"devices": {}, "networks": [], "ok": True}, False, None)
-            self.assertIn(("NETWORK", tuple(custom["colors"]["text"])),
+            self.assertIn(("Network", tuple(custom["colors"]["text"])),
                           [(item.args[3], tuple(item.args[4])) for item in text.call_args_list])
             text.reset_mock()
             ui.draw_cpu_utilization_graph(None, (), None, (20, 30, 900, 400))

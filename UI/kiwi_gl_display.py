@@ -3,7 +3,7 @@ import argparse
 import calendar
 from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import ctypes
 import errno
 import faulthandler
@@ -82,10 +82,10 @@ class NetworkManagerBridge:
             def invoke(operation, operation_payload=None):
                 result = subprocess.run(
                     ["sudo", "-n", NETWORK_MANAGER_HELPER, operation],
-                    input=json.dumps(operation_payload or {}) if operation == "connect" else None,
+                    input=json.dumps(operation_payload or {}) if operation in ("connect", "country", "disconnect", "forget") else None,
                     text=True,
                     capture_output=True,
-                    timeout=42 if operation == "connect" else 28,
+                    timeout=180 if operation == "connect" else 60,
                     check=False,
                 )
                 try:
@@ -110,16 +110,32 @@ class NetworkManagerBridge:
                 response = invoke("status")
             else:
                 response = invoke(action, payload)
-            notice = response.get("message") or response.get("error") or "Network status updated."
+            notice = response.get("error") or response.get("notice") or response.get("message") or "Network status updated."
             with self._lock:
                 previous_networks = self._snapshot.get("networks", [])
                 self._snapshot.update(response)
                 if action == "status" and not response.get("networks"):
                     self._snapshot["networks"] = previous_networks
                 self._snapshot["notice"] = notice
+                if action in ("refresh", "status", "open", "disconnect", "forget") and "devices" in response:
+                    wifi = response["devices"].get("wlan0", {})
+                    if wifi.get("state") != "connected":
+                        self._snapshot["networks"] = [dict(n, active=False) for n in self._snapshot.get("networks", [])]
+                    elif wifi.get("ssid"):
+                        self._snapshot["networks"] = [dict(n, active=n.get("ssid") == wifi["ssid"]) for n in self._snapshot.get("networks", [])]
+                if response.get("forgotten_uuid"):
+                    self._snapshot["networks"] = [dict(n, saved_uuid=None) if n.get("saved_uuid") == response["forgotten_uuid"] else n
+                                                   for n in self._snapshot.get("networks", [])]
+                if action == "connect" and response.get("ok"):
+                    connected = response.get("connected_ssid") or (payload or {}).get("ssid")
+                    self._snapshot["networks"] = [dict(n, active=n.get("ssid") == connected) for n in previous_networks]
+                if action == "connect":
+                    self._snapshot["connect_result"] = {"ssid": (payload or {}).get("ssid"), "ok": bool(response.get("ok")), "notice": notice}
         except (OSError, subprocess.SubprocessError, ValueError):
             with self._lock:
                 self._snapshot.update({"ok": False, "notice": "Network manager is unavailable."})
+                if action == "connect":
+                    self._snapshot["connect_result"] = {"ssid": (payload or {}).get("ssid"), "ok": False, "notice": "Could not connect. Please try again."}
         finally:
             with self._lock:
                 self._busy = False
@@ -2528,7 +2544,7 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 SETTINGS_MENU_SUBTITLES = {
     "radio_info": "IDENTITY, SITE & GPS",
-    "network": "WI-FI & LAN",
+    "network": "NETWORK",
     "stats": "USAGE HISTORY",
     "tests": "TEST & EXPLORE",
     "system": "HARDWARE & FAN",
@@ -17055,76 +17071,122 @@ def draw_deepgram_setup(text_cache, value, mode, error=""):
     draw_keyboard_modal_sidebar(text_cache, "ASR", "DEEPGRAM API KEY")
 
 
+NETWORK_PAGE_SIZE = 6
+
+
 def network_panel_boxes():
-    """Large, touch-safe Network Manager layout for the 1280x800 display."""
     panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
     x0, y0, x1, y1 = panel
     return {
-        "panel": panel,
-        "back": lcd_drawer_back_box(),
-        "rescan": (x0 + 20, y1 - 72, x0 + 192, y1 - 16),
-        "join": (x0 + 208, y1 - 72, x0 + 380, y1 - 16),
-        "ethernet": (x0 + 20, y0 + 110, x0 + 434, y0 + 250),
-        "wifi": (x0 + 20, y0 + 272, x0 + 434, y0 + 430),
-        "list": (x0 + 462, y0 + 110, x1 - 20, y1 - 92),
+        "panel": panel, "back": lcd_drawer_back_box(),
+        "country": (x1 - 274, y0 + 10, x1 - 20, y0 + 66),
+        "rescan": (x0 + 20, y1 - 66, x0 + 188, y1 - 10),
+        "previous": (x1 - 300, y1 - 66, x1 - 168, y1 - 10),
+        "next": (x1 - 152, y1 - 66, x1 - 20, y1 - 10),
+        "ethernet": (x0 + 20, y0 + 78, (x0 + x1) / 2 - 8, y0 + 200),
+        "wifi": ((x0 + x1) / 2 + 8, y0 + 78, x1 - 20, y0 + 200),
+        "list": (x0 + 20, y0 + 250, x1 - 20, y1 - 100),
     }
 
 
 def network_scan_boxes(networks):
-    list_box = network_panel_boxes()["list"]
-    x0, y0, x1, y1 = list_box
-    columns, gap, row_h = 2, 14, 72
-    width = (x1 - x0 - gap) / columns
-    boxes = []
-    for index, _network in enumerate(networks[:10]):
-        col, row = index % columns, index // columns
-        bx0 = x0 + col * (width + gap)
-        by0 = y0 + 44 + row * (row_h + 10)
-        boxes.append((bx0, by0, bx0 + width, by0 + row_h))
-    return boxes
+    x0, y0, x1, y1 = network_panel_boxes()["list"]
+    row_h = (y1 - y0) / NETWORK_PAGE_SIZE
+    return [(x0, y0 + i * row_h, x1, y0 + (i + 1) * row_h)
+            for i in range(min(len(networks), NETWORK_PAGE_SIZE))]
+
+
+def network_selection_action(network):
+    if network.get("active"):
+        return "manage"
+    security = str(network.get("security") or "").upper()
+    if network.get("saved_uuid"):
+        return "manage"
+    if security in ("", "--"):
+        return "connect"
+    if "802.1X" in security or "EAP" in security or "WEP" in security:
+        return "unsupported"
+    return "password"
+
+
+def network_action_boxes():
+    x0, y0, x1, y1 = network_panel_boxes()["panel"]
+    left, right = x0 + 100, x1 - 100
+    return {"primary": (left, y0 + 300, right, y0 + 364),
+            "forget": (left, y0 + 382, right, y0 + 446),
+            "cancel": (left, y0 + 464, right, y0 + 528)}
+
+
+def draw_network_actions(text_cache, network):
+    x0, y0, x1, y1 = network_panel_boxes()["panel"]
+    color = lambda name: getattr(APP_UI_STYLE.palette, name)
+    draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
+    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO NETWORK")
+    confirm = network.get("confirm_forget")
+    title = "Forget this network?" if confirm else "Wi-Fi network"
+    draw_text(text_cache, x0 + 30, y0 + 38, title, color("text"), 30, True, False, "lm")
+    draw_text(text_cache, x0 + 30, y0 + 110,
+              fit_station_text(text_cache, network.get("ssid", ""), x1-x0-60, 28, True, False),
+              color("ready"), 28, True, False, "lm")
+    lines = (["Removes the saved password and automatic connection.",
+              "If connected, this also disconnects Wi-Fi."] if confirm else
+             ["Disconnect keeps the password for later.", "Forget removes this saved network and its password."])
+    for i, line in enumerate(lines):
+        draw_text(text_cache, x0 + 30, y0 + 180 + i * 36, line, color("secondary_text"), 21, False, False, "lm")
+    boxes = network_action_boxes()
+    draw_network_button(text_cache, boxes["primary"], "Forget network" if confirm else
+                        ("Disconnect" if network.get("active") else "Connect"), 26)
+    if not confirm and network.get("saved_uuid"):
+        draw_network_button(text_cache, boxes["forget"], "Forget network…", 24)
+    draw_network_button(text_cache, boxes["cancel"], "Cancel", 24)
 
 
 def network_password_boxes():
-    panel = (166, 82, LOGICAL_W - 166, LOGICAL_H - 54)
+    # Stay to the left of the shared Back rail; nothing is hidden underneath it.
+    panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
     x0, y0, x1, y1 = panel
-    field = (x0 + 26, y0 + 82, x1 - 26, y0 + 142)
-    fx0, fy0, fx1, fy1 = field
     return {
         "panel": panel,
-        "field": field,
-        "reveal": (fx1 - 70, fy0 + 7, fx1 - 8, fy1 - 7),
-        "mode": (x0 + 26, y0 + 160, x0 + 130, y0 + 216),
-        "caps": (x0 + 146, y0 + 160, x0 + 250, y0 + 216),
-        "clear": (x0 + 266, y0 + 160, x0 + 370, y0 + 216),
-        "cancel": (x1 - 254, y0 + 160, x1 - 146, y0 + 216),
-        "join": (x1 - 130, y0 + 160, x1 - 26, y0 + 216),
+        "field": (x0 + 24, y0 + 112, x1 - 24, y0 + 184),
+        "reveal": (x1 - 124, y0 + 120, x1 - 32, y0 + 176),
+        "mode": (x0 + 24, y0 + 208, x0 + 154, y0 + 268),
+        "caps": (x0 + 170, y0 + 208, x0 + 300, y0 + 268),
+        "clear": (x0 + 316, y0 + 208, x0 + 446, y0 + 268),
+        "space": (x0 + 170, y0 + 550, x1 - 170, y0 + 610),
+        "cancel": (x0 + 24, y1 - 78, x0 + 204, y1 - 14),
+        "join": (x1 - 254, y1 - 78, x1 - 24, y1 - 14),
     }
 
 
 def network_keyboard_rows(mode, caps=False):
     if mode == "symbols":
         labels = ("1234567890", "!@#$%&*_-+", "()[]{}.,/<")
+    elif mode == "symbols2":
+        labels = ("1234567890", "=?:;\\|~`^", "\"'<>[]{}")
     elif caps or mode == "upper":
         labels = ("QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM<")
     else:
         labels = ("qwertyuiop", "asdfghjkl", "zxcvbnm<")
-    panel = network_password_boxes()["panel"]
-    x0, y0, x1, _y1 = panel
-    rows = []
-    for row, keys in enumerate(labels):
-        key_w = min(70, (x1 - x0 - 52) / len(keys))
-        row_w = len(keys) * key_w
-        row_x0 = (x0 + x1 - row_w) / 2
-        rows.append((keys, row_x0, y0 + 242 + row * 72, key_w))
-    return rows
+    x0, y0, x1, _ = network_password_boxes()["panel"]
+    key_w = (x1 - x0 - 48) / 10
+    return [(keys, (x0 + x1 - len(keys) * key_w) / 2,
+             y0 + 292 + row * 84, key_w) for row, keys in enumerate(labels)]
 
 
 def network_password_key_at(x, y, mode, caps=False):
     for keys, x0, y0, key_w in network_keyboard_rows(mode, caps):
-        if y0 <= y <= y0 + 58 and x0 <= x <= x0 + len(keys) * key_w:
-            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
-            return "BACK" if key == "<" else key
+        for i, key in enumerate(keys):
+            if contains((x0 + i * key_w, y0, x0 + (i + 1) * key_w - 6, y0 + 72), x, y):
+                return "BACK" if key == "<" and mode != "symbols2" else key
     return None
+
+
+def draw_network_button(text_cache, box, label, size=22, active=False):
+    # Reuse the shared frame, but preserve keyboard case and explicit type size.
+    visual = draw_styled_button_frame(box, active=active)
+    draw_text(text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
+              label, visual.text, size, True, False, "cm",
+              family=APP_UI_STYLE.button.font_family)
 
 
 def draw_network_password_eye(box, revealed):
@@ -17143,98 +17205,133 @@ def draw_network_password_eye(box, revealed):
         draw_logical_line(cx - 22, cy + 14, cx + 22, cy - 14, themed_instrument_color("text", (225, 241, 243, 235)), 2)
 
 
-def network_status_text(device):
-    state = str(device.get("state", "unavailable")).upper()
-    address = next(iter(device.get("addresses") or ()), "NO IP")
-    connection = str(device.get("connection") or "NOT CONNECTED")
-    return state, connection, address
+def network_status_text(device, wifi=False):
+    """Report link state without assuming that a connected link has Internet."""
+    state = str(device.get("state") or "unavailable")
+    address = ", ".join(device.get("addresses") or [])
+    if state == "connected":
+        detail = (device.get("ssid") or device.get("connection") or "Wi-Fi") if wifi else "Cable connected"
+        return "Connected", str(detail), address or "Waiting for IP address"
+    if state.startswith("connecting"):
+        return "Connecting…", "Obtaining network settings", address or "Waiting for IP address"
+    if state == "unmanaged":
+        return "Unmanaged", "Check system network settings", address or "No IP address"
+    if wifi:
+        return "Not connected", "Choose a network below", "No IP address"
+    return "Not connected", "Plug in an Ethernet cable", "No IP address"
 
 
-def draw_network_status_card(text_cache, box, label, device, preferred):
+def draw_network_status_card(text_cache, box, label, device, wifi=False):
     x0, y0, x1, y1 = box
-    state, connection, address = network_status_text(device or {})
-    active = state == "CONNECTED"
-    edge = themed_instrument_color("active_border", (83, 229, 165, 220)) if active else themed_instrument_color("section_border", (117, 140, 151, 110))
-    fill = themed_instrument_color("active_surface", (10, 35, 34, 236)) if active else themed_instrument_color("section_surface", (13, 23, 30, 232))
-    draw_logical_rect(x0, y0, x1, y1, fill)
-    for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
-    draw_text(text_cache, x0 + 20, y0 + 24, label, themed_instrument_color("text", (225, 241, 243)), 21, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 20, y0 + 24, "PRIMARY" if preferred else "STANDBY", themed_instrument_color("ready", (105, 238, 177)) if active else themed_instrument_color("secondary_text", (143, 169, 173)), 14, True, False, "rm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 62, connection, themed_instrument_color("ready", (112, 229, 169)) if active else themed_instrument_color("secondary_text", (162, 182, 185)), 16, False, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 103, address, themed_instrument_color("text", (206, 225, 228)), 22, True, True, "lm")
+    state, detail, address = network_status_text(device or {}, wifi)
+    color = lambda name: getattr(APP_UI_STYLE.palette, name)
+    active = state == "Connected"
+    draw_logical_rect(*box, color("background"))
+    draw_text(text_cache, x0 + 14, y0 + 24, label, color("text"), 24, True, False, "lm")
+    draw_text(text_cache, x1 - 14, y0 + 24, state,
+              color("ready") if active else color("secondary_text"), 18, False, False, "rm")
+    for y, value, size in ((y0 + 62, detail, 20), (y0 + 96, address, 22)):
+        draw_text(text_cache, x0 + 14, y,
+                  fit_station_text(text_cache, value, x1 - x0 - 28, size, False, False),
+                  color("text") if active else color("secondary_text"), size, False, False, "lm")
 
 
-def draw_network_manager(text_cache, snapshot, busy, selected_ssid):
+def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, country_open=False):
     boxes = network_panel_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     devices = snapshot.get("devices") or {}
     networks = snapshot.get("networks") or []
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, themed_instrument_color("footer_background", (2, 8, 12, 196)))
-    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (7, 18, 25, 248)))
-    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (93, 205, 192, 205)), 2)
-    draw_text(text_cache, x0 + 20, y0 + 35, "NETWORK", themed_instrument_color("text", (230, 245, 247)), 26, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 66, "ETHERNET PREFERRED  ·  WI-FI AUTOMATIC BACKUP", themed_instrument_color("secondary_text", (121, 187, 184)), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 20, y0 + 91, "SELECT A WI-FI NETWORK, THEN ENTER ITS KEY", themed_instrument_color("secondary_text", (171, 220, 215)), 14, True, False, "lm", family="Liberation Sans")
+    color = lambda name: getattr(APP_UI_STYLE.palette, name)
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
+    draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
     draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO SETTINGS")
-    draw_network_status_card(text_cache, boxes["ethernet"], "ETHERNET", devices.get("eth0"), True)
-    draw_network_status_card(text_cache, boxes["wifi"], "WI-FI", devices.get("wlan0"), False)
-    lx0, ly0, lx1, ly1 = boxes["list"]
-    draw_text(text_cache, lx0, ly0 + 14, "WI-FI NETWORKS", themed_instrument_color("section_heading", (207, 232, 234)), 18, True, False, "lm", family="Liberation Sans")
-    scanning = bool(snapshot.get("scanning"))
-    status_label = "SCANNING..." if scanning else ("UPDATING..." if busy else f"{len(networks)} FOUND")
-    draw_text(text_cache, lx1, ly0 + 14, status_label, themed_instrument_color("ready", (109, 235, 178)) if scanning else themed_instrument_color("secondary_text", (145, 184, 189)), 13, True, False, "rm", family="Liberation Sans")
-    scan_boxes = network_scan_boxes(networks)
-    for network, box in zip(networks, scan_boxes):
+    draw_text(text_cache, x0 + 20, y0 + 30, "Network", color("text"), 30, True, False, "lm")
+    draw_network_status_card(text_cache, boxes["ethernet"], "Ethernet", devices.get("eth0"))
+    draw_network_status_card(text_cache, boxes["wifi"], "Wi-Fi", devices.get("wlan0"), wifi=True)
+    draw_text(text_cache, x0 + 20, y0 + 225, "Wi-Fi networks · tap to connect", color("text"), 22, False, False, "lm")
+    scanning = snapshot.get("scanning")
+    draw_text(text_cache, x1 - 20, y0 + 225,
+              "Scanning…" if scanning else f"{len(networks)} networks",
+              color("secondary_text"), 18, False, False, "rm")
+    draw_network_button(text_cache, boxes["country"], "Country: " + (snapshot.get("country") or "Not set"), 20)
+    if country_open:
+        draw_logical_rect(x0 + 10, y0 + 66, x1 - 10, y1 - 70, color("section_surface"))
+        draw_text(text_cache, x0 + 20, y0 + 100, "Select the country where this Pi is located", color("text"), 22, True, False, "lm")
+        draw_text(text_cache, x0 + 20, y0 + 146, "Changing country may interrupt Wi-Fi. Tap a country to apply.", color("secondary_text"), 18, False, False, "lm")
+        networks = [{"ssid": c["name"], "active": c["code"] == snapshot.get("country"),
+                     "code": c["code"]} for c in snapshot.get("countries", [])]
+    visible = networks[page * NETWORK_PAGE_SIZE:(page + 1) * NETWORK_PAGE_SIZE]
+    for network, box in zip(visible, network_scan_boxes(visible)):
         bx0, by0, bx1, by1 = box
-        selected = network.get("ssid") == selected_ssid
         active = bool(network.get("active"))
-        draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("selected_surface", (24, 65, 58, 236)) if selected else themed_instrument_color("section_surface", (14, 31, 40, 230)))
-        edge = themed_instrument_color("selected_border", (104, 236, 177, 246)) if selected else (themed_instrument_color("active_border", (72, 212, 156, 184)) if active else themed_instrument_color("section_border", (95, 125, 136, 120)))
-        for ax0, ay0, ax1, ay1 in ((bx0, by0, bx1, by0), (bx0, by1, bx1, by1), (bx0, by0, bx0, by1), (bx1, by0, bx1, by1)):
-            draw_logical_line(ax0, ay0, ax1, ay1, edge, 1)
-        ssid = fit_station_text(text_cache, str(network.get("ssid", "")), bx1 - bx0 - 26, 17, True, False, family="Liberation Sans")
-        draw_text(text_cache, bx0 + 13, by0 + 21, ssid, themed_instrument_color("text", (232, 246, 247)), 17, True, False, "lm", family="Liberation Sans")
-        security = "LOCKED" if network.get("security") not in ("", "--") else "OPEN"
-        detail = "SELECTED - ENTER WI-FI KEY" if selected else f"{network.get('signal', 0):.0f}%  {security}"
-        draw_text(text_cache, bx0 + 13, by1 - 16, detail, themed_instrument_color("ready", (109, 233, 177)) if selected or active else themed_instrument_color("secondary_text", (158, 188, 193)), 13, True, False, "lm", family="Liberation Sans")
-    if not networks and not busy:
-        draw_text(text_cache, (lx0 + lx1) / 2, (ly0 + ly1) / 2, "NO NETWORKS YET", themed_instrument_color("secondary_text", (139, 166, 170)), 19, True, False, "cm", family="Liberation Sans")
-    draw_picker_button(text_cache, boxes["rescan"], "SCANNING" if scanning else "RESCAN", 16, scanning)
-    join_label = "ENTER WI-FI KEY" if selected_ssid else "SELECT WI-FI"
-    draw_picker_button(text_cache, boxes["join"], join_label, 14 if selected_ssid else 15, bool(selected_ssid) and not busy)
-    notice = str(snapshot.get("notice") or "Select a network, then enter its Wi-Fi key.")
-    draw_text(text_cache, x0 + 408, y1 - 43, fit_station_text(text_cache, notice, x1 - (x0 + 430) - 18, 15, False, False, family="Liberation Sans"), themed_instrument_color("waiting", (241, 175, 121)) if not snapshot.get("ok") else themed_instrument_color("secondary_text", (156, 194, 197)), 15, False, False, "lm", family="Liberation Sans")
+        row_palette = replace(APP_UI_STYLE.palette, surface=color("section_surface"),
+                              border=color("section_surface"), selected_border=color("selected_surface"))
+        visual = draw_styled_button_frame(box, selected=active,
+                                         style=replace(APP_UI_STYLE.button, radius=0, palette=row_palette))
+        ssid = fit_station_text(text_cache, str(network.get("ssid", "")), bx1 - bx0 - 270, 24, True, False)
+        draw_text(text_cache, bx0 + 12, (by0 + by1) / 2, ssid, visual.text, 24, True, False, "lm")
+        detail = "Connected" if active else ("Saved" if network.get("saved_uuid") else
+                  ("Open" if not network.get("security") or network.get("security") == "--" else "Secured"))
+        draw_text(text_cache, bx1 - 12, (by0 + by1) / 2,
+                  (("Current · " if active else "") + network["code"]) if country_open else f"{detail}   {network.get('signal', 0):.0f}%",
+                  color("ready") if active else color("secondary_text"), 19, False, False, "rm")
+        draw_section_divider(bx0, by1, bx1)
+    if not networks:
+        draw_text(text_cache, (x0 + x1) / 2, y0 + 310,
+                  "Searching for networks…" if busy else "No networks found. Tap Scan again.",
+                  color("secondary_text"), 22, False, False, "cm")
+    notice = str(snapshot.get("notice") or "")
+    draw_text(text_cache, x0 + 20, y1 - 84,
+              fit_station_text(text_cache, notice, x1 - x0 - 40, 18, False, False),
+              color("secondary_text") if snapshot.get("ok") else color("waiting"), 18, False, False, "lm")
+    draw_network_button(text_cache, boxes["rescan"], "Cancel" if country_open else ("Scanning…" if scanning else "Scan again"), 22)
+    if len(networks) > NETWORK_PAGE_SIZE:
+        draw_network_button(text_cache, boxes["previous"], "Previous", 20)
+        draw_network_button(text_cache, boxes["next"], "Next", 20)
+        draw_text(text_cache, x0 + 230, y1 - 38,
+                  f"{page + 1} / {(len(networks) + NETWORK_PAGE_SIZE - 1) // NETWORK_PAGE_SIZE}",
+                  color("secondary_text"), 20, False, False, "lm")
 
 
 def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
     boxes = network_password_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, themed_instrument_color("footer_background", (1, 6, 10, 202)))
-    draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (8, 20, 27, 250)))
-    draw_logical_line(x0, y0, x1, y0, themed_instrument_color("section_border", (100, 230, 185, 220)), 2)
-    draw_text(text_cache, x0 + 26, y0 + 30, "JOIN WI-FI", themed_instrument_color("text", (229, 246, 247)), 24, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 26, y0 + 57, fit_station_text(text_cache, ssid, x1 - x0 - 52, 19, False, False, family="Liberation Sans"), themed_instrument_color("ready", (112, 237, 178)), 19, False, False, "lm", family="Liberation Sans")
+    color = lambda name: getattr(APP_UI_STYLE.palette, name)
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
+    draw_logical_rect(*boxes["panel"], color("section_surface"))
+    draw_text(text_cache, x0 + 24, y0 + 30, "Connect to Wi-Fi", color("text"), 28, True, False, "lm")
+    draw_text(text_cache, x0 + 24, y0 + 72,
+              fit_station_text(text_cache, ssid, x1 - x0 - 48, 24, True, False),
+              color("ready"), 24, True, False, "lm")
     fx0, fy0, fx1, fy1 = boxes["field"]
-    draw_logical_rect(fx0, fy0, fx1, fy1, themed_instrument_color("section_surface", (4, 12, 17, 246)))
-    draw_logical_line(fx0, fy0, fx1, fy0, themed_instrument_color("section_border", (84, 153, 152, 185)), 1)
-    field_text = (value if revealed else "*" * len(value)) or ("WI-FI PASSWORD" if placeholder_visible else "")
-    field_size = 32 if value else 20
-    field_width = boxes["reveal"][0] - fx0 - 28
-    rendered_text = fit_station_text(text_cache, field_text, field_width, field_size, False, False, family="Liberation Sans")
-    draw_text(text_cache, fx0 + 14, (fy0 + fy1) / 2, rendered_text, themed_instrument_color("text", (226, 241, 243)) if value else themed_instrument_color("secondary_text", (130, 163, 167)), field_size, False, False, "lm", family="Liberation Sans")
-    draw_network_password_eye(boxes["reveal"], revealed)
-    draw_picker_button(text_cache, boxes["mode"], "123" if mode != "symbols" else "ABC", 16)
-    draw_picker_button(text_cache, boxes["caps"], "CAPS", 16, caps and mode != "symbols")
-    draw_picker_button(text_cache, boxes["clear"], "CLR", 16)
-    draw_picker_button(text_cache, boxes["cancel"], "CANCEL", 15)
-    draw_picker_button(text_cache, boxes["join"], "JOINING" if busy else "JOIN", 16, bool(value) and not busy)
+    draw_logical_rect(*boxes["field"], color("background"))
+    draw_logical_line(fx0, fy1, fx1, fy1, color("focus"), 2)
+    caption = (value if revealed else "•" * len(value)) or "Enter password"
+    # Show the end while typing so long secrets remain editable.
+    width = boxes["reveal"][0] - fx0 - 24
+    if text_cache is not None:
+        while len(caption) > 1 and text_cache.font(28, family=APP_UI_STYLE.button.font_family).size(caption)[0] > width:
+            caption = caption[1:]
+    draw_text(text_cache, fx0 + 12, (fy0 + fy1) / 2, caption,
+              color("text") if value else color("secondary_text"), 28, False, False, "lm",
+              family=APP_UI_STYLE.button.font_family)
+    draw_network_button(text_cache, boxes["reveal"], "Hide" if revealed else "Show", 20, revealed)
+    symbols = mode.startswith("symbols")
+    draw_network_button(text_cache, boxes["mode"], "ABC" if symbols else "123 / #", 22)
+    draw_network_button(text_cache, boxes["caps"], "#+=" if symbols else "Shift", 22, caps and not symbols)
+    draw_network_button(text_cache, boxes["clear"], "Clear", 22)
     for keys, row_x0, row_y0, key_w in network_keyboard_rows(mode, caps):
-        for index, key in enumerate(keys):
-            box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 58)
-            draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 14 if key == "<" else 22)
-    message = error or "Password stays on this Pi only. Ethernet remains preferred."
-    draw_text(text_cache, x0 + 26, y1 - 18, message, themed_instrument_color("waiting", (244, 165, 117)) if error else themed_instrument_color("secondary_text", (143, 183, 187)), 14, False, False, "lm", family="Liberation Sans")
+        for i, key in enumerate(keys):
+            back = key == "<" and mode != "symbols2"
+            box = (row_x0 + i * key_w, row_y0, row_x0 + (i + 1) * key_w - 6, row_y0 + 72)
+            draw_network_button(text_cache, box, "DEL" if back else key, 22 if back else 32)
+    draw_network_button(text_cache, boxes["space"], "Space", 24)
+    draw_network_button(text_cache, boxes["cancel"], "Cancel", 24)
+    draw_network_button(text_cache, boxes["join"], "Connecting…" if busy else "Connect", 26, True)
+    if error:
+        draw_text(text_cache, x0 + 24, y0 + 634,
+                  fit_station_text(text_cache, error, x1 - x0 - 48, 18, False, False),
+                  color("waiting"), 18, False, False, "lm")
     draw_keyboard_modal_sidebar(text_cache, "NETWORK", "WI-FI KEY")
 
 
@@ -23857,6 +23954,10 @@ def main():
     network_panel_open = False
     network_password_open = False
     network_selected_ssid = ""
+    network_page = 0
+    network_country_open = False
+    network_action = None
+    network_connect_pending = False
     network_password_value = ""
     network_password_placeholder_visible = True
     network_password_revealed = False
@@ -25405,7 +25506,7 @@ def main():
 
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
-        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh
+        nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
@@ -25541,7 +25642,11 @@ def main():
             network_password_placeholder_visible = True
             network_password_revealed = False
             network_keyboard_caps = False
-            network_notice = "Loading network status..."
+            network_notice = ""
+            network_page = 0
+            network_country_open = False
+            network_action = None
+            network_connect_pending = False
             network_bridge.request("open")
             network_next_refresh = time.monotonic() + 12.0
             settings_menu_open = False
@@ -25930,7 +26035,7 @@ def main():
             and not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not ((adsb_workspace.open and adsb_workspace.coverage_open) or station_workspace.open
+            and not (adsb_workspace.open or station_workspace.open
                      or (vhf_workspace.open and vhf_workspace.mode == 'spectrum'))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open))
@@ -26130,6 +26235,15 @@ def main():
         return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
 
 
+    def submit_network_password():
+        nonlocal network_notice, network_connect_pending
+        if not 8 <= len(network_password_value) <= 63:
+            network_notice = "Enter a password with 8–63 characters."
+            return
+        if network_bridge.request("connect", {"ssid": network_selected_ssid, "password": network_password_value}):
+            network_connect_pending = True
+            network_notice = f"Connecting to {network_selected_ssid}…"
+
     try:
         if dual_vfo_open:
             start_dual_vfo_clients()
@@ -26199,6 +26313,24 @@ def main():
                     elif event.key==pygame.K_RETURN:station_workspace.key('DONE')
                     elif event.key==pygame.K_BACKSPACE:station_workspace.key('DELETE')
                     elif getattr(event,'unicode','') and event.unicode.isprintable():station_workspace.key(event.unicode)
+                elif event.type == pygame.KEYDOWN and network_action is not None and network_panel_open:
+                    if event.key == pygame.K_ESCAPE:
+                        network_action = None
+                    wake_controls()
+                elif event.type == pygame.KEYDOWN and network_password_open:
+                    if event.key == pygame.K_ESCAPE:
+                        network_password_open = False
+                        network_connect_pending = False
+                        network_password_value = ""
+                        network_password_revealed = False
+                    elif not network_connect_pending:
+                        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                            submit_network_password()
+                        elif event.key == pygame.K_BACKSPACE:
+                            network_password_value = network_password_value[:-1]
+                        elif event.unicode and event.unicode.isprintable() and len(network_password_value) < 63:
+                            network_password_value += event.unicode
+                    wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
                 elif (
@@ -28877,42 +29009,39 @@ def main():
                                 boxes = network_password_boxes()
                                 if network_password_back_requested(x, y):
                                     network_password_open = False
+                                    network_connect_pending = False
                                     network_password_value = ""
                                     network_password_placeholder_visible = True
                                     network_password_revealed = False
                                     network_keyboard_caps = False
                                     network_notice = ""
+                                elif network_connect_pending and not contains(boxes["cancel"], x, y):
+                                    pass
                                 elif contains(boxes["mode"], x, y):
-                                    network_keyboard_mode = "symbols" if network_keyboard_mode != "symbols" else "lower"
+                                    network_keyboard_mode = "lower" if network_keyboard_mode.startswith("symbols") else "symbols"
                                 elif contains(boxes["reveal"], x, y):
                                     network_password_revealed = not network_password_revealed
                                 elif contains(boxes["caps"], x, y):
-                                    network_keyboard_caps = not network_keyboard_caps
-                                    # CAPS is an alphabet control. Return from symbols
-                                    # immediately so its effect is visible on the keys.
-                                    if network_keyboard_mode == "symbols":
-                                        network_keyboard_mode = "lower"
+                                    if network_keyboard_mode.startswith("symbols"):
+                                        network_keyboard_mode = "symbols2" if network_keyboard_mode == "symbols" else "symbols"
+                                    else:
+                                        network_keyboard_caps = not network_keyboard_caps
                                 elif contains(boxes["clear"], x, y):
                                     network_password_value = ""
                                     network_password_placeholder_visible = False
                                     network_notice = ""
                                 elif contains(boxes["cancel"], x, y):
                                     network_password_open = False
+                                    network_connect_pending = False
                                     network_password_value = ""
                                     network_password_placeholder_visible = True
                                     network_password_revealed = False
                                     network_keyboard_caps = False
                                     network_notice = ""
                                 elif contains(boxes["join"], x, y):
-                                    if len(network_password_value) >= 8 and network_bridge.request(
-                                        "connect", {"ssid": network_selected_ssid, "password": network_password_value}
-                                    ):
-                                        network_notice = f"Joining {network_selected_ssid}..."
-                                        network_password_value = ""
-                                        network_password_placeholder_visible = True
-                                        network_password_revealed = False
-                                        network_keyboard_caps = False
-                                        network_next_refresh = time.monotonic() + 4.0
+                                    submit_network_password()
+                                elif contains(boxes["space"], x, y) and len(network_password_value) < 63:
+                                    network_password_value += " "
                                 elif contains(boxes["field"], x, y):
                                     network_password_placeholder_visible = False
                                 else:
@@ -28929,29 +29058,70 @@ def main():
                             if moved <= args.tap_px:
                                 boxes = network_panel_boxes()
                                 snapshot, busy = network_bridge.snapshot()
-                                networks = snapshot.get("networks") or []
-                                if contains(boxes["back"], x, y):
+                                networks = (snapshot.get("countries") if network_country_open else snapshot.get("networks")) or []
+                                if network_action is not None:
+                                    action_boxes = network_action_boxes()
+                                    if contains(boxes["back"], x, y) or contains(action_boxes["cancel"], x, y):
+                                        network_action = None
+                                    elif not busy:
+                                        if contains(action_boxes["forget"], x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
+                                            network_action = dict(network_action, confirm_forget=True)
+                                        elif contains(action_boxes["primary"], x, y):
+                                            operation = "forget" if network_action.get("confirm_forget") else ("disconnect" if network_action.get("active") else "connect")
+                                            if network_bridge.request(operation, network_action):
+                                                network_connect_pending = operation == "connect"
+                                                network_notice = ""
+                                                network_action = None
+                                                network_next_refresh = time.monotonic() + 12.0
+                                elif contains(boxes["back"], x, y):
                                     network_panel_open = False
                                     network_selected_ssid = ""
                                     settings_menu_open = True
                                     digital_menu_open = False
+                                elif contains(boxes["country"], x, y) and not busy:
+                                    network_country_open = not network_country_open
+                                    network_page = 0
                                 elif contains(boxes["rescan"], x, y):
-                                    network_bridge.request("scan")
-                                    network_notice = "Scanning Wi-Fi networks..."
-                                elif contains(boxes["join"], x, y) and network_selected_ssid and not busy:
-                                    network_password_open = True
-                                    network_password_value = ""
-                                    network_password_placeholder_visible = True
-                                    network_password_revealed = False
-                                    network_keyboard_mode = "lower"
-                                    network_keyboard_caps = False
-                                    network_notice = ""
-                                else:
-                                    for network, box in zip(networks, network_scan_boxes(networks)):
-                                        if contains(box, x, y):
-                                            network_selected_ssid = str(network.get("ssid") or "")
-                                            network_notice = f"{network_selected_ssid} selected. Tap ENTER WI-FI KEY to continue."
+                                    if network_country_open:
+                                        network_country_open = False
+                                        network_page = 0
+                                    elif network_bridge.request("scan"):
+                                        network_notice = ""
+                                elif contains(boxes["previous"], x, y):
+                                    network_page = max(0, network_page - 1)
+                                elif contains(boxes["next"], x, y):
+                                    network_page = min(max(0, (len(networks) - 1) // NETWORK_PAGE_SIZE), network_page + 1)
+                                elif not busy:
+                                    visible = networks[network_page * NETWORK_PAGE_SIZE:(network_page + 1) * NETWORK_PAGE_SIZE]
+                                    for network, box in zip(visible, network_scan_boxes(visible)):
+                                        if not contains(box, x, y):
+                                            continue
+                                        if network_country_open:
+                                            if network_bridge.request("country", {"country": network["code"]}):
+                                                network_country_open = False
+                                                network_page = 0
+                                                network_notice = ""
                                             break
+                                        network_selected_ssid = str(network.get("ssid") or "")
+                                        action = network_selection_action(network)
+                                        network_password_value = ""
+                                        network_password_revealed = False
+                                        network_keyboard_mode = "lower"
+                                        network_keyboard_caps = False
+                                        network_notice = ""
+                                        if action == "password":
+                                            network_password_open = True
+                                        elif action == "connect":
+                                            if network_bridge.request("connect", {"ssid": network_selected_ssid,
+                                                                                 "saved_uuid": network.get("saved_uuid"),
+                                                                                 "open": network.get("security") in (None, "", "--")}):
+                                                network_connect_pending = True
+                                                network_notice = f"Connecting to {network_selected_ssid}…"
+                                        elif action == "manage":
+                                            network_action = dict(network)
+                                        else:
+                                            network_notice = "Enterprise / WEP networks require setup outside this screen."
+                                        break
                             wake_controls()
                         elif touch_started and gesture == "callsign_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -29504,15 +29674,24 @@ def main():
                     f"{receiver_home_profile['lat']:.4f},{receiver_home_profile['lon']:.4f}",
                     flush=True,
                 )
-            if network_panel_open and now >= network_next_refresh:
+            if network_panel_open and network_action is None and not network_password_open and not network_connect_pending and now >= network_next_refresh:
                 network_bridge.request("refresh")
                 network_next_refresh = now + 12.0
             network_snapshot, network_busy = network_bridge.snapshot()
-            if network_password_open and not network_busy:
-                wifi_state = str((network_snapshot.get("devices") or {}).get("wlan0", {}).get("state", "")).lower()
-                if wifi_state == "connected":
-                    network_password_open = False
-                    network_notice = str(network_snapshot.get("notice") or "Wi-Fi connected.")
+            network_page = min(network_page, max(0, (len(network_snapshot.get("countries" if network_country_open else "networks") or []) - 1) // NETWORK_PAGE_SIZE))
+            if network_connect_pending and not network_busy:
+                result = network_snapshot.get("connect_result") or {}
+                if result.get("ssid") == network_selected_ssid:
+                    network_connect_pending = False
+                    network_notice = str(result.get("notice") or "Could not connect.")
+                    if result.get("ok"):
+                        network_password_open = False
+                        network_password_value = ""
+                        network_password_revealed = False
+                    else:
+                        selected = next((n for n in network_snapshot.get("networks", []) if n.get("ssid") == network_selected_ssid), {})
+                        security = str(selected.get("security") or "").upper()
+                        network_password_open = bool(security and security != "--" and "EAP" not in security and "802.1X" not in security and "WEP" not in security)
             if picker_open and picker_map_open:
                 map_dt = min(0.05, max(0.0, now - picker_map_motion_at))
                 picker_map_motion_at = now
@@ -30298,7 +30477,9 @@ def main():
                 network_draw_snapshot = dict(network_snapshot)
                 if network_notice:
                     network_draw_snapshot["notice"] = network_notice
-                draw_network_manager(text_cache, network_draw_snapshot, network_busy, network_selected_ssid)
+                draw_network_manager(text_cache, network_draw_snapshot, network_busy, network_selected_ssid, network_page, network_country_open)
+                if network_action is not None:
+                    draw_network_actions(text_cache, network_action)
                 if network_password_open:
                     draw_network_password(
                         text_cache,

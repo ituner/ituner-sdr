@@ -6,9 +6,14 @@ observations on both screens, without claiming an SDR or starting ADS-B.
 
 - **Sky cells** projects received directions onto an angular hemisphere, in
   4° azimuth × 2° elevation cells. Blue means received; grey means unknown.
-- **Sky trails** shows received positions projected onto that hemisphere.
-- **True 3D distance** preserves east/north/up distances, with 5 km horizontal
-  rings and no vertical exaggeration. Drag to rotate; use sliders (web) or
+- **Sky trails** shows received positions projected onto that hemisphere, with brighter connecting lines. Display thinning preserves links only where the original observations establish continuous reception; real gaps remain split.
+- **3D distance** fits the ground disk and every displayed aircraft to the viewport.
+  Height defaults to **Fit height**, with the expansion factor explicitly shown
+  on the plot. **True scale · 1:1** (web Height display / touchscreen Height)
+  restores equal horizontal and vertical units. Horizontal range, altitude
+  readouts and point details always retain actual values. One graduated ground
+  ruler and a height axis replace per-point distance labels. Entering this view
+  uses a lower 25° camera tilt to reveal vertical separation. Drag to rotate; use sliders (web) or
   rotation/tilt buttons (touch). Tap a point to inspect it; on touch this also
   filters its aircraft. Reset restores all aircraft.
 - **RX radius** is the maximum observed horizontal distance from the configured
@@ -33,6 +38,9 @@ independently of the 24-hour traffic trails. Retention is up to 90 days and
 flight logging cadence. SQLite reuses pages as older positions expire. Sky-cell
 statistics and extrema use the full retained history. To bound UI payloads, dot
 views are thinned above 20,000 positions, preserving maximum altitude/range.
+Links between retained dots are built before thinning: a longer displayed segment
+is only confirmed when all intervening original links pass the time, movement
+and receiver-lifecycle checks. It does not invent continuity across a gap.
 
 The `/api/coverage` endpoint reads a cached snapshot built on the receiver
 worker. The native renderer builds cached 3D geometry off the GL/touch thread, then
@@ -48,7 +56,7 @@ Positions must be directly received ADS-B, with finite coordinates, a numeric
 altitude and position age ≤10 seconds. Duplicates are removed. WGS84 ECEF→ENU
 accounts for Earth curvature. GNSS altitude is preferred; a barometric fallback
 uses open dots. RSSI is readsb's recent aircraft average in dBFS, not calibrated
-antenna gain. Short trails connect observations no more than 15 seconds apart,
+antenna gain. Trails connect original observations no more than 15 seconds apart,
 with implausible jumps and receiver lifecycle boundaries split. Web optionally
 shows dashed inferred links across 15–120 second position gaps.
 

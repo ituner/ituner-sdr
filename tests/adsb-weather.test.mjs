@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+let source=await readFile(new URL('../UI/adsb_weather.js',import.meta.url),'utf8');
+source=source.replace("import {ADSBGlobe} from './adsb_globe.js';",'');
+const {radarRectangles,weatherStatus}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const b={scale:0,bounds:[-122.4,37.6,-121.6,37.6+4/60],bins:[...Array(32).fill(7),...Array(96).fill(255)],expires_at:200};
+const rects=radarRectangles([b],100);
+assert.equal(rects.length,1);assert.equal(rects[0].level,7);
+assert.equal(rects[0].bounds[3],b.bounds[3]);assert.ok(Math.abs(rects[0].bounds[1]-(b.bounds[3]-1/60))<1e-9);
+assert.deepEqual(radarRectangles([b],201),[]);
+assert.match(weatherStatus({status:'LISTENING',last_uplink_at:null},100)[0],/Listening/);
+assert.match(weatherStatus({status:'RECEIVING',last_uplink_at:99},100)[0],/received/);
+assert.match(weatherStatus({status:'STOPPED'},100)[0],/stopped/);
+console.log('PASS: weather expiry, radar orientation, extreme echoes and explicit reception states');

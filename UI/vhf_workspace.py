@@ -3,6 +3,7 @@ import math
 import textwrap
 import time
 from decoder_style import DecoderStyle
+from dongle_workspace import DongleWorkspace
 from types import SimpleNamespace
 from adsb_workspace import ADSBWorkspace
 from sstv_workspace import SSTVWorkspace
@@ -22,6 +23,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
         self.navigation_history=[]
+        self.dongles=DongleWorkspace(ui,hub)
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
         self.map=ADSBWorkspace(ui,MapAdapter(self))
         self.map.trail_seconds=86400  # Independent VHF map keeps its existing history window.
@@ -43,12 +45,15 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def panel(self,box):self.ui.draw_logical_rounded_rect(*box,self.RADIUS,self.PANEL,self.LINE,1)
 
     def drag_begin(self,x,y):
+        if self.dongles and self.dongles.open:return False
         if self.mode=='spectrum':return self.spectrum.drag_begin(x,y)
         self.map.drag_begin(x,y)
     def drag_move(self,sx,sy,x,y):
+        if self.dongles and self.dongles.open:return False
         if self.mode=='spectrum':return self.spectrum.drag_move(sx,sy,x,y)
         if self.view=='map' and not self.overlay:self.map.drag_move(sx,sy,x,y)
     def swipe(self,sx=None,sy=None,x=None,y=None):
+        if self.dongles and self.dongles.open:return False
         if self.mode=='spectrum':return self.spectrum.swipe(sx,sy,x,y)
         if sx is None:return self.map.swipe()
         if abs(y-sy)>60 and abs(y-sy)>abs(x-sx)*1.5:
@@ -69,12 +74,14 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
         else:self.open=False
 
     def tap(self,x,y):
+        if self.dongles.open:return self.dongles.tap(x,y)
         if self.mode=='spectrum':
             self.spectrum.tap(x,y);self.open=self.spectrum.open;return
         for box,(action,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             try:
-                if action=='home':self.open=False
+                if action=='dongles':self.dongles.show()
+                elif action=='home':self.open=False
                 elif action=='back':self.back()
                 elif action=='view':
                     if value!=self.view or self.overlay:self.navigate(view=value)
@@ -234,6 +241,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             if self.mode=='meteor':self.button(cache,(40,550,974,640),'CONTINUOUS RECEPTION',('continuous',None),'ON · SAVE EACH PASS' if state['settings'].get('continuous') else 'OFF · SINGLE CAPTURE',active=state['settings'].get('continuous',False))
             return
         if self.overlay=='usb':
+            self.button(cache,(40,626,506,684),'DONGLES / RENAME',('dongles',None))
             for i,(label,action) in enumerate((('GAIN',('number','gain')),('PPM',('number','ppm')),('SITE',('overlay','location')))):
                 self.button(cache,(590+i*130,108,712+i*130,150),label,action)
         title='RECEPTION PROFILES' if self.overlay=='profiles' else 'USB RECEIVER ASSIGNMENT'
@@ -245,10 +253,11 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             key='profile' if self.overlay=='profiles' else 'assign';label=item.get('name',item.get('label'))
             subtitle=f"{item['frequency']/1e6:.6f} MHz" if 'frequency' in item else self.manager.broker.snapshot().get(item['id'],'available')
             self.button(cache,(x,y,x+458,y+96),label,(key,item['id']),subtitle)
-        self.text(cache,40,654,f'PAGE {self.overlay_page+1} / {pages}',14,self.MUTED)
+        self.text(cache,40,616,f'PAGE {self.overlay_page+1} / {pages}',14,self.MUTED)
         self.button(cache,(526,626,740,684),'PREVIOUS',('page',-1));self.button(cache,(754,626,968,684),'NEXT',('page',1))
 
     def draw(self,cache):
+        if self.dongles.open:return self.dongles.draw(cache)
         if self.mode=='spectrum':return self.spectrum.draw(cache)
         ui=self.ui;self.actions=[];state=self.session.snapshot()
         ui.draw_logical_rect(0,0,1280,800,self.BG);self.header(cache,state)

@@ -56,10 +56,10 @@ class DecoderThemeTests(unittest.TestCase):
             for view in ('map','traffic','logs','usb','coverage'):
                 w.traffic_open=view=='traffic';w.logs_open=view=='logs';w.usb_open=view=='usb';w.coverage_open=view=='coverage'
                 w.open=True;w.draw(Mock())
-                self.assert_navigation_clear(w,rail=view!='coverage')
+                self.assert_navigation_clear(w)
                 box=next(box for box,action in w.actions if action==('back',None))
                 w.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
-                self.assertEqual(w.open, view != "map", view)
+                self.assertEqual(w.open,view!='map',view)
                 self.assertFalse(w.coverage_open or w.traffic_open or w.logs_open or w.usb_open)
 
     def test_adsb_back_retraces_nested_views_before_leaving_decoder(self):
@@ -85,31 +85,34 @@ class DecoderThemeTests(unittest.TestCase):
         boxes=[c.args[1] for c in ui.draw_styled_two_line_button.call_args_list]
         for box,action in w.actions:
             self.assertIn(box,boxes,action)
-        self.assertIn(RAIL_BACK_BOX,boxes)
-        self.assertIn((1034,12,1270,76),boxes)
+        self.assertIn(full_width_back_box(),boxes)
+        self.assertIn(('settings',None),[action for _,action in w.actions])
+        self.assertEqual(w.MAP,(0,0,1280,712))
         # A left-side physical BACK hit must map to the same HOME rail coordinates.
         self.assertEqual(theme_system.display_to_logical_x(20),1044)
         clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC (UTC)']
         self.assertEqual(len(clock),1)
-        self.assertEqual(clock[0].args[1:3],(18,771))
+        self.assertEqual(clock[0].args[1:3],(274,771))
         self.assertEqual(clock[0].args[5],18)
         for i,(box,action) in enumerate(w.actions):
             for other,item in w.actions[i+1:]:
                 self.assertFalse(overlap(box,other),(action,item))
-        w.open=True;w.tap(theme_system.display_to_logical_x(20),750)
+        w.open=True;w.tap(20,750)
         self.assertFalse(w.open)
 
     def test_footprint_control_uses_theme_and_stays_above_footer(self):
         w,ui,manager,state=test_adsb.WorkspaceTests().dashboard()
         for name in theme_system.BUILTIN_THEMES:
             self.apply(name=name)
+            w.navigate('map',remember=False);w.navigation=[]
             w.open=True;w.rx_footprint=True;ui.reset_mock();w.draw(Mock())
+            self.assertIn(('fit',None),[action for _,action in w.actions])
+            w.navigate('options');w.draw(Mock())
             box=next(box for box,action in w.actions if action==('rx_footprint',None))
             self.assertGreaterEqual(box[3]-box[1],56)
             self.assertLessEqual(box[3],712)
             call=next(c for c in ui.draw_styled_two_line_button.call_args_list if c.args[1]==box)
             self.assertTrue(call.kwargs['active'])
-            self.assertIn(('fit',None),[action for _,action in w.actions])
             w.tap((box[0]+box[2])/2,(box[1]+box[3])/2)
             self.assertFalse(w.rx_footprint)
             self.assertTrue(w.open)

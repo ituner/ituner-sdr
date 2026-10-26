@@ -8,7 +8,7 @@ sources=/usr/local/src/ituner-vhf
 install -d "$prefix/bin" "$prefix/licenses" "$sources"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  git cmake build-essential pkg-config libusb-1.0-0-dev librtlsdr-dev \
+  git cmake build-essential pkg-config libusb-1.0-0-dev librtlsdr-dev rtl-sdr \
   soapysdr-tools soapysdr-module-rtlsdr libsoapysdr-dev python3-soapysdr \
   python3-numpy python3-scipy python3-yaml python3-aprslib python3-ephem \
   rtl-433 direwolf gnuradio gr-satellites satdump libfftw3-dev \
@@ -42,5 +42,6 @@ install -m 0644 "$repo"/UI/vhf_*.py "$repo"/UI/vhf_dashboard.{html,css,js} \
 install -m 0644 "$repo"/UI/{spectrum_monitor,spectrum_history,spectrum_analysis,spectrum_report,spectrum_workspace,soapy_survey}.py "$repo"/UI/spectrum.{html,css,js} "$repo"/UI/spectrum_tools.js "$repo"/UI/spectrum_allocations.json /opt/ituner-sdr/UI/
 dpkg-query -W soapysdr-tools soapysdr-module-rtlsdr rtl-433 direwolf gnuradio gr-satellites satdump > "$prefix/versions.txt"
 printf '%s\n' 'AIS-catcher 5404fd71dda8f39cc73e5fdf7b58e3f1ecb38a4c' 'RS1729 89b1ea7f3371d99c630f6734c42014d88e667853' >> "$prefix/versions.txt"
+install -m 0644 "$repo"/UI/{rtl_registry,rtl_eeprom_access,dongle_web,dongle_workspace}.py "$repo"/UI/dongles.{html,css,js} /opt/ituner-sdr/UI/
 install -m 0644 "$repo"/UI/station*.py "$repo"/UI/station.{html,css,js} /opt/ituner-sdr/UI/
 echo 'Installed. Restart ituner-sdr.service to load the decoder menu. Browser: http://cm5.local:8092/'

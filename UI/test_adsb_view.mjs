@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const source=fs.readFileSync(new URL('./adsb_view.js',import.meta.url),'utf8');
+const {TrafficView}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const plane=(heard=100,position=100)=>({hex:'a',last_seen_at:heard,gs:250,...(position===null?{}:{lat:44,lon:26,position_time:position})});
+const view=new TrafficView(100);view.ingest([plane()],100);
+assert.equal(view.pressLive(),false);assert.equal(view.liveSeconds,15);
+assert.equal(view.aircraft([plane()],{},115,true).length,0);
+assert.equal(view.pressLive(),true);assert.equal(view.liveSeconds,30);
+assert.equal(view.aircraft([],{},120,true)[0].historical,true);
+assert.equal(view.counts([],120).live,0);assert.equal(view.counts([],120).positions,1);
+const speed=plane(129,null);view.ingest([speed],129);
+assert.equal(view.aircraft([speed],{},129,true)[0].position_time,100);
+assert.equal(view.aircraft([speed],{},130,true).length,0);
+assert.equal(view.trailVisible('a',[speed],130),false);
+for(const seconds of [60,120,300,15]){view.pressLive();assert.equal(view.liveSeconds,seconds);assert.equal(view.trailSeconds,300);}
+view.mode='history';view.liveSeconds=60;assert.equal(view.pressLive(),false);assert.equal(view.liveSeconds,60);
+const tracks={a:[{time:120,lat:44,lon:26}]};assert.equal(view.aircraft([],tracks,140,true)[0].historical,true);
+assert.equal(view.trailVisible('a',[],140,tracks.a),true);
+view.startFresh(141);assert.equal(view.aircraft([],tracks,142,true).length,0);
+assert.equal(view.aircraft([],{a:[{time:999999,lat:44,lon:26}]},142,true).length,0);
+console.log('ADS-B web viewing-window checks passed');

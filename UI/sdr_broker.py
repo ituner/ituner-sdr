@@ -4,6 +4,7 @@ Discovery reads USB descriptors; claiming a receiver happens only on Start.
 Callbacks request a graceful stop, and a new owner must wait for release.
 """
 import threading
+import time
 
 
 def soapy_args(device):
@@ -19,9 +20,27 @@ class ReceiverBroker:
         self.lock = threading.RLock()
         self.leases = {}
         self.stoppers = {}
+        self.resumers = {}
 
-    def register(self, owner, stop):
-        with self.lock: self.stoppers[owner] = stop
+    def register(self, owner, stop, resume=None, enabled=None):
+        with self.lock:
+            self.stoppers[owner] = stop
+            if resume and enabled:self.resumers[owner]=(resume,enabled)
+
+    def pause(self):
+        with self.lock:
+            active=[(self.stoppers[k],resume) for k,(resume,enabled) in self.resumers.items() if enabled()]
+        def restore():
+            for _,resume in active:resume()
+        try:
+            for stop,_ in active:stop()
+            deadline=time.monotonic()+8
+            while self.snapshot():
+                if time.monotonic()>deadline:raise ValueError('Receiver is still busy; stop it and try again')
+                time.sleep(.05)
+        except Exception:
+            restore();raise
+        return restore
 
     def request(self, owner, devices, selection='auto', handoff=True):
         """User-requested handoff, preferring an unused receiver for Auto."""
@@ -37,6 +56,7 @@ class ReceiverBroker:
 
     def acquire(self, owner, device):
         with self.lock:
+            if owner!='dongle-maintenance' and 'dongle-maintenance' in self.leases.values():return False
             if self.leases.get(device) not in (None, owner): return False
             self.leases[device] = owner
             return True

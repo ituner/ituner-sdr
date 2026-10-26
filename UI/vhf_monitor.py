@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from urllib.request import urlopen
 from station_web import station_get, station_post
 from adsb_monitor import ADSBHandler, rtl_devices
+from dongle_web import dongle_get, dongle_post
 from adsb_globe import GlobeAssets
 from adsb_traffic import receiver_position
 from web_app_preview import WebAppPreviews, WEB_APPS, preview_html
@@ -110,7 +111,7 @@ class DecoderSession:
         resume=(self.mode=='ism' and getattr(hub,'rtl433_ui_installed',False)) or (self.mode=='meteor' and self.settings.get('continuous') is True)
         self.enabled=bool(resume and self.settings.get('enabled') is True)
         self.target=self.settings['selection']; self.tle_busy=False
-        hub.broker.register(self.owner,lambda:self.control('stop'))
+        hub.broker.register(self.owner,lambda:self.control('stop'),lambda:self.control('start'),lambda:self.enabled)
         try:
             with (self.root/'receiver.log').open('rb') as stream:
                 stream.seek(0,2);size=stream.tell();stream.seek(max(0,size-65536));lines=stream.read(65536).decode('utf-8','replace').splitlines()
@@ -523,7 +524,12 @@ class VHFHub:
 
     def _worker(self):
         while not self.closed.is_set():
-            try:self.devices=self.scanner()
+            try:
+                self.devices=self.scanner()
+                from rtl_registry import REGISTRY
+                for session in {**self.sessions,**self.sensor_receivers}.values():
+                    selection=REGISTRY.resolve(session.settings['selection'],self.devices)
+                    if selection!=session.settings['selection']:session.control('configure',selection=selection)
             except (OSError,RuntimeError):self.devices=[]
             try:self.refresh_assets()
             except OSError:pass
@@ -593,6 +599,7 @@ class VHFHub:
 class VHFHandler(ADSBHandler):
     def do_GET(self):
         manager=self.server.manager;request=urlsplit(self.path);path=unquote(request.path);query=parse_qs(request.query)
+        if dongle_get(self,path):return
         try:
             if path.startswith('/apps/'):
                 key=path.removeprefix('/apps/')
@@ -647,6 +654,7 @@ class VHFHandler(ADSBHandler):
         except (ValueError,OSError,KeyError) as exc:self.send(json.dumps(dict(error=str(exc))).encode(),status=400)
 
     def do_POST(self):
+        if self.path=='/api/dongles':dongle_post(self);return
         if self.path=='/api/station':station_post(self);return
         manager=self.server.manager
         origin=self.headers.get('Origin')

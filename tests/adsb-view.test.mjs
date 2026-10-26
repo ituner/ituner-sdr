@@ -4,6 +4,30 @@ import test from 'node:test';
 const source=await readFile(new URL('../UI/adsb_view.js',import.meta.url),'utf8');
 const {TrafficView,aged,freshness}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const plane=(hex='a',heard=100,position=100)=>({hex,last_seen_at:heard,...(position===null?{}:{lat:44,lon:26,position_time:position})});
+test('aircraft icons switch independently without removing saved aircraft or affecting Live',()=>{
+ const v=new TrafficView(100),tracks={old:[{time:90,lat:44,lon:26}]};v.mode='history';
+ assert.equal(v.iconsVisible(false),true);v.historyIcons=false;assert.equal(v.iconsVisible(true),false);
+ assert.equal(v.historyLabels,false);assert.equal(v.historyTrails,false);
+ assert.deepEqual(v.aircraft([],tracks,110,true).map(p=>p.hex),['old']);
+ v.mode='live';assert.equal(v.iconsVisible(true),true);
+ v.mode='history';assert.equal(v.iconsVisible(true),false);
+});
+test('history names default off independently of Live labels and trail visibility',()=>{
+ const v=new TrafficView(100);assert.equal(v.labelsVisible(true),true);assert.equal(v.labelsVisible(false),false);
+ v.mode='history';assert.equal(v.labelsVisible(true),false);
+ v.historyLabels=true;assert.equal(v.labelsVisible(false),true);assert.equal(v.historyTrails,false);
+ v.mode='live';assert.equal(v.labelsVisible(false),false);
+ v.mode='history';assert.equal(v.labelsVisible(false),true);
+});
+test('history hides trail lines and dots by default while retaining selectable aircraft',()=>{
+ const v=new TrafficView(100),tracks={old:[{time:90,lat:44,lon:26}]};v.mode='history';
+ assert.equal(v.trailVisible('old',[],110,tracks.old),false);
+ assert.deepEqual(v.aircraft([],tracks,110,true).map(p=>p.hex),['old']);
+ v.historyTrails=true;assert.equal(v.trailVisible('old',[],110,tracks.old),true);
+ v.mode='live';assert.equal(v.trailVisible('a',[plane('a',110,110)],110),true);
+ v.mode='history';assert.equal(v.trailVisible('old',[],110),true);
+ assert.equal(tracks.old[0].time,90);
+});
 test('live ages RF contact independently from a stale aircraft position',()=>{
   const v=new TrafficView(100),planes=[plane(),plane('speed',110,80),plane('gone',90)];v.ingest(planes,110);
   assert.deepEqual(v.counts(planes,110),{live:2,positions:1,new:0});

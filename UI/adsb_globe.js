@@ -30,7 +30,7 @@ export class ADSBGlobe {
     this.storageKey=storageKey;
     this.host=host; this.onSelect=onSelect; this.onError=onError;
     this.yaw=25*RAD; this.pitch=45*RAD; this.scale=5; this.radiusFactor=.92; this.dragGain=1;
-    this.footprintEnabled=true;this.footprint=null;this.historicalMarkers=false;this.style='both'; this.following=false; this.labels=true; this.rings=false; this.trailSeconds=900; this.site=null; this.planes=[]; this.selected=null; this.centered=false;
+    this.footprintEnabled=true;this.footprint=null;this.historicalMarkers=false;this.style='both'; this.following=false; this.labels=true; this.aircraftIcons=true; this.rings=false; this.trailSeconds=900; this.site=null; this.planes=[]; this.selected=null; this.centered=false;
     this.tiles=new Map(); this.traces=new Map(); this.wanted=[]; this.pending=new Set();
     this.canvas=document.createElement('canvas'); this.canvas.setAttribute('aria-label','GLOBE satellite map');
     this.overlay=document.createElement('canvas'); this.overlay.setAttribute('aria-hidden','true');
@@ -92,6 +92,8 @@ export class ADSBGlobe {
   }
   resize(){const rect=this.host.getBoundingClientRect();this.width=Math.max(1,rect.width);this.height=Math.max(1,rect.height);const dpr=Math.min(devicePixelRatio||1,2);for(const c of [this.canvas,this.overlay]){c.width=Math.round(this.width*dpr);c.height=Math.round(this.height*dpr);}this.ctx.setTransform(dpr,0,0,dpr,0,0);this.render();}
   save(){try{localStorage.setItem(this.storageKey,JSON.stringify({yaw:this.yaw,pitch:this.pitch,scale:this.scale,footprintEnabled:this.footprintEnabled}));}catch{}}
+  get showAircraftIcons(){return this.trafficView?this.trafficView.iconsVisible(this.aircraftIcons!==false):this.aircraftIcons!==false;}
+  get showAircraftLabels(){return this.trafficView?this.trafficView.labelsVisible(this.labels!==false):this.labels!==false;}
   bind() {
     const points=new Map(); let origin=null,moved=false;
     const reset=()=>{const a=[...points.values()];origin={yaw:this.yaw,pitch:this.pitch,scale:this.scale,points:a};moved=false;};
@@ -101,7 +103,7 @@ export class ADSBGlobe {
       else if(a.length===2&&origin.points.length===2){const distance=p=>Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]);this.scale=clamp(origin.scale*distance(a)/Math.max(1,distance(origin.points)),MAP_ZOOM_MIN,MAP_ZOOM_MAX);this.centered=true;moved=true;}
       this.render();
     });
-    const end=e=>{if(!points.has(e.pointerId))return;const tap=points.size===1&&!moved;points.delete(e.pointerId);if(tap){const r=this.overlay.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;const near=this.mapAircraft().map(p=>({p,point:this.project(p)})).filter(v=>v.point).map(v=>({p:v.p,d:Math.hypot(v.point[0]-x,v.point[1]-y)})).sort((a,b)=>a.d-b.d);if(near[0]?.d<32){this.selected=near[0].p.hex;this.onSelect(near[0].p);this.render();}}
+    const end=e=>{if(!points.has(e.pointerId))return;const tap=points.size===1&&!moved;points.delete(e.pointerId);if(tap&&(this.showAircraftIcons||this.showAircraftLabels)){const r=this.overlay.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;const near=this.mapAircraft().map(p=>({p,point:this.project(p)})).filter(v=>v.point).map(v=>({p:v.p,d:Math.hypot(v.point[0]-x,v.point[1]-y)})).sort((a,b)=>a.d-b.d);if(near[0]?.d<32){this.selected=near[0].p.hex;this.onSelect(near[0].p);this.render();}}
       reset();this.save();this.requestTiles();};
     this.overlay.addEventListener('pointerup',end);this.overlay.addEventListener('pointercancel',e=>{points.delete(e.pointerId);reset();});
     this.overlay.addEventListener('wheel',e=>{e.preventDefault();this.zoom(Math.exp(-e.deltaY*.0015));},{passive:false});
@@ -138,13 +140,13 @@ export class ADSBGlobe {
       const point=trace.points.at(-1),age=now-point?.time;
       if(!point||!Number.isFinite(age)||age<15||age>Math.min(this.trailSeconds,TRAIL_RETENTION))continue;
       if(!Number.isFinite(point.lat)||!Number.isFinite(point.lon)||Math.abs(point.lat)>90||Math.abs(point.lon)>180)continue;
-      markers.push({hex,lat:point.lat,lon:point.lon,flight:point.flight,track:point.track,gs:point.gs,baro_rate:point.baro_rate,alt_baro:point.alt,seen_pos:age,last_position_at:point.time,historical:true});
+      markers.push({hex,lat:point.lat,lon:point.lon,flight:point.flight,track:point.track,gs:point.gs,baro_rate:point.baro_rate,band:point.band,alt_baro:point.alt,seen_pos:age,last_position_at:point.time,historical:true});
     }
     return markers;
   }
   setTracks(tracks){this.traces.clear();for(const [key,rows] of Object.entries(tracks)){if(!Array.isArray(rows))continue;const points=compactTrail(rows);if(points.length)this.traces.set(key,{at:points.at(-1).time*1000,points});}this.render();}
   update(state){this.site=state.receiver_position||null;this.planes=state.aircraft||[];const now=Date.now();for(const [key,trace] of this.traces){trace.points=compactTrail(trace.points,now/1000);if(!trace.points.length)this.traces.delete(key);}
-    for(const p of this.planes){if(!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||p.seen_pos>=15)continue;let trace=this.traces.get(p.hex)||{at:0,points:[]};const positionTime=p.position_time??now/1000-(p.seen_pos||0);if(now-trace.at>=4500&&positionTime>(trace.points.at(-1)?.time||0)){trace.points.push({lat:p.lat,lon:p.lon,time:positionTime,alt:p.alt_baro,flight:p.flight,track:p.track,gs:p.gs,baro_rate:p.baro_rate});trace.points=compactTrail(trace.points,now/1000);trace.at=now;this.traces.set(p.hex,trace);}}
+    for(const p of this.planes){if(!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||p.seen_pos>=15)continue;let trace=this.traces.get(p.hex)||{at:0,points:[]};const positionTime=p.position_time??now/1000-(p.seen_pos||0);if(now-trace.at>=4500&&positionTime>(trace.points.at(-1)?.time||0)){trace.points.push({lat:p.lat,lon:p.lon,time:positionTime,alt:p.alt_baro,flight:p.flight,track:p.track,gs:p.gs,baro_rate:p.baro_rate,band:p.band});trace.points=compactTrail(trace.points,now/1000);trace.at=now;this.traces.set(p.hex,trace);}}
     const target=this.planes.find(p=>p.hex===this.selected&&Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&p.seen_pos<15);
     if(this.following&&target){this.yaw=target.lon*RAD;this.pitch=clamp(target.lat*RAD,-82*RAD,82*RAD);}
     if(!this.centered&&this.planes.some(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&p.seen_pos<15))this.center();
@@ -158,7 +160,22 @@ export class ADSBGlobe {
   }catch{}finally{this.tileBusy=false;}}
   prune(){for(const [key,tile] of this.tiles){if(this.tiles.size<=32)break;if(this.wanted.includes(key))continue;this.gl.deleteTexture(tile.texture);this.gl.deleteBuffer(tile.mesh.buffer);this.tiles.delete(key);}}
   draw(mesh,texture,color){if(!mesh)return;const gl=this.gl;gl.uniform1i(this.uniform.Image,texture?1:0);gl.uniform4fv(this.uniform.Color,color||[1,1,1,1]);if(texture)gl.bindTexture(gl.TEXTURE_2D,texture);gl.bindBuffer(gl.ARRAY_BUFFER,mesh.buffer);gl.vertexAttribPointer(this.position,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(this.uv,2,gl.FLOAT,false,20,12);gl.drawArrays(mesh.mode,0,mesh.count);}
-  drawTrail(points,cutoff){const ctx=this.ctx;ctx.beginPath();let previous=null;for(const point of points){if(point.time<cutoff){previous=null;continue;}const q=this.project(point);if(!q){previous=null;continue;}if(previous&&point.time-previous.time<=120)ctx.lineTo(...q);else ctx.moveTo(...q);previous=point;}ctx.stroke();}
+  drawTrail(points,cutoff,dotColor=this.ctx.strokeStyle,dotRadius=2){
+    const ctx=this.ctx,dots=[];ctx.beginPath();let previous=null,lastDot=null,lastVisible=null;
+    for(const point of points){
+      if(point.time<cutoff){previous=null;lastDot=null;continue;}
+      const q=this.project(point);if(!q){previous=null;lastDot=null;continue;}
+      if(previous&&point.time-previous.time<=120)ctx.lineTo(...q);else{ctx.moveTo(...q);lastDot=null;}
+      previous=point;
+      if(q[0]>=-3&&q[0]<=this.width+3&&q[1]>=-3&&q[1]<=this.height+3){
+        lastVisible=q;
+        if(!lastDot||Math.hypot(q[0]-lastDot[0],q[1]-lastDot[1])>=6){dots.push(q);lastDot=q;}
+      }
+    }
+    ctx.stroke();
+    if(lastVisible&&(!dots.length||lastVisible[0]!==dots.at(-1)[0]||lastVisible[1]!==dots.at(-1)[1]))dots.push(lastVisible);
+    if(dots.length){ctx.fillStyle=dotColor;ctx.beginPath();for(const [x,y] of dots){ctx.moveTo(x+dotRadius,y);ctx.arc(x,y,dotRadius,0,Math.PI*2);}ctx.fill();}
+  }
   render(){if(!this.gl||!this.width)return;const gl=this.gl;gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.clearColor(.025,.06,.085,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(this.program);
     const sy=Math.sin(this.yaw),cy=Math.cos(this.yaw),sp=Math.sin(this.pitch),cp=Math.cos(this.pitch);
     gl.uniform3fv(this.uniform.Right,[cy,0,-sy]);gl.uniform3fv(this.uniform.Up,[-sp*sy,cp,-sp*cy]);gl.uniform3fv(this.uniform.Depth,[cp*sy,sp,cp*cy]);
@@ -167,19 +184,22 @@ export class ADSBGlobe {
     this.draw(this.base,this.style!=='borders'?this.earth:null,[.055,.15,.18,1]);
     if(this.style!=='borders')for(const key of this.wanted){const tile=this.tiles.get(key);if(tile)this.draw(tile.mesh,tile.texture);}
     if(this.style!=='satellite')this.draw(this.borders,null,[.62,.75,.71,1]);
-    const ctx=this.ctx;ctx.clearRect(0,0,this.width,this.height);ctx.font='12px system-ui';ctx.lineJoin='round';this.drawFootprint();
+    const ctx=this.ctx;ctx.clearRect(0,0,this.width,this.height);ctx.font='12px system-ui';ctx.lineJoin='round';this.drawFootprint();this.drawWeather?.();
     const scaleLabel=document.querySelector('#scale-bar b'),scaleLine=document.querySelector('#scale-bar span');
     if(scaleLabel&&scaleLine){const maxDistance=Math.asin(Math.min(.95,110/this.radius()))*3440.065;const distances=[.005,.01,.02,.05,.1,.2,.5,1,2,5,10,20,50,100,200,500,1000,2000];const distance=distances.filter(n=>n<=maxDistance).pop()||distances[0];scaleLabel.textContent=distance<1?Math.round(distance*1852)+' m':distance+' NM';scaleLine.style.width=(Math.sin(distance/3440.065)*this.radius())+'px';}
     const viewStatus=document.querySelector('#view-status');if(viewStatus)viewStatus.textContent='NORTH UP · '+(this.style==='borders'?'BORDERS':'GLOBE')+' · '+this.scale.toFixed(1)+'×';
     if(this.rings&&this.site){ctx.strokeStyle='#7eacc199';ctx.lineWidth=1;ctx.setLineDash([4,5]);for(const distance of [50,100,200]){const angular=distance/3440.065,lat=this.site.lat*RAD,lon=this.site.lon*RAD;ctx.beginPath();let previous=false;for(let angle=0;angle<=360;angle+=3){const bearing=angle*RAD,la=Math.asin(Math.sin(lat)*Math.cos(angular)+Math.cos(lat)*Math.sin(angular)*Math.cos(bearing));const lo=lon+Math.atan2(Math.sin(bearing)*Math.sin(angular)*Math.cos(lat),Math.cos(angular)-Math.sin(lat)*Math.sin(la));const q=this.project({lat:la/RAD,lon:lo/RAD});if(!q){previous=false;continue;}previous?ctx.lineTo(...q):ctx.moveTo(...q);previous=true;}ctx.stroke();}ctx.setLineDash([]);const site=this.project(this.site);if(site){ctx.strokeStyle='#d2dce5';ctx.strokeRect(site[0]-4,site[1]-4,8,8);ctx.fillStyle='#cbd8e4';ctx.fillText('RX SITE',site[0]+10,site[1]+4);}}
     const trafficNow=this.trafficNow?.()??Date.now()/1000,view=this.trafficView;
     const trailCutoff=view?view.cutoff(trafficNow):trafficNow-this.trailSeconds;
-    if(view?.backdrop&&view.mode!=='history')for(const trace of this.traces.values()){ctx.strokeStyle='#71859535';ctx.lineWidth=1;this.drawTrail(trace.points.filter(p=>view.mode!=='session'||p.time<trailCutoff),trafficNow-TRAIL_RETENTION);}
-    if(view?.mode==='session'||this.trailSeconds>0)for(const [key,trace] of this.traces){if(view&&!view.trailVisible(key,this.planes,trafficNow))continue;ctx.strokeStyle=key===this.selected?'#ffd267':'#65e3d260';ctx.lineWidth=key===this.selected?1.6:1;this.drawTrail(trace.points,trailCutoff);}
-    for(const plane of this.mapAircraft()){const p=this.project(plane);if(!p||p[0]<-20||p[0]>this.width+20||p[1]<-20||p[1]>this.height+20)continue;const selected=plane.hex===this.selected,color=selected?'#ffd267':plane.historical?'#91a8b8':Number(plane.alt_baro)>20000?'#78b8ff':'#65e3d2';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.6;
-      if(view?.arrival(plane.hex,trafficNow)){ctx.save();ctx.strokeStyle='#a2ffe9';ctx.shadowColor='#65e3d2';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(p[0],p[1],20,0,Math.PI*2);ctx.stroke();ctx.restore();}
+    const labelsVisible=this.showAircraftLabels,iconsVisible=this.showAircraftIcons;
+    if(view?.backdrop&&view.mode!=='history')for(const trace of this.traces.values()){ctx.strokeStyle='#71859535';ctx.lineWidth=1;this.drawTrail(trace.points.filter(p=>view.mode!=='session'||p.time<trailCutoff),trafficNow-TRAIL_RETENTION,'#71859555',1.2);}
+    if(view?.mode==='session'||this.trailSeconds>0)for(const [key,trace] of this.traces){if(view&&!view.trailVisible(key,this.planes,trafficNow,trace.points))continue;const selected=key===this.selected;ctx.strokeStyle=selected?'#ffd267':'#65e3d260';ctx.lineWidth=selected?1.6:1;this.drawTrail(trace.points,trailCutoff,selected?'#ffd267':'#65e3d2cc',selected?3:2);}
+    for(const plane of iconsVisible||labelsVisible?this.mapAircraft():[]){const p=this.project(plane);if(!p||p[0]<-20||p[0]>this.width+20||p[1]<-20||p[1]>this.height+20)continue;const selected=plane.hex===this.selected,color=selected?'#ffd267':plane.historical?'#91a8b8':Number(plane.alt_baro)>20000?'#78b8ff':'#65e3d2';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.6;
+      if(iconsVisible&&view?.arrival(plane.hex,trafficNow)){ctx.save();ctx.strokeStyle='#a2ffe9';ctx.shadowColor='#65e3d2';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(p[0],p[1],20,0,Math.PI*2);ctx.stroke();ctx.restore();}
+      if(iconsVisible){
       ctx.save();if(view&&!plane.historical)ctx.globalAlpha=Math.max(.25,1-plane.seen_pos/20);ctx.translate(...p);ctx.rotate((plane.track||0)*RAD);ctx.beginPath();if(plane.kind==='ship'){ctx.moveTo(0,-12);ctx.lineTo(6,-3);ctx.lineTo(6,9);ctx.lineTo(-6,9);ctx.lineTo(-6,-3);ctx.closePath();}else if(plane.kind==='station'){ctx.arc(0,0,5,0,Math.PI*2);ctx.moveTo(-9,0);ctx.lineTo(9,0);ctx.moveTo(0,-9);ctx.lineTo(0,9);}else if(plane.kind==='balloon'){ctx.arc(0,-3,7,0,Math.PI*2);ctx.moveTo(0,4);ctx.lineTo(0,12);}else{ctx.moveTo(0,-11);ctx.lineTo(0,10);ctx.moveTo(-10,3);ctx.lineTo(0,-4);ctx.lineTo(10,3);ctx.moveTo(-5,9);ctx.lineTo(0,6);ctx.lineTo(5,9);}ctx.stroke();ctx.restore();
-      if(!this.labels&&!selected)continue;ctx.strokeStyle='#07131d';ctx.lineWidth=3;const label=(plane.flight||plane.hex).trim()+(plane.historical?' · '+positionAge(plane.seen_pos):'');ctx.strokeText(label,p[0]+14,p[1]-10);ctx.fillText(label,p[0]+14,p[1]-10);
+      }
+      if(!labelsVisible&&!(selected&&iconsVisible))continue;ctx.strokeStyle='#07131d';ctx.lineWidth=3;const label=(plane.flight||plane.hex).trim()+(plane.band==='978'?' · UAT':'')+(plane.historical?' · '+positionAge(plane.seen_pos):'');ctx.strokeText(label,p[0]+14,p[1]-10);ctx.fillText(label,p[0]+14,p[1]-10);
     }
   }
 }

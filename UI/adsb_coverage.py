@@ -9,13 +9,32 @@ import math
 import sqlite3
 import threading
 import time
+from bisect import bisect_right
 from station_profile import distance_m
-from adsb_footprint import build_footprint
+from adsb_footprint import build_footprint, footprint_from_peaks, SECTOR_DEGREES
 from pathlib import Path
 
 RETENTION = 90 * 86400
 MAX_POINTS = 250000
 DISPLAY_POINTS = 20000
+
+
+def retained_trail_links(points, keep, breaks, base):
+    """Join thinned samples only when every original reception link was valid."""
+    last={};retained={};links=[];component=0;output=0
+    for index,p in enumerate(points):
+        previous=last.get(p[1]);connected=False
+        if previous:
+            a,group=previous;dt=p[0]-a[0]
+            connected=(0<dt<=15 and math.dist(a[2:5],p[2:5])<=500+400*dt
+                       and bisect_right(breaks,base+p[0])==bisect_right(breaks,base+a[0]))
+        if not connected:component+=1;group=component
+        last[p[1]]=(p,group)
+        if index not in keep:continue
+        old=retained.get(p[1])
+        if old and old[1]==group:links.append([old[0],output])
+        retained[p[1]]=(output,group);output+=1
+    return links
 
 
 def finite(v):
@@ -64,6 +83,8 @@ class ReceptionCoverage:
         self.root = Path(root)
         self.lock = threading.RLock()
         self.data = dict(status='LOADING', meta={}, aircraft=[], points=[], cells=[], breaks=[], base=0)
+        self.maximum=dict(status='LOADING',meta={},footprint={});self.maximum_key=None;self.peak_revision=0
+        self.scoped = {}
         self.pending_breaks = []
         self.revision = 0
         self.key = None
@@ -90,10 +111,23 @@ class ReceptionCoverage:
             self.requested = True
             self.key = None
 
-    def snapshot(self):
+    def snapshot(self, since=None):
+        if since==0:since=None
+        if since is not None:
+            if not finite(since) or since<0:raise ValueError('Invalid reception window')
+            since=float(since)
+            with self.lock:
+                if since not in self.scoped:
+                    if len(self.scoped)>=4:self.scoped.pop(next(iter(self.scoped)))
+                    self.scoped[since]=dict(key=None,next_build=0,data=dict(status='LOADING',meta=dict(window_since=since,retained_positions=0,positioned_aircraft=0,**{k:self.data.get('meta',{}).get(k) for k in ('reference','reference_height_m','reference_height_known')}),aircraft=[],points=[],cells=[],breaks=[],base=0,footprint={}))
+                return self.scoped[since]['data']
         with self.lock:
             self.requested = True
             return self.data
+
+    def maximum_snapshot(self):
+        """Persistent maximum extent, independent of display windows or pruning."""
+        with self.lock:return self.maximum
 
     def _open(self):
         if self.db is not None: return
@@ -105,6 +139,10 @@ class ReceptionCoverage:
         columns={r[1] for r in self.db.execute('PRAGMA table_info(positions)')}
         for column in ('site_lat','site_lon'):
             if column not in columns:self.db.execute('ALTER TABLE positions ADD COLUMN '+column+' REAL')
+        if 'footprint_saved' not in columns:self.db.execute('ALTER TABLE positions ADD COLUMN footprint_saved INTEGER NOT NULL DEFAULT 0')
+        self.db.execute('CREATE INDEX IF NOT EXISTS positions_footprint_pending ON positions(footprint_saved)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS footprint_sites (id INTEGER PRIMARY KEY,lat REAL,lon REAL,first_position REAL,last_position REAL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS footprint_peaks (site_id INTEGER,sector INTEGER,radius REAL,positions INTEGER,PRIMARY KEY(site_id,sector))')
         self.db.execute('CREATE TABLE IF NOT EXISTS coverage_meta (key TEXT PRIMARY KEY,value TEXT)')
         self.db.execute('CREATE TABLE IF NOT EXISTS breaks (time REAL PRIMARY KEY)')
         if not self.db.execute("SELECT value FROM coverage_meta WHERE key='legacy_site'").fetchone():
@@ -151,6 +189,11 @@ class ReceptionCoverage:
     def tick(self, site, now=None):
         now = time.time() if now is None else now
         self.import_logs()
+        self.accumulate_maximum(site)
+        maximum_key=(self.peak_revision,json.dumps(site,sort_keys=True))
+        if maximum_key!=self.maximum_key:
+            maximum=self.build_maximum(site)
+            with self.lock:self.maximum=maximum;self.maximum_key=maximum_key
         with self.lock:
             pending, self.pending_breaks = self.pending_breaks, []
         if pending:
@@ -163,20 +206,67 @@ class ReceptionCoverage:
         with self.lock:
             height = self.height
             key = (self.revision, json.dumps(site, sort_keys=True), height)
-            if not self.requested or (key == self.key and not self.error) or now < self.next_build: return
-            self.requested = False
-        data = self.build(site, height)
-        with self.lock:
-            self.data = data; self.key = key; self.error = ''; self.next_build = now+5
+            full=self.requested and (key!=self.key or self.error) and now>=self.next_build
+            scopes=[since for since,cache in self.scoped.items() if cache['key']!=key and now>=cache['next_build']]
+            if full:self.requested=False
+        if full:
+            data=self.build(site,height)
+            with self.lock:self.data=data;self.key=key;self.error='';self.next_build=now+5
+        for since in scopes:
+            data=self.build(site,height,since)
+            with self.lock:
+                if since in self.scoped:self.scoped[since].update(data=data,key=key,next_build=now+5)
 
-    def build(self, site, height):
-        meta = dict(reference=site, reference_height_m=height or 0, reference_height_known=height is not None,
+    def accumulate_maximum(self,site):
+        legacy=self.db.execute("SELECT value FROM coverage_meta WHERE key='legacy_site'").fetchone()
+        anchor=json.loads(legacy[0]) if legacy else site
+        if not legacy and anchor:
+            self.db.execute('INSERT OR IGNORE INTO coverage_meta VALUES (?,?)',('legacy_site',json.dumps(anchor)));self.db.commit()
+        sites=[(r[0],dict(lat=r[1],lon=r[2])) for r in self.db.execute('SELECT id,lat,lon FROM footprint_sites')]
+        while True:
+            pending=self.db.execute('SELECT rowid,time,lat,lon,site_lat,site_lon FROM positions WHERE footprint_saved=0 LIMIT 10000').fetchall()
+            if not pending:break
+            groups={};saved=[]
+            with self.db:
+                for rowid,stamp,lat,lon,slat,slon in pending:
+                    receiver=dict(lat=slat,lon=slon) if slat is not None and slon is not None else anchor
+                    if not receiver:continue
+                    match=min(((distance_m(receiver,s),ident,s) for ident,s in sites),default=(float('inf'),None,None))
+                    if match[0]>100:
+                        ident=self.db.execute('INSERT INTO footprint_sites(lat,lon,first_position,last_position) VALUES (?,?,?,?)',(receiver['lat'],receiver['lon'],stamp,stamp)).lastrowid
+                        sites.append((ident,receiver));reference=receiver
+                    else:_,ident,reference=match
+                    group=groups.setdefault(ident,dict(site=reference,rows=[],first=stamp,last=stamp))
+                    group['rows'].append((lat,lon));group['first']=min(group['first'],stamp);group['last']=max(group['last'],stamp);saved.append((rowid,))
+                for ident,group in groups.items():
+                    for sector in build_footprint(group['site'],group['rows'])['sectors']:
+                        self.db.execute('''INSERT INTO footprint_peaks VALUES (?,?,?,?) ON CONFLICT(site_id,sector)
+                            DO UPDATE SET radius=MAX(radius,excluded.radius),positions=positions+excluded.positions''',
+                            (ident,int(sector['azimuth_deg']//SECTOR_DEGREES),sector['radius_m'],sector['positions']))
+                    self.db.execute('UPDATE footprint_sites SET first_position=MIN(first_position,?),last_position=MAX(last_position,?) WHERE id=?',(group['first'],group['last'],ident))
+                self.db.executemany('UPDATE positions SET footprint_saved=1 WHERE rowid=?',saved)
+            if not saved:break
+            self.peak_revision+=1
+
+    def build_maximum(self,site):
+        matches=[(distance_m(site,dict(lat=r[1],lon=r[2])),r) for r in self.db.execute('SELECT id,lat,lon,first_position,last_position FROM footprint_sites')] if site else []
+        match=min(matches,default=(float('inf'),None))
+        record=match[1] if match[0]<=100 else None
+        peaks={r[0]:[r[1],r[2]] for r in self.db.execute('SELECT sector,radius,positions FROM footprint_peaks WHERE site_id=?',(record[0],))} if record else {}
+        reference=dict(lat=record[1],lon=record[2]) if record else site
+        count=sum(v[1] for v in peaks.values())
+        return dict(status='READY' if peaks else 'EMPTY' if site else 'NO SITE',scope='accumulated maximum',
+                    meta=dict(retained_positions=count,first_position=record[3] if record else None,last_position=record[4] if record else None),
+                    footprint=footprint_from_peaks(reference,peaks))
+
+    def build(self, site, height, since=None):
+        meta = dict(window_since=since,reference=site, reference_height_m=height or 0, reference_height_known=height is not None,
                     retention_days=90, storage_limit=MAX_POINTS, retained_positions=0, positioned_aircraft=0,
                     altitude_sources={}, horizontal_range_max_km=0, slant_range_max_km=0, max_altitude_ft=None,
                     rssi_min=-40, rssi_max=0)
         empty = dict(status='NO SITE' if not site else 'EMPTY', meta=meta, base=0, points=[], cells=[], aircraft=[], breaks=[], footprint=build_footprint(site,[]))
         if not site: return empty
-        rows = self.db.execute('SELECT time,hex,lat,lon,altitude,gnss,rssi,label,site_lat,site_lon FROM positions ORDER BY time,hex').fetchall()
+        rows = self.db.execute('SELECT time,hex,lat,lon,altitude,gnss,rssi,label,site_lat,site_lon FROM positions WHERE time >= ? ORDER BY time,hex', (since or 0,)).fetchall()
         legacy=self.db.execute("SELECT value FROM coverage_meta WHERE key='legacy_site'").fetchone()
         if not legacy:
             self.db.execute('INSERT OR IGNORE INTO coverage_meta VALUES (?,?)',('legacy_site',json.dumps(site)));self.db.commit()
@@ -210,13 +300,14 @@ class ReceptionCoverage:
                     horizontal_range_max_km=max_range/1000, slant_range_max_km=max_slant/1000, altitude_sources=sources,
                     cells_observed=len(cells), rssi_min=min(levels) if levels else -40, rssi_max=max(levels) if levels else 0)
         # All cells and extrema use the complete history. Bound only rendered dots.
-        if len(points)>DISPLAY_POINTS:
-            keep=set(range(0,len(points),math.ceil(len(points)/DISPLAY_POINTS))) | {max_alt_index,max_range_index,len(points)-1}
-            points=[p for i,p in enumerate(points) if i in keep]
-        meta['displayed_positions']=len(points)
         breaks = [r[0] for r in self.db.execute('SELECT time FROM breaks WHERE time >= ? ORDER BY time', (base,))]
+        keep=(set(range(0,len(points),math.ceil(len(points)/DISPLAY_POINTS))) | {max_alt_index,max_range_index,len(points)-1}
+              if len(points)>DISPLAY_POINTS else set(range(len(points))))
+        segments=retained_trail_links(points,keep,breaks,base)
+        points=[p for i,p in enumerate(points) if i in keep]
+        meta.update(displayed_positions=len(points),trail_segments=len(segments))
         return dict(status='READY', meta=meta, base=base, aircraft=[dict(hex=a,label=names.get(a,a)) for a in addresses], points=points,
-                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,
+                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,segments=segments,
                     footprint=build_footprint(site,((r[2],r[3]) for r in rows)))
 
     def mark_break(self, stamp):
