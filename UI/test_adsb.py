@@ -406,14 +406,28 @@ class WorkspaceTests(unittest.TestCase):
                 for other in boxes[i+1:]:
                     self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(box,other))
 
-    def test_top_navigation_starts_left_with_equal_sizes_and_gaps(self):
+    def test_top_navigation_follows_title_with_equal_sizes_and_gaps(self):
         w,ui,manager,state=self.dashboard();w.draw(Mock())
         actions={('traffic_view','live'),('traffic_view','history'),('coverage',None),('view_options',None),('settings',None)}
         boxes=[b for b,a in w.actions if a in actions]
         self.assertEqual(len(boxes),5)
-        self.assertEqual(boxes[0][:2],(16,16))
+        self.assertEqual(boxes[0][:2],(216,16))
         self.assertEqual({(b[2]-b[0],b[3]-b[1]) for b in boxes},{(192,64)})
         self.assertTrue(all(b[0]-a[2]==8 for a,b in zip(boxes,boxes[1:])))
+
+    def test_receiver_shortcuts_align_under_live_and_empty_card_uses_theme(self):
+        from ui_style import APP_UI_STYLE
+        w,ui,manager,state=self.dashboard();w.draw(Mock())
+        boxes={a:b for b,a in w.actions}
+        self.assertEqual(boxes[('rx_footprint',None)],(216,88,408,152))
+        self.assertEqual(boxes[('usb',None)],(416,88,608,152))
+        self.assertEqual(boxes[('weather',None)],(616,88,808,152))
+        self.assertEqual(w.card_box[3]-w.card_box[1],64)
+        cards=[c for c in ui.draw_logical_rounded_rect.call_args_list if c.args[:4]==w.card_box]
+        self.assertEqual(cards[-1].args[4],APP_UI_STYLE.button.radius)
+        title=next(c for c in ui.draw_logical_rounded_rect.call_args_list if c.args[:4]==(16,16,208,80))
+        self.assertLess(title.args[5][3],255)
+        self.assertEqual(title.args[4],APP_UI_STYLE.button.radius)
 
     def test_option_rails_keep_one_back_and_all_actions_on_both_theme_sides(self):
         import theme_system
@@ -450,10 +464,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_dashboard_hud_does_not_select_or_drag_an_aircraft_behind_it(self):
         workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen=0,seen_pos=0)])
-        ui.radiogarden_project.return_value=(50,100,1)
-        workspace.draw(Mock());workspace.tap(50,100)
+        ui.radiogarden_project.return_value=(50,240,1)
+        workspace.draw(Mock());workspace.tap(50,240)
         self.assertIsNone(workspace.selected)
-        workspace.drag_begin(50,100);workspace.drag_move(50,100,100,110)
+        workspace.drag_begin(50,240);workspace.drag_move(50,240,100,250)
         ui.radiogarden_pan_angles.assert_not_called()
         workspace.traffic_open=True;workspace.draw(Mock())
         self.assertEqual(workspace.points,[])
