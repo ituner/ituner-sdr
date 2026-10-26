@@ -433,7 +433,7 @@ class WorkspaceTests(unittest.TestCase):
         original=deepcopy(theme_system.runtime_theme)
         self.addCleanup(theme_system.apply_theme,original)
         for color in ([24,48,72],[240,180,90]):
-            theme=deepcopy(original);theme['colors']['text']=color;theme_system.apply_theme(theme)
+            theme=deepcopy(original);theme['colors']['secondary_text']=color;theme_system.apply_theme(theme)
             ui.draw_text.reset_mock();w.draw(Mock())
             captions={'SELECT AN AIRCRAFT','DRAG','Tap a plane on the map to inspect it.'}
             calls=[c for c in ui.draw_text.call_args_list if c.args[3] in captions]
