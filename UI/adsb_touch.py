@@ -169,10 +169,16 @@ class AirspaceDashboard:
         self.card_box=(x,y,x+width,y+height);self.card_handle=(x,y,x+width,y+42)
         self.overlay_boxes.append(self.card_box)
         self.ui.draw_logical_rounded_rect(*self.card_box,APP_UI_STYLE.button.radius,(*self.PANEL[:3],174),(*self.LINE[:3],120),1)
-        self.ink(cache,x+16,y+22,(plane.get('flight') or plane['hex']).strip() if plane else 'SELECT AN AIRCRAFT',23 if plane else 19,self.GOLD if plane else self.TEXT,width=250)
-        self.ink(cache,x+width-16,y+22,'DRAG',11,self.MUTED,anchor='rm')
         if not plane:
-            self.text(cache,x+16,y+46,'Tap a plane on the map to inspect it.',14,self.MUTED,width=310);return
+            style=APP_UI_STYLE.button
+            for tx,ty,label,size,anchor in (
+                    (x+16,y+20,'SELECT AN AIRCRAFT',style.title_size,'lm'),
+                    (x+width-16,y+20,'DRAG',style.subtitle_size,'rm'),
+                    (x+16,y+44,'Tap a plane on the map to inspect it.',style.subtitle_size,'lm')):
+                self.ui.draw_text(cache,tx,ty,label,(255,255,255),size,True,False,anchor,family=style.font_family)
+            return
+        self.ink(cache,x+16,y+22,(plane.get('flight') or plane['hex']).strip(),23,self.GOLD,width=250)
+        self.ink(cache,x+width-16,y+22,'DRAG',11,self.MUTED,anchor='rm')
         self.text(cache,x+16,y+55,'ICAO '+plane['hex'].upper()+' · '+('978 UAT' if plane.get('band')=='978' else '1090 ES')+' · '+str(plane.get('squawk') or '—'),13,self.MUTED,width=310)
         for dx,dy,label,key,unit in ((16,88,'ALTITUDE','alt_baro','ft'),(178,88,'SPEED','gs','kt'),(16,146,'HEADING','track','°'),(178,146,'VERT RATE','baro_rate','ft/min')):
             self.text(cache,x+dx,y+dy,label,12,self.MUTED,width=148)
