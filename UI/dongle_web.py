@@ -3,6 +3,9 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 from rtl_registry import REGISTRY
+from dongle_notice import notice_get, notice_post
+import dongle_notice
+import usb_radios
 
 
 def maintenance_busy(manager):
@@ -16,22 +19,28 @@ def maintenance_busy(manager):
 def dongle_control(manager,data):
     action=data.get('action');key=data.get('id')
     if action=='rename':REGISTRY.rename(key,data.get('nickname'))
-    elif action=='assign_id':REGISTRY.assign_id(key,data.get('nickname',''),manager.scanner,getattr(manager,'broker',None),lambda:maintenance_busy(manager))
+    elif action=='assign_id':
+        service=dongle_notice.SERVICE
+        if service and any(r['id']==key and r.get('can_assign') for r in (service.snapshot().get('notice') or {}).get('receivers',[])):
+            REGISTRY.rename(key,data.get('nickname',''))
+            service.assign(service.snapshot()['notice']['id'],key)
+        else:REGISTRY.assign_id(key,data.get('nickname',''),manager.scanner,getattr(manager,'broker',None),lambda:maintenance_busy(manager))
     elif action=='scan':manager.devices=manager.scanner()
     elif action in ('probe','program'):
         REGISTRY.start(key,action,manager.scanner,getattr(manager,'broker',None),data.get('serial'),lambda:maintenance_busy(manager))
     else:raise ValueError('Unknown dongle action')
-    return REGISTRY.snapshot(manager.scanner())
+    return usb_radios.snapshot(manager,REGISTRY)
 
 
 def dongle_get(handler,path):
-    if path not in ('/dongles','/dongles.js','/dongles.css','/api/dongles'):return False
+    if notice_get(handler,path):return True
+    if path not in ('/dongles','/usb-radios','/dongles.js','/dongles.css','/usb-radio-select.js','/api/dongles','/api/usb-radios'):return False
     try:
-        if path=='/api/dongles':
+        if path in ('/api/dongles','/api/usb-radios'):
             manager=handler.server.manager
-            handler.send(json.dumps(dict(REGISTRY.snapshot(manager.scanner()),control_token=manager.token)).encode())
+            handler.send(json.dumps(dict(usb_radios.snapshot(manager,REGISTRY),control_token=manager.token)).encode())
         else:
-            name='dongles.html' if path=='/dongles' else path[1:]
+            name='dongles.html' if path in ('/dongles','/usb-radios') else path[1:]
             mime='text/html' if name.endswith('.html') else 'text/css' if name.endswith('.css') else 'text/javascript'
             handler.send(Path(__file__).with_name(name).read_bytes(),mime+'; charset=utf-8')
     except (OSError,ValueError) as exc:handler.send(json.dumps(dict(error=str(exc))).encode(),status=400)

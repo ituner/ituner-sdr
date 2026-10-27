@@ -2,7 +2,7 @@
 const {EventEmitter}=require('node:events');
 const fs=require('node:fs');
 const path=require('node:path');
-const {IntelligentScanner}=require('./scanner.cjs');
+const {IntelligentScanner,PROFILES}=require('./scanner.cjs');
 
 function frequency(value){
   if(typeof value==='number'&&Number.isFinite(value)&&value>=30e6&&value<=1700e6)return Math.round(value);
@@ -178,7 +178,7 @@ function createAdapter(options={}){
     stopScan:()=>run(async()=>{holdScan('Holding current frequencies');await poll();}),
     getFrequency:()=>main(cached)?.settings.frequency||null,
     getStatus:()=>({status,error}),
-    getReceiver:()=>({status,error,settings:{...main(cached)?.settings,enabled:active(cached).length>0},primary_settings:cached?.sessions.ism?.settings||{},assigned:main(cached)?.assigned||null,
+    getReceiver:()=>({status,error,bands:PROFILES,settings:{...main(cached)?.settings,enabled:active(cached).length>0},primary_settings:cached?.sessions.ism?.settings||{},assigned:main(cached)?.assigned||null,
       receivers:Object.entries(sessions(cached)).filter(([,r])=>r?.enabled||r?.assigned).map(([id,r])=>({id,enabled:r.enabled,status:r.status,settings:r.settings,assigned:r.assigned,receiving_frequency:r.receiving_frequency})),
       pool:{autoExpand,maxReceivers:6,warning:poolWarning},devices:cached?.devices||[],leases:cached?.leases||{},scan:scanner.snapshot()}),
     on:emitter.on.bind(emitter),poll,

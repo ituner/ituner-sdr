@@ -4,6 +4,7 @@ import textwrap
 import time
 from decoder_style import DecoderStyle
 from dongle_workspace import DongleWorkspace
+from usb_radio_controls import receiver_rows
 from station_workspace import StationWorkspace
 from sstv_workspace import SSTVWorkspace
 from adsb_touch import AirspaceDashboard
@@ -98,6 +99,8 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def go_back(self):
         if self.coverage_open and self.coverage_view.window_open:
             self.coverage_view.window_open=False;return
+        if self.coverage_open and self.coverage_view.selected_observation is not None:
+            self.coverage_view.selected_observation=None;return
         if self.weather_open and self.weather_view.report is not None:
             self.weather_view.action('weather_close_report',None);return
         if self.navigation:self.navigate(self.navigation.pop(),remember=False)
@@ -175,6 +178,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
     def tap(self, x, y, *args):
         if self.radio_info and self.radio_info.open:return self.radio_info.tap(x,y)
         if self.dongles and self.dongles.open:return self.dongles.tap(x,y)
+        if self.coverage_open and self.coverage_view.panel_contains(x,y):return self.coverage_view.panel_tap(x,y)
         on_card=self.current_screen()=='map' and self.card_box and self.ui.contains(self.card_box,x,y)
         for box,(kind,value) in (self.card_actions if on_card else self.actions):
             if not self.ui.contains(box,x,y): continue
@@ -474,7 +478,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.ink(cache,640,664,f'PAGE {self.traffic_page+1} / {max(1,(len(planes)+4)//5)}',16,self.MUTED,anchor='cm')
 
     def draw_usb(self, cache, state):
-        self.panel((24,150,1256,700))
+        self.panel((24,150,1256,704))
         bands=state.get('bands') or [dict(id='1090',name='1090 ES',**{k:state.get(k) for k in ('enabled','status','selection','assigned')})]
         band=next((b for b in bands if b['id']==self.usb_band),bands[0])
         for i,b in enumerate(bands):
@@ -482,13 +486,9 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.ink(cache,40,244,band['status']+' · '+str(band.get('messages',0))+' packets',20,self.CYAN,width=1200)
         self.button(cache,(40,266,960,322),'AUTO · '+('SPARE DONGLE' if self.usb_band=='978' else 'FIRST AVAILABLE DONGLE'),('band_assign','auto'),active=band.get('selection','auto')=='auto')
         self.button(cache,(976,266,1240,322),'STOP' if band['enabled'] else 'START',('band_control','stop' if band['enabled'] else 'start'),enabled=band['enabled'] or band.get('installed',True))
-        devices=state['devices'];self.usb_page=min(self.usb_page,max(0,(len(devices)-1)//3))
-        other_ids={b['assigned']['id'] for b in bands if b['id']!=self.usb_band and b.get('assigned')}
-        for i,device in enumerate(devices[self.usb_page*3:self.usb_page*3+3]):
-            busy=device['id'] in other_ids
-            self.button(cache,(40,338+i*68,1240,398+i*68),device['label'],('band_assign',device['id']),
-                        'Assigned to other band' if busy else '',active=band.get('selection')==device['id'],enabled=not busy)
-        if not devices:self.text(cache,40,374,'No RTL-SDR detected. Check USB power and connection.',20,self.MUTED,width=1200)
+        blocked={b['assigned']['id'] for b in bands if b['id']!=self.usb_band and b.get('assigned')}
+        self.usb_page,last=receiver_rows(self,cache,state['devices'],state.get('leases',{}),'uat' if self.usb_band=='978' else 'adsb',band.get('selection','auto'),self.usb_page,action='band_assign',unique=self.usb_band=='978',blocked=blocked,top=338,include_auto=False,left=40,right=1240,page_size=3,row_height=60,row_gap=8)
+        if not state['devices']:self.text(cache,40,374,'No USB radio connected. Plug in a receiver to begin.',20,self.MUTED,width=1200)
         self.text(cache,40,558,band.get('detail',''),18,self.MUTED,width=1200)
         site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET'
         self.ink(cache,40,600,location,16,self.MUTED,width=900)

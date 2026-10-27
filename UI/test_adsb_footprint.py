@@ -37,7 +37,7 @@ class FootprintTests(unittest.TestCase):
         self.assertLess(p['lon'],0)
         data=build_footprint(site,[(p['lat'],p['lon'])])
         frame=projected_frame(data['regions'],lambda p:(p['east'],p['north'],1))
-        self.assertEqual(len(frame['batches']),2)
+        self.assertEqual(len(frame['batches']),3)
         for _,vertices,colours in frame['batches']:
             self.assertEqual(len(vertices),len(colours));self.assertTrue(np.isfinite(vertices).all())
         self.assertEqual(projected_frame(data['regions'],lambda p:None)['batches'],[])

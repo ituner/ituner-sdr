@@ -265,3 +265,11 @@ On the CM5's retained airband dataset, cold full history analysis measured about
 6.8 seconds before this change and 1.0 second afterward. The signal-only request
 measured about 0.10 seconds and native spectrum geometry about 0.004 seconds.
 These are data preparation timings, not a claim about display FPS or RF sensitivity.
+
+## All-decoder mini SDR
+
+Below the survey results, **Decoder activity · mini SDR** subscribes to the
+shared decoder feed on port 8093. Its 1024-pixel / adaptive-height-marker waterfall covers
+0–1.5 GHz, including HF, sensors, VHF/UHF and ADS-B. It shows actual decoded
+outputs separately from this scanner's RF-energy detections. The decoder feed
+never claims or retunes a radio. See [the shared activity model](decoder-activity.md).

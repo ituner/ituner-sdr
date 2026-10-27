@@ -5,6 +5,7 @@ import csv
 import io
 import math
 import json
+from rtl_registry import same_usb_attachment
 import os
 from pathlib import Path
 import subprocess
@@ -291,7 +292,7 @@ class ReceiverComparison:
         for key in list(self.sessions):
             session=self.sessions[key];process=session['process']
             failed=process and process.poll() is not None
-            if process and (key not in targets or key not in online or not primary or key==primary['id'] or failed or session['position']!=site):
+            if process and (key not in targets or key not in online or not primary or key==primary['id'] or failed or session['position']!=site or key in online and not same_usb_attachment(session['device'],online[key])):
                 self._stop_session(key)
                 if failed:session['retry']=time.monotonic()+15
             if key not in targets:del self.sessions[key]

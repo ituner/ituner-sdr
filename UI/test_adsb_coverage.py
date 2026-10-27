@@ -24,6 +24,43 @@ def row(stamp=None,**fields):
 
 
 class CoverageTests(unittest.TestCase):
+    def test_aircraft_card_buttons_consume_taps_above_underlying_dome_controls(self):
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        w=ADSBWorkspace(ui,Mock());w.coverage_open=True;view=w.coverage_view
+        data=dict(base=1000,meta={},aircraft=[dict(hex='a',label='A')],points=[[0,0,1000,2000,3000,10000,-22,1,'A']])
+        view.selected_observation=dome_gl.observation_info(data,0)
+        w.actions=[((1128,636,1256,692),('coverage_tilt',10))]
+        view.draw_aircraft(Mock(),dict(aircraft=[]));tilt=view.tilt
+        w.tap(1140,644);self.assertEqual(view.aircraft,'a');self.assertEqual(view.tilt,tilt)
+        box=next(box for box,action in view.panel_actions if action[0]=='coverage_close_aircraft')
+        w.tap((box[0]+box[2])/2,(box[1]+box[3])/2);self.assertIsNone(view.selected_observation)
+
+    def test_native_tap_opens_recorded_aircraft_without_filtering_or_retuning(self):
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        w=ADSBWorkspace(ui,Mock());w.coverage_open=True;view=w.coverage_view
+        data=dict(base=1000,meta={},aircraft=[dict(hex='abc123',label='TEST')],points=[[0,0,10000,20000,3000,10000,-22,1,'TEST']],cells=[[24,6,1,-22,1,23000]])
+        for mode in ('cells','trails','space'):
+            view.mode=mode;view.projected=dome_gl.project(dome_gl.prepare(data,mode),0,55,920,558);view.pick_data=data
+            hit=next(h for h in view.projected['hits'] if h[4] is not None)
+            view.tap(hit[0]+180,hit[1]+154)
+            self.assertEqual(view.selected_observation['hex'],'abc123')
+            self.assertEqual(view.selected_observation['time'],1000)
+            self.assertEqual(view.selected_observation['altitude'],10000)
+            self.assertIsNone(view.aircraft)
+            view.action('coverage_filter_aircraft',None);self.assertEqual(view.aircraft,'abc123')
+            view.action('coverage_filter_aircraft',None);self.assertIsNone(view.aircraft)
+            w.go_back();self.assertIsNone(view.selected_observation);self.assertTrue(w.coverage_open)
+        w.manager.control.assert_not_called()
+
+    def test_trail_midpoint_opens_an_actual_endpoint_sample_not_an_invented_position(self):
+        data=dict(base=1000,meta=dict(horizontal_range_max_km=100),aircraft=[dict(hex='abc123',label='TEST')],points=[[0,0,-25000,0,5000,16000,-25,1,'TEST'],[100,0,25000,0,6000,20000,-20,1,'TEST']],segments=[[0,1]])
+        frame=dome_gl.project(dome_gl.prepare(data,'space'),0,25,920,558)
+        middle=frame['pick_segments'][0].mean(axis=0)
+        index=dome_gl.pick_observation(frame,*middle)
+        self.assertIn(index,(0,1))
+        self.assertIn(dome_gl.observation_info(data,index)['time'],(1000,1100))
+        self.assertIsNone(dome_gl.pick_observation(frame,-1000,-1000))
+
     def test_sky_trails_stay_on_the_dome_shell(self):
         arc=dome_gl.sky_arc(dome_gl.vector(0,10),dome_gl.vector(180,10))
         self.assertGreater(len(arc),2)

@@ -1,5 +1,12 @@
 """Receive-only profiles; frequencies can be changed without editing commands."""
+import json
 from pathlib import Path
+
+RTL433_BANDS = json.loads(Path(__file__).with_name('rtl433_profiles.json').read_text())
+
+def rtl433_sample_rate(frequency):
+    return next((p['sample_rate'] for p in RTL433_BANDS if p['frequency']==frequency),
+                1000000 if frequency>=600000000 else 250000)
 
 MODES = {
     'ais': dict(title='Maritime', label='AIS', engine='AIS-catcher', icon='ship', color='#63dcca',
@@ -18,10 +25,7 @@ MODES = {
         description='Weather stations, environmental sensors and short-range devices.',
         hint='Listen on one band at a time. Sensor readings appear when a supported device transmits.',
         url='https://github.com/merbanan/rtl_433',
-        presets=[dict(id='433', name='433 MHz · Europe', frequency=433920000),
-                 dict(id='868', name='868 MHz · Europe', frequency=868300000),
-                 dict(id='315', name='315 MHz', frequency=315000000),
-                 dict(id='915', name='915 MHz', frequency=915000000)]),
+        presets=RTL433_BANDS),
     'meteor': dict(title='Earth observation', label='Meteor-M', engine='SatDump', icon='satellite', color='#b9a5f7',
         description='Decode LRPT passes into multispectral weather imagery.',
         hint='137 MHz satellite antenna · a visible pass is required. Stop finishes the image products.',

@@ -101,6 +101,15 @@ class UATTests(unittest.TestCase):
             self.rx.step([ES,UAT],[ES['id']])
         self.assertEqual(self.rx.status,'RECEIVING');self.assertEqual(len(self.rx.processes),2)
 
+    def test_same_serial_new_usb_address_reopens_uat_without_claiming_1090(self):
+        self.start();self.rx.assigned.update(bus=3,address=10,usb_path='3-1')
+        returning=dict(UAT,bus=3,address=11,usb_path='3-1')
+        children=[Mock(),Mock()]
+        for p in children:p.poll.return_value=None
+        with patch('adsb_uat.subprocess.Popen',side_effect=children) as launch:self.rx.step([ES,returning],[ES['id']])
+        self.assertEqual(launch.call_count,2);self.assertEqual(self.rx.assigned['address'],11)
+        self.assertTrue(self.rx.enabled);self.assertEqual(self.broker.snapshot()[ES['id']],'adsb')
+
     def test_stop_or_unplug_releases_both_children_but_keeps_1090(self):
         self.start();self.rx.step([ES],[ES['id']])
         for child in self.children:child.terminate.assert_called_once()

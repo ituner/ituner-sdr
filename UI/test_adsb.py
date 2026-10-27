@@ -246,6 +246,24 @@ class WorkspaceTests(unittest.TestCase):
         manager.log_snapshot.return_value=dict(lines=[],entries=[])
         return ADSBWorkspace(ui,manager),ui,manager,state
 
+    def test_updated_radio_picker_keeps_site_and_paging_clear_of_receiver_rows(self):
+        w,ui,manager,state=self.dashboard()
+        state['devices']=[dict(DEVICE,id=f'serial:{i}',serial=str(i),label=f'Radio {i}') for i in range(7)]
+        w.navigate('usb');seen=set()
+        for page in range(3):
+            w.usb_page=page;w.draw(Mock())
+            rows=[(box,action) for box,action in w.actions if action[0]=='band_assign' and action[1]!='auto']
+            self.assertEqual(len(rows),3 if page<2 else 1)
+            self.assertTrue(all(box[1]>=338 and box[3]<=534 for box,_ in rows))
+            seen.update(action[1] for _,action in rows)
+            self.assertIn(('site',None),[a for _,a in w.actions])
+            self.assertIn(('page',1),[a for _,a in w.actions])
+            for i,(box,action) in enumerate(w.actions):
+                for other,item in w.actions[i+1:]:
+                    self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(action,item))
+        self.assertEqual(seen,{d['id'] for d in state['devices']})
+        manager.control.assert_not_called()
+
     def test_receiver_site_opens_shared_location_editor_and_preserves_view(self):
         workspace, ui, manager, state = self.dashboard()
         workspace.show()

@@ -3,6 +3,7 @@ import ctypes
 import ctypes.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from rtl_registry import same_usb_attachment
 import logging
 from logging.handlers import RotatingFileHandler
 import mimetypes
@@ -17,7 +18,10 @@ import time
 from urllib.parse import unquote, urlsplit, parse_qs
 from station_web import station_get, station_post
 from dongle_web import dongle_get, dongle_post
+from dongle_notice import inject_notice, notice_post
 from station_profile import distance_m
+from adsb_ground import GroundMap
+from adsb_aircraft import AircraftDetails
 from adsb_coverage import ReceptionCoverage
 from adsb_logs import LOG_FILES, read_log_tail
 from adsb_globe import GlobeAssets
@@ -99,7 +103,9 @@ class ADSBManager:
         self.last_payload = 0
         self.server = None
         self.token = secrets.token_urlsafe(32)
+        self.aircraft_details = AircraftDetails(self.root, self.map_root)
         self.globe = GlobeAssets()
+        self.ground_map = GroundMap(self.globe)
         self.weather = WeatherService(self.root,self.data)
         self.log_cache = {kind: read_log_tail(self.root, kind) for kind in LOG_FILES}
         self.next_logs = 0
@@ -271,7 +277,7 @@ class ADSBManager:
                             detail=self.detail, last_message_at=self.last_message_at)
             band1090['aircraft_count']=es_count
             return dict(now=now, enabled=self.enabled or self.uat.enabled, enabled_1090=self.enabled,
-                        selection=self.selection, devices=[dict(d) for d in self.devices],
+                        selection=self.selection, devices=[dict(d) for d in self.devices],leases=self.broker.snapshot() if self.broker else {},
                         assigned=dict(assigned) if assigned else None, status=self.status if self.enabled else uat['status'] if self.uat.enabled else self.status, detail=self.detail,
                         aircraft=planes, messages=self.messages+self.uat.total_messages, port=self.port,
                         started_at=latest([self.started_at,self.uat.started_at]),last_message_at=latest([self.last_message_at,self.uat.last_packet_at]),
@@ -362,7 +368,7 @@ class ADSBManager:
             self.next_scan = now+5
         if self.process and (not self.enabled or self._location_restart_needed() or
                 (self.selection != 'auto' and self.assigned['id'] != self.selection) or
-                not any(d['id'] == self.assigned['id'] for d in self.devices)):
+                not any(same_usb_attachment(d,self.assigned) for d in self.devices)):
             self._stop()
         if self.process and self.process.poll() is not None:
             failed = self.assigned['id']
@@ -484,6 +490,8 @@ class ADSBManager:
         self.comparison.stop()
 
     def close(self):
+        self.ground_map.close()
+        self.aircraft_details.close()
         self.closed.set()
         self.wake.set()
         self.thread.join(timeout=16)
@@ -498,6 +506,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
     def send(self, data, mime='application/json', status=200, encoding=None):
+        if mime.startswith('text/html') and not encoding:data=inject_notice(data)
         self.send_response(status)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(data)))
@@ -516,6 +525,18 @@ class ADSBHandler(BaseHTTPRequestHandler):
         try:
             if path == '/api/state':
                 self.send(json.dumps(dict(manager.snapshot(), control_token=manager.token)).encode())
+            elif path == '/api/aircraft':
+                self.send(json.dumps(manager.aircraft_details.snapshot(query.get('hex', [''])[0])).encode())
+            elif path == '/api/aircraft/photo':
+                target=manager.aircraft_details.photo_path(query.get('hex', [''])[0])
+                if target is None or not target.is_file(): self.send(b'No photo', 'text/plain', 404)
+                else: self.send(target.read_bytes(), 'image/jpeg')
+            elif path == '/api/coverage/ground':
+                site=dict(lat=float(query.get('lat',['nan'])[0]),lon=float(query.get('lon',['nan'])[0]))
+                self.send(json.dumps(manager.ground_map.snapshot(site,float(query.get('radius',['5000'])[0]))).encode())
+            elif path == '/api/coverage/ground.png':
+                image=manager.ground_map.image(query.get('key',[''])[0])
+                self.send(image or b'', 'image/png', status=200 if image else 404)
             elif path == '/api/coverage':
                 state=manager.snapshot()
                 self.send(json.dumps(dict(manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
@@ -580,6 +601,7 @@ class ADSBHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError): self.send(b'Unavailable', 'text/plain', 503)
 
     def do_POST(self):
+        if notice_post(self):return
         if self.path=='/api/dongles':dongle_post(self);return
         if self.path=='/api/station':station_post(self);return
         manager = self.server.manager

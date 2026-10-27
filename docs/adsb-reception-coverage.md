@@ -14,8 +14,15 @@ observations on both screens, without claiming an SDR or starting ADS-B.
   readouts and point details always retain actual values. One graduated ground
   ruler and a height axis replace per-point distance labels. Entering this view
   uses a lower 25° camera tilt to reveal vertical separation. Drag to rotate; use sliders (web) or
-  rotation/tilt buttons (touch). Tap a point to inspect it; on touch this also
-  filters its aircraft. Reset restores all aircraft.
+  rotation/tilt buttons (touch). Tap a dot, any part of a trail, or an observed
+  sky cell to open an aircraft information card without filtering the scene.
+  The card shows the recorded sample time, altitude/source, RSSI, horizontal
+  and slant range, azimuth and elevation. Current speed/heading/squawk appear
+  separately as Live now only while radio contact is fresh. A sky cell selects
+  its latest retained sample; it can contain reception from several aircraft.
+  Only this aircraft explicitly filters the display; Show all restores it.
+  Close or Back (touch) / Escape (web) dismisses the card first. Reset restores
+  all aircraft. Empty/unobserved sky does not fabricate an aircraft.
 - **RX radius** is the maximum observed horizontal distance from the configured
   antenna. Diameter is twice that radius: a reference circle, not a claim of
   complete circular coverage. Maximum slant range includes vertical distance.
@@ -78,6 +85,9 @@ the displayed aircraft and the enabled footprint. Changing Live / Since opened /
 History or starting a fresh viewing window does not clear the reception history.
 The reception dome is unchanged.
 
+The overlay uses translucent violet shading with a bright lavender edge and dark
+outline, so its extent stays distinct from terrain, cyan trails and aircraft.
+
 The boundary uses the furthest directly received position in each 5-degree
 bearing sector, over the full retained history (up to 90 days). Adjacent observed
 sectors join; unobserved directions stay blank, including across north. This is
@@ -91,3 +101,41 @@ refreshed every ten seconds in the browser. Native projection is cached until
 the history or camera changes and drawn in two OpenGL batches below the trails
 and aircraft. A footprint from a receiver site more than 100 m away is hidden
 until history for the current site is ready.
+
+### Aircraft identity in the dome popup
+
+Tapping a received point or sky trail shows the aircraft manufacturer, model,
+registration and ICAO type when known, alongside the selected sample's recorded
+telemetry. The native touchscreen and browser share the same lookup cache.
+The installed tar1090 aircraft database provides an offline fallback; opening a
+card requests fuller identity from adsbdb (PlaneBase), with hexdb as fallback.
+Only the six-digit aircraft ICAO address is sent, never the receiver location or
+reception history. Identity describes the database's current registration and
+can differ from the registration at the time of an old observation.
+
+Where available, a small matched-aircraft thumbnail is supplied by Airport-Data
+through adsbdb. The web thumbnail links to its original photo. Missing photos
+stay hidden; no generic aircraft photograph is substituted. Internet lookups,
+image decoding and thumbnail resizing run in one background worker, independently
+of reception and dome rendering. Results persist for seven days; offline or
+missing lookups retry after five minutes when that card is next opened. Memory
+is limited to 128 identities and the persistent cache to 512 identities/photos.
+
+### Optional geographic base in 3D distance view
+
+Choose **Aircraft · 3D distance → Ground map → Satellite base** in the browser,
+or **3D distance → Ground** on the touchscreen. The layer defaults to off. The
+browser remembers its choice; the native choice lasts for the app session.
+The map shares the GLOBE NASA Blue Marble imagery, regional GIBS tiles and disk
+cache. It is aligned with the receiver's WGS84 east/north coordinates and rotates
+with the aircraft scene. A selected sample gains a gold vertical guide to its
+horizontal ground position. The map stays faint so trails and altitude cues are
+readable. The ground map does not change reception, time windows or filters.
+
+The base is a **flat reference map**. Relief shading in the imagery is not a 3D
+terrain mesh, buildings or a measured obstruction survey. Aircraft positions and
+height expansion retain the existing 3D geometry and labels. Imagery is rendered
+on one background worker and uploaded once per patch/detail change; camera
+rotation reuses the same texture. No image downloads or geographic reprojection
+run on the touchscreen drawing thread. Missing regional tiles fall back to the
+bundled world image. The renderer keeps at most two 512-pixel ground patches.

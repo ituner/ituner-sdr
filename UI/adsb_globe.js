@@ -117,12 +117,14 @@ export class ADSBGlobe {
   setFootprint(value){this.footprint=value;this.render();}
   drawFootprint(){
     const regions=this.footprintRegions();if(!regions.length)return;
-    const ctx=this.ctx;ctx.save();ctx.fillStyle='#84b6bf';ctx.strokeStyle='#84b6bf';ctx.lineWidth=1;
+    const ctx=this.ctx;ctx.save();ctx.fillStyle='#9874ed';ctx.lineJoin='round';ctx.lineCap='round';
     for(const region of regions){
       const polygon=region.vertices.map(p=>this.project(p)),outline=region.outline.map(p=>this.project(p));
       if(polygon.some(p=>!p)||outline.some(p=>!p))continue;
-      ctx.beginPath();polygon.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.globalAlpha=.13;ctx.fill();
-      ctx.beginPath();outline.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.globalAlpha=.38;ctx.stroke();
+      ctx.beginPath();polygon.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.globalAlpha=.24;ctx.fill();
+      ctx.beginPath();outline.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));
+      ctx.strokeStyle='#101223';ctx.globalAlpha=.85;ctx.lineWidth=5;ctx.stroke();
+      ctx.strokeStyle='#d2baff';ctx.globalAlpha=.95;ctx.lineWidth=2;ctx.stroke();
     }
     ctx.restore();
   }

@@ -6,6 +6,29 @@ import numpy as np
 BLUE=(76/255,157/255,1); MUTED=(145/255,170/255,193/255)
 
 
+def observation_info(data,index):
+    p=data['points'][index];aircraft=data['aircraft'][p[1]]
+    up=p[4]-(data.get('meta',{}).get('reference_height_m') or 0);horizontal=math.hypot(p[2],p[3])
+    return dict(hex=aircraft['hex'],label=p[8] or aircraft['label'],time=data.get('base',0)+p[0],
+                altitude=p[5],gnss=bool(p[7]),rssi=p[6],east=p[2],north=p[3],up=up,horizontal=horizontal/1000,
+                slant=math.hypot(horizontal,up)/1000,azimuth=math.degrees(math.atan2(p[2],p[3]))%360,
+                elevation=math.degrees(math.atan2(up,horizontal)))
+
+
+def pick_observation(frame,x,y,radius=22):
+    """Pick actual samples at dots, observed cells or anywhere along a trail."""
+    candidates=[(math.hypot(px-x,py-y),-order,index) for order,(px,py,_label,_hex,index) in enumerate(frame.get('hits',[])) if index is not None]
+    near=min(candidates,default=(float('inf'),0,None))
+    if near[0]<8:return near[2]
+    paths=frame.get('pick_segments')
+    if paths is not None and len(paths):
+        a=paths[:,0];v=paths[:,1]-a;q=np.asarray((x,y))-a
+        t=np.clip(np.sum(q*v,axis=1)/np.maximum(np.sum(v*v,axis=1),1e-9),0,1)
+        distances=np.linalg.norm(a+t[:,None]*v-(x,y),axis=1);i=int(np.argmin(distances))
+        if distances[i]<min(radius,near[0]):return int(frame['pick_indices'][i,0 if t[i]<.5 else 1])
+    return near[2] if near[0]<radius else None
+
+
 def scene_scope(data):
     meta=data.get('meta',{});site=meta.get('reference') or {}
     return (meta.get('window_since'),site.get('lat'),site.get('lon'),meta.get('reference_height_m'))
@@ -87,7 +110,8 @@ def prepare(data,mode,signal=False,aircraft=None,new_points=(),expanded=True):
     if aircraft:radius=max(5000,math.ceil(max([0]+[math.hypot(p[2],p[3])/1000 for p in selected])/5)*5000)
     highest=max([1000]+[p[4]-height for p in selected]);axis_height=math.ceil(highest/1000)*1000
     height_scale=space_height_scale(radius,axis_height,expanded) if mode=='space' else 1
-    points=[];cells={};lines=[];line_colours=[];labels=[];highlights=[]
+    points=[];cells={};cell_samples={};lines=[];line_colours=[];labels=[];highlights=[];pick_paths=[];pick_indices=[]
+    indexes={id(p):i for i,p in enumerate(data.get('points',[]))}
     for p in data.get('points',[]):
         if aircraft and names[p[1]]['hex']!=aircraft:continue
         up=p[4]-height;distance=math.hypot(p[2],p[3]);az=math.degrees(math.atan2(p[2],p[3]))%360;el=math.degrees(math.atan2(up,distance))
@@ -96,6 +120,7 @@ def prepare(data,mode,signal=False,aircraft=None,new_points=(),expanded=True):
         points.append((p,world,el,label,names[p[1]]['hex']))
         if (mode=='space' or el>=0) and point_key(data,p) in new_points:highlights.append(world)
         if el>=0:
+            cell_samples[(int(az//4)*4,min(88,int(el//2)*2))]=indexes[id(p)]
             cell=cells.setdefault((int(az//4)*4,min(88,int(el//2)*2)),[0,0,0,0]);cell[0]+=1
             if p[6] is not None:cell[1]+=p[6];cell[2]+=1
             cell[3]=max(cell[3],distance)
@@ -118,7 +143,6 @@ def prepare(data,mode,signal=False,aircraft=None,new_points=(),expanded=True):
         for el in (30,60):labels.append((vector(90,el),f'{el}°',18,(145,170,193)))
     if mode!='cells':
         last={};breaks=data.get('breaks',[])
-        indexes={id(p):i for i,p in enumerate(data.get('points',[]))}
         confirmed={tuple(pair) for pair in data.get('segments',[])} if 'segments' in data else None
         for p,world,el,_,_ in points:
             previous=last.get(p[1]);last[p[1]]=(p,world)
@@ -127,19 +151,22 @@ def prepare(data,mode,signal=False,aircraft=None,new_points=(),expanded=True):
                 joined=((indexes[id(a)],indexes[id(p)]) in confirmed if confirmed is not None else
                         0<dt<=15 and math.dist(a[2:5],p[2:5])<=500+400*dt and not any(data['base']+a[0]<t<=data['base']+p[0] for t in breaks))
                 if joined and (mode=='space' or el>=0 and av[2]>=0):
-                    path([av,world] if mode=='space' else sky_arc(av,world),(.24,.53,.9,1))
+                    vertices=[av,world] if mode=='space' else sky_arc(av,world)
+                    path(vertices,(.24,.53,.9,1))
+                    pick_paths.extend(zip(vertices[:-1],vertices[1:]));pick_indices.extend([(indexes[id(a)],indexes[id(p)])]*(len(vertices)-1))
     for name,az in (('N',0),('E',90),('S',180),('W',270)):labels.append((vector(az,0,1.10),name,23,(220,236,255)))
     labels.append(((0,0,-.08),'RECEIVER',16,(145,170,193)))
-    result=dict(mode=mode,lines=np.asarray(lines,dtype=np.float32).reshape(-1,2,3),line_colours=np.asarray(line_colours,dtype=np.float32),labels=labels,meta=meta,radius=radius,height_scale=height_scale,axis_height=axis_height,highlights=np.asarray(highlights[-256:],dtype=np.float32).reshape(-1,3),highest=highest/radius*height_scale if mode=='space' else 1.06)
+    result=dict(mode=mode,lines=np.asarray(lines,dtype=np.float32).reshape(-1,2,3),line_colours=np.asarray(line_colours,dtype=np.float32),labels=labels,meta=meta,radius=radius,height_scale=height_scale,axis_height=axis_height,pick_paths=np.asarray(pick_paths,dtype=np.float32).reshape(-1,2,3),pick_indices=np.asarray(pick_indices,dtype=np.int32).reshape(-1,2),highlights=np.asarray(highlights[-256:],dtype=np.float32).reshape(-1,3),highest=highest/radius*height_scale if mode=='space' else 1.06)
     if mode=='cells':
         keys,verts=sky_grid();colors=[];hits=[]
         for az,el in keys:
             cell=cells.get((az,el));colors.append(colour(cell[1]/cell[2] if cell[2] else None,cell[0]) if cell else (*MUTED,.047))
-            hits.append((f'{az}–{az+4}° az / {el}–{el+2}° el · {cell[0]} positions · max {cell[3]/1000:.1f} km',None) if cell else (f'{az}–{az+4}° az / {el}–{el+2}° el · unobserved / unknown',None))
+            index=cell_samples.get((az,el));hex=names[data['points'][index][1]]['hex'] if index is not None else None
+            hits.append((f'{az}–{az+4}° az / {el}–{el+2}° el · {cell[0]} positions · max {cell[3]/1000:.1f} km',hex,index) if cell else (f'{az}–{az+4}° az / {el}–{el+2}° el · unobserved / unknown',None,None))
         result.update(cells=verts,colours=np.asarray(colors,dtype=np.float32),hit_labels=hits)
     else:
         visible=[p for p in points if mode=='space' or p[2]>=0]
-        result.update(dots=np.asarray([p[1] for p in visible],dtype=np.float32).reshape(-1,3),colours=np.asarray([colour(p[0][6]) for p in visible],dtype=np.float32).reshape(-1,4),solid=np.asarray([bool(p[0][7]) for p in visible]),hit_labels=[(p[3],p[4]) for p in visible])
+        result.update(dots=np.asarray([p[1] for p in visible],dtype=np.float32).reshape(-1,3),colours=np.asarray([colour(p[0][6]) for p in visible],dtype=np.float32).reshape(-1,4),solid=np.asarray([bool(p[0][7]) for p in visible]),hit_labels=[(p[3],p[4],indexes[id(p[0])]) for p in visible])
     return result
 
 
@@ -203,7 +230,10 @@ def project(scene,yaw,tilt,width,height):
         q=screen(scene['highlights']);angles=np.arange(13,dtype=np.float32)*math.tau/12
         offsets=np.stack((np.cos(angles),np.sin(angles)),axis=1)*7
         pulse=np.stack((q[:,None,:]+offsets[:-1],q[:,None,:]+offsets[1:]),axis=2).reshape(-1,2)
-    return dict(batches=batches,labels=labels,hits=hits,native=None,pulse=pulse,pulse_native=None)
+    return dict(batches=batches,labels=labels,hits=hits,native=None,pulse=pulse,pulse_native=None,
+                pick_segments=screen(scene['pick_paths']),pick_indices=scene['pick_indices'],
+                ground_quad=screen(np.asarray(((-1,1,0),(1,1,0),(1,-1,0),(-1,-1,0)),dtype=np.float32)),
+                camera=(matrix,scale,center))
 
 
 def draw(ui,frame,box,pulse_alpha=0):
@@ -216,7 +246,8 @@ def draw(ui,frame,box,pulse_alpha=0):
     gl=ui.GL;gl.glDisable(gl.GL_TEXTURE_2D);gl.glEnableClientState(gl.GL_VERTEX_ARRAY);gl.glEnableClientState(gl.GL_COLOR_ARRAY)
     try:
         gl.glLineWidth(1.2)
-        for kind,vertices,colors in frame['native'][1]:
+        for index,(kind,vertices,colors) in enumerate(frame['native'][1]):
+            if kind=='lines':gl.glLineWidth(frame.get('line_widths',{}).get(index,1.2))
             gl.glVertexPointer(2,gl.GL_FLOAT,0,vertices);gl.glColorPointer(4,gl.GL_FLOAT,0,colors)
             gl.glDrawArrays(gl.GL_TRIANGLES if kind=='triangles' else gl.GL_LINES,0,len(vertices))
         pulse=frame.get('pulse',())
@@ -227,5 +258,6 @@ def draw(ui,frame,box,pulse_alpha=0):
             gl.glDisableClientState(gl.GL_COLOR_ARRAY);gl.glColor4f(.65,1,.83,pulse_alpha)
             gl.glLineWidth(1.8);gl.glVertexPointer(2,gl.GL_FLOAT,0,vertices);gl.glDrawArrays(gl.GL_LINES,0,len(vertices))
     finally:
+        gl.glLineWidth(1.2)
         gl.glDisableClientState(gl.GL_COLOR_ARRAY);gl.glDisableClientState(gl.GL_VERTEX_ARRAY);gl.glEnable(gl.GL_TEXTURE_2D)
         if pulse_alpha>0:gl.glColor4f(1,1,1,1)

@@ -1,7 +1,12 @@
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const load=async path=>import('data:text/javascript;base64,'+Buffer.from(await readFile(new URL(path,import.meta.url),'utf8')).toString('base64'));
-const {mountCoverage,newCoveragePoints,spaceHeightScale,spaceFrame,skyArc}=await load('../UI/adsb_coverage.js');
+const {mountCoverage,newCoveragePoints,spaceHeightScale,spaceFrame,skyArc,coverageObservation,nearestCoverageHit}=await load('../UI/adsb_coverage.js');
+const sampleData={base:1000,meta:{reference_height_m:100},aircraft:[{hex:'abc123',label:'TEST'}],points:[[10,0,3000,4000,1100,5000,-22,1,'FLIGHT']]};
+const sample=coverageObservation(sampleData,0);assert.equal(sample.time,1010);assert.equal(sample.label,'FLIGHT');assert.equal(sample.horizontal,5);assert.equal(sample.altitude,5000);assert.equal(sample.gnss,true);
+const trail={kind:'trail',depth:0,path:[{x:0,y:0},{x:100,y:0}],segment:{a:{id:0},b:{id:1}}};
+assert.equal(nearestCoverageHit([trail],40,3).point.id,0);assert.equal(nearestCoverageHit([trail],70,3).point.id,1);assert.equal(nearestCoverageHit([trail],40,30),null);
+const dot={kind:'point',x:41,y:0,depth:1,point:{id:2}};assert.equal(nearestCoverageHit([trail,dot],40,3).point.id,2);
 const arc=skyArc([0,.98480775,.17364818],[0,-.98480775,.17364818]);assert.ok(arc.length>2);for(const p of arc)assert.ok(Math.abs(Math.hypot(...p)-1)<1e-6);assert.ok(Math.max(...arc.map(p=>p[2]))>.9);
 assert.equal(spaceHeightScale(100000,14000,true),5);assert.equal(spaceHeightScale(100000,14000,false),1);
 for(const [width,height] of [[340,360],[920,558],[1232,460]])for(const yaw of [0,95,210])for(const tilt of [8,25,55,90]){

@@ -57,7 +57,11 @@ def projected_frame(regions,project):
         if not all(p is not None for p in polygon+outline):continue
         for i in range(1,len(polygon)-1):triangles.extend((polygon[0][:2],polygon[i][:2],polygon[i+1][:2]))
         for a,b in zip(outline,outline[1:]):lines.extend((a[:2],b[:2]))
-    batches=[]
-    for kind,vertices,alpha in (('triangles',triangles,.13),('lines',lines,.38)):
-        if vertices:batches.append((kind,np.asarray(vertices,dtype=np.float32),np.tile((132/255,182/255,191/255,alpha),(len(vertices),1)).astype(np.float32)))
-    return dict(batches=batches,native=None)
+    batches=[];line_widths={}
+    for kind,vertices,rgba,width in (('triangles',triangles,(152/255,116/255,237/255,.24),0),
+                                     ('lines',lines,(16/255,18/255,35/255,.85),5),
+                                     ('lines',lines,(210/255,186/255,1,.95),2)):
+        if vertices:
+            if width:line_widths[len(batches)]=width
+            batches.append((kind,np.asarray(vertices,dtype=np.float32),np.tile(rgba,(len(vertices),1)).astype(np.float32)))
+    return dict(batches=batches,native=None,line_widths=line_widths)

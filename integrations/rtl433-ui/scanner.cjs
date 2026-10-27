@@ -1,6 +1,7 @@
 'use strict';
 // Shared activity model; independent receiver visits never duplicate a frequency.
-const BANDS=[433920000,868300000,915000000,315000000,345000000,868950000];
+const PROFILES=require('../../UI/rtl433_profiles.json');
+const BANDS=PROFILES.map(p=>p.frequency);
 class IntelligentScanner {
   constructor({now=Date.now,saved={}}={}){
     this.now=now;this.enabled=saved.enabled===true;this.reason=this.enabled?'Resuming scan':'Ready to explore';
@@ -58,4 +59,4 @@ class IntelligentScanner {
       bands:this.bands.map(b=>({...b,devices:[...b.devices],recent:b.recent.map(v=>({...v})),packetsPerMinute:b.seconds?b.packets*60/b.seconds:0}))};
   }
 }
-module.exports={IntelligentScanner,BANDS};
+module.exports={IntelligentScanner,BANDS,PROFILES};
