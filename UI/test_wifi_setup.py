@@ -44,7 +44,7 @@ class WifiUITests(unittest.TestCase):
                     expected='BACK' if key=='<' and mode!='symbols2' else key
                     self.assertEqual(actual,expected)
                     if actual!='BACK': chars.add(actual)
-                    self.assertLess(x+(i+1)*w, ui.LCD_NAV_X0)
+                    self.assertLess(x+(i+1)*w, ui.LOGICAL_W)
             self.assertIsNone(ui.network_password_key_at(-10,-10,mode))
         self.assertTrue(set(chr(n) for n in range(32,127)) <= chars)
 
@@ -64,16 +64,37 @@ class WifiUITests(unittest.TestCase):
         self.assertEqual(ui.touch_keyboard_next_mode('symbols2','MODE'),'lower')
         self.assertIn('<',[key for key,_ in ui.touch_keyboard_key_boxes('symbols2')])
 
+    def test_keyboard_frames_follow_active_theme_radius_and_palette(self):
+        from copy import deepcopy
+        for radius in (0, 8):
+            theme = deepcopy(ui.theme_system.DEFAULT_THEME)
+            theme.update(id="keyboard-test", radius=radius)
+            theme["colors"]["surface"] = [21, 32, 43, 255]
+            theme["colors"]["active_surface"] = [54, 65, 76, 255]
+            with self.subTest(radius=radius), ui.theme_system.preview_theme(theme), \
+                    patch.object(ui, 'draw_logical_rect') as rect, \
+                    patch.object(ui, 'draw_logical_line'), \
+                    patch.object(ui, 'draw_logical_rounded_rect') as frames, \
+                    patch.object(ui, 'draw_text') as text, \
+                    patch.object(ui, 'fit_station_text', side_effect=lambda cache, value, *args: value):
+                ui.draw_network_password(None, 'Test network', 'secret', 'lower', False, False, False)
+                self.assertTrue(frames.call_args_list)
+                self.assertTrue(all(c.args[4] == radius for c in frames.call_args_list))
+                self.assertEqual(frames.call_args_list[0].args[5], tuple(theme['colors']['surface']))
+                self.assertEqual(frames.call_args_list[-1].args[5], tuple(theme['colors']['active_surface']))
+                self.assertEqual(rect.call_args_list[0].args[4], ui.APP_UI_STYLE.palette.background)
+                self.assertTrue(any(c.args[4] == ui.APP_UI_STYLE.palette.text for c in text.call_args_list))
+
     def test_keyboard_case_and_requested_size_are_preserved(self):
         with patch.object(ui,'draw_styled_button_frame',return_value=SimpleNamespace(text=(255,255,255))), patch.object(ui,'draw_text') as text:
             ui.draw_network_button(None,(0,0,80,72),'a',32)
         self.assertEqual(text.call_args.args[3],'a')
         self.assertEqual(text.call_args.args[5],32)
 
-    def test_connect_and_password_are_not_under_the_back_sidebar(self):
+    def test_full_width_keyboard_stays_inside_canvas(self):
         boxes=ui.network_password_boxes()
         for name,b in boxes.items():
-            self.assertLess(b[2],ui.LCD_NAV_X0,name)
+            self.assertLess(b[2],ui.LOGICAL_W,name)
             self.assertLessEqual(b[3],ui.LOGICAL_H,name)
         self.assertGreaterEqual(boxes['join'][2]-boxes['join'][0],200)
         self.assertGreaterEqual(boxes['join'][3]-boxes['join'][1],60)

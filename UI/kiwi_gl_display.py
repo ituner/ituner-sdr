@@ -16875,24 +16875,18 @@ def deepgram_setup_surface_box():
 
 
 def keyboard_modal_back_box():
-    """The persistent escape target shared by every touch keyboard."""
-    return lcd_drawer_back_box()
+    """Compatibility alias for the visible Cancel button, never a hidden rail."""
+    return network_password_boxes()["cancel"]
 
 
 def station_search_back_box():
-    """Use the common rail Back control on the 1280x800 interface."""
-    return keyboard_modal_back_box() if LCD_800_MODE else SEARCH_EXIT_BOX
+    """Search exits through the same visible Cancel control as every keyboard."""
+    return keyboard_modal_back_box()
 
 
 def network_password_back_requested(x, y):
-    """Keep Wi-Fi secret entry escapable even while its modal owns input."""
-    return LCD_800_MODE and contains(keyboard_modal_back_box(), x, y)
-
-
-def draw_keyboard_modal_sidebar(text_cache, title, detail):
-    """Draw a visible, touch-safe escape rail beside a modal keyboard."""
-    if LCD_800_MODE:
-        draw_settings_leaf_sidebar(text_cache, title, detail)
+    """Keep Wi-Fi secret entry escapable through its visible Cancel control."""
+    return contains(keyboard_modal_back_box(), x, y)
 
 
 def deepgram_key_at(x, y, mode):
@@ -16982,8 +16976,8 @@ def draw_network_actions(text_cache, network):
 
 
 def network_password_boxes():
-    # Stay to the left of the shared Back rail; nothing is hidden underneath it.
-    panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
+    # Text entry owns the whole canvas; Cancel is its only dismissal control.
+    panel = (28, 32, LOGICAL_W - 28, LOGICAL_H - 28)
     x0, y0, x1, y1 = panel
     return {
         "panel": panel,
@@ -17142,7 +17136,10 @@ def draw_touch_keyboard(text_cache, title, detail, value, mode="lower", submit="
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(*boxes["panel"], color("section_surface"))
-    draw_text(text_cache, x0 + 24, y0 + 30, title, color("text"), 28, True, False, "lm")
+    heading = title if rail_title.upper() == "KEYBOARD" or rail_title.casefold() in title.casefold() else f"{rail_title} · {title}"
+    draw_text(text_cache, x0 + 24, y0 + 30,
+              fit_station_text(text_cache, heading, x1 - x0 - 48, 28, True, False),
+              color("text"), 28, True, False, "lm")
     draw_text(text_cache, x0 + 24, y0 + 72,
               fit_station_text(text_cache, detail, x1 - x0 - 48, 24, True, False),
               color("ready"), 24, True, False, "lm")
@@ -17176,7 +17173,6 @@ def draw_touch_keyboard(text_cache, title, detail, value, mode="lower", submit="
         draw_text(text_cache, x0 + 24, y0 + 634,
                   fit_station_text(text_cache, error, x1 - x0 - 48, 18, False, False),
                   color("waiting"), 18, False, False, "lm")
-    draw_keyboard_modal_sidebar(text_cache, rail_title, rail_detail)
 
 
 
@@ -17208,8 +17204,6 @@ def touch_keyboard_key_boxes(mode="lower", caps=False):
 
 def touch_keyboard_action_at(x, y, mode="lower"):
     boxes = network_password_boxes()
-    if LCD_800_MODE and contains(keyboard_modal_back_box(), x, y):
-        return "CANCEL"
     for name, action in (("mode", "MODE"), ("caps", "CAPS"), ("clear", "CLEAR"),
                          ("space", "SPACE"), ("cancel", "CANCEL"), ("join", "SAVE")):
         if contains(boxes[name], x, y):
@@ -25923,9 +25917,7 @@ def main():
     desktop_map_motion_at = 0.0
 
     def shared_keyboard_open():
-        # Every text keyboard renders in Wi-Fi's canonical right-rail space.
-        # Full-width decoder pages normally position navigation themselves, but
-        # their modal keyboard needs the same composition and inverse hit map.
+        # Text keyboards fill the canvas and bypass rail composition/hit mapping.
         if theme_editor.open and theme_editor.overlay == "name":
             return True
         if deepgram_setup_open or network_password_open or (picker_open and search_open) or wspr_identity_open:
@@ -25952,7 +25944,7 @@ def main():
         if theme_system.runtime_theme["sidebar"] != "left":
             return False
         if shared_keyboard_open():
-            return True
+            return False
         return (
             not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
@@ -29249,13 +29241,7 @@ def main():
                         elif touch_started and gesture == "search":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                if (
-                                    contains(station_search_back_box(), x, y)
-                                    or (
-                                        not LCD_800_MODE
-                                        and contains(SEARCH_LEFT_EXIT_BOX, x, y)
-                                    )
-                                ):
+                                if contains(station_search_back_box(), x, y):
                                     search_open = False
                                     station_scroll = 0
                                 else:

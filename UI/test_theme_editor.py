@@ -240,9 +240,22 @@ class ThemeEditorTests(unittest.TestCase):
         self.assertEqual(self.editor.buffer,'a1?')
         self.tap('name:MODE');self.tap('name:BACK')
         self.assertEqual(self.editor.buffer,'a1')
-        self.tap('name:rail_cancel')
+        self.tap('name:CANCEL')
         self.assertIsNone(self.editor.overlay)
         self.assertEqual(self.editor.preview['name'],'My Radio')
+
+    def test_name_keyboard_has_no_invisible_sidebar_cancel_target(self):
+        self.tap('tab:customize');self.tap('theme_name');self.tap('name:CLEAR')
+        self.tap('name:a')
+        self.assertNotIn('name:rail_cancel', theme_screen_boxes(self.editor))
+        # This was inside the old right-rail BACK button, below the keyboard's
+        # visible command row. It must not dismiss an editor after rail removal.
+        self.editor.tap(1250, 780)
+        self.assertEqual(self.editor.overlay, 'name')
+        self.assertEqual(self.editor.buffer, 'a')
+        self.tap('name:CANCEL')
+        self.assertIsNone(self.editor.overlay)
+        self.assertEqual(self.editor.preview['name'], 'My Radio')
 
     def test_duplicate_explicit_name_is_an_inline_error_without_closing(self):
         self.library.upsert(new_theme('Other'))

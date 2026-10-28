@@ -58,7 +58,6 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         result={f"name:{key}":box for key,box in ui.touch_keyboard_key_boxes(getattr(editor,'keyboard_mode','lower'))}
         result.update({f"name:{action}":boxes[key] for key,action in
             (("mode","MODE"),("caps","CAPS"),("clear","CLEAR"),("space","SPACE"),("cancel","CANCEL"),("join","DONE"))})
-        result['name:rail_cancel']=ui.keyboard_modal_back_box()
         return result
     if editor.overlay and not ignore_overlay:
         if editor.overlay == "delete":
@@ -292,7 +291,7 @@ class ThemeEditor:
             if value in ('MODE','CAPS'):
                 self.keyboard_mode=keyboard_ui(self).touch_keyboard_next_mode(getattr(self,'keyboard_mode','lower'),value)
                 return
-            value={'BACK':'DEL','rail_cancel':'CANCEL'}.get(value,value)
+            value={'BACK':'DEL'}.get(value,value)
         if value == "CANCEL":
             self.overlay = None
             self.error = ""

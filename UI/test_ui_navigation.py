@@ -1696,7 +1696,6 @@ class ReceiverListStyleTests(unittest.TestCase):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
                 mock.patch.object(ui, "draw_logical_line"), \
-                mock.patch.object(ui, "draw_keyboard_modal_sidebar"), \
                 mock.patch.object(ui, "draw_network_button"), \
                 mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, text, *_args: text), \
                 mock.patch.object(ui, "draw_text") as draw:

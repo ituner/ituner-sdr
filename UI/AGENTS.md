@@ -47,9 +47,12 @@ All current and future native text-entry screens must use the shared Wi-Fi
 password keyboard design, layout, and placement. Reuse `draw_touch_keyboard`,
 `touch_keyboard_action_at`, and `touch_keyboard_next_mode` in
 `kiwi_gl_display.py`; do not introduce screen-specific alphabetic keyboards.
-Preserve its key sizes, rows, spacing, command positions, theme styling, and
-bottom BACK placement. Register new keyboard modals in `shared_keyboard_open`
-so left/right rail composition and touch mapping stay aligned. Keep field
+Text-entry keyboards use the full screen width, with no side rail or duplicate
+BACK button. Preserve the shared rows, spacing, command positions, key heights,
+and theme styling; use the visible Cancel button to dismiss. Retain useful
+section context in the main heading. Register new keyboard modals in
+`shared_keyboard_open` so rail composition and inverse touch mapping are
+disabled for both left- and right-rail themes. Keep field
 validation, length limits, masking, and save/cancel behavior specific to the
 field. Dedicated numeric and hexadecimal keypads may retain their existing
 purpose-specific layouts.
@@ -57,3 +60,7 @@ purpose-specific layouts.
 SYSTEM is an explicit placement exception: keep its button group bottom-aligned
 8 px above the fixed BACK button. Its first Wi-Fi / ETHERNET control remains
 full-width; preserve the spaces around the slash.
+
+Keyboard previews must apply the chosen runtime theme before rendering; never
+present the uninitialized renderer fallback as the active theme. Keyboard
+corners, colors, and typography must come from shared theme styling.
