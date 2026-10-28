@@ -1535,7 +1535,7 @@ WSPR_CAPACITY_REFRESH_SECONDS = 20.0
 MAIN_RECEIVER_CAPACITY_REFRESH_SECONDS = 20.0
 WSPR_CAPACITY_TIMEOUT_SECONDS = 4.0
 WSPR_DECODE_BOX = (904, 6, 1018, 70)
-WSPR_CPU_BOX = (760, 12, 936, 62)
+WSPR_CPU_BOX = (720, 6, 896, 70)
 WSPR_ADD_BOX = (1026, 6, 1140, 70)
 WSPR_HOME_BOX = (1148, 6, 1262, 70)
 WSPR_CPU_DETAIL_BOX = (280, 114, 1000, 698)
@@ -12654,8 +12654,8 @@ def draw_wspr_identity_panel(text_cache, values, active_field, error="", mode="u
 def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_band, smeter_dbm, identity_values):
     """Session planner now; future local FPGA decode workers bind to bands."""
     x0, y0, x1, y1 = WSPR_PANEL_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 106))
-    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 238))
+    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
     draw_text(text_cache, 36, y0 + 22, "WSPR", themed_instrument_color("text", (232, 246, 247)), 21, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 146, y0 + 22, f"{len(sessions):02d} SELECTED", themed_instrument_color("ready", (98, 241, 169)), 14, True, True, "lm", family="Liberation Sans")
@@ -12780,10 +12780,10 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
                                  rate_info=None):
     """Dense left log plus a right-side receiver/decode status column."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     side_x0 = x1 - 166
     log_x0, log_x1 = x0 + 12, side_x0 - 12
-    draw_logical_line(side_x0, y0 + 8, side_x0, y1 - 8, (83, 151, 151, 146), 1)
+    draw_logical_line(side_x0, y0 + 8, side_x0, y1 - 8, APP_UI_STYLE.palette.divider, 1)
     decode_status = str(snapshot.get("decode_status", "ARMED"))
     decode_detail = str(snapshot.get("decode_detail", ""))
     status_color = {
@@ -12815,7 +12815,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         ("km", "MI" if theme_system.runtime_theme["units"] == "imperial" else "KM", "rm"),
     ):
         draw_text(text_cache, columns[key], y0 + 16, label, header_color, 13, True, True, anchor, family="Liberation Mono")
-    draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, (84, 142, 148, 112), 1)
+    draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, APP_UI_STYLE.palette.divider, 1)
     # Seven compact rows make the in-card decode view useful without forcing
     # the operator into the full log. A slightly tighter baseline still gives
     # the existing 13 px mono text enough air at this 1280x800 tile size.
@@ -12825,7 +12825,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         draw_text(text_cache, (log_x0 + log_x1) / 2, (y0 + y1) / 2 + 4, waiting, status_color, 13, True, True, "cm", family="Liberation Sans")
     for index, spot in enumerate(spots):
         y = y0 + 40 + index * 19
-        draw_logical_line(log_x0, y + 11, log_x1, y + 11, (75, 116, 124, 72), 1)
+        draw_logical_line(log_x0, y + 11, log_x1, y + 11, APP_UI_STYLE.palette.divider, 1)
         distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
         values = {
             "utc": str(spot.get("utc", "----"))[-4:],
@@ -12872,9 +12872,9 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
     snapshot = monitor.snapshot() if monitor is not None else {}
     x0, x1 = 28, rf_canvas_width() - 28
     header_h = WSPR_EXPANDED_LOG_HEADER_H
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR LOG", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
@@ -12895,7 +12895,7 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
         ("km", "DISTANCE mi" if theme_system.runtime_theme["units"] == "imperial" else "DISTANCE km", "rm"),
     ):
         draw_text(text_cache, columns[key], header_h + 30, label, themed_instrument_color("secondary_text", (112, 181, 184)), 16, True, True, anchor, family="Liberation Mono")
-    draw_logical_line(x0, header_h + 43, x1, header_h + 43, (92, 158, 160, 145), 1)
+    draw_logical_line(x0, header_h + 43, x1, header_h + 43, APP_UI_STYLE.palette.divider, 1)
     spots = tuple(snapshot.get("decoded_spots", ()))
     max_scroll = max(0, len(spots) - WSPR_EXPANDED_LOG_ROWS)
     scroll_rows = int(clamp(scroll_rows, 0, max_scroll))
@@ -12905,7 +12905,7 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
         draw_text(text_cache, (x0 + x1) / 2, (header_h + LOGICAL_H) / 2, detail, status_color, 21, True, True, "cm", family="Liberation Sans")
     for index, spot in enumerate(visible):
         y = header_h + 72 + index * WSPR_EXPANDED_LOG_ROW_H
-        draw_logical_line(x0, y + 17, x1, y + 17, (75, 121, 127, 74), 1)
+        draw_logical_line(x0, y + 17, x1, y + 17, APP_UI_STYLE.palette.divider, 1)
         distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
         values = {
             "utc": str(spot.get("utc", "----"))[-4:],
@@ -12928,9 +12928,9 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     x0, x1 = 28, rf_canvas_width() - 28
     wf_y0, wf_y1 = header_h + 12, LOGICAL_H - 38
     snapshot = monitor.snapshot() if monitor is not None else {}
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 10, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR WATERFALL", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
@@ -12944,7 +12944,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     draw_text(text_cache, x1, 28, state_text, state_color, 18, True, True, "rm", family="Liberation Sans")
     draw_text(text_cache, x1, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", themed_instrument_color("secondary_text", (160, 205, 208)), 14, True, True, "rm", family="Liberation Mono")
 
-    draw_logical_rect(x0, wf_y0, x1, wf_y1, (1, 7, 14, 255))
+    draw_logical_rect(x0, wf_y0, x1, wf_y1, APP_UI_STYLE.palette.waterfall_low)
     if texture is not None and count:
         if not texture.draw_history(x0, wf_y0, x1, wf_y1, scroll_rows):
             loaded = min(count, int(texture.history_backfill_index))
@@ -12956,7 +12956,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     else:
         draw_text(text_cache, (x0 + x1) / 2, (wf_y0 + wf_y1) / 2, "WAITING FOR WSPR WATERFALL ROWS", themed_instrument_color("secondary_text", (126, 169, 177)), 20, True, True, "cm", family="Liberation Sans")
     for ax0, ay0, ax1, ay1 in ((x0, wf_y0, x1, wf_y0), (x0, wf_y1, x1, wf_y1), (x0, wf_y0, x0, wf_y1), (x1, wf_y0, x1, wf_y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (86, 166, 170, 150), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     footer = "SWIPE UP FOR OLDER WATERFALL  ·  TAP BACK TO RETURN" if max_scroll else "BUILDING 800-ROW RAM HISTORY"
     draw_text(text_cache, x0, LOGICAL_H - 18, footer, themed_instrument_color("secondary_text", (113, 187, 182)), 14, True, True, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
@@ -12965,7 +12965,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
 def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid, graph_cache):
     """Show a pure WSPR distance-versus-time scatter plot."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     spots = tuple(snapshot.get("decoded_spots", ()))
     model = graph_cache.model_for(tile_id, spots, receiver_grid)
     draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", themed_instrument_color("text", (203, 235, 234)), 14, True, True, "lm", family="Liberation Sans")
@@ -12982,7 +12982,7 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
     distance_top = model["distance_top"]
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 78), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 6, y - 1,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (123, 176, 180)), 11, True, True, "rm", family="Liberation Mono")
@@ -13023,29 +13023,29 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     header_h = 146
     plot_x0, plot_x1 = x0 + 74, x1 - 24
     plot_y0, plot_y1 = header_h + 22, LOGICAL_H - 64
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 680, 20, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0, 57, receiver, themed_instrument_color("secondary_text", (149, 211, 207)), 18, True, False, "lm", family="Liberation Sans")
     state = "LOADING HISTORY" if loading else ("PRECOMPUTED" if ready else "WAITING")
     draw_text(text_cache, 888, 57, state, (118, 224, 185) if ready else (234, 187, 106), 15, True, True, "lm", family="Liberation Sans")
-    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, APP_UI_STYLE.palette.background)
     max_distance = max((distance for _stamp, distance in points), default=0.0)
     distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
     distance_unit = "mi" if theme_system.runtime_theme["units"] == "imperial" else "km"
     for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 94), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 11, y,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (151, 199, 200)), 15, True, True, "rm", family="Liberation Mono")
     draw_text(text_cache, plot_x1, plot_y0 - 11, distance_unit, themed_instrument_color("secondary_text", (108, 185, 180)), 13, True, True, "rm", family="Liberation Sans")
     for index in range(1, 5):
         x = plot_x0 + (plot_x1 - plot_x0) * index / 5
-        draw_logical_line(x, plot_y0, x, plot_y1, (74, 127, 132, 56), 1)
+        draw_logical_line(x, plot_y0, x, plot_y1, APP_UI_STYLE.palette.spectrum_grid, 1)
     cutoff = now - window_s
     for stamp, distance in points:
         x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
@@ -13092,7 +13092,7 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
     window_s = WSPR_DISTANCE_WINDOWS[window_index]
     now = time.time()
     border = (104, 239, 184, 230) if focused else (81, 154, 158, 154)
-    draw_logical_rect(x0, y0, x1, y1, (5, 18, 24, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, border, 1)
     band = str(tile.get("band", "?"))
@@ -13102,11 +13102,11 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
     draw_text(text_cache, x1 - 12, y0 + 17, f"{len(points)}", themed_instrument_color("ready", (111, 229, 181)), 14, True, True, "rm", family="Liberation Mono")
     plot_x0, plot_x1 = x0 + 49, x1 - 14
     plot_y0, plot_y1 = y0 + 38, y1 - 30
-    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, APP_UI_STYLE.palette.background)
     distance_top = max(1000, int(math.ceil(max((distance for _stamp, distance in points), default=0.0) / 1000.0)) * 1000)
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (76, 134, 140, 90), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 7, y,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (126, 184, 186)), 11, True, True, "rm", family="Liberation Mono")
@@ -13128,9 +13128,9 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     """A familiar MRTG overview: two detailed receiver histories per page."""
     window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
     boxes, page, page_count = wspr_expanded_graph_boxes(len(tiles), page)
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), 140, (8, 29, 35, 250))
-    draw_logical_line(0, 139, rf_canvas_width(), 139, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), 140, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, 139, rf_canvas_width(), 139, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, 28, 28, "WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", themed_instrument_color("secondary_text", (139, 205, 201)), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
@@ -13146,7 +13146,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
                 focused=str(tile.get("id", "")) == str(focused_id),
             )
         else:
-            draw_logical_rect(*box, (4, 14, 20, 160))
+            draw_logical_rect(*box, APP_UI_STYLE.palette.section_surface)
     draw_text(text_cache, rf_canvas_width() - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", themed_instrument_color("secondary_text", (132, 194, 191)), 14, True, True, "rm", family="Liberation Mono")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
@@ -13172,7 +13172,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
                    "waiting" if status in ("CONNECTING", "RETRY", "NO W/F") else
                    "focus" if status == "AUDIO FFT" else "secondary_text")
     color = themed_instrument_color(status_role, color)[:3]
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 238))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (*color, 150), 1)
     band = str(tile.get("band", "?"))
@@ -13190,8 +13190,8 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     if leader:
         # Annunciator, not another button: a compact bright indicator placed
         # in the instrument header immediately before receiver capacity.
-        draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, (19, 91, 65, 240))
-        draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, (120, 255, 187, 250), 1.5)
+        draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, APP_UI_STYLE.palette.selected_surface)
+        draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, APP_UI_STYLE.palette.ready, 1.5)
         draw_text(text_cache, (leader_x0 + leader_x1) / 2, y0 + 20, "LEADER", themed_instrument_color("ready", (202, 255, 220)), 12, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, capacity_x, y0 + 20, capacity_label, capacity_color, 15, True, True, "rm", family="Liberation Sans")
     draw_wspr_cycle_timer(x1 - 28, y0 + 22, 10)
@@ -13201,7 +13201,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     # card's redundant bottom status rail.
     wf_box = (x0 + 14, y0 + 38, x1 - 14, y1 - (14 if view == 1 else 48))
     if view == 0:
-        draw_logical_rect(*wf_box, (2, 8, 15, 245))
+        draw_logical_rect(*wf_box, APP_UI_STYLE.palette.waterfall_low)
         if texture is not None:
             texture.draw(*wf_box)
         else:
@@ -13232,8 +13232,8 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         }.get(status, ("W/F WAIT", (30, 42, 48, 205), (165, 194, 198)))
         source_width = 122 if source_label == "AUDIO FFT" else 112
         source_box = (wf_box[0] + 8, wf_box[1] + 8, wf_box[0] + 8 + source_width, wf_box[1] + 31)
-        draw_logical_rect(*source_box, source_fill)
-        draw_logical_line(source_box[0], source_box[1], source_box[2], source_box[1], (*source_color, 190), 1)
+        draw_logical_rect(*source_box, APP_UI_STYLE.palette.section_surface)
+        draw_logical_line(source_box[0], source_box[1], source_box[2], source_box[1], APP_UI_STYLE.palette.divider, 1)
         draw_text(text_cache, (source_box[0] + source_box[2]) / 2, (source_box[1] + source_box[3]) / 2, source_label, themed_instrument_color("ready" if status == "LIVE" else "waiting" if status in ("NO W/F", "RETRY", "CONNECTING") else "secondary_text", source_color), 13, True, True, "cm", family="Liberation Sans")
     if view != 1:
         level = snapshot["smeter_dbm"]
@@ -13273,12 +13273,12 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
 
 def draw_wspr_add_card(text_cache, box):
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (10, 29, 35, 218))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (77, 171, 153, 165), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2 - 15
-    draw_logical_line(cx - 22, cy, cx + 22, cy, (96, 236, 175, 230), 3)
-    draw_logical_line(cx, cy - 22, cx, cy + 22, (96, 236, 175, 230), 3)
+    draw_logical_line(cx - 22, cy, cx + 22, cy, APP_UI_STYLE.palette.ready, 3)
+    draw_logical_line(cx, cy - 22, cx, cy + 22, APP_UI_STYLE.palette.ready, 3)
     draw_text(text_cache, cx, cy + 43, "ADD WSPR", themed_instrument_color("text", (225, 249, 245)), 22, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, cx, cy + 66, "CURRENT RADIO PRESELECTED", themed_instrument_color("ready", (118, 190, 181)), 13, True, True, "cm", family="Liberation Sans")
 
@@ -13352,13 +13352,13 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
     snapshot = monitor.snapshot() if monitor is not None else {"status": "QUEUED", "smeter_dbm": None}
     paused = bool(tile.get("paused", False))
     status = "STOPPED" if paused else snapshot.get("status", "QUEUED")
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 172))
-    draw_logical_rect(x0, y0, x1, y1, (8, 22, 29, 242))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (88, 207, 179, 178), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     name = str(tile.get("name", "CURRENT RECEIVER"))
-    status_color = (92, 241, 177) if status == "LIVE" else (244, 188, 104) if status == "CONNECTING" else (173, 193, 197)
+    status_color = getattr(APP_UI_STYLE.palette, "ready" if status == "LIVE" else "waiting" if status == "CONNECTING" else "secondary_text")
     draw_text(text_cache, x0 + 32, y0 + 38, f"{band} m WSPR", themed_instrument_color("text", (232, 247, 247)), 25, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 32, y0 + 38, status, status_color, 16, True, True, "rm", family="Liberation Sans")
     if band_picker_open:
@@ -13379,19 +13379,14 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
             station_name, location, server, used, total = station_fields(station)
             local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
             active = server.rstrip("/") == str(tile.get("server", "")).rstrip("/")
-            draw_logical_rect(*box, (27, 76, 66, 232) if active else (14, 31, 39, 235))
-            draw_logical_line(
-                box[0], box[1], box[2], box[1],
-                (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)),
-                1,
-            )
+            draw_styled_button_frame(box, selected=active)
             draw_text(text_cache, box[0] + 16, box[1] + 23, fit_station_text(text_cache, station_name, box[2] - box[0] - 32, 18, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 18, True, False, "lm", family="Liberation Sans")
             detail = location or server
             if used is not None and total is not None:
                 detail += f"  ·  {used}/{total}"
             if local_receiver:
                 detail = "LAN  ·  kiwisdr.local"
-            draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 13, False, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), APP_UI_STYLE.palette.ready if local_receiver else APP_UI_STYLE.palette.secondary_text, 13, False, False, "lm", family="Liberation Sans")
         draw_text(text_cache, x0 + 32, y0 + 300, "WSPR HF BAND", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
         for label, frequency, box in boxes["hf_band_boxes"]:
             active = label == band
@@ -13404,8 +13399,8 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
                   True, True, "cm", family="Liberation Sans")
         return
     receiver_box = boxes["receiver"]
-    draw_logical_rect(*receiver_box, (14, 37, 44, 235))
-    draw_logical_line(receiver_box[0], receiver_box[1], receiver_box[2], receiver_box[1], (91, 171, 164, 165), 1)
+    draw_logical_rect(*receiver_box, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(receiver_box[0], receiver_box[1], receiver_box[2], receiver_box[1], APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 22, fit_station_text(text_cache, name, receiver_box[2] - receiver_box[0] - 170, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (232, 246, 247)), 19, True, False, "lm", family="Liberation Sans")
     location = str(tile.get("location", "") or tile.get("server", ""))
     draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 56, fit_station_text(text_cache, location, receiver_box[2] - receiver_box[0] - 170, 14, False, False, "Liberation Sans"), themed_instrument_color("secondary_text", (160, 195, 199)), 14, False, False, "lm", family="Liberation Sans")
@@ -13465,8 +13460,8 @@ def wspr_tile_settings_action_at(x, y, receiver_rows, receiver_page, receiver_pi
 def draw_wspr_cpu_debug_backdrop(text_cache):
     """Keep the expanded CPU debug view readable without leaving WSPR."""
     x0, y0, x1, y1 = WSPR_CPU_DETAIL_BOX
-    draw_logical_rect(0, WSPR_WORKSPACE_HEADER_H, LOGICAL_W, LOGICAL_H, (0, 5, 8, 172))
-    draw_logical_rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, (11, 38, 44, 232))
+    draw_logical_rect(0, WSPR_WORKSPACE_HEADER_H, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, APP_UI_STYLE.palette.section_surface)
     draw_text(text_cache, (x0 + x1) / 2, y0 - 19, "CPU DEBUG  ·  TAP PANEL TO RETURN", themed_instrument_color("ready", (148, 224, 213)), 15, True, True, "cm", family="Liberation Sans")
 
 
@@ -13495,10 +13490,10 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
     """Large global controls for the decoding work that follows each capture."""
     boxes = wspr_decoder_settings_layout()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 178))
-    draw_logical_rect(x0, y0, x1, y1, (8, 23, 30, 246))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (93, 216, 181, 196), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, x0 + 28, y0 + 38, "WSPR DECODE", themed_instrument_color("text", (236, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 28, y0 + 68, "GLOBAL PROFILE  ·  APPLIES ON THE NEXT TWO-MINUTE DECODE", themed_instrument_color("ready", (126, 203, 191)), 14, True, True, "lm", family="Liberation Sans")
     details = {
@@ -13540,7 +13535,7 @@ def wspr_decoder_settings_action_at(x, y):
 
 def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, cpu_percent=None, receiver_grid=None,
                         decode_rates=None, mini_distance_cache=None):
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 9, 14, 253))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
     card_boxes = wspr_workspace_card_boxes(len(tiles), scroll_y)
     for index, box in enumerate(card_boxes):
         if box[3] < WSPR_WORKSPACE_HEADER_H or box[1] > LOGICAL_H:
@@ -13554,10 +13549,10 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
                 (decode_rates or {}).get(key), mini_distance_cache,
             )
         else:
-            draw_logical_rect(*box, (5, 14, 20, 142))
+            draw_logical_rect(*box, APP_UI_STYLE.palette.section_surface)
     # Cards may scroll under this fixed header. Redraw it after the grid so
     # the header also forms the viewport's clean clipping edge.
-    draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, (8, 22, 29, 250))
+    draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W)
     draw_text(text_cache, 22, 27, "WSPR MONITOR", themed_instrument_color("text", (234, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     live_count = sum(
@@ -13573,12 +13568,12 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     draw_styled_two_line_button(text_cache, WSPR_DECODE_BOX, "DECODE", decode_detail,
                                 active=decode_active)
     cpu_x0, cpu_y0, cpu_x1, cpu_y1 = WSPR_CPU_BOX
-    draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, (11, 37, 43, 212))
-    draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, (87, 211, 190, 156), 1)
+    draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, APP_UI_STYLE.palette.divider, 1)
     cpu_label = "CPU --" if cpu_percent is None else f"CPU {cpu_percent:.0f}%"
     draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, themed_instrument_color("ready", (163, 238, 226)), 17, True, True, "cm", family="Liberation Sans")
     draw_styled_text_button(text_cache, WSPR_ADD_BOX, "ADD WSPR")
-    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "HOME")
+    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "BACK")
 
 
 def wspr_add_layout():
@@ -13611,9 +13606,9 @@ def wspr_add_band_boxes():
 def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page, selected_server):
     panel, bands_box, receivers_box, cancel, create, prev, next_box = wspr_add_layout()
     x0, y0, x1, y1 = panel
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 224))
-    draw_logical_rect(x0, y0, x1, y1, (8, 20, 27, 250))
-    draw_logical_line(x0, y0, x1, y0, (87, 209, 175, 200), 1)
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(x0, y0, x1, y0, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, 42, 57, "ADD WSPR SESSION", themed_instrument_color("text", (232, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 42, 80, "LAN KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", themed_instrument_color("ready", (120, 196, 185)), 14, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LAN FIRST", themed_instrument_color("secondary_text", (177, 209, 213)), 16, True, True, "lm", family="Liberation Sans")
@@ -13629,15 +13624,14 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
         box = (bx0, by0 + index * (row_h + 8), bx1, by0 + index * (row_h + 8) + row_h)
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
         active = server.rstrip("/") == str(selected_server or "").rstrip("/")
-        draw_logical_rect(*box, (27, 76, 66, 232) if active else (14, 31, 39, 235))
-        draw_logical_line(box[0], box[1], box[2], box[1], (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)), 1)
+        draw_styled_button_frame(box, selected=active)
         draw_text(text_cache, box[0] + 16, box[1] + 24, fit_station_text(text_cache, name, box[2] - box[0] - 32, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 19, True, False, "lm", family="Liberation Sans")
         detail = location or server
         if used is not None and total is not None:
             detail += f"  ·  {used}/{total}"
         if local_receiver:
             detail = "LAN  ·  kiwisdr.local"
-        draw_text(text_cache, box[0] + 16, box[1] + 51, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 14, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, box[0] + 16, box[1] + 51, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 14, False, False, "Liberation Sans"), APP_UI_STYLE.palette.ready if local_receiver else APP_UI_STYLE.palette.secondary_text, 14, False, False, "lm", family="Liberation Sans")
     for box, label, active in ((cancel, "CANCEL", False), (create, "CREATE", True), (prev, "< PREV", False), (next_box, "NEXT >", False)):
         draw_wspr_button(text_cache, box, label, active=active)
     pages = max(1, math.ceil(len(receiver_rows) / 3))
@@ -13653,7 +13647,7 @@ def wspr_workspace_action_at(x, y, tiles, scroll_y):
         if contains(WSPR_DECODE_BOX, x, y):
             return "decoder_settings", None
         if contains(WSPR_HOME_BOX, x, y):
-            return "home", None
+            return "back", None
         if contains(WSPR_ADD_BOX, x, y):
             return "add", None
     for index, box in enumerate(wspr_workspace_card_boxes(len(tiles), scroll_y)):
@@ -24312,6 +24306,7 @@ def main():
     wspr_history = deque(maxlen=max(256, int(WSPR_HISTORY_SECONDS / 1.5)))
     wspr_next_sample = 0.0
     wspr_next_log_at = 0.0
+    wspr_navigation_parent = "home"
     wspr_panel_open = args.wspr_preview
     wspr_identity_preferences = remembered_preferences.get("wspr_identity", {})
     if not isinstance(wspr_identity_preferences, dict):
@@ -25387,7 +25382,7 @@ def main():
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
-        nonlocal usb_radios_parent
+        nonlocal usb_radios_parent, wspr_navigation_parent
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
@@ -25674,10 +25669,13 @@ def main():
             settings_menu_open = digital_menu_open = False
             active_server, active_freq, *_ = state.snapshot()
             active_mode, *_ = state.radio_snapshot()
-            ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[kind]).show(active_server, active_freq, active_mode)
+            workspace = {"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[kind]
+            workspace.navigation_parent = parent
+            workspace.show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
+            wspr_navigation_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             wspr_panel_open = True
@@ -25945,13 +25943,17 @@ def main():
             return False
         if shared_keyboard_open():
             return False
+        if any(getattr(getattr(workspace, "log_search_view", None), "open", False)
+               for workspace in (cw_workspace, qrss_workspace, hell_workspace, sstv_workspace, wspr_history_view)):
+            return False
         return (
             not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
             and not (adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+                     or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
-            and not (wspr_panel_open or font_lab_open or rtl_lab_open
+            and not ((wspr_panel_open and not (wspr_expanded_waterfall_open or wspr_expanded_graph_open)) or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open))
         )
 
@@ -27974,24 +27976,44 @@ def main():
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 cw_workspace.tap(x, y, wspr_receiver_choices())
+                                if not cw_workspace.open:
+                                    parent = getattr(cw_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "qrss_workspace":
                             if qrss_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 qrss_workspace.tap(x, y, wspr_receiver_choices())
+                                if not qrss_workspace.open:
+                                    parent = getattr(qrss_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "hell_workspace":
                             if hell_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 hell_workspace.tap(x, y, wspr_receiver_choices())
+                                if not hell_workspace.open:
+                                    parent = getattr(hell_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "sstv_workspace":
                             if sstv_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 sstv_workspace.tap(x, y, wspr_receiver_choices())
+                                if not sstv_workspace.open:
+                                    parent = getattr(sstv_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "wspr_add":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28249,7 +28271,7 @@ def main():
                                 choice = wspr_workspace_action_at(x, y, wspr_tiles, wspr_workspace_scroll)
                                 if choice is not None:
                                     kind, _value = choice
-                                    if kind == "home":
+                                    if kind == "back":
                                         wspr_panel_open = False
                                         wspr_expanded_log_open = False
                                         wspr_expanded_log_id = ""
@@ -28268,7 +28290,10 @@ def main():
                                         wspr_tile_delete_armed = False
                                         wspr_cpu_detail_open = False
                                         cpu_utilization_graph_open = False
-                                        # Home is merely a view transition:
+                                        restore_navigation_parent(wspr_navigation_parent)
+                                        if wspr_navigation_parent == "modes":
+                                            radio_family_open = "digital"
+                                        # Back is merely a view transition:
                                         # configured WSPR monitor streams keep
                                         # their remote W/F slots and continue.
                                     elif kind == "add":
@@ -28517,9 +28542,12 @@ def main():
                                         active_server, active_freq, *_ = state.snapshot()
                                         active_mode, *_ = state.radio_snapshot()
                                         sstv_workspace.open = hell_workspace.open = qrss_workspace.open = cw_workspace.open = False
-                                        ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[value]).show(active_server, active_freq, active_mode)
+                                        workspace = {"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[value]
+                                        workspace.navigation_parent = "modes"
+                                        workspace.show(active_server, active_freq, active_mode)
                                         tests_panel_open = dj_tune_open = filter_panel_open = False
                                     elif kind == "workspace" and value == "wspr":
+                                        wspr_navigation_parent = "modes"
                                         radio_setup_open = False
                                         radio_family_open = None
                                         wspr_panel_open = True

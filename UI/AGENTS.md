@@ -64,3 +64,12 @@ full-width; preserve the spaces around the slash.
 Keyboard previews must apply the chosen runtime theme before rendering; never
 present the uninitialized renderer fallback as the active theme. Keyboard
 corners, colors, and typography must come from shared theme styling.
+
+Digital-mode workspaces use a single BACK action that retraces the previous
+view and ultimately returns to the menu that opened them. Do not inject HOME
+or BACK over forms that already own Cancel, or over the shared keyboard.
+Keep HOME only when it has a distinct destination (as in Spectrum Analyzer).
+Full-width HF workspaces must bypass the rail framebuffer composer; position
+BACK and footer controls directly for the selected theme side so plots and
+image cards are never split. Use live theme tokens for screen chrome while
+preserving received image pixels and measurement palettes.

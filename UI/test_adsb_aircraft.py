@@ -108,4 +108,5 @@ class AircraftDetailsTests(unittest.TestCase):
         view.draw_aircraft(Mock(),dict(aircraft=[]))
         labels=[c.args[3] for c in w.ink.call_args_list]
         self.assertIn('Cessna',labels);self.assertIn('172S Skyhawk',labels);self.assertIn('10,000 GNSS',labels)
+        self.assertEqual([label for label in labels if label.startswith('ICAO ')],['ICAO ABC123 · N123AB'])
         view.draw_photo.assert_called_once();self.assertEqual(view.selected_observation['time'],1000)

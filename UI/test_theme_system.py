@@ -103,7 +103,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "fit_station_text", side_effect=lambda _cache, value, *_args, **_kwargs: value), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_network_manager(None, {"devices": {}, "networks": [], "ok": True}, False, None)
-            self.assertIn(("Network", tuple(custom["colors"]["text"])),
+            self.assertIn(("Wi-Fi / ETHERNET", tuple(custom["colors"]["text"])),
                           [(item.args[3], tuple(item.args[4])) for item in text.call_args_list])
             text.reset_mock()
             ui.draw_cpu_utilization_graph(None, (), None, (20, 30, 900, 400))

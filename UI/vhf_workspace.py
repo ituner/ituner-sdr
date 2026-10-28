@@ -284,21 +284,20 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
         elif self.view=='products':self.draw_products(cache)
         else:self.draw_logs(cache,state)
         ui.draw_logical_rect(1024,0,1280,800,self.PANEL)
-        self.text(cache,1038,32,MODES[self.mode]['label'].upper(),23,self.CYAN)
-        self.text(cache,1038,62,state['status'],12,self.MUTED,width=226)
+        ui.draw_sidebar_header(cache,MODES[self.mode]['label'].upper())
         items=[('START' if not state['enabled'] else 'STOP',('start' if not state['enabled'] else 'stop',None),state['status']),
             (('LISTENING BAND' if self.mode=='ism' else 'PROFILE'),('overlay','bands' if self.mode=='ism' else 'profiles'),f"{state['settings']['frequency']/1e6:g} MHz" if self.mode=='ism' else self.session.profile()['name']),
             ('USB RECEIVER',('overlay','usb'),state['assigned']['serial'] if state['assigned'] else 'AUTO / SELECT'),
             ('FREQUENCY',('number','frequency'),f"{state['settings']['frequency']/1e6:.6f} MHz")]
-        for index,(label,action,sub) in enumerate(items):self.button(cache,(1034,82+index*78,1270,150+index*78),label,action,sub,active=index==0 and state['enabled'])
+        for index,(label,action,sub) in enumerate(items):self.button(cache,(1034,80+index*72,1270,144+index*72),label,action,sub,active=index==0 and state['enabled'])
         for i,(label,value) in enumerate((('MAP','map'),('DATA','data'),('PRODUCTS','products'),('LOGS','logs'))):
-            x=1034+(i%2)*122;y=402+(i//2)*78;self.button(cache,(x,y,x+114,y+68),label,('view',value),active=self.view==value)
+            x=1034+(i%2)*122;y=368+(i//2)*72;self.button(cache,(x,y,x+114,y+64),label,('view',value),active=self.view==value)
         if self.view=='map' and not self.overlay:
             for i,(label,action) in enumerate((('ZOOM +',('zoom',1.4)),('ZOOM -',('zoom',1/1.4)),('FIT ALL',('fit',None)),('FOLLOW',('follow',None)))):
-                x=1034+(i%2)*122;y=558+(i//2)*78;self.button(cache,(x,y,x+114,y+68),label,action,active=label=='FOLLOW' and self.map.following)
+                x=1034+(i%2)*122;y=512+(i//2)*72;self.button(cache,(x,y,x+114,y+64),label,action,active=label=='FOLLOW' and self.map.following)
         else:
-            self.button(cache,(1034,558,1148,626),'PREV',('page',-1));self.button(cache,(1156,558,1270,626),'NEXT',('page',1))
-            if self.mode in ('meteor','cubesat'):self.button(cache,(1034,636,1270,704),'SITE / ORBITS',('overlay','location'))
+            self.button(cache,(1034,512,1148,576),'PREV',('page',-1));self.button(cache,(1156,512,1270,576),'NEXT',('page',1))
+            if self.mode in ('meteor','cubesat'):self.button(cache,(1034,584,1270,648),'SITE / ORBITS',('overlay','location'))
         self.button(cache,(1034,728,1270,792),'BACK',('back',None))
         dashboard='RTL433-UI · cm5.local:8093' if self.mode=='ism' and getattr(self.manager,'rtl433_ui_installed',False) else 'SIGNAL OBSERVATORY · cm5.local:8092'
         self.draw_status(cache,self.message or state['detail'],dashboard)

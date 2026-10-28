@@ -154,7 +154,7 @@ class CoverageTouch:
             for x,y,text,size,color in self.projected['labels']:w.ink(cache,BOX[0]+x,BOX[1]+y,text,size,color,anchor='cm')
         if self.error or w.manager.coverage_error or data.get('status') in (None,'LOADING','EMPTY','NO SITE'):
             text=self.error or w.manager.coverage_error or {'EMPTY':'No aircraft positions in this viewing window yet.','NO SITE':'Tap Site to enter antenna latitude / longitude.'}.get(data.get('status'),'Loading reception history…')
-            w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=1100)
+            w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=880)
         factor=frame.get('height_scale',1) if frame else 1
         if self.mode=='space':
             w.button(cache,(24,382,152,450),'Ground',('coverage_ground',None),'Map on' if self.ground_enabled else 'Map off',active=self.ground_enabled)
@@ -229,7 +229,6 @@ class CoverageTouch:
         w.ui.draw_logical_rounded_rect(x,y,x1,y1,w.RADIUS,(*w.PANEL[:3],235),(*BLUE,200),1)
         first=len(w.actions)
         w.ink(cache,x+12,y+22,p['label'],24,w.GOLD,width=300)
-        w.ink(cache,x+12,y+46,'ICAO '+p['hex'].upper()+(' · latest cell sample' if self.mode=='cells' else ''),15,w.MUTED,width=300)
         w.button(cache,(x1-68,y+8,x1-12,y+64),'×',('coverage_close_aircraft',None))
         service=getattr(w.manager,'aircraft_details',None)
         info=service.snapshot(p['hex']) if service is not None else {}
@@ -241,8 +240,9 @@ class CoverageTouch:
         model=info.get('model') or info.get('icao_type') or ('Model unavailable' if info.get('status')!='loading' else '')
         lines=textwrap.wrap(model,width=27 if photo else 38)
         for index,line in enumerate(lines[:2]):w.ink(cache,x+12,y+105+index*21,line,17,w.TEXT,width=width)
-        if info.get('registration'):
-            w.ink(cache,x+12,y+46,'ICAO '+p['hex'].upper()+' · '+info['registration'],15,w.MUTED,width=300)
+        identity='ICAO '+p['hex'].upper()
+        identity+=' · '+info['registration'] if info.get('registration') else (' · latest cell sample' if self.mode=='cells' else '')
+        w.ink(cache,x+12,y+46,identity,15,w.MUTED,width=300)
         if photo:
             self.draw_photo(service.photo_path(p['hex']),(x+290,y+68,x1-12,y+132))
             w.ink(cache,x+290,y+142,'Airport-Data.com',11,w.MUTED,width=106)
