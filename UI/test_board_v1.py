@@ -901,7 +901,7 @@ class BoardLayoutTests(unittest.TestCase):
                 if has_back and index == len(items) - 1:
                     continue  # Back is the shared full-width return target.
                 box = ui.lcd_nav_box(index, len(items), has_back)
-                self.assertEqual(box[2] - box[0], ui.LCD_NAV_TILE_W)
+                self.assertEqual(box[2] - box[0], 236 if has_back and index == 0 else ui.LCD_NAV_TILE_W)
                 self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H if has_back else ui.LCD_HOME_NAV_TILE_H)
         # The Globe retains its four compact rail commands and full-width Back.
         ui.configure_output(True)
@@ -1354,42 +1354,33 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
         self.assertEqual(
             sidebar.call_args_list,
             [
-                call(None, "NETWORK", "WI-FI KEY"),
+                call(None, "VOSC", "DEEPGRAM API KEY"),
+                call(None, "WI-FI/ETHERNET", "WI-FI KEY"),
                 call(None, "SEARCH", "RECEIVERS"),
             ],
         )
 
-    def test_deepgram_keypad_uses_only_the_right_rail(self):
+    def test_deepgram_uses_wifi_keyboard_geometry_and_retains_secret_paste(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        for mode in ("lower", "upper", "digits"):
+        for mode in ("lower", "upper", "symbols", "symbols2"):
             boxes = ui.deepgram_sidebar_boxes(mode)
-            self.assertEqual(boxes["panel"], (ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H))
-            self.assertEqual(ui.deepgram_setup_surface_box(), boxes["panel"])
-            self.assertIsNone(ui.deepgram_setup_action_at(200, 100, mode))
+            self.assertEqual(boxes["panel"], ui.network_password_boxes()["panel"])
+            self.assertEqual(ui.deepgram_setup_surface_box(), (0, 0, ui.LOGICAL_W, ui.LOGICAL_H))
             self.assertEqual(boxes["close"], ui.lcd_drawer_back_box())
-            self.assertEqual(boxes["field"][2] - boxes["field"][0], 236)
             field = boxes["field"]
-            self.assertEqual(ui.deepgram_setup_action_at((field[0] + field[2]) / 2,
-                                                          (field[1] + field[3]) / 2, mode), "PASTE")
+            with patch.object(ui, "DESKTOP_MODE", True):
+                self.assertEqual(ui.deepgram_setup_action_at((field[0] + field[2]) / 2,
+                                                            (field[1] + field[3]) / 2, mode), "PASTE")
             for action, box in (*boxes["actions"].items(), *boxes["keys"]):
-                self.assertGreaterEqual(box[0], ui.LCD_NAV_X0 + 10)
-                self.assertLessEqual(box[2], ui.LOGICAL_W - 10)
-                self.assertEqual((box[2] - box[0], box[3] - box[1]), (55, 31))
+                self.assertLess(box[2], ui.LCD_NAV_X0)
+                self.assertGreaterEqual(box[3] - box[1], 60)
                 self.assertEqual(ui.deepgram_setup_action_at((box[0] + box[2]) / 2,
-                                                              (box[1] + box[3]) / 2, mode), action)
-            self.assertLess(max(box[3] for _action, box in boxes["keys"]), boxes["close"][1])
-
-        with patch.object(ui, "draw_logical_rect") as rect, \
-                patch.object(ui, "draw_logical_line"), \
-                patch.object(ui, "draw_text"), \
-                patch.object(ui, "draw_sidebar_header"), \
-                patch.object(ui, "draw_lcd_drawer_heading"), \
-                patch.object(ui, "draw_styled_text_button"), \
-                patch.object(ui, "draw_radio_close_button"):
+                                                            (box[1] + box[3]) / 2, mode), action)
+        with patch.object(ui, "draw_touch_keyboard") as keyboard:
             ui.draw_deepgram_setup(None, "secret", "lower")
-        self.assertTrue(rect.call_args_list)
-        self.assertTrue(all(call_args.args[0] >= ui.LCD_NAV_X0 for call_args in rect.call_args_list))
+        self.assertTrue(keyboard.call_args.kwargs["secret"])
+        self.assertEqual(keyboard.call_args.kwargs["placeholder"], "Enter API key")
 
     def test_all_primary_back_targets_match_after_configuration(self):
         ui.configure_output(True)

@@ -34,14 +34,9 @@ class SearchView(SSTVWorkspace):
         self.button(cache,(264,82,500,146),'MODE',('mode',None),self.mode)
         self.button(cache,(508,82,744,146),'SEARCH',('search',None))
         if self.keyboard:
-            for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/ ')):
-                for x,char in enumerate(row):
-                    left,top=24+x*122,205+y*72
-                    self.button(cache,(left,top,left+114,top+64),char if char!=' ' else 'SPACE',('key',char))
-            for i,(label,kind) in enumerate((('DELETE','erase'),('CLEAR','clear'),('SEARCH','done'))):
-                left=24+i*122
-                self.button(cache,(left,501,left+114,565),label,(kind,None))
-            self.text(cache,24,640,'Use a full or partial callsign. Matching ignores upper / lower case.',20);return
+            self.ui.draw_touch_keyboard(cache,'Search saved logs','Use a full or partial callsign. Matching ignores case.',self.query,
+                mode=getattr(self,'keyboard_mode','lower'),submit='Search',rail_title='SEARCH')
+            return
         for i,row in enumerate(self.result['results']):
             y=168+i*175;self.ui.draw_logical_rect(20,y,1260,y+159,(17,38,48,255))
             self.text(cache,32,y+25,row['mode'].upper()+' · '+row['utc']+' · '+row['band'],20,(104,234,194),width=995)
@@ -59,6 +54,16 @@ class SearchView(SSTVWorkspace):
         self.text(cache,280,779,self.message or 'OCR and Morse text are tentative. Tap a mode to search across all decoders.',15,width=736)
 
     def tap(self,x,y,*unused):
+        if self.keyboard:
+            mode=getattr(self,'keyboard_mode','lower')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action=='CANCEL':self.keyboard=False
+            elif action=='SAVE':self.keyboard=False;self.offset=0;self.submit()
+            elif action=='BACK':self.query=self.query[:-1]
+            elif action=='CLEAR':self.query=''
+            elif action:self.query=(self.query+(' ' if action=='SPACE' else action))[:80]
+            return
         a=next((a for box,a in self.actions if self.ui.contains(box,x,y)),None)
         if not a:return
         kind,value=a

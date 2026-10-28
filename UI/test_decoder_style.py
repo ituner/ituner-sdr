@@ -129,7 +129,8 @@ class DecoderThemeTests(unittest.TestCase):
             for page in ('identity','location','gps'):
                 w.page=page;w.field=None;w.draw(Mock());self.assert_navigation_clear(w)
             w.field='station_name';w.value='Unsaved';w.draw(Mock())
-            self.assert_navigation_clear(w,('key','CANCEL'))
+            self.assertEqual(ui.draw_touch_keyboard.call_args.args[3],'Unsaved')
+            ui.touch_keyboard_action_at.return_value='CANCEL'
             b=full_width_back_box();w.tap(b[0]+10,b[1]+10)
             self.assertIsNone(w.field);self.assertTrue(w.open)
             self.assertNotEqual(w.draft['station_name'],'Unsaved')

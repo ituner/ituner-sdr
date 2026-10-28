@@ -1692,20 +1692,19 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(draw.call_args.args[3], "ERROR")
         self.assertEqual(draw.call_args.args[4], ui.APP_UI_STYLE.palette.secondary_text)
 
-    def test_deepgram_key_error_remains_in_vosc_rail(self):
+    def test_deepgram_key_error_remains_visible_in_shared_keyboard(self):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
                 mock.patch.object(ui, "draw_logical_line"), \
-                mock.patch.object(ui, "draw_sidebar_header"), \
-                mock.patch.object(ui, "draw_lcd_drawer_heading"), \
-                mock.patch.object(ui, "draw_styled_text_button"), \
-                mock.patch.object(ui, "draw_radio_close_button"), \
-                mock.patch.object(ui, "fit_station_text", return_value="ENTER THE COMPLETE API KEY"), \
+                mock.patch.object(ui, "draw_keyboard_modal_sidebar"), \
+                mock.patch.object(ui, "draw_network_button"), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, text, *_args: text), \
                 mock.patch.object(ui, "draw_text") as draw:
             ui.draw_deepgram_setup(None, "short", "lower", "enter the complete API key")
         labels = [call.args[3] for call in draw.call_args_list]
-        self.assertIn("ERROR", labels)
-        self.assertIn("ENTER THE COMPLETE API KEY", labels)
+        self.assertIn("enter the complete API key", labels)
+        self.assertNotIn("short", labels)
+        self.assertIn("•••••", labels)
 
     def test_bottom_vosc_popup_owns_covered_zoom_buttons_until_moved(self):
         ui.configure_output(True)

@@ -190,6 +190,10 @@ class HellWorkspace(SSTVWorkspace):
 
     def draw_report(self,cache):
         p=self.reporting
+        if getattr(self,'report_keyboard',False):
+            self.ui.draw_touch_keyboard(cache,{'call':'Heard callsign','reporter':'Receiver callsign','grid':'Receiver grid'}[self.report_field],
+                'PSK REPORTER',self.report_entry,mode=getattr(self,'keyboard_mode','upper'),submit='Done',rail_title='HELL')
+            return
         self.text(cache,24,36,'Report a station to PSK Reporter',28)
         self.text(cache,24,83,p['receiver']+' · '+p['server'],18,width=1230)
         self.text(cache,24,121,'Use the receiving antenna’s identity and location, not your own for a remote Kiwi.',18)
@@ -198,11 +202,6 @@ class HellWorkspace(SSTVWorkspace):
             self.button(cache,(x,151,x+236,215),label,('report_field',key),p[key],active=self.report_field==key)
         self.button(cache,(24,234,260,298),'REPORTING PERMISSION',('confirm_report',None),'YES' if p['confirmed'] else 'NO',active=p['confirmed'])
         self.text(cache,276,267,'Callsign is correct; I may report for this receiver and its location is correct.',17,width=740)
-        for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/')):
-            for x,c in enumerate(row):
-                left,top=24+x*122,322+y*72
-                self.button(cache,(left,top,left+114,top+64),c,('report_key',c))
-        self.button(cache,(24,616,260,680),'DELETE',('report_erase',None))
         self.button(cache,(268,616,504,680),'QUEUE REPORT',('send_report',None))
         self.button(cache,(512,616,748,680),'CANCEL',('cancel_report',None))
         self.text(cache,24,704,self.message,17,width=990)
@@ -210,6 +209,17 @@ class HellWorkspace(SSTVWorkspace):
         self.text(cache,24,770,'PSK Reporter uses UDP; delivery is unconfirmed.',16,width=990)
 
     def tap(self,x,y,receivers):
+        if self.reporting is not None and getattr(self,'report_keyboard',False):
+            mode=getattr(self,'keyboard_mode','upper')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action in ('SAVE','CANCEL'):
+                if action=='SAVE':self.reporting[self.report_field]=self.report_entry
+                self.report_keyboard=False
+            elif action=='BACK':self.report_entry=self.report_entry[:-1]
+            elif action=='CLEAR':self.report_entry=''
+            elif action:self.report_entry=(self.report_entry+(' ' if action=='SPACE' else action))[:16]
+            return
         receivers = self.kiwi_receivers(receivers)
         action=next((a for box,a in reversed(self.actions) if self.ui.contains(box,x,y)),None)
         if action is None:return
@@ -251,8 +261,8 @@ class HellWorkspace(SSTVWorkspace):
                 if station and station.local_receiver(item['server']):
                     shared=station.snapshot();profile.update(reporter=shared['config']['callsign'] or profile.get('reporter',''),grid=shared['grid'] or profile.get('grid',''))
                 self.reporting=dict(image=value,call='',reporter=profile.get('reporter',''),grid=profile.get('grid',''),confirmed=False,receiver=item['receiver'],server=item['server'])
-                self.message='';self.report_field='call'
-            elif key=='report_field':self.report_field=value
+                self.message='';self.report_field='call';self.report_keyboard=False
+            elif key=='report_field':self.report_field=value;self.report_entry=self.reporting[value];self.report_keyboard=True
             elif key=='report_key':self.reporting[self.report_field]=(self.reporting[self.report_field]+value)[:16]
             elif key=='report_erase':self.reporting[self.report_field]=self.reporting[self.report_field][:-1]
             elif key=='confirm_report':self.reporting['confirmed']=not self.reporting['confirmed']

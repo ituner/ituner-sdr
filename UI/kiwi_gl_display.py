@@ -2514,9 +2514,9 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
+    ("network", "WI-FI/ETHERNET"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
-    ("network", "NETWORK"),
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
@@ -4133,23 +4133,11 @@ def health_prioritized_stations(stations, station_health, sort_mode):
 
 
 def keyboard_rows(mode):
-    if mode == "numeric":
-        return SEARCH_NUMERIC_KEY_ROWS
-    if mode == "lower":
-        return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in SEARCH_KEY_ROWS)
-    return SEARCH_KEY_ROWS
+    return network_keyboard_rows("symbols" if mode == "numeric" else mode)
 
 
 def search_key_at(x, y, mode):
-    for keys, x0, y0, key_w in keyboard_rows(mode):
-        if y0 <= y < y0 + 70 and x0 <= x < x0 + len(keys) * key_w:
-            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
-            if key == "<":
-                return "BACK"
-            if key == ">":
-                return "ENTER"
-            return " " if key == "~" else key
-    return None
+    return touch_keyboard_action_at(x, y, mode)
 
 
 def frequency_entry_layout():
@@ -12628,86 +12616,39 @@ def wspr_identity_open_box():
     return x1 - 210, y0 + 4, x1 - 14, y0 + 44
 
 
-def wspr_identity_layout():
-    x0, y0, x1, y1 = WSPR_IDENTITY_BOX
-    field_x0, field_x1 = x0 + 132, x1 - 26
-    reporter = (field_x0, y0 + 42, field_x1, y0 + 84)
-    grid = (field_x0, y0 + 94, field_x1, y0 + 136)
-    key_y0 = y0 + 154
-    keys = []
-    for row_index, row in enumerate(WSPR_IDENTITY_KEY_ROWS):
-        key_gap = 7
-        key_w = (field_x1 - (x0 + 26) - key_gap * (len(row) - 1)) / len(row)
-        for index, key in enumerate(row):
-            left = x0 + 26 + index * (key_w + key_gap)
-            keys.append((key, (left, key_y0 + row_index * 42, left + key_w, key_y0 + row_index * 42 + 34)))
-    defaults = (x0 + 26, y1 - 48, x0 + 214, y1 - 12)
-    cancel = (x0 + 228, y1 - 48, x0 + 410, y1 - 12)
-    save = (x1 - 214, y1 - 48, x1 - 26, y1 - 12)
-    return reporter, grid, tuple(keys), defaults, cancel, save
+def wspr_identity_layout(mode="upper"):
+    boxes = network_password_boxes()
+    x0, y0, x1, _ = boxes["panel"]
+    reporter = (x0 + 24, y0 + 48, x0 + 330, y0 + 104)
+    grid = (x0 + 346, y0 + 48, x1 - 24, y0 + 104)
+    defaults = (x0 + 462, y0 + 208, x1 - 24, y0 + 268)
+    return reporter, grid, touch_keyboard_key_boxes(mode), defaults, boxes["cancel"], boxes["join"]
 
 
-def wspr_identity_action_at(x, y):
-    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout()
-    if contains(reporter, x, y):
-        return "field", "reporter"
-    if contains(grid, x, y):
-        return "field", "grid"
-    for key, box in keys:
+def wspr_identity_action_at(x, y, mode="upper"):
+    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout(mode)
+    for name, box in (("reporter", reporter), ("grid", grid)):
         if contains(box, x, y):
-            return "key", key
+            return "field", name
     if contains(defaults, x, y):
         return "defaults", None
-    if contains(cancel, x, y):
-        return "cancel", None
-    if contains(save, x, y):
-        return "save", None
+    action = touch_keyboard_action_at(x, y, mode)
+    if action in ("MODE", "CAPS"):
+        return "mode", action
+    if action in ("CANCEL", "SAVE", "CLEAR"):
+        return action.lower(), None
+    if action:
+        return "key", "<" if action == "BACK" else (" " if action == "SPACE" else action)
     return None
 
 
-def draw_wspr_identity_panel(text_cache, values, active_field, error=""):
-    x0, y0, x1, y1 = WSPR_IDENTITY_BOX
-    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout()
-    identity = wspr_log_identity(values)
-    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 146))
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 248))
-    draw_logical_line(x0, y0, x1, y0, (114, 222, 182, 168), 1)
-    draw_text(text_cache, x0 + 24, y0 + 19, "WSPR REPORTER ID", themed_instrument_color("text", (232, 246, 247)), 20, True, True, "lm", family="Liberation Sans")
-    state_text = "UPLOAD READY" if identity["upload_ready"] else "LOCAL LOG ONLY"
-    state_color = themed_instrument_color("ready", (104, 243, 176)) if identity["upload_ready"] else themed_instrument_color("waiting", (241, 181, 108))
-    draw_text(text_cache, x1 - 26, y0 + 19, state_text, state_color, 13, True, True, "rm", family="Liberation Sans")
-
-    def field(box, label, value, selected, placeholder):
-        bx0, by0, bx1, by1 = box
-        draw_text(text_cache, x0 + 26, (by0 + by1) / 2, label, themed_instrument_color("secondary_text", (157, 192, 198)), 15, True, True, "lm", family="Liberation Sans")
-        fill = (13, 37, 43, 250) if selected else (10, 28, 35, 242)
-        edge = (93, 237, 173, 230) if selected else (86, 126, 137, 142)
-        draw_logical_rect(bx0, by0, bx1, by1, fill)
-        draw_logical_line(bx0, by0, bx1, by0, edge, 2 if selected else 1)
-        draw_logical_line(bx0, by1, bx1, by1, (45, 79, 88, 170), 1)
-        text = value or placeholder
-        color = themed_instrument_color("text", (232, 246, 247)) if value else themed_instrument_color("secondary_text", (130, 157, 164))
-        draw_text(text_cache, bx0 + 14, (by0 + by1) / 2, text, color, 21, True, True, "lm", family="Liberation Sans")
-
-    field(reporter, "REPORTER", values.get("reporter", ""), active_field == "reporter", "SWL")
-    field(grid, "GRID", values.get("grid", ""), active_field == "grid", "MAIDENHEAD  e.g. JN63")
-    for key, box in keys:
-        bx0, by0, bx1, by1 = box
-        draw_logical_rect(bx0, by0, bx1, by1, (16, 34, 42, 236))
-        draw_logical_line(bx0, by0, bx1, by0, (95, 144, 153, 126), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "DEL" if key == "<" else key, themed_instrument_color("text", (221, 238, 240)), 17 if key == "<" else 20, True, True, "cm", family="Liberation Sans")
-
-    def action(box, label, accent, active=False):
-        bx0, by0, bx1, by1 = box
-        draw_logical_rect(bx0, by0, bx1, by1, accent if active else (15, 32, 40, 242))
-        draw_logical_line(bx0, by0, bx1, by0, accent if active else (81, 123, 133, 140), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, themed_instrument_color("text", (238, 250, 250)), 16, True, True, "cm", family="Liberation Sans")
-
-    action(defaults, "SWL DEFAULT", (37, 87, 73, 244), True)
-    action(cancel, "CANCEL", (15, 32, 40, 242))
-    action(save, "SAVE", (40, 112, 83, 246), True)
-    message = error or "Grid is optional for local logs; a valid 4/6-char grid is required before external upload."
-    draw_text(text_cache, x0 + 26, y1 - 63, message, themed_instrument_color("waiting", (245, 157, 119)) if error else themed_instrument_color("secondary_text", (139, 184, 190)), 12, True, True, "lm", family="Liberation Sans")
+def draw_wspr_identity_panel(text_cache, values, active_field, error="", mode="upper"):
+    draw_touch_keyboard(text_cache, "WSPR REPORTER ID", "", values.get(active_field, ""), mode,
+                        submit="Save", error=error, rail_title="WSPR", rail_detail="REPORTER ID")
+    reporter, grid, _, defaults, _, _ = wspr_identity_layout(mode)
+    draw_network_button(text_cache, reporter, "REPORTER: " + values.get("reporter", "SWL"), 22, active_field == "reporter")
+    draw_network_button(text_cache, grid, "GRID: " + values.get("grid", ""), 22, active_field == "grid")
+    draw_network_button(text_cache, defaults, "SWL DEFAULT", 22)
 
 
 def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_band, smeter_dbm, identity_values):
@@ -16355,6 +16296,16 @@ def decoder_rail_groups():
 
 def lcd_nav_box(index, item_count=None, has_back=False):
     """Return the logical box for the permanent LCD navigation rail."""
+    if has_back and item_count == len(SETTINGS_MENU_ITEMS):
+        if index == item_count - 1:
+            return lcd_drawer_back_box()
+        top = LCD_DRAWER_HEADER_H + 16
+        if index == 0:
+            return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
+        col, row = (index - 1) % 2, (index - 1) // 2 + 1
+        x0 = LCD_NAV_X0 + 10 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+        y0 = top + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+        return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
     if has_back and item_count == len(DIGITAL_MENU_ITEMS):
         spectrum_top, hf_top, vhf_top, web_top, _headings = decoder_rail_groups()
         if index == item_count - 1:
@@ -16906,45 +16857,20 @@ def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=1
 
 
 def deepgram_keyboard_rows(mode):
-    if mode == "digits":
-        return DEEPGRAM_KEY_DIGIT_ROWS
-    if mode == "lower":
-        return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in DEEPGRAM_KEY_ROWS)
-    return DEEPGRAM_KEY_ROWS
+    return network_keyboard_rows("symbols" if mode == "digits" else mode)
 
 
 def deepgram_sidebar_boxes(mode):
-    """Fit the existing key-entry modes entirely inside the 236 px VOSC rail."""
-    left = LCD_NAV_X0 + 10
-    action_names = ("MODE", "CLEAR", "BACK", "SAVE")
-    actions = {
-        name: (left + index * 60, 176, left + index * 60 + 55, 207)
-        for index, name in enumerate(action_names)
-    }
-    keys = "".join(row for row, _x, _y, _width in deepgram_keyboard_rows(mode))
-    # Two useful key characters fill the last alphabet row so every row spans
-    # the same four-column width as the frequency keypad.
-    if len(keys) % 4:
-        keys += "@/"[:4 - len(keys) % 4]
-    key_boxes = tuple(
-        (
-            "BACK" if key == "<" else key,
-            (left + index % 4 * 60, 223 + index // 4 * 39,
-             left + index % 4 * 60 + 55, 254 + index // 4 * 39),
-        )
-        for index, key in enumerate(keys)
-    )
-    return {
-        "panel": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
-        "field": (left, 112, LOGICAL_W - 10, 160),
-        "actions": actions,
-        "keys": key_boxes,
-        "close": lcd_drawer_back_box(),
-    }
+    """Compatibility accessor for the shared full-size typing surface."""
+    boxes = network_password_boxes()
+    return dict(panel=boxes["panel"], field=boxes["field"],
+                actions={"MODE": boxes["mode"], "CAPS": boxes["caps"],
+                         "CLEAR": boxes["clear"], "SAVE": boxes["join"]},
+                keys=touch_keyboard_key_boxes(mode), close=keyboard_modal_back_box())
 
 
 def deepgram_setup_surface_box():
-    return (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H) if LCD_800_MODE else DEEPGRAM_SETUP_BOX
+    return (0, 0, LOGICAL_W, LOGICAL_H)
 
 
 def keyboard_modal_back_box():
@@ -16969,111 +16895,19 @@ def draw_keyboard_modal_sidebar(text_cache, title, detail):
 
 
 def deepgram_key_at(x, y, mode):
-    if LCD_800_MODE:
-        for action, box in deepgram_sidebar_boxes(mode)["keys"]:
-            if contains(box, x, y):
-                return action
-        return None
-    for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
-        if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
-            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
-            return "BACK" if key == "<" else key
-    return None
+    return network_password_key_at(x, y, mode)
 
 
 def deepgram_setup_action_at(x, y, mode):
-    if LCD_800_MODE:
-        boxes = deepgram_sidebar_boxes(mode)
-        if contains(boxes["close"], x, y):
-            return "CANCEL"
-        if DESKTOP_MODE and contains(boxes["field"], x, y):
-            return "PASTE"
-        for action, box in boxes["actions"].items():
-            if contains(box, x, y):
-                return action
-        return deepgram_key_at(x, y, mode)
-    if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
+    if DESKTOP_MODE and contains(network_password_boxes()["field"], x, y):
         return "PASTE"
-    if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
-        return "MODE"
-    if contains(DEEPGRAM_KEY_CLEAR_BOX, x, y):
-        return "CLEAR"
-    if contains(DEEPGRAM_KEY_CANCEL_BOX, x, y):
-        return "CANCEL"
-    if contains(DEEPGRAM_KEY_SAVE_BOX, x, y):
-        return "SAVE"
-    return deepgram_key_at(x, y, mode)
+    return touch_keyboard_action_at(x, y, mode)
 
 
 def draw_deepgram_setup(text_cache, value, mode, error=""):
-    """Draw key entry in the VOSC rail on the 1280x800 screen."""
-    if LCD_800_MODE:
-        boxes = deepgram_sidebar_boxes(mode)
-        draw_logical_rect(*boxes["panel"], APP_UI_STYLE.palette.sidebar)
-        draw_sidebar_header(text_cache, "VOSC")
-        draw_lcd_drawer_heading(text_cache, boxes["field"][0] + 4, 88, "DEEPGRAM API KEY")
-        field = boxes["field"]
-        draw_logical_rect(*field, themed_instrument_color("section_surface", (11, 20, 27, 255)) if not error else themed_instrument_color("danger", (72, 36, 32, 255)))
-        draw_logical_line(field[0], field[1], field[2], field[1], themed_instrument_color("section_border", (112, 136, 146, 255)), 1)
-        masked = "*" * min(len(value), 22) + ("..." if len(value) > 22 else "")
-        field_text = masked or ("TAP TO PASTE OR TYPE" if DESKTOP_MODE else "ENTER KEY BELOW")
-        draw_text(text_cache, field[0] + 8, (field[1] + field[3]) / 2,
-                  field_text, themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174)),
-                  13, bool(value), False, "lm", family=APP_UI_STYLE.button.font_family)
-        mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
-        for action, box in boxes["actions"].items():
-            label = {"MODE": mode_label, "CLEAR": "CLR", "BACK": "DEL", "SAVE": "OK"}[action]
-            draw_styled_text_button(text_cache, box, label, active=action == "MODE" and mode != "lower")
-        for key, box in boxes["keys"]:
-            draw_styled_text_button(text_cache, box, "DEL" if key == "BACK" else key)
-        if error:
-            draw_text(text_cache, field[0] + 4, 562, "ERROR",
-                      themed_instrument_color("notice", (72, 255, 122)), 13, True, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-            draw_text(text_cache, field[0] + 4, 586,
-                      fit_station_text(text_cache, error.upper(), 228, 13, False, False,
-                                       family=APP_UI_STYLE.button.font_family),
-                      themed_instrument_color("notice", (72, 255, 122)), 13, False, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-        else:
-            draw_text(text_cache, field[0] + 4, 562, "SAVED LOCALLY ON THIS DEVICE",
-                      themed_instrument_color("secondary_text", (174, 203, 208)), 13, False, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-        draw_radio_close_button(text_cache, boxes["close"])
-        return
-    x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
-    draw_logical_line(x0, y0, x1, y0, (103, 215, 210, 188), 1)
-    draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", themed_instrument_color("section_heading", (224, 241, 243)), 20, True, False, "lm", family="Cantarell")
-    draw_text(text_cache, x1 - 28, y0 + 23, "LOCAL ONLY", themed_instrument_color("secondary_text", (116, 184, 183)), 13, False, False, "rm", family="Cantarell")
-    field_color = (48, 75, 80, 246) if not error else (90, 47, 42, 246)
-    draw_logical_rect(*DEEPGRAM_KEY_FIELD_BOX, field_color)
-    draw_logical_line(DEEPGRAM_KEY_FIELD_BOX[0], DEEPGRAM_KEY_FIELD_BOX[1], DEEPGRAM_KEY_FIELD_BOX[2], DEEPGRAM_KEY_FIELD_BOX[1], (132, 190, 190, 184), 1)
-    masked = "*" * len(value)
-    field_text = masked or (
-        "Click here or Cmd+V to paste your key"
-        if DESKTOP_MODE
-        else "Touch keys to enter your key"
-    )
-    field_color = themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174))
-    draw_text(text_cache, DEEPGRAM_KEY_FIELD_BOX[0] + 14, (DEEPGRAM_KEY_FIELD_BOX[1] + DEEPGRAM_KEY_FIELD_BOX[3]) / 2, field_text, field_color, 19, False, False, "lm", family="Cantarell")
-    mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
-    draw_picker_button(text_cache, DEEPGRAM_KEY_MODE_BOX, mode_label, 15, mode != "lower")
-    draw_picker_button(text_cache, DEEPGRAM_KEY_CLEAR_BOX, "CLR", 15)
-    draw_picker_button(text_cache, DEEPGRAM_KEY_CANCEL_BOX, "X", 22)
-    draw_picker_button(text_cache, DEEPGRAM_KEY_SAVE_BOX, "OK", 15, bool(value))
-    for keys, row_x0, row_y0, key_w in deepgram_keyboard_rows(mode):
-        for index, key in enumerate(keys):
-            box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 52)
-            draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 16 if key == "<" else 22)
-    message = error or (
-        "Cmd+V pastes from the Mac clipboard. The key is never shown again."
-        if DESKTOP_MODE
-        else "Saved only on this device. The key is never shown again."
-    )
-    draw_text(text_cache, x0 + 30, y1 - 18, message, themed_instrument_color("waiting", (246, 163, 116)) if error else themed_instrument_color("secondary_text", (124, 184, 187)), 14, False, False, "lm", family="Cantarell")
-    draw_keyboard_modal_sidebar(text_cache, "ASR", "DEEPGRAM API KEY")
+    draw_touch_keyboard(text_cache, "DEEPGRAM API KEY", "Saved only on this device",
+                        value, mode, submit="Save", secret=True, error=error,
+                        rail_title="VOSC", rail_detail="DEEPGRAM API KEY", placeholder="Enter API key")
 
 
 NETWORK_PAGE_SIZE = 6
@@ -17126,7 +16960,7 @@ def draw_network_actions(text_cache, network):
     x0, y0, x1, y1 = network_panel_boxes()["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO NETWORK")
+    draw_settings_leaf_sidebar(text_cache, "WI-FI/ETHERNET", "BACK TO WI-FI/ETHERNET")
     confirm = network.get("confirm_forget")
     title = "Forget this network?" if confirm else "Wi-Fi network"
     draw_text(text_cache, x0 + 30, y0 + 38, title, color("text"), 30, True, False, "lm")
@@ -17249,8 +17083,8 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO SETTINGS")
-    draw_text(text_cache, x0 + 20, y0 + 30, "Network", color("text"), 30, True, False, "lm")
+    draw_settings_leaf_sidebar(text_cache, "WI-FI/ETHERNET", "BACK TO SETTINGS")
+    draw_text(text_cache, x0 + 20, y0 + 30, "WI-FI/ETHERNET", color("text"), 30, True, False, "lm")
     draw_network_status_card(text_cache, boxes["ethernet"], "Ethernet", devices.get("eth0"))
     draw_network_status_card(text_cache, boxes["wifi"], "Wi-Fi", devices.get("wlan0"), wifi=True)
     draw_text(text_cache, x0 + 20, y0 + 225, "Wi-Fi networks · tap to connect", color("text"), 22, False, False, "lm")
@@ -17298,32 +17132,36 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
                   color("secondary_text"), 20, False, False, "lm")
 
 
-def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
+def draw_touch_keyboard(text_cache, title, detail, value, mode="lower", submit="Save",
+                        secret=False, error="", rail_title="KEYBOARD", rail_detail="",
+                        caps=False, revealed=False, show_reveal=False, busy=False, placeholder=None):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
     boxes = network_password_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(*boxes["panel"], color("section_surface"))
-    draw_text(text_cache, x0 + 24, y0 + 30, "Connect to Wi-Fi", color("text"), 28, True, False, "lm")
+    draw_text(text_cache, x0 + 24, y0 + 30, title, color("text"), 28, True, False, "lm")
     draw_text(text_cache, x0 + 24, y0 + 72,
-              fit_station_text(text_cache, ssid, x1 - x0 - 48, 24, True, False),
+              fit_station_text(text_cache, detail, x1 - x0 - 48, 24, True, False),
               color("ready"), 24, True, False, "lm")
     fx0, fy0, fx1, fy1 = boxes["field"]
     draw_logical_rect(*boxes["field"], color("background"))
     draw_logical_line(fx0, fy1, fx1, fy1, color("focus"), 2)
-    caption = (value if revealed else "•" * len(value)) or "Enter password"
+    caption = (value if not secret or revealed else "•" * len(value)) or placeholder or ("Enter password" if secret else "Enter text")
     # Show the end while typing so long secrets remain editable.
-    width = boxes["reveal"][0] - fx0 - 24
+    width = (boxes["reveal"][0] if show_reveal else fx1) - fx0 - 24
     if text_cache is not None:
         while len(caption) > 1 and text_cache.font(28, family=APP_UI_STYLE.button.font_family).size(caption)[0] > width:
             caption = caption[1:]
     draw_text(text_cache, fx0 + 12, (fy0 + fy1) / 2, caption,
               color("text") if value else color("secondary_text"), 28, False, False, "lm",
               family=APP_UI_STYLE.button.font_family)
-    draw_network_button(text_cache, boxes["reveal"], "Hide" if revealed else "Show", 20, revealed)
+    if show_reveal:
+        draw_network_button(text_cache, boxes["reveal"], "Hide" if revealed else "Show", 20, revealed)
     symbols = mode.startswith("symbols")
     draw_network_button(text_cache, boxes["mode"], "ABC" if symbols else "123 / #", 22)
-    draw_network_button(text_cache, boxes["caps"], "#+=" if symbols else "Shift", 22, caps and not symbols)
+    draw_network_button(text_cache, boxes["caps"], "#+=" if symbols else "Shift", 22, (caps or mode == "upper") and not symbols)
     draw_network_button(text_cache, boxes["clear"], "Clear", 22)
     for keys, row_x0, row_y0, key_w in network_keyboard_rows(mode, caps):
         for i, key in enumerate(keys):
@@ -17332,31 +17170,59 @@ def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, e
             draw_network_button(text_cache, box, "DEL" if back else key, 22 if back else 32)
     draw_network_button(text_cache, boxes["space"], "Space", 24)
     draw_network_button(text_cache, boxes["cancel"], "Cancel", 24)
-    draw_network_button(text_cache, boxes["join"], "Connecting…" if busy else "Connect", 26, True)
+    draw_network_button(text_cache, boxes["join"], "Connecting…" if busy else submit, 26, True)
     if error:
         draw_text(text_cache, x0 + 24, y0 + 634,
                   fit_station_text(text_cache, error, x1 - x0 - 48, 18, False, False),
                   color("waiting"), 18, False, False, "lm")
-    draw_keyboard_modal_sidebar(text_cache, "NETWORK", "WI-FI KEY")
+    draw_keyboard_modal_sidebar(text_cache, rail_title, rail_detail)
+
+
+
+def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
+    draw_touch_keyboard(text_cache, "Connect to Wi-Fi", ssid, value, mode,
+                        submit="Connect", secret=True, error=error,
+                        rail_title="WI-FI/ETHERNET", rail_detail="WI-FI KEY",
+                        caps=caps, revealed=revealed, show_reveal=True, busy=busy)
+
+
+def touch_keyboard_next_mode(mode, action):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
+    if action == "MODE":
+        return "lower" if mode.startswith("symbols") else "symbols"
+    if action == "CAPS":
+        if mode.startswith("symbols"):
+            return "symbols2" if mode == "symbols" else "symbols"
+        return "lower" if mode == "upper" else "upper"
+    return mode
+
+
+def touch_keyboard_key_boxes(mode="lower", caps=False):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
+    return tuple(("BACK" if key == "<" and mode != "symbols2" else key,
+                  (x + i * width, y, x + (i + 1) * width - 6, y + 72))
+                 for keys, x, y, width in network_keyboard_rows(mode, caps)
+                 for i, key in enumerate(keys))
+
+
+def touch_keyboard_action_at(x, y, mode="lower"):
+    boxes = network_password_boxes()
+    if LCD_800_MODE and contains(keyboard_modal_back_box(), x, y):
+        return "CANCEL"
+    for name, action in (("mode", "MODE"), ("caps", "CAPS"), ("clear", "CLEAR"),
+                         ("space", "SPACE"), ("cancel", "CANCEL"), ("join", "SAVE")):
+        if contains(boxes[name], x, y):
+            return action
+    for action, box in touch_keyboard_key_boxes(mode):
+        if contains(box, x, y):
+            return action
+    return None
 
 
 def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mode):
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
-    draw_logical_rect(18, 8, 596, 64, (36, 40, 44, 255))
-    draw_logical_line(18, 8, 596, 8, (166, 171, 175, 210), 1)
-    draw_logical_line(18, 64, 596, 64, (166, 171, 175, 210), 1)
-    draw_text(text_cache, 34, 36, query or "Country, city, call sign, or station name", (240, 242, 244) if query else (166, 171, 175), 23, False, False, "lm")
-    draw_picker_button(text_cache, SEARCH_CASE_BOX, "aA", 16, keyboard_mode != "numeric")
-    draw_picker_button(text_cache, SEARCH_MODE_BOX, "123" if keyboard_mode != "numeric" else "ABC", 14, keyboard_mode == "numeric")
-    if not LCD_800_MODE:
-        draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
-        draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
-    for keys, x0, y0, key_w in keyboard_rows(keyboard_mode):
-        for index, key in enumerate(keys):
-            box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
-            label = "BACK" if key == "<" else ("ENTER" if key == ">" else ("SPACE" if key == "~" else key))
-            draw_picker_button(text_cache, box, label, 19 if key in "<>~" else 26)
-    draw_keyboard_modal_sidebar(text_cache, "SEARCH", "RECEIVERS")
+    draw_touch_keyboard(text_cache, "Search receivers", "Country, city, call sign, or station name",
+                        query, keyboard_mode, submit="Search", rail_title="SEARCH",
+                        rail_detail="RECEIVERS")
 
 
 def draw_frequency_keypad(text_cache, value, invalid=False):
@@ -24481,6 +24347,7 @@ def main():
     threading.Thread(target=refresh_local_wspr_grid, name="wspr-local-grid", daemon=True).start()
     wspr_identity_open = False
     wspr_identity_field = "reporter"
+    wspr_identity_keyboard_mode = "upper"
     wspr_identity_error = ""
     globe_receivers = merge_receiver_map_stations(load_globe_receivers(), catalog_stations)
     if globe_receivers:
@@ -26054,10 +25921,39 @@ def main():
     desktop_map_velocity = (0.0, 0.0)
     desktop_map_motion_at = 0.0
 
+    def shared_keyboard_open():
+        # Every text keyboard renders in Wi-Fi's canonical right-rail space.
+        # Full-width decoder pages normally position navigation themselves, but
+        # their modal keyboard needs the same composition and inverse hit map.
+        if theme_editor.open and theme_editor.overlay == "name":
+            return True
+        if deepgram_setup_open or network_password_open or (picker_open and search_open) or wspr_identity_open:
+            return True
+        if (station_workspace.open and station_workspace.field is not None
+                or usb_radios_workspace.open and usb_radios_workspace.field is not None):
+            return True
+        if vhf_workspace.open and (vhf_workspace.mode == "spectrum" and vhf_workspace.spectrum.overlay == "label"
+                or vhf_workspace.dongles.open and vhf_workspace.dongles.field is not None):
+            return True
+        if adsb_workspace.open and adsb_workspace.dongles is not None and adsb_workspace.dongles.open and adsb_workspace.dongles.field is not None:
+            return True
+        if hell_workspace.open and hell_workspace.reporting is not None and getattr(hell_workspace, "report_keyboard", False):
+            return True
+        if wspr_panel_open and wspr_expanded_log_open and wspr_history_view.settings is not None and getattr(wspr_history_view, "field_keyboard", False):
+            return True
+        for workspace in (cw_workspace, qrss_workspace, hell_workspace, sstv_workspace, wspr_history_view):
+            view = getattr(workspace, "log_search_view", None)
+            if view is not None and view.open and view.keyboard:
+                return True
+        return False
+
     def rail_relocation_active():
+        if theme_system.runtime_theme["sidebar"] != "left":
+            return False
+        if shared_keyboard_open():
+            return True
         return (
-            theme_system.runtime_theme["sidebar"] == "left"
-            and not theme_editor.open
+            not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
             and not (adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
@@ -27083,10 +26979,8 @@ def main():
                                 gesture = "wspr_add"
                             elif wspr_add_open:
                                 gesture = "wspr_add_outside"
-                            elif wspr_identity_open and contains(WSPR_IDENTITY_BOX, x, y):
-                                gesture = "wspr_identity"
                             elif wspr_identity_open:
-                                gesture = "wspr_identity_outside"
+                                gesture = "wspr_identity"
                             elif wspr_panel_open and contains(WSPR_WORKSPACE_BOX, x, y):
                                 gesture = "wspr_workspace"
                             elif wspr_panel_open:
@@ -27978,11 +27872,16 @@ def main():
                         elif touch_started and gesture == "wspr_identity":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_identity_action_at(x, y)
+                                choice = wspr_identity_action_at(x, y, wspr_identity_keyboard_mode)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "field":
                                         wspr_identity_field = value
+                                        wspr_identity_error = ""
+                                    elif kind == "mode":
+                                        wspr_identity_keyboard_mode = touch_keyboard_next_mode(wspr_identity_keyboard_mode, value)
+                                    elif kind == "clear":
+                                        wspr_identity_values[wspr_identity_field] = ""
                                         wspr_identity_error = ""
                                     elif kind == "key":
                                         field = wspr_identity_field
@@ -29017,12 +28916,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action = deepgram_setup_action_at(x, y, deepgram_key_mode)
-                                if action == "MODE":
-                                    deepgram_key_mode = {
-                                        "lower": "upper",
-                                        "upper": "digits",
-                                        "digits": "lower",
-                                    }[deepgram_key_mode]
+                                if action in ("MODE", "CAPS"):
+                                    deepgram_key_mode = touch_keyboard_next_mode(deepgram_key_mode, action)
+                                elif action == "SPACE" and len(deepgram_key_value) < 512:
+                                    deepgram_key_value += " "
                                 elif action == "CLEAR":
                                     deepgram_key_value = ""
                                     deepgram_key_error = ""
@@ -29360,17 +29257,18 @@ def main():
                                 ):
                                     search_open = False
                                     station_scroll = 0
-                                elif contains(SEARCH_CASE_BOX, x, y):
-                                    if keyboard_mode != "numeric":
-                                        keyboard_mode = "lower" if keyboard_mode == "upper" else "upper"
-                                elif contains(SEARCH_MODE_BOX, x, y):
-                                    keyboard_mode = "upper" if keyboard_mode == "numeric" else "numeric"
                                 else:
                                     key = search_key_at(x, y, keyboard_mode)
-                                    if key == "BACK":
+                                    if key in ("MODE", "CAPS"):
+                                        keyboard_mode = touch_keyboard_next_mode(keyboard_mode, key)
+                                    elif key == "CLEAR":
+                                        station_query = ""
+                                    elif key == "BACK":
                                         station_query = station_query[:-1]
-                                    elif key == "ENTER":
+                                    elif key in ("SAVE", "CANCEL"):
                                         search_open = False
+                                    elif key == "SPACE" and len(station_query) < 48:
+                                        station_query += " "
                                     elif key and len(station_query) < 48:
                                         station_query += key
                                     stations = filtered_stations(
@@ -30680,6 +30578,7 @@ def main():
                     wspr_identity_values,
                     wspr_identity_field,
                     wspr_identity_error,
+                    wspr_identity_keyboard_mode,
                 )
             if dj_tune_open:
                 draw_dj_tune_panel(

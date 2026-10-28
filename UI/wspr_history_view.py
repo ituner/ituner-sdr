@@ -122,6 +122,10 @@ class WSPRHistoryView:
 
     def draw_settings(self,cache):
         p=self.settings
+        if getattr(self,'field_keyboard',False):
+            self.ui.draw_touch_keyboard(cache,'Reporter callsign' if self.field=='call' else 'Receiver grid',
+                'WSPRNET REPORTING',self.field_entry,mode=getattr(self,'keyboard_mode','upper'),submit='Done',rail_title='WSPR')
+            return
         self.text(cache,24,90,'WSPRnet reporting · '+p['name'],22,width=1220)
         self.text(cache,24,126,'Use the receiving antenna’s identity and grid, including for remote receivers.',18)
         for i,(key,label) in enumerate((('call','Reporter'),('grid','Receiver grid'))):
@@ -133,11 +137,6 @@ class WSPRHistoryView:
         self.button(cache,(512,155,748,219),'WSPRNET UPLOADS',('enabled',),p['enabled'],
                     subtitle='ON' if p['enabled'] else 'OFF')
         self.text(cache,24,317,'Only new spots are uploaded. History and uncertain uploads are not sent automatically.',17)
-        for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/-')):
-            for x,char in enumerate(row):
-                left, top = 24+x*122, 350+y*72
-                self.button(cache,(left,top,left+114,top+64),char,('key',char))
-        self.button(cache,(24,646,138,710),'DELETE',('erase',))
         self.button(cache,(146,646,260,710),'SAVE',('save',))
         self.button(cache,(268,646,382,710),'CANCEL',('cancel',))
         if self.message:self.text(cache,24,328,self.message,17,width=980)
@@ -150,6 +149,17 @@ class WSPRHistoryView:
         self.offset=max(0,min(maximum,self.offset+12*direction));self.next_read=0
 
     def tap(self,x,y):
+        if self.settings is not None and getattr(self,'field_keyboard',False):
+            mode=getattr(self,'keyboard_mode','upper')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action in ('SAVE','CANCEL'):
+                if action=='SAVE':self.settings[self.field]=self.field_entry
+                self.field_keyboard=False
+            elif action=='BACK':self.field_entry=self.field_entry[:-1]
+            elif action=='CLEAR':self.field_entry=''
+            elif action:self.field_entry=(self.field_entry+(' ' if action=='SPACE' else action))[:16 if self.field=='call' else 6]
+            return
         action=next((a for box,a in self.actions if box[0]<=x<=box[2] and box[1]<=y<=box[3]),None)
         if not action:return
         key=action[0]
@@ -165,12 +175,12 @@ class WSPRHistoryView:
             self.band='';self.run='';self.offset=0
         elif key=='settings':
             row=next((r for r in self.sources if r['source']==self.source),None)
-            if row:self.settings=dict(row);self.message=''
+            if row:self.settings=dict(row);self.message='';self.field_keyboard=False
             else:self.message='Select one receiver first.'
         elif key=='cancel':self.settings=None;self.message=''
         elif self.settings is not None:
             p=self.settings
-            if key=='field':self.field=action[1]
+            if key=='field':self.field=action[1];self.field_entry=p[self.field];self.field_keyboard=True
             elif key=='enabled':p['enabled']=not p['enabled']
             elif key=='confirm':p['confirmed']=not p['confirmed']
             elif key=='key':p[self.field]=(p[self.field]+action[1])[:16 if self.field=='call' else 6]

@@ -48,6 +48,22 @@ class WifiUITests(unittest.TestCase):
             self.assertIsNone(ui.network_password_key_at(-10,-10,mode))
         self.assertTrue(set(chr(n) for n in range(32,127)) <= chars)
 
+    def test_shared_keyboard_commands_and_modes_preserve_literal_symbols(self):
+        for mode in ('lower','upper','symbols','symbols2'):
+            for action,box in ui.touch_keyboard_key_boxes(mode):
+                x,y=(box[0]+box[2])/2,(box[1]+box[3])/2
+                self.assertEqual(ui.touch_keyboard_action_at(x,y,mode),action)
+                self.assertEqual(ui.search_key_at(x,y,mode),action)
+                self.assertEqual(ui.deepgram_setup_action_at(x,y,mode),action)
+            for key,action in (('mode','MODE'),('caps','CAPS'),('clear','CLEAR'),('space','SPACE'),('cancel','CANCEL'),('join','SAVE')):
+                box=ui.network_password_boxes()[key]
+                self.assertEqual(ui.touch_keyboard_action_at((box[0]+box[2])/2,(box[1]+box[3])/2,mode),action)
+        self.assertEqual(ui.touch_keyboard_next_mode('lower','CAPS'),'upper')
+        self.assertEqual(ui.touch_keyboard_next_mode('upper','MODE'),'symbols')
+        self.assertEqual(ui.touch_keyboard_next_mode('symbols','CAPS'),'symbols2')
+        self.assertEqual(ui.touch_keyboard_next_mode('symbols2','MODE'),'lower')
+        self.assertIn('<',[key for key,_ in ui.touch_keyboard_key_boxes('symbols2')])
+
     def test_keyboard_case_and_requested_size_are_preserved(self):
         with patch.object(ui,'draw_styled_button_frame',return_value=SimpleNamespace(text=(255,255,255))), patch.object(ui,'draw_text') as text:
             ui.draw_network_button(None,(0,0,80,72),'a',32)
