@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 from caption_reveal import CaptionReveal
+from main_volume_control import MainVolumeControl
 from ui_chrome import draw_status_clock, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
@@ -4612,10 +4613,9 @@ def contains_with_guard(box, x, y, guard=CONTROL_TOUCH_GUARD_PX):
 
 def mute_waterfall_box():
     """A visible, dismissible explanation for intentional silence."""
-    x1 = LCD_NAV_X0 - 18 if LCD_800_MODE else BASE_LOGICAL_W - 18
-    x0 = x1 - 270
-    y0 = sdr_ui.TOP_H + 38
-    return x0, y0, x1, y0 + 70
+    cx = theme_system.display_to_logical_x(LOGICAL_W / 2, width=LOGICAL_W)
+    cy = LOGICAL_H / 2
+    return cx - 135, cy - 35, cx + 135, cy + 35
 
 
 def stream_waterfall_box():
@@ -16227,6 +16227,17 @@ def lcd_home_volume_track_box(show_compact_readouts=True):
     return x0 + 56, y1 - 32, x1 - 12, y1 - 8
 
 
+def home_volume_action_at(x, y, show_compact_readouts=True):
+    """Keep the speaker touch area separate from the slider's zero end."""
+    panel = lcd_home_volume_box(show_compact_readouts)
+    track = lcd_home_volume_track_box(show_compact_readouts)
+    if contains((panel[0], panel[3] - 44, track[0] - 4, panel[3]), x, y):
+        return "home_volume_mute"
+    if contains((track[0] - 4, panel[3] - 44, panel[2], panel[3]), x, y):
+        return "home_volume"
+    return None
+
+
 def home_volume_at_x(x, show_compact_readouts=True):
     return volume_at_x(x, lcd_home_volume_track_box(show_compact_readouts))
 
@@ -23881,18 +23892,27 @@ def main():
     if audio_volume is not None and audio_volume <= MAIN_VOLUME_MUTE_THRESHOLD:
         state.set_audio_controls(audio_mute=True)
 
+    main_volume_control = MainVolumeControl(
+        audio_volume, lambda value: set_audio_output_volume(args, value),
+        lambda muted: state.set_audio_controls(audio_mute=muted),
+        MAIN_VOLUME_MUTE_THRESHOLD,
+    )
+
     def apply_main_volume(requested_volume):
-        """Apply one master-level gesture and keep mute state in lockstep."""
+        """Apply a slider/knob gesture and remember its audible level."""
         nonlocal audio_volume, audio_volume_last_apply
-        applied_volume = set_audio_output_volume(args, requested_volume)
+        applied_volume = main_volume_control.apply(requested_volume)
         if applied_volume is not None:
-            audio_volume = applied_volume
-            args.output_volume = applied_volume
+            audio_volume = args.output_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
-            state.set_audio_controls(
-                audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
-            )
         return applied_volume
+
+    def set_main_mute(muted):
+        nonlocal audio_volume, audio_volume_last_apply
+        applied_volume = main_volume_control.mute(muted)
+        if applied_volume is not None:
+            audio_volume = args.output_volume = applied_volume
+            audio_volume_last_apply = time.monotonic()
 
     tests_panel_open = False
     tests_parent = "home"
@@ -25601,6 +25621,9 @@ def main():
             if current_output_volume is not None:
                 audio_volume = current_output_volume
                 args.output_volume = current_output_volume
+                main_volume_control.volume = current_output_volume
+                if current_output_volume > MAIN_VOLUME_MUTE_THRESHOLD:
+                    main_volume_control.last_audible = current_output_volume
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -26941,14 +26964,10 @@ def main():
                                 lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
                                 gesture = "home_passband"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_mute_box(home_rail_has_meter(instrument_layout)), x, y
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and (
+                                volume_action := home_volume_action_at(x, y, home_rail_has_meter(instrument_layout))
                             ):
-                                gesture = "home_volume_mute"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_box(home_rail_has_meter(instrument_layout)), x, y
-                            ):
-                                gesture = "home_volume"
+                                gesture = volume_action
                             # Settings and MODES are full right-rail pages whose
                             # title sits exactly over the Home annunciator
                             # placeholders. While either is open, that region
@@ -27746,7 +27765,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 controls, _audio_generation = state.audio_controls_snapshot()
-                                state.set_audio_controls(audio_mute=not controls["mute"])
+                                set_main_mute(not controls["mute"])
                             wake_controls()
                         elif touch_started and gesture == "audio_squelch_level":
                             current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
@@ -27785,7 +27804,7 @@ def main():
                                 if choice in (None, "close"):
                                     audio_panel_open = False
                                 elif choice == "mute":
-                                    state.set_audio_controls(audio_mute=not controls["mute"])
+                                    set_main_mute(not controls["mute"])
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
                                     state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
@@ -28863,7 +28882,7 @@ def main():
                         elif touch_started and gesture == "waterfall_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                state.set_audio_controls(audio_mute=False)
+                                set_main_mute(False)
                             wake_controls()
                         elif touch_started and gesture == "stream_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
