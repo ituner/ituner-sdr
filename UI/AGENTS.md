@@ -42,3 +42,14 @@ not redesign other screens; preserve the Dome's established arrangement.
 Side-rail content starts 16 px below the horizontal divider under the rail
 name. Apply this spacing to every titled side rail; retain the established
 bottom BACK position and existing button sizes.
+
+All current and future native text-entry screens must use the shared Wi-Fi
+password keyboard design, layout, and placement. Reuse `draw_touch_keyboard`,
+`touch_keyboard_action_at`, and `touch_keyboard_next_mode` in
+`kiwi_gl_display.py`; do not introduce screen-specific alphabetic keyboards.
+Preserve its key sizes, rows, spacing, command positions, theme styling, and
+bottom BACK placement. Register new keyboard modals in `shared_keyboard_open`
+so left/right rail composition and touch mapping stay aligned. Keep field
+validation, length limits, masking, and save/cancel behavior specific to the
+field. Dedicated numeric and hexadecimal keypads may retain their existing
+purpose-specific layouts.
