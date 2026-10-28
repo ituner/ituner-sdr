@@ -17418,7 +17418,7 @@ def wrap_caption_lines(text_cache, text, max_width, size, max_rows=2, max_charac
             current = word
         else:
             current = candidate
-    if current and len(rows) < max_rows:
+    if current:
         rows.append(current)
     # Captions are live information: preserve the newest complete rows when
     # the source is longer than the available subtitle history.
@@ -18392,10 +18392,14 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     if not display:
         draw_text(text_cache, x0 + 20, (content_y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
         return
-    color = themed_instrument_color("text", (157, 218, 198)) if phoneme_mode else (themed_instrument_color("secondary_text", (166, 204, 213)) if partial else themed_instrument_color("text", (230, 241, 244)))
+    # Keep the reading position bright, including while ASR is still revising
+    # a partial hypothesis. Earlier rows recede using the live theme palette.
+    current_color = themed_instrument_color("text", (230, 241, 244))
+    history_color = themed_instrument_color("secondary_text", (166, 204, 213))
     line_spacing = 30
     first_y = (content_y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
     for index, caption in enumerate(display):
+        color = current_color if index == len(display) - 1 else history_color
         draw_text(text_cache, x0 + 20, first_y + index * line_spacing, caption, color, 26, True, False, "lm", family=family)
 
 
