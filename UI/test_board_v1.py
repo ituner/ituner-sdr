@@ -1355,7 +1355,7 @@ class NavigationAndLandingBoundaryTests(unittest.TestCase):
             sidebar.call_args_list,
             [
                 call(None, "VOSC", "DEEPGRAM API KEY"),
-                call(None, "Wi-Fi / ETHERNER", "WI-FI KEY"),
+                call(None, "Wi-Fi / ETHERNET", "WI-FI KEY"),
                 call(None, "SEARCH", "RECEIVERS"),
             ],
         )

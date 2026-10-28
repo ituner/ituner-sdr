@@ -55,5 +55,5 @@ field. Dedicated numeric and hexadecimal keypads may retain their existing
 purpose-specific layouts.
 
 SYSTEM is an explicit placement exception: keep its button group bottom-aligned
-8 px above the fixed BACK button. Its first Wi-Fi / ETHERNER control remains
+8 px above the fixed BACK button. Its first Wi-Fi / ETHERNET control remains
 full-width; preserve the spaces around the slash.

@@ -10,7 +10,7 @@ import kiwi_gl_display as ui
 class SystemNetworkMenuTests(unittest.TestCase):
     def test_network_is_first_full_width_with_matching_touch_target(self):
         items = ui.SETTINGS_MENU_ITEMS
-        self.assertEqual(items[0], ("network", "Wi-Fi / ETHERNER"))
+        self.assertEqual(items[0], ("network", "Wi-Fi / ETHERNET"))
         boxes = [ui.lcd_nav_box(i, len(items), True) for i in range(len(items))]
         network = boxes[0]
         self.assertEqual(network, (ui.LCD_NAV_X0 + 10, ui.lcd_drawer_back_box()[1] - 4 * (ui.LCD_NAV_TILE_H + ui.LCD_NAV_GAP),
@@ -46,7 +46,7 @@ class SystemNetworkMenuTests(unittest.TestCase):
             ui.draw_lcd_navigation(None, settings_open=True)
         first = button.call_args_list[0].args
         self.assertEqual(first[1], ui.lcd_nav_box(0, len(ui.SETTINGS_MENU_ITEMS), True))
-        self.assertEqual(first[2], "Wi-Fi / ETHERNER")
+        self.assertEqual(first[2], "Wi-Fi / ETHERNET")
 
 
 if __name__ == "__main__":
