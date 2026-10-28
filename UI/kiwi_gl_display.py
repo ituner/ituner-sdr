@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+from caption_reveal import CaptionReveal
 from ui_chrome import draw_status_clock, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
@@ -18330,7 +18331,7 @@ def draw_vosc_live_popup_error(text_cache, box, message):
 
 
 def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
-                       engine="off"):
+                       engine="off", reveal=None):
     """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
@@ -18364,6 +18365,9 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     if caption_mode == "both":
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
+        if reveal is not None:
+            source = reveal.reveal(source, "original")
+            english = reveal.reveal(english, "english")
         if not source and not english:
             draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
             return
@@ -18385,6 +18389,8 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     # Selecting only lines[-1] made a four-row panel appear to be one row.
     selected_lines = translations if caption_mode == "english" and any(translations) else lines
     source = " ".join((*selected_lines, partial)).strip()
+    if reveal is not None:
+        source = reveal.reveal(source)
     # Four larger rows make finished radio speech readable at arm's length.
     display = wrap_caption_lines(
         text_cache, source, content_x1 - x0 - 20, 26, max_rows=4, max_characters=62, family=family
@@ -23707,6 +23713,7 @@ def main():
     vosc_error_osd_until = 0.0
     vosc_error_osd_message = ""
     last_vosc_error_key = ()
+    caption_reveal = CaptionReveal()
     rc28_mode_osd_until = 0.0
     frequency_identity_result_queue = queue.Queue(maxsize=1)
     frequency_identity_pending_key = None
@@ -30290,6 +30297,7 @@ def main():
                 )
             if scope_adjust_active and not LCD_800_MODE:
                 draw_scope_height_grip(text_cache, spectrum_y1, scope_height)
+            caption_reveal.reset_for((transcription_enabled, asr_engine, caption_mode, _transcription_generation))
             if transcription_enabled and waterfall_visible:
                 draw_vosk_captions(
                     text_cache,
@@ -30300,6 +30308,7 @@ def main():
                     caption_mode,
                     caption_box,
                     asr_engine,
+                    reveal=caption_reveal,
                 )
             if waterfall_visible:
                 draw_callsign_captions(
