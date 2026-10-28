@@ -37,9 +37,7 @@ class MainVolumeTests(unittest.TestCase):
 
     def test_mute_popup_centered_clear_of_home_icons(self):
         box = ui.mute_waterfall_box()
-        self.assertEqual((box[0]+box[2])/2,
-                         ui.theme_system.display_to_logical_x(ui.LOGICAL_W/2))
-        self.assertEqual((box[1]+box[3])/2, ui.LOGICAL_H/2)
+        self.assertEqual(box, ui.ZOOM_OSD_BOX)
         for icon in (ui.favorite_waterfall_box(), ui.stream_waterfall_box()):
             self.assertTrue(box[2] <= icon[0] or box[0] >= icon[2] or
                             box[3] <= icon[1] or box[1] >= icon[3])
@@ -61,5 +59,13 @@ class MainVolumeTests(unittest.TestCase):
         for side in ('left', 'right'):
             with patch.dict(ui.theme_system.runtime_theme, sidebar=side):
                 box = ui.mute_waterfall_box()
-                x = (box[0] + box[2])/2
-                self.assertEqual(x, ui.theme_system.display_to_logical_x(ui.LOGICAL_W/2))
+                self.assertEqual(box, ui.ZOOM_OSD_BOX)
+
+    def test_mute_uses_zoom_typography_and_persistent_red_panel(self):
+        with patch.object(ui, 'draw_analog_osd_panel') as panel, patch.object(ui, 'draw_text') as text:
+            ui.draw_muted_waterfall_badge(None)
+        red = ui.themed_instrument_color('danger_border', ui.MUTE_ACCENT)[:3]
+        panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 246, red, (8, 0, 0))
+        self.assertEqual([c.args[3] for c in text.call_args_list], ['AUDIO MUTED', 'TAP TO UNMUTE'])
+        for call in text.call_args_list:
+            self.assertEqual(call.args[4:9], (red, 28, True, True, 'lm'))

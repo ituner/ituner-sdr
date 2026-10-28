@@ -4613,9 +4613,7 @@ def contains_with_guard(box, x, y, guard=CONTROL_TOUCH_GUARD_PX):
 
 def mute_waterfall_box():
     """A visible, dismissible explanation for intentional silence."""
-    cx = theme_system.display_to_logical_x(LOGICAL_W / 2, width=LOGICAL_W)
-    cy = LOGICAL_H / 2
-    return cx - 135, cy - 35, cx + 135, cy + 35
+    return ZOOM_OSD_BOX
 
 
 def stream_waterfall_box():
@@ -8741,24 +8739,12 @@ def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
 
 def draw_muted_waterfall_badge(text_cache):
     """Keep an intentional mute obvious without obscuring live RF detail."""
-    x0, y0, x1, y1 = mute_waterfall_box()
-    accent = (*MUTE_ACCENT, 246)
-    quiet = (208, 226, 230)
-    cy = (y0 + y1) / 2
-    draw_logical_rect(x0, y0, x1, y1, (10, 16, 23, 152))
-    draw_logical_line(x0, y0, x1, y0, accent, 2)
-    draw_logical_line(x0, y1, x1, y1, accent, 2)
-    # Simple speaker silhouette and a prominent mute slash keep this legible
-    # on the 800 px panel without depending on an icon-font glyph.
-    draw_logical_rect(x0 + 18, cy - 9, x0 + 29, cy + 9, accent)
-    draw_logical_polyline(
-        ((x0 + 29, cy - 9), (x0 + 45, cy - 21), (x0 + 45, cy + 21), (x0 + 29, cy + 9)),
-        accent,
-        2.5,
-    )
-    draw_logical_line(x0 + 13, cy - 24, x0 + 50, cy + 24, accent, 4)
-    draw_text(text_cache, x0 + 66, cy - 10, "AUDIO MUTED", accent[:3], 21, True, True, "lm")
-    draw_text(text_cache, x0 + 66, cy + 16, "TAP TO UNMUTE", quiet, 14, True, True, "lm")
+    box = mute_waterfall_box()
+    x0, y0, _x1, _y1 = box
+    red = themed_instrument_color("danger_border", MUTE_ACCENT)[:3]
+    draw_analog_osd_panel(box, 246, red, (8, 0, 0))
+    draw_text(text_cache, x0 + 18, y0 + 22, "AUDIO MUTED", red, 28, True, True, "lm")
+    draw_text(text_cache, x0 + 18, y0 + 64, "TAP TO UNMUTE", red, 28, True, True, "lm")
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
@@ -14829,13 +14815,18 @@ def draw_theme_notice_osd(text_cache, action, detail, alpha):
               24, True, True, "lm", alpha=opacity)
 
 
-def draw_green_osd_panel(box, alpha):
-    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+def draw_analog_osd_panel(box, alpha, color, background):
+    """Shared analog notice wash and scanlines, with a semantic accent."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
+    draw_logical_rect(x0, y0, x1, y1, (*background, int(alpha * 0.42)))
     for offset, line_alpha in ((32, 0.20), (64, 0.12)):
         y = y0 + offset
-        draw_logical_line(x0 + 4, y, x1 - 4, y, (*APP_UI_STYLE.palette.notice, int(alpha * line_alpha)), 1)
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (*color, int(alpha * line_alpha)), 1)
+
+
+def draw_green_osd_panel(box, alpha):
+    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+    draw_analog_osd_panel(box, alpha, APP_UI_STYLE.palette.notice, (0, 8, 4))
 
 
 def sort_chevron_points(box, sort_mode):
