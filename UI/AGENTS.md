@@ -53,3 +53,7 @@ so left/right rail composition and touch mapping stay aligned. Keep field
 validation, length limits, masking, and save/cancel behavior specific to the
 field. Dedicated numeric and hexadecimal keypads may retain their existing
 purpose-specific layouts.
+
+SYSTEM is an explicit placement exception: keep its button group bottom-aligned
+8 px above the fixed BACK button. Its first Wi-Fi / ETHERNER control remains
+full-width; preserve the spaces around the slash.

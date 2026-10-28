@@ -2514,7 +2514,7 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
-    ("network", "WI-FI/ETHERNET"),
+    ("network", "Wi-Fi / ETHERNER"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
     ("stats", "CPU LOAD"),
@@ -8522,7 +8522,7 @@ def draw_navigation_button(text_cache, box, title, subtitle):
         (subtitle, 13 if taller_tile else 12, subtitle_y, visual.text if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
-        draw_text(text_cache, cx, round(cy), str(text).upper(), color,
+        draw_text(text_cache, cx, round(cy), str(text) if text == "Wi-Fi / ETHERNER" else str(text).upper(), color,
                   size, True, False, "cm", family=style.font_family)
     return visual
 
@@ -16299,7 +16299,8 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     if has_back and item_count == len(SETTINGS_MENU_ITEMS):
         if index == item_count - 1:
             return lcd_drawer_back_box()
-        top = LCD_DRAWER_HEADER_H + 16
+        rows = 1 + math.ceil((item_count - 2) / 2)
+        top = lcd_drawer_back_box()[1] - rows * (LCD_NAV_TILE_H + LCD_NAV_GAP)
         if index == 0:
             return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
         col, row = (index - 1) % 2, (index - 1) // 2 + 1
@@ -16960,7 +16961,7 @@ def draw_network_actions(text_cache, network):
     x0, y0, x1, y1 = network_panel_boxes()["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "WI-FI/ETHERNET", "BACK TO WI-FI/ETHERNET")
+    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNER", "BACK TO Wi-Fi / ETHERNER")
     confirm = network.get("confirm_forget")
     title = "Forget this network?" if confirm else "Wi-Fi network"
     draw_text(text_cache, x0 + 30, y0 + 38, title, color("text"), 30, True, False, "lm")
@@ -17083,8 +17084,8 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "WI-FI/ETHERNET", "BACK TO SETTINGS")
-    draw_text(text_cache, x0 + 20, y0 + 30, "WI-FI/ETHERNET", color("text"), 30, True, False, "lm")
+    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNER", "BACK TO SETTINGS")
+    draw_text(text_cache, x0 + 20, y0 + 30, "Wi-Fi / ETHERNER", color("text"), 30, True, False, "lm")
     draw_network_status_card(text_cache, boxes["ethernet"], "Ethernet", devices.get("eth0"))
     draw_network_status_card(text_cache, boxes["wifi"], "Wi-Fi", devices.get("wlan0"), wifi=True)
     draw_text(text_cache, x0 + 20, y0 + 225, "Wi-Fi networks · tap to connect", color("text"), 22, False, False, "lm")
@@ -17182,7 +17183,7 @@ def draw_touch_keyboard(text_cache, title, detail, value, mode="lower", submit="
 def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
     draw_touch_keyboard(text_cache, "Connect to Wi-Fi", ssid, value, mode,
                         submit="Connect", secret=True, error=error,
-                        rail_title="WI-FI/ETHERNET", rail_detail="WI-FI KEY",
+                        rail_title="Wi-Fi / ETHERNER", rail_detail="WI-FI KEY",
                         caps=caps, revealed=revealed, show_reveal=True, busy=busy)
 
 
