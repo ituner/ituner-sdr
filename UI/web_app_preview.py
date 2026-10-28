@@ -9,6 +9,8 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.request import urlopen
+from urllib.error import URLError
 
 
 WEB_APPS = {
@@ -72,6 +74,25 @@ class WebAppPreviews:
             self.error_notice = None
             self.error_until = 0
 
+    def validate_destination(self, key):
+        """Do not surrender native navigation to a missing service or wrong port."""
+        try:
+            with urlopen(f'http://127.0.0.1:{self.port}/apps/{key}', timeout=2) as response:
+                if b'id="back"' not in response.read(32768):
+                    raise ValueError('Preview is unavailable. Return to Decoders and retry.')
+        except (OSError, URLError) as exc:
+            raise ValueError('Preview is unavailable. Return to Decoders and retry.') from exc
+        app = WEB_APPS[key]
+        host = self.hostname or '127.0.0.1'
+        if ':' in host:host=f'[{host}]'
+        try:
+            with urlopen(f'http://{host}:{app["port"]}{app["path"]}', timeout=2) as response:
+                body=response.read(65536).lower().replace(b' ', b'')
+                if app['name'].lower().replace(' ', '').encode() not in body:
+                    raise ValueError(f'{app["name"]} is not available at its configured address.')
+        except (OSError, URLError) as exc:
+            raise ValueError(f'{app["name"]} is not running or reachable.') from exc
+
     def _open(self, key):
         if key not in WEB_APPS:
             raise ValueError('Unknown satellite application')
@@ -98,6 +119,7 @@ class WebAppPreviews:
                 platform_args = ['--ozone-platform=wayland', '--kiosk', '--password-store=basic']
                 env = dict(os.environ, WAYLAND_DISPLAY=os.environ.get('WAYLAND_DISPLAY', 'wayland-0'),
                            XDG_RUNTIME_DIR=os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
+            self.validate_destination(key)
             profile.mkdir(mode=0o700, parents=True, exist_ok=True)
             url = f'http://127.0.0.1:{self.port}/apps/{key}?touch=1&rotation={self.rotation}'
             self.process = subprocess.Popen([
@@ -152,7 +174,7 @@ strong{font-size:20px}small{color:#a3bacb;font-size:14px;margin-left:auto}iframe
 #error{position:absolute;top:75px;left:20px;padding:15px;background:#632c28;border-radius:8px;font-size:20px}
 </style></head><body><div class="preview"><header><button id="back">← Decoders</button>
 <strong>TITLE</strong><small>WEB PREVIEW</small><button id="reload">Reload</button></header>
-<iframe title="TITLE application" data-source="SOURCE"></iframe>
+<iframe title="TITLE application" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" data-source="SOURCE"></iframe>
 <div id="loading" role="status" aria-live="polite"><div class="card"><strong>Loading TITLE…</strong><p id="loading-detail">Please wait</p></div></div>
 <div id="error" hidden></div></div>
 <script>

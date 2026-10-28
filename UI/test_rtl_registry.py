@@ -147,7 +147,10 @@ class InventoryTests(unittest.TestCase):
                                     back=full_width_back_box()
                                     self.assertFalse(min(box[2],back[2])>max(box[0],back[0]) and min(box[3],back[3])>max(box[1],back[1]))
                     w.field='Nickname';w.value='Roof';w.keyboard(Mock())
-                    self.assertIn(('key','DONE'),[a for _,a in w.actions])
+                    self.assertEqual(ui.draw_touch_keyboard.call_args.kwargs['submit'],'Done')
+                    ui.touch_keyboard_action_at.return_value='CANCEL'
+                    w.tap(0,0)
+                    self.assertIsNone(w.field)
             finally:theme_system.apply_theme(original)
 
     def test_web_registry_uses_shared_saved_names_and_requires_same_origin_token(self):

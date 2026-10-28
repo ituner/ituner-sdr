@@ -23,6 +23,7 @@ class MapAdapter:
 class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def __init__(self,ui,hub):
         super().__init__(ui,hub)
+        self.navigation_history=[]
         self.dongles=DongleWorkspace(ui,hub)
         self.mode='ais';self.view='map';self.page=0;self.overlay=None;self.overlay_page=0
         self.map=ADSBWorkspace(ui,MapAdapter(self))
@@ -35,6 +36,7 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def session(self):return self.manager.sessions[self.mode]
 
     def show(self,mode):
+        self.navigation_history.clear()
         self.spectrum.open=mode=='spectrum'
         if mode=='spectrum':
             self.mode=mode;self.open=True;self.spectrum.show();return
@@ -60,6 +62,18 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             setattr(self,field,max(0,getattr(self,field)+(1 if y<sy else -1)));return True
         return self.map.swipe()
 
+    def navigate(self, view=None, overlay=None):
+        if (view is None or view == self.view) and overlay == self.overlay:return
+        self.navigation_history.append((self.view,self.overlay,self.page,self.overlay_page))
+        if view is not None:self.view=view;self.page=0
+        self.overlay=overlay;self.overlay_page=0
+
+    def back(self):
+        if self.navigation_history:
+            self.view,self.overlay,self.page,self.overlay_page=self.navigation_history.pop()
+        elif self.overlay:self.overlay=None
+        else:self.open=False
+
     def tap(self,x,y):
         if self.dongles.open:return self.dongles.tap(x,y)
         if self.mode=='spectrum':
@@ -69,24 +83,25 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
             try:
                 if action=='dongles':self.dongles.show()
                 elif action=='home':self.open=False
-                elif action=='back':
-                    if self.overlay:self.overlay=None
-                    else:self.open=False
-                elif action=='view':self.view=value;self.page=0;self.overlay=None
+                elif action=='back':self.back()
+                elif action=='view':
+                    if value!=self.view or self.overlay:self.navigate(view=value)
                 elif action=='overlay':
                     if value=='location' and getattr(self.ui,'station_settings',None):
-                        self.ui.station_settings.show();self.open=False;return
-                    self.overlay=value;self.overlay_page=0
+                        self.ui.station_settings.show(parent='vhf');self.open=False;return
+                    self.navigate(overlay=value)
                     if value=='location':self.station_edit=dict(self.manager.position or dict(lat=0,lon=0))
                     elif value in ('profiles','bands'):self.overlay_page=next((i//8 for i,p in enumerate(self.manager.catalog[self.mode]['presets']) if (p['frequency']==self.session.settings['frequency'] if value=='bands' else p['id']==self.session.settings['profile'])),0)
                 elif action=='page':
                     field='overlay_page' if self.overlay in ('profiles','bands','usb') else 'page';setattr(self,field,max(0,getattr(self,field)+value))
-                elif action=='profile':self.session.control('configure',profile=value);self.overlay=None
-                elif action=='band':self.session.control('configure',frequency=value);self.overlay=None
-                elif action=='assign':self.session.control('configure',selection=value);self.overlay=None
+                elif action=='profile':self.session.control('configure',profile=value);self.back()
+                elif action=='band':
+                    self.session.control('configure',frequency=value)
+                    if self.overlay=='bands':self.back()
+                elif action=='assign':self.session.control('configure',selection=value);self.back()
                 elif action=='number':
                     self.edit_field=value
-                    self.number=str(self.station_edit.get(value,0) if value in ('lat','lon') else self.session.settings[value]/1e6 if value=='frequency' else self.session.settings[value]);self.overlay='number'
+                    self.number=str(self.station_edit.get(value,0) if value in ('lat','lon') else self.session.settings[value]/1e6 if value=='frequency' else self.session.settings[value]);self.navigate(overlay='number')
                 elif action=='key':
                     if value=='DEL':self.number=self.number[:-1]
                     elif value=='CLEAR':self.number=''
@@ -95,19 +110,19 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
                         if self.edit_field in ('lat','lon'):
                             limit=90 if self.edit_field=='lat' else 180
                             if not -limit<=number<=limit:raise ValueError(f'Coordinate must be -{limit} to {limit} degrees')
-                            self.station_edit[self.edit_field]=number;self.overlay='location'
+                            self.station_edit[self.edit_field]=number;self.back()
                         else:
-                            self.session.control('configure',**{self.edit_field:number*1e6 if self.edit_field=='frequency' else number});self.overlay=None
+                            self.session.control('configure',**{self.edit_field:number*1e6 if self.edit_field=='frequency' else number});self.back()
                     elif len(self.number)<14:self.number+=value
                 elif action=='continuous':self.session.control('configure',continuous=not self.session.settings.get('continuous'));
-                elif action=='save_site':self.manager.control(self.mode,'location',position=self.station_edit);self.overlay=None
+                elif action=='save_site':self.manager.control(self.mode,'location',position=self.station_edit);self.back()
                 elif action=='zoom':self.map.zoom(value)
                 elif action=='fit':self.map.centered=False;self.map.following=False
                 elif action=='follow':
                     if self.map.selected:self.map.following=not self.map.following
                     else:self.message='Tap a target to follow it.'
                 elif action=='trails':self.map.trail_seconds=0 if self.map.trail_seconds else 900
-                elif action=='image':self.enlarged=value;self.overlay='image'
+                elif action=='image':self.enlarged=value;self.navigate(overlay='image')
                 else:self.session.control(action)
                 if action not in ('follow',):self.message=''
             except (ValueError,OSError) as exc:self.message=str(exc)
@@ -269,21 +284,20 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
         elif self.view=='products':self.draw_products(cache)
         else:self.draw_logs(cache,state)
         ui.draw_logical_rect(1024,0,1280,800,self.PANEL)
-        self.text(cache,1038,32,MODES[self.mode]['label'].upper(),23,self.CYAN)
-        self.text(cache,1038,62,state['status'],12,self.MUTED,width=226)
+        ui.draw_sidebar_header(cache,MODES[self.mode]['label'].upper())
         items=[('START' if not state['enabled'] else 'STOP',('start' if not state['enabled'] else 'stop',None),state['status']),
             (('LISTENING BAND' if self.mode=='ism' else 'PROFILE'),('overlay','bands' if self.mode=='ism' else 'profiles'),f"{state['settings']['frequency']/1e6:g} MHz" if self.mode=='ism' else self.session.profile()['name']),
             ('USB RECEIVER',('overlay','usb'),state['assigned']['serial'] if state['assigned'] else 'AUTO / SELECT'),
             ('FREQUENCY',('number','frequency'),f"{state['settings']['frequency']/1e6:.6f} MHz")]
-        for index,(label,action,sub) in enumerate(items):self.button(cache,(1034,82+index*78,1270,150+index*78),label,action,sub,active=index==0 and state['enabled'])
+        for index,(label,action,sub) in enumerate(items):self.button(cache,(1034,80+index*72,1270,144+index*72),label,action,sub,active=index==0 and state['enabled'])
         for i,(label,value) in enumerate((('MAP','map'),('DATA','data'),('PRODUCTS','products'),('LOGS','logs'))):
-            x=1034+(i%2)*122;y=402+(i//2)*78;self.button(cache,(x,y,x+114,y+68),label,('view',value),active=self.view==value)
+            x=1034+(i%2)*122;y=368+(i//2)*72;self.button(cache,(x,y,x+114,y+64),label,('view',value),active=self.view==value)
         if self.view=='map' and not self.overlay:
             for i,(label,action) in enumerate((('ZOOM +',('zoom',1.4)),('ZOOM -',('zoom',1/1.4)),('FIT ALL',('fit',None)),('FOLLOW',('follow',None)))):
-                x=1034+(i%2)*122;y=558+(i//2)*78;self.button(cache,(x,y,x+114,y+68),label,action,active=label=='FOLLOW' and self.map.following)
+                x=1034+(i%2)*122;y=512+(i//2)*72;self.button(cache,(x,y,x+114,y+64),label,action,active=label=='FOLLOW' and self.map.following)
         else:
-            self.button(cache,(1034,558,1148,626),'PREV',('page',-1));self.button(cache,(1156,558,1270,626),'NEXT',('page',1))
-            if self.mode in ('meteor','cubesat'):self.button(cache,(1034,636,1270,704),'SITE / ORBITS',('overlay','location'))
+            self.button(cache,(1034,512,1148,576),'PREV',('page',-1));self.button(cache,(1156,512,1270,576),'NEXT',('page',1))
+            if self.mode in ('meteor','cubesat'):self.button(cache,(1034,584,1270,648),'SITE / ORBITS',('overlay','location'))
         self.button(cache,(1034,728,1270,792),'BACK',('back',None))
         dashboard='RTL433-UI · cm5.local:8093' if self.mode=='ism' and getattr(self.manager,'rtl433_ui_installed',False) else 'SIGNAL OBSERVATORY · cm5.local:8092'
         self.draw_status(cache,self.message or state['detail'],dashboard)

@@ -63,13 +63,16 @@ class NavigationTests(unittest.TestCase):
         m=SimpleNamespace(configs=[row],snapshot=lambda:[row],image_snapshot=lambda *args:[],web_error='',web_port=8073)
         w=cls(ui,m);w.open=True;install_navigation(w)
         return w
-    def test_shared_back_home_hierarchy(self):
+    def test_shared_back_returns_to_previous_view_without_duplicate_home(self):
         for cls in (CWWorkspace,HellWorkspace,QRSSWorkspace,SSTVWorkspace):
             w=self.make(cls);w.enlarged='image';w.tap(1152,760,[])
             self.assertIsNone(w.enlarged);self.assertTrue(w.open)
-            w.tap(1152,760,[]);self.assertTrue(w.decoders_open);self.assertTrue(w.open)
-            w.add_open=True;w.tap(1152,760,[]);self.assertFalse(w.add_open)
-            w.tap(1152,40,[]);self.assertFalse(w.open)
+            w.tap(1152,760,[]);self.assertFalse(w.open)
+            w.open=True;w.add_open=True;w.draw(None,[])
+            cancel=next(box for box,action in w.actions if action[0]=='cancel_add')
+            w.tap((cancel[0]+cancel[2])/2,(cancel[1]+cancel[3])/2,[])
+            self.assertFalse(w.add_open);self.assertTrue(w.open)
+            self.assertFalse(any(a[0] in ('home','nav_home') for _,a in w.actions))
     def test_receiver_card_and_live_button_open_live(self):
         w=self.make(CWWorkspace);w.decoders_open=True;w.draw_receivers(None)
         self.assertTrue(any(a[0]=='select_rx' for b,a in w.actions if b[1]>210))
@@ -78,12 +81,13 @@ class NavigationTests(unittest.TestCase):
         w.tap(230,245,[]);self.assertTrue(w.add_open);self.assertTrue(w.decoders_open)
         w.add_open=False;w.tap(370,245,[]);self.assertFalse(w.decoders_open)
 
-    def test_decoder_setup_buttons_keep_back_and_create_reachable(self):
+    def test_decoder_setup_buttons_keep_cancel_and_create_reachable(self):
         back=(1034,728,1270,792)
         for cls in (CWWorkspace,HellWorkspace,QRSSWorkspace,SSTVWorkspace):
             with self.subTest(workspace=cls.__name__):
                 w=self.make(cls);w.add_open=True;w.draw(None,[])
-                self.assertIn((back,('nav_back',None)),w.actions)
+                self.assertFalse(any(action[0]=='nav_back' for _,action in w.actions))
+                self.assertEqual(sum(action[0]=='cancel_add' for _,action in w.actions),1)
                 create=next(box for box,action in w.actions if action[0]=='create')
                 self.assertEqual((create[2]-create[0],create[3]-create[1]),(236,64))
                 self.assertLessEqual(create[2]+8,back[0])

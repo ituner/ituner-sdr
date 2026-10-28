@@ -24,7 +24,6 @@ COLOR_GROUPS = (
     ("WATERFALL", ("waterfall_low", "waterfall_high", "waterfall_ruler_background", "waterfall_ruler_minor", "waterfall_ruler_major", "waterfall_ruler_label")),
 )
 assert set(COLOR_NAMES) == {key for _, keys in COLOR_GROUPS for key in keys}
-NAME_KEYS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") + ("SPACE", "DEL", "CLEAR", "CANCEL", "DONE")
 HEX_KEYS = tuple("0123456789ABCDEF") + ("DEL", "CLEAR", "CANCEL", "APPLY")
 NUMBER_KEYS = tuple("123456789") + ("CLEAR", "0", "DEL", "CANCEL", "DONE")
 CARDS_PER_PAGE = 6
@@ -42,14 +41,29 @@ def contains(box, x, y):
     return box[0] <= x < box[2] and box[1] <= y < box[3]
 
 
+def keyboard_ui(editor):
+    # Rendering supplies the live UI module, including when it runs as __main__.
+    # The lazy fallback supports headless editor callers.
+    if not hasattr(editor, 'keyboard_ui'):
+        import kiwi_gl_display
+        editor.keyboard_ui = kiwi_gl_display
+    return editor.keyboard_ui
+
+
 def theme_screen_boxes(editor, *, ignore_overlay=False):
     """Paint and touch use the same non-overlapping targets."""
+    if editor.overlay == "name" and not ignore_overlay:
+        ui=keyboard_ui(editor)
+        boxes=ui.network_password_boxes()
+        result={f"name:{key}":box for key,box in ui.touch_keyboard_key_boxes(getattr(editor,'keyboard_mode','lower'))}
+        result.update({f"name:{action}":boxes[key] for key,action in
+            (("mode","MODE"),("caps","CAPS"),("clear","CLEAR"),("space","SPACE"),("cancel","CANCEL"),("join","DONE"))})
+        return result
     if editor.overlay and not ignore_overlay:
         if editor.overlay == "delete":
             return {"delete_cancel": (360, 446, 624, 510), "delete_confirm": (648, 446, 912, 510)}
-        prefix, keys, columns = ("name", NAME_KEYS, 10) if editor.overlay == "name" else (
-            ("hex", HEX_KEYS, 4) if editor.overlay == "hex" else ("alpha", NUMBER_KEYS, 3))
-        width = 1080 if prefix == "name" else 584
+        prefix, keys, columns = ("hex", HEX_KEYS, 4) if editor.overlay == "hex" else ("alpha", NUMBER_KEYS, 3)
+        width = 584
         left = (1280 - width) / 2
         cell = (width - (columns - 1) * 8) / columns
         return {f"{prefix}:{key}": (left + (index % columns) * (cell + 8), 252 + (index // columns) * 68,
@@ -273,6 +287,11 @@ class ThemeEditor:
             self.set_hue(x)
 
     def _key(self, value):
+        if self.overlay == "name":
+            if value in ('MODE','CAPS'):
+                self.keyboard_mode=keyboard_ui(self).touch_keyboard_next_mode(getattr(self,'keyboard_mode','lower'),value)
+                return
+            value={'BACK':'DEL'}.get(value,value)
         if value == "CANCEL":
             self.overlay = None
             self.error = ""

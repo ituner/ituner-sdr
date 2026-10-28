@@ -1,0 +1,75 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * iTuner r2 CM5 main board + encoder board, 2026-08-26/28 schematics.
+ * The fourth quadrature channel (ENC2_A1/B1, GPIO9/10) is deliberately idle.
+ * H1 has no push-switch line on either schematic.
+ *
+ * Each encoder is a separate Linux input device. The distinct relative axes
+ * let a reader distinguish roles without relying on /dev/input/eventN order:
+ *   TUNE = REL_DIAL (7), VIEW = REL_WHEEL (8), NAV = REL_HWHEEL (6).
+ * Button events come from the named gpio-keys device:
+ *   VIEW = BTN_0 (0x100), NAV = BTN_1 (0x101).
+ */
+/ {
+    compatible = "brcm,bcm2712";
+
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+            ituner_tune_encoder: ituner-tune-encoder {
+                compatible = "rotary-encoder";
+                gpios = <&rp1_gpio 22 0>, <&rp1_gpio 27 0>;
+                linux,axis = <7>; /* REL_DIAL */
+                rotary-encoder,relative-axis;
+                rotary-encoder,encoding = "gray";
+                /* LPD3806-360BM: 360 periods/rev through TXS0102DCUR.
+                 * No rotary debounce property is supported by this driver.
+                 * Do not apply the push switches' 25 ms delay to optical A/B.
+                 */
+                rotary-encoder,steps-per-period = <1>;
+                status = "okay";
+            };
+
+            ituner_view_encoder: ituner-view-encoder {
+                compatible = "rotary-encoder";
+                gpios = <&rp1_gpio 17 0>, <&rp1_gpio 24 0>;
+                linux,axis = <8>; /* REL_WHEEL */
+                rotary-encoder,relative-axis;
+                rotary-encoder,encoding = "gray";
+                rotary-encoder,steps-per-period = <2>;
+                status = "okay";
+            };
+
+            ituner_nav_encoder: ituner-nav-encoder {
+                compatible = "rotary-encoder";
+                gpios = <&rp1_gpio 6 0>, <&rp1_gpio 5 0>;
+                linux,axis = <6>; /* REL_HWHEEL */
+                rotary-encoder,relative-axis;
+                rotary-encoder,encoding = "gray";
+                rotary-encoder,steps-per-period = <2>;
+                status = "okay";
+            };
+
+            ituner_encoder_buttons: ituner-encoder-buttons {
+                compatible = "gpio-keys";
+                label = "iTuner encoder buttons";
+
+                view-button {
+                    label = "iTuner VIEW press";
+                    gpios = <&rp1_gpio 23 1>; /* active low */
+                    linux,code = <0x100>; /* BTN_0 */
+                    debounce-interval = <25>;
+                };
+
+                nav-button {
+                    label = "iTuner NAV press";
+                    gpios = <&rp1_gpio 11 1>; /* active low */
+                    linux,code = <0x101>; /* BTN_1 */
+                    debounce-interval = <25>;
+                };
+            };
+        };
+    };
+};

@@ -246,6 +246,39 @@ class WorkspaceTests(unittest.TestCase):
         manager.log_snapshot.return_value=dict(lines=[],entries=[])
         return ADSBWorkspace(ui,manager),ui,manager,state
 
+    def test_updated_radio_picker_keeps_site_and_paging_clear_of_receiver_rows(self):
+        w,ui,manager,state=self.dashboard()
+        state['devices']=[dict(DEVICE,id=f'serial:{i}',serial=str(i),label=f'Radio {i}') for i in range(7)]
+        w.navigate('usb');seen=set()
+        for page in range(3):
+            w.usb_page=page;w.draw(Mock())
+            rows=[(box,action) for box,action in w.actions if action[0]=='band_assign' and action[1]!='auto']
+            self.assertEqual(len(rows),3 if page<2 else 1)
+            self.assertTrue(all(box[1]>=338 and box[3]<=534 for box,_ in rows))
+            seen.update(action[1] for _,action in rows)
+            self.assertIn(('site',None),[a for _,a in w.actions])
+            self.assertIn(('page',1),[a for _,a in w.actions])
+            for i,(box,action) in enumerate(w.actions):
+                for other,item in w.actions[i+1:]:
+                    self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(action,item))
+        self.assertEqual(seen,{d['id'] for d in state['devices']})
+        manager.control.assert_not_called()
+
+    def test_receiver_site_opens_shared_location_editor_and_preserves_view(self):
+        workspace, ui, manager, state = self.dashboard()
+        workspace.show()
+        workspace.navigate('usb')
+        workspace.actions=[]
+        workspace.draw_usb(Mock(), state)
+        self.press(workspace, ('site', None))
+        ui.station_settings.show.assert_called_once_with(parent='adsb')
+        self.assertEqual(ui.station_settings.page, 'location')
+        self.assertFalse(workspace.open)
+        workspace.open=True
+        self.assertEqual(workspace.current_screen(), 'usb')
+        workspace.go_back()
+        self.assertEqual(workspace.current_screen(), 'map')
+
     @staticmethod
     def press(workspace, action):
         box=next(box for box,item in workspace.actions if item==action)
@@ -262,7 +295,7 @@ class WorkspaceTests(unittest.TestCase):
         for expected in ('altitude','callsign','recent'):
             workspace.draw(Mock());self.press(workspace,('sort',None))
             self.assertEqual(workspace.traffic_sort,expected)
-        self.press(workspace,('back',None));workspace.draw(Mock());self.press(workspace,('close_options',None))
+        self.press(workspace,('back',None));workspace.draw(Mock());self.press(workspace,('back',None))
         workspace.draw(Mock());self.press(workspace,('clear',None))
         self.assertIsNone(workspace.selected);self.assertIsNone(workspace.selected_plane);self.assertFalse(workspace.following)
         manager.control.assert_not_called()
@@ -276,6 +309,7 @@ class WorkspaceTests(unittest.TestCase):
         self.press(workspace,('traffic_view','history'));workspace.draw(Mock())
         self.assertEqual(len(workspace.points),1);self.assertEqual(workspace.trail_seconds,86400)
         self.press(workspace,('view_options',None));workspace.draw(Mock())
+        self.press(workspace,('options_page',1));workspace.draw(Mock())
         self.press(workspace,('start_fresh',None));workspace.draw(Mock())
         self.assertEqual(workspace.traffic_view.mode,'live');self.assertEqual(workspace.points,[])
         self.assertIn('old',workspace.tracks);manager.control.assert_not_called()
@@ -354,6 +388,7 @@ class WorkspaceTests(unittest.TestCase):
             w.draw(Mock());self.press(w,('back',None))
         self.assertEqual(w.current_screen(),'map');self.assertTrue(w.open)
         w.navigate('traffic');w.navigate('options');w.draw(Mock())
+        self.press(w,('options_page',1));w.draw(Mock())
         self.press(w,('history_window',None));w.draw(Mock())
         original=w.history_seconds
         self.press(w,('history_choice',3600));w.draw(Mock())
@@ -364,7 +399,7 @@ class WorkspaceTests(unittest.TestCase):
         self.press(w,('history_choice',3600));w.draw(Mock())
         self.press(w,('history_apply',None));self.assertEqual(w.history_seconds,3600)
         self.assertEqual(w.current_screen(),'options')
-        w.draw(Mock());self.press(w,('close_options',None));self.assertEqual(w.current_screen(),'traffic')
+        w.draw(Mock());self.press(w,('back',None));self.assertEqual(w.current_screen(),'traffic')
         w.draw(Mock());self.press(w,('back',None));self.assertEqual(w.current_screen(),'map')
         self.assertTrue(w.open)
         w.draw(Mock());self.press(w,('back',None));self.assertFalse(w.open)
@@ -389,6 +424,66 @@ class WorkspaceTests(unittest.TestCase):
                 for other in boxes[i+1:]:
                     self.assertFalse(box[0]<other[2] and box[2]>other[0] and box[1]<other[3] and box[3]>other[1],(box,other))
 
+    def test_top_navigation_follows_title_with_equal_sizes_and_gaps(self):
+        w,ui,manager,state=self.dashboard();w.draw(Mock())
+        actions={('traffic_view','live'),('traffic_view','history'),('coverage',None),('view_options',None),('settings',None)}
+        boxes=[b for b,a in w.actions if a in actions]
+        self.assertEqual(len(boxes),5)
+        self.assertEqual(boxes[0][:2],(216,16))
+        self.assertEqual({(b[2]-b[0],b[3]-b[1]) for b in boxes},{(192,64)})
+        self.assertTrue(all(b[0]-a[2]==8 for a,b in zip(boxes,boxes[1:])))
+
+    def test_receiver_shortcuts_align_under_live_and_empty_card_uses_theme(self):
+        from ui_style import APP_UI_STYLE
+        w,ui,manager,state=self.dashboard();w.draw(Mock())
+        boxes={a:b for b,a in w.actions}
+        self.assertEqual(boxes[('rx_footprint',None)],(216,88,408,152))
+        self.assertEqual(boxes[('usb',None)],(416,88,608,152))
+        self.assertEqual(boxes[('weather',None)],(616,88,808,152))
+        self.assertEqual(w.card_box[3]-w.card_box[1],64)
+        cards=[c for c in ui.draw_logical_rounded_rect.call_args_list if c.args[:4]==w.card_box]
+        self.assertEqual(cards[-1].args[4],APP_UI_STYLE.button.radius)
+        title=next(c for c in ui.draw_logical_rounded_rect.call_args_list if c.args[:4]==(16,16,208,80))
+        self.assertLess(title.args[5][3],255)
+        self.assertEqual(title.args[4],APP_UI_STYLE.button.radius)
+        import theme_system
+        from copy import deepcopy
+        original=deepcopy(theme_system.runtime_theme)
+        self.addCleanup(theme_system.apply_theme,original)
+        for color in ([24,48,72],[240,180,90]):
+            theme=deepcopy(original);theme['colors']['secondary_text']=color;theme_system.apply_theme(theme)
+            ui.draw_text.reset_mock();w.draw(Mock())
+            captions={'SELECT AN AIRCRAFT','DRAG','Tap a plane on the map to inspect it.'}
+            calls=[c for c in ui.draw_text.call_args_list if c.args[3] in captions]
+            self.assertEqual(len(calls),3)
+            self.assertTrue(all(tuple(c.args[4])==tuple(color) for c in calls))
+
+    def test_option_rails_keep_one_back_and_all_actions_on_both_theme_sides(self):
+        import theme_system
+        from copy import deepcopy
+        original=deepcopy(theme_system.runtime_theme)
+        self.addCleanup(theme_system.apply_theme,original)
+        for side in ('left','right'):
+            theme=deepcopy(original);theme['sidebar']=side;theme_system.apply_theme(theme)
+            x=10 if side=='left' else 1034
+            w,ui,manager,state=self.dashboard();w.show()
+            for screen in ('options','settings'):
+                w.navigate(screen,remember=False);seen=set()
+                for page in range(2 if screen=='options' else 1):
+                    w.options_page=page;w.draw(Mock())
+                    backs=[b for b,a in w.actions if a==('back',None)]
+                    self.assertEqual(backs,[(x,728,x+236,792)])
+                    self.assertFalse(any(a[0] in ('close_options','close_settings') for _,a in w.actions))
+                    rows=[b for b,a in w.actions if a[0] not in ('back','options_page')]
+                    self.assertEqual(rows[0][1],80)  # 16 px below the 64 px divider.
+                    self.assertTrue(all(b[0]==x and b[2]==x+236 and b[3]-b[1]==64 for b in rows))
+                    self.assertTrue(all(b[1]-a[3]==8 for a,b in zip(rows,rows[1:])))
+                    seen.update(a[0] for _,a in w.actions)
+                if screen=='options':
+                    self.assertTrue({'traffic','style','labels','aircraft_icons','history_trails','rings','rx_footprint','history_window','start_fresh','reset_card'}<=seen)
+                else:self.assertTrue({'usb','radio_info','logs','comparison','stop'}<=seen)
+                manager.control.assert_not_called()
+
     def test_shared_radio_information_returns_to_airspace_settings(self):
         w,ui,manager,state=self.dashboard();w.show();w.navigate('settings')
         w.radio_info.station.snapshot.return_value={'config':{}}
@@ -398,10 +493,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_dashboard_hud_does_not_select_or_drag_an_aircraft_behind_it(self):
         workspace,ui,manager,state=self.dashboard([dict(hex='abc',lat=44,lon=26,seen=0,seen_pos=0)])
-        ui.radiogarden_project.return_value=(50,100,1)
-        workspace.draw(Mock());workspace.tap(50,100)
+        ui.radiogarden_project.return_value=(50,240,1)
+        workspace.draw(Mock());workspace.tap(50,240)
         self.assertIsNone(workspace.selected)
-        workspace.drag_begin(50,100);workspace.drag_move(50,100,100,110)
+        workspace.drag_begin(50,240);workspace.drag_move(50,240,100,250)
         ui.radiogarden_pan_angles.assert_not_called()
         workspace.traffic_open=True;workspace.draw(Mock())
         self.assertEqual(workspace.points,[])

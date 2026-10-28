@@ -38,6 +38,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.dongles = DongleWorkspace(ui,manager) if hasattr(manager,"scanner") else None
         self.radio_info=StationWorkspace(ui,manager.station) if getattr(manager,'station',None) is not None else None
         self.view_options=False
+        self.options_page=0
         self.settings_open=False
         self.history_window_open=False
         self.navigation=[]
@@ -201,6 +202,10 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
             elif kind=='radio_info' and self.radio_info:self.radio_info.show()
             elif kind.startswith('coverage_'):self.coverage_view.action(kind,value)
             elif kind=='coverage':self.navigate('coverage')
+            elif kind=='site':
+                self.ui.station_settings.show(parent='adsb')
+                self.ui.station_settings.page='location'
+                self.open=False
             elif kind=='home': self.open=False
             elif kind in ('back','cancel_history','close_options','close_settings'):self.go_back()
             elif kind=='map_view':self.navigation=[];self.navigate('map',remember=False)
@@ -209,9 +214,10 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                     previous=self.traffic_view.mode;self.traffic_view.press_live()
                     if previous!='live':self.set_traffic_view('live')
                 else:self.set_traffic_view(value)
+            elif kind=='options_page':self.options_page=max(0,min(1,self.options_page+value))
             elif kind=='view_options':
                 if self.current_screen() in ('options','history_window'):self.go_back()
-                else:self.navigate('options')
+                else:self.options_page=0;self.navigate('options')
             elif kind=='settings':
                 if self.settings_open:self.go_back()
                 else:self.navigate('settings')
@@ -258,7 +264,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
                     if self.traffic_view.mode=='history':self.history_seconds=self.trail_seconds
             elif kind=='rings':
                 if self.manager.snapshot().get('receiver_position'): self.rings=not self.rings
-                else: self.message='Set receiver latitude/longitude in the browser Receiver panel.'
+                else: self.message='Set antenna coordinates in RECEIVER / ANTENNA SITE.'
             elif kind=='follow':
                 live=next((p for p in self.manager.snapshot()['aircraft'] if p.get('hex')==self.selected),None)
                 if self.following: self.following=False
@@ -476,15 +482,18 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         bands=state.get('bands') or [dict(id='1090',name='1090 ES',**{k:state.get(k) for k in ('enabled','status','selection','assigned')})]
         band=next((b for b in bands if b['id']==self.usb_band),bands[0])
         for i,b in enumerate(bands):
-            self.button(cache,(40+i*608,158,632+i*608,214),b['name'],('usb_band',b['id']),active=b['id']==self.usb_band)
-        self.button(cache,(40,222,960,278),'Auto · available radio',('band_assign','auto'),active=band.get('selection','auto')=='auto')
-        self.button(cache,(976,222,1240,278),'Stop' if band['enabled'] else 'Start',('band_control','stop' if band['enabled'] else 'start'),enabled=band['enabled'] or band.get('installed',True))
+            self.button(cache,(40+i*608,164,632+i*608,220),b['name'],('usb_band',b['id']),active=b['id']==self.usb_band)
+        self.ink(cache,40,244,band['status']+' · '+str(band.get('messages',0))+' packets',20,self.CYAN,width=1200)
+        self.button(cache,(40,266,960,322),'AUTO · '+('SPARE DONGLE' if self.usb_band=='978' else 'FIRST AVAILABLE DONGLE'),('band_assign','auto'),active=band.get('selection','auto')=='auto')
+        self.button(cache,(976,266,1240,322),'STOP' if band['enabled'] else 'START',('band_control','stop' if band['enabled'] else 'start'),enabled=band['enabled'] or band.get('installed',True))
         blocked={b['assigned']['id'] for b in bands if b['id']!=self.usb_band and b.get('assigned')}
-        self.usb_page,last=receiver_rows(self,cache,state['devices'],state.get('leases',{}),'uat' if self.usb_band=='978' else 'adsb',band.get('selection','auto'),self.usb_page,action='band_assign',unique=self.usb_band=='978',blocked=blocked,top=282,include_auto=False,left=40,right=1240)
-        if not state['devices']:self.ink(cache,40,344,'No USB radio connected. Plug in a receiver to begin.',23,self.MUTED,width=1200)
-        self.button(cache,(40,644,420,700),'USB-Radios',('dongles',None))
-        if last:
-            self.button(cache,(436,644,824,700),'Previous',('page',-1));self.button(cache,(840,644,1240,700),'Next',('page',1))
-        else:self.ink(cache,452,672,band.get('status','')+' · '+str(band.get('messages',0))+' packets',20,self.MUTED,width=780)
+        self.usb_page,last=receiver_rows(self,cache,state['devices'],state.get('leases',{}),'uat' if self.usb_band=='978' else 'adsb',band.get('selection','auto'),self.usb_page,action='band_assign',unique=self.usb_band=='978',blocked=blocked,top=338,include_auto=False,left=40,right=1240,page_size=3,row_height=60,row_gap=8)
+        if not state['devices']:self.text(cache,40,374,'No USB radio connected. Plug in a receiver to begin.',20,self.MUTED,width=1200)
+        self.text(cache,40,558,band.get('detail',''),18,self.MUTED,width=1200)
+        site=state.get('receiver_position');location=f"RX SITE {site['lat']:.5f}°, {site['lon']:.5f}°" if site else 'RX SITE NOT SET'
+        self.ink(cache,40,600,location,16,self.MUTED,width=900)
+        self.button(cache,(976,574,1240,630),'ANTENNA SITE',('site',None))
+        self.text(cache,40,622,'Edit shared location and GPS under Settings / Radio information.',16,self.MUTED,width=900)
+        self.button(cache,(40,636,420,692),'DONGLES / RENAME',('dongles',None));self.button(cache,(436,636,824,692),'PREVIOUS',('page',-1));self.button(cache,(840,636,1240,692),'NEXT',('page',1))
 
     def close(self): self.manager.close()

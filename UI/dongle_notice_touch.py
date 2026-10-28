@@ -33,7 +33,7 @@ class USBNoticePopup(StationWorkspace):
         if not self.visible():return
         n=self.view.notice;self.actions=[];ui=self.ui
         ui.draw_logical_rect(0,0,1280,800,(0,0,0,170))
-        ui.draw_logical_rounded_rect(180,80,1100,720,18,self.PANEL,self.CYAN,1)
+        ui.draw_logical_rounded_rect(180,80,1100,720,self.RADIUS,self.PANEL,self.CYAN,1)
         self.ink(cache,208,122,n['title'],28,width=788)
         self.button(cache,(1016,92,1080,156),'×',('dismiss',None))
         for i,line in enumerate(textwrap.wrap(n['message'],width=67)[:3]):self.ink(cache,208,181+i*27,line,22,self.MUTED,width=864)

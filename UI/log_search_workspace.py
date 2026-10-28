@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import textwrap
 from sstv_workspace import SSTVWorkspace
 from ui_style import APP_UI_STYLE
+from decoder_style import full_width_back_box, DecoderStyle
 
 
 class SearchView(SSTVWorkspace):
@@ -12,6 +13,9 @@ class SearchView(SSTVWorkspace):
         self.service=service;self.mode='all';self.query='';self.offset=0
         self.result={'results':[],'total':0};self.future=None;self.keyboard=False;self.picture=None
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='log-search-view')
+
+    def color(self,role):
+        return getattr(APP_UI_STYLE.palette,role)
 
     def submit(self):
         if self.future and not self.future.done(): self.future.cancel()
@@ -23,29 +27,25 @@ class SearchView(SSTVWorkspace):
             try:self.result=self.future.result();self.message=self.result['notice']
             except Exception:self.message='Could not read logs. Tap Search to retry.'
             self.future=None
-        self.actions=[];self.ui.draw_logical_rect(0,0,1280,800,(7,18,25,255))
-        self.text(cache,20,34,'SEARCH SAVED LOGS',27,(104,234,194))
-        self.button(cache,(1034,728,1270,792),'BACK',('back',None))
+        self.actions=[]
+        if self.keyboard:
+            self.ui.draw_touch_keyboard(cache,'Search saved logs','Use a full or partial callsign. Matching ignores case.',self.query,
+                mode=getattr(self,'keyboard_mode','lower'),submit='Search',rail_title='SEARCH')
+            return
+        self.ui.draw_logical_rect(0,0,1280,800,APP_UI_STYLE.palette.background)
+        self.text(cache,20,34,'SEARCH SAVED LOGS',27,APP_UI_STYLE.palette.section_heading)
+        self.button(cache,full_width_back_box(),'BACK',('back',None))
         if self.picture:
             self.manager.gallery=self.service.galleries()[self.picture['mode']]
-            self.image(self.picture['image_id'],(20,90,1020,780));return
+            self.image(self.picture['image_id'],(20,90,1260,700));return
         self.button(cache,(20,82,256,146),'CALLSIGN',('keyboard',None),
                     self.query or 'ALL SAVED RESULTS')
         self.button(cache,(264,82,500,146),'MODE',('mode',None),self.mode)
         self.button(cache,(508,82,744,146),'SEARCH',('search',None))
-        if self.keyboard:
-            for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/ ')):
-                for x,char in enumerate(row):
-                    left,top=24+x*122,205+y*72
-                    self.button(cache,(left,top,left+114,top+64),char if char!=' ' else 'SPACE',('key',char))
-            for i,(label,kind) in enumerate((('DELETE','erase'),('CLEAR','clear'),('SEARCH','done'))):
-                left=24+i*122
-                self.button(cache,(left,501,left+114,565),label,(kind,None))
-            self.text(cache,24,640,'Use a full or partial callsign. Matching ignores upper / lower case.',20);return
         for i,row in enumerate(self.result['results']):
-            y=168+i*175;self.ui.draw_logical_rect(20,y,1260,y+159,(17,38,48,255))
-            self.text(cache,32,y+25,row['mode'].upper()+' · '+row['utc']+' · '+row['band'],20,(104,234,194),width=995)
-            self.text(cache,32,y+54,row['receiver']+' · '+f"{row['frequency_hz']/1e6:.6f} MHz"+' · '+row['source'],16,width=990)
+            y=168+i*150;self.ui.draw_logical_rect(20,y,1260,y+142,APP_UI_STYLE.palette.section_surface)
+            self.text(cache,32,y+25,row['mode'].upper()+' · '+row['utc']+' · '+row['band'],20,APP_UI_STYLE.palette.section_heading,width=960)
+            self.text(cache,32,y+54,row['receiver']+' · '+f"{row['frequency_hz']/1e6:.6f} MHz"+' · '+row['source'],16,width=960)
             snippet=row['text'] or 'No recognized text'
             match=snippet.upper().find(self.query.strip().upper()) if self.query.strip() else 0
             if match>110:snippet='…'+snippet[max(0,match-80):]
@@ -53,12 +53,22 @@ class SearchView(SSTVWorkspace):
             if row.get('image_url'):self.button(cache,(1010,y+15,1246,y+79),'IMAGE',('image',row))
         total=self.result['total']
         if not total:self.text(cache,30,250,'No matching saved results. Try part of the callsign.',24,width=1200)
-        self.button(cache,(20,728,134,792),'PREVIOUS',('page',-1))
-        self.button(cache,(142,728,256,792),'NEXT',('page',1))
-        self.text(cache,280,749,f'{total} results · page {self.offset//3+1}',18)
-        self.text(cache,280,779,self.message or 'OCR and Morse text are tentative. Tap a mode to search across all decoders.',15,width=736)
+        self.button(cache,(20,640,134,704),'PREVIOUS',('page',-1))
+        self.button(cache,(142,640,256,704),'NEXT',('page',1))
+        self.text(cache,280,672,f'{total} results · page {self.offset//3+1}',18)
+        DecoderStyle.draw_status(self,cache,self.message or 'OCR and Morse text are tentative.', 'Tap a mode to search across all decoders.',full_width=True)
 
     def tap(self,x,y,*unused):
+        if self.keyboard:
+            mode=getattr(self,'keyboard_mode','lower')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action=='CANCEL':self.keyboard=False
+            elif action=='SAVE':self.keyboard=False;self.offset=0;self.submit()
+            elif action=='BACK':self.query=self.query[:-1]
+            elif action=='CLEAR':self.query=''
+            elif action:self.query=(self.query+(' ' if action=='SPACE' else action))[:80]
+            return
         a=next((a for box,a in self.actions if self.ui.contains(box,x,y)),None)
         if not a:return
         kind,value=a
@@ -86,7 +96,8 @@ def install_search(workspace, mode, service):
     """Decorate only workspace entry points; no app input or audio changes."""
     view=SearchView(workspace.ui,service)
     original_draw,original_tap,original_close=workspace.draw,workspace.tap,workspace.close
-    box=(424,8,538,72) if mode in ('sstv','hell') else (1034,656,1270,720)
+    box=((424,8,538,72) if mode in ('sstv','hell') else
+         (1034,8,1270,72) if mode in ('cw','qrss') else (1034,656,1270,720))
     visible=False
     def draw(cache,*args):
         nonlocal visible

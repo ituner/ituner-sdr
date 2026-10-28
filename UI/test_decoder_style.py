@@ -62,6 +62,17 @@ class DecoderThemeTests(unittest.TestCase):
                 self.assertEqual(w.open,view!='map',view)
                 self.assertFalse(w.coverage_open or w.traffic_open or w.logs_open or w.usb_open)
 
+    def test_adsb_back_retraces_nested_views_before_leaving_decoder(self):
+        w,ui,manager,state=test_adsb.WorkspaceTests().dashboard()
+        w.open=True
+        def tap(kind):
+            w.actions=[((0,0,100,100),(kind,None))];w.tap(10,10)
+        tap('traffic');tap('logs');tap('coverage')
+        tap('back');self.assertTrue(w.logs_open);self.assertTrue(w.open)
+        tap('back');self.assertTrue(w.traffic_open);self.assertTrue(w.open)
+        tap('back');self.assertFalse(w.traffic_open);self.assertTrue(w.open)
+        tap('back');self.assertFalse(w.open)
+
     def test_adsb_uses_home_rail_buttons_clock_and_status_typography(self):
         import time
         from unittest.mock import patch
@@ -118,7 +129,8 @@ class DecoderThemeTests(unittest.TestCase):
             for page in ('identity','location','gps'):
                 w.page=page;w.field=None;w.draw(Mock());self.assert_navigation_clear(w)
             w.field='station_name';w.value='Unsaved';w.draw(Mock())
-            self.assert_navigation_clear(w,('key','CANCEL'))
+            self.assertEqual(ui.draw_touch_keyboard.call_args.args[3],'Unsaved')
+            ui.touch_keyboard_action_at.return_value='CANCEL'
             b=full_width_back_box();w.tap(b[0]+10,b[1]+10)
             self.assertIsNone(w.field);self.assertTrue(w.open)
             self.assertNotEqual(w.draft['station_name'],'Unsaved')

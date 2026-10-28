@@ -79,6 +79,13 @@ class NativeSpectrumTests(unittest.TestCase):
         back();self.assertFalse(w.open);self.assertEqual(w.exit_target,'digi')
         self.assertTrue(w.commands.empty())
 
+    def test_gain_keypad_back_returns_to_advanced_settings(self):
+        w=self.workspace;w.open=True;w.overlay='number';w.edit_field='gain'
+        w.actions=[((0,0,100,100),('back',None))];w.tap(10,10)
+        self.assertEqual(w.overlay,'advanced');self.assertTrue(w.open)
+        w.tap(10,10);self.assertEqual(w.overlay,'settings');self.assertTrue(w.open)
+        self.assertTrue(w.commands.empty())
+
     def test_home_exits_nested_setup_and_propagates_through_vhf_host(self):
         from vhf_workspace import VHFWorkspace
         # Exercise the host's real dispatch rather than closing only the child.

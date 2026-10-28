@@ -21,3 +21,55 @@ Use full-width workspaces and one main chart at a time, including for its
 waterfall. Primary touch controls use at least 20 px labels and 56 px hit
 targets. Do not shrink the web sidebar into a native control rail. Preserve
 an explicit return from investigation to the preceding survey or watch mode.
+
+All receiver categories, including USB, must use the same receiver list-item
+renderer, row geometry, spacing, typography, and badge/status positions. Adapt
+the content to the source; do not substitute centered buttons or custom cards.
+Keep established list layouts consistent throughout the app unless the user
+explicitly requests a layout change.
+Active USB receivers must use exactly the same selected-row styling as active
+network receivers. Derive selection from the running receiver, not merely the
+open category or a saved network address. Browsing must not imply activation.
+On app restart or reboot, restore the last chosen receiver (including USB) and
+always open HOME. Preserve the USB choice across worker failures; transient
+audio-thread state must not overwrite the remembered receiver with LAN.
+Preserve each screen's established button sizes and arrangement. HOME's rail
+button dimensions apply to rail controls, not every button throughout the app.
+Keep pagination inside its content panel and clear of rows and the side rail.
+Do not rename buttons unless the user explicitly requests it. Layout fixes must
+not redesign other screens; preserve the Dome's established arrangement.
+
+Side-rail content starts 16 px below the horizontal divider under the rail
+name. Apply this spacing to every titled side rail; retain the established
+bottom BACK position and existing button sizes.
+
+All current and future native text-entry screens must use the shared Wi-Fi
+password keyboard design, layout, and placement. Reuse `draw_touch_keyboard`,
+`touch_keyboard_action_at`, and `touch_keyboard_next_mode` in
+`kiwi_gl_display.py`; do not introduce screen-specific alphabetic keyboards.
+Text-entry keyboards use the full screen width, with no side rail or duplicate
+BACK button. Preserve the shared rows, spacing, command positions, key heights,
+and theme styling; use the visible Cancel button to dismiss. Retain useful
+section context in the main heading. Register new keyboard modals in
+`shared_keyboard_open` so rail composition and inverse touch mapping are
+disabled for both left- and right-rail themes. Keep field
+validation, length limits, masking, and save/cancel behavior specific to the
+field. Dedicated numeric and hexadecimal keypads may retain their existing
+purpose-specific layouts.
+
+SYSTEM is an explicit placement exception: keep its button group bottom-aligned
+8 px above the fixed BACK button. Its first Wi-Fi / ETHERNET control remains
+full-width; preserve the spaces around the slash.
+
+Keyboard previews must apply the chosen runtime theme before rendering; never
+present the uninitialized renderer fallback as the active theme. Keyboard
+corners, colors, and typography must come from shared theme styling.
+
+Digital-mode workspaces use a single BACK action that retraces the previous
+view and ultimately returns to the menu that opened them. Do not inject HOME
+or BACK over forms that already own Cancel, or over the shared keyboard.
+Keep HOME only when it has a distinct destination (as in Spectrum Analyzer).
+Full-width HF workspaces must bypass the rail framebuffer composer; position
+BACK and footer controls directly for the selected theme side so plots and
+image cards are never split. Use live theme tokens for screen chrome while
+preserving received image pixels and measurement palettes.

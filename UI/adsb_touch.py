@@ -6,6 +6,7 @@ same instruments and touch actions as the browser without embedding a browser.
 import math
 import time
 from ui_style import APP_UI_STYLE
+from decoder_style import full_width_back_box
 from adsb_traffic import historical_aircraft, position_age, reception_summary, trail_label
 from adsb_view import aged, freshness
 from adsb_bands import band_readings
@@ -41,8 +42,10 @@ class AirspaceDashboard:
         self.ui.draw_logical_polyline([(x-6*size,y+11*size),(x,y+7*size),(x+6*size,y+11*size)],(*color,255),2)
 
     def header(self, cache, state, valid):
-        self.ink(cache,24,35,'AIRSPACE',26,bold=True)
-        self.ink(cache,24,64,'1090 ES + 978 UAT · local receiver',14,self.CYAN,width=310)
+        visual=APP_UI_STYLE.button.resolve()
+        self.ui.draw_logical_rounded_rect(16,16,208,80,APP_UI_STYLE.button.radius,(*visual.fill[:3],100),visual.border,visual.border_width)
+        self.ink(cache,112,36,'AIRSPACE',26,anchor='cm',bold=True)
+        self.ink(cache,112,62,'1090 ES + 978 UAT',14,self.CYAN,width=172,anchor='cm')
         self.draw_view_controls(cache)
         if self.last_count is None or state['messages']<self.last_count:
             self.last_count,self.last_rate_time=state['messages'],time.monotonic();self.rate=0
@@ -59,21 +62,21 @@ class AirspaceDashboard:
                   ('View',('view_options',None),self.view_options or self.history_window_open),
                   ('Settings',('settings',None),self.settings_open or self.usb_open or self.logs_open))
         for index,(label,action,active) in enumerate(controls):
-            x=360+index*180
-            self.button(cache,(x,16,x+164,72),label,action,active=active)
+            x=216+index*200
+            self.button(cache,(x,16,x+192,80),label,action,active=active)
 
     def draw_map_hud(self, cache, state, valid):
         self.overlay_boxes=[]
         if self.current_screen()!='map':return
-        self.overlay_boxes=[(16,84,670,128),(16,648,530,672),(16,678,160,710)]
+        self.overlay_boxes=[(16,16,208,80),(16,224,670,272),(16,648,530,672),(16,678,160,710)]
         counts=self.traffic_view.counts(state['aircraft'],time.time(),self.tracks)
         for index,(label,value) in enumerate((('LIVE',counts['live']),('ON MAP',counts['positions']),('NEW',counts['new']),('MSG/S',f'{self.rate:.1f}'),('MESSAGES',self.instrument_value(state['messages'])))):
             x=24+index*128
-            self.ink(cache,x,96,label,12,self.MUTED)
-            self.ink(cache,x,118,value,19,width=120)
-        self.button(cache,(692,88,872,144),'RX '+('ON' if self.rx_footprint else 'OFF'),('rx_footprint',None),active=self.rx_footprint)
-        self.button(cache,(888,88,1110,144),'Receivers',('usb',None))
-        self.button(cache,(1126,88,1264,144),'Weather',('weather',None))
+            self.ink(cache,x,240,label,12,self.MUTED)
+            self.ink(cache,x,262,value,19,width=120)
+        self.button(cache,(216,88,408,152),'RX '+('ON' if self.rx_footprint else 'OFF'),('rx_footprint',None),active=self.rx_footprint)
+        self.button(cache,(416,88,608,152),'Receivers',('usb',None))
+        self.button(cache,(616,88,808,152),'Weather',('weather',None))
         self.overlay_boxes.append((16,164,872,216))
         self.ui.draw_logical_rect(16,164,872,216,(*self.BG[:3],160))
         for index,band in enumerate(band_readings(state,time.time())):
@@ -85,8 +88,8 @@ class AirspaceDashboard:
         if notice_key!=getattr(self,'view_notice_key',None):
             self.view_notice_key=notice_key;self.view_notice_until=now+5
         if now<self.view_notice_until:
-            self.ink(cache,24,150,view.label+' · trails '+('off' if view.mode=='history' and not view.history_trails else trail_label(self.trail_seconds))+((' · keep '+view.live_label) if view.mode=='live' else ''),15,self.CYAN)
-            self.overlay_boxes.append((16,134,670,164))
+            self.ink(cache,24,286,view.label+' · trails '+('off' if view.mode=='history' and not view.history_trails else trail_label(self.trail_seconds))+((' · keep '+view.live_label) if view.mode=='live' else ''),15,self.CYAN)
+            self.overlay_boxes.append((16,272,670,300))
         for box,title,value in (((548,634,608,690),'−',1/1.6),((620,634,788,690),'Fit view',None),((800,634,860,690),'+',1.6)):
             self.button(cache,box,title,('fit',None) if value is None else ('zoom',value))
         for x,label,color in ((30,'Low altitude',self.CYAN),(158,'High altitude',(120,184,255)),(291,'Selected',self.GOLD),(400,'Last known',self.MUTED)):
@@ -98,34 +101,47 @@ class AirspaceDashboard:
         self.ui.draw_logical_polyline([(24,686),(24,691),(24+width,691),(24+width,686)],(*self.MUTED,255),1)
         self.ink(cache,24,706,f'{round(distance*1852)} m' if distance<1 else f'{distance:g} NM',11,self.MUTED)
 
+    def draw_options_rail(self,cache,title,options,page=0):
+        # Full-canvas decoder coordinates already follow the chosen theme side.
+        x=full_width_back_box()[0]-10
+        self.ui.draw_logical_rect(x,0,x+256,800,self.color('sidebar'))
+        self.ui.draw_logical_rect(x,0,x+256,64,self.color('sidebar_header'))
+        self.ui.draw_text(cache,x+128,32,title,self.color('sidebar_title'),15,True,False,'cm',family='Liberation Sans')
+        self.ui.draw_logical_line(x+10,64,x+246,64,self.color('divider'),1)
+        for index,(label,action,subtitle,active,enabled) in enumerate(options[page*7:page*7+7]):
+            y=80+index*72
+            self.button(cache,(x+10,y,x+246,y+64),label,action,subtitle,active=active,enabled=enabled)
+        if len(options)>7:
+            self.button(cache,(x+10,608,x+124,672),'PREVIOUS',('options_page',-1),enabled=page>0)
+            self.button(cache,(x+132,608,x+246,672),'NEXT',('options_page',1),enabled=(page+1)*7<len(options))
+            self.ink(cache,x+128,696,f'{page+1} / {(len(options)+6)//7}',16,self.MUTED,anchor='cm')
+
     def draw_settings(self,cache,state):
-        self.surface((340,150,940,686))
-        self.ink(cache,368,188,'RADIO & DATA',25)
         primary_enabled=state.get('enabled_1090',state['enabled'])
-        for index,(title,action,subtitle) in enumerate((('Receiver & dongles',('usb',None),'1090 ES + 978 UAT · separate USB receivers'),
-                    ('Radio / user information',('radio_info',None),'Shared location, callsign and GPS'),
-                    ('Logs & diagnostics',('logs',None),'Flights, receiver and diagnostics'),
-                    ('Receiver comparison',('comparison',None),'All dongles · live graph / five-minute results'),
-                    ('Stop 1090 ES' if primary_enabled else 'Start 1090 ES',('stop' if primary_enabled else 'start',None),'Manage UAT separately under Receiver & dongles'))):
-            y=212+index*74;self.button(cache,(368,y,912,y+64),title,action,subtitle,enabled=action[0]!='radio_info' or self.radio_info is not None)
-        self.button(cache,(368,584,912,648),'Back',('close_settings',None))
+        options=[(title,action,subtitle,False,action[0]!='radio_info' or self.radio_info is not None)
+                 for title,action,subtitle in (
+                    ('Receiver & dongles',('usb',None),'1090 ES + 978 UAT'),
+                    ('Radio / user information',('radio_info',None),'Location, callsign and GPS'),
+                    ('Logs & diagnostics',('logs',None),'Flights and receiver'),
+                    ('Receiver comparison',('comparison',None),'Live graph / results'),
+                    ('Stop 1090 ES' if primary_enabled else 'Start 1090 ES',('stop' if primary_enabled else 'start',None),'1090 ES receiver'))]
+        self.draw_options_rail(cache,'ADS-B SETTINGS',options)
 
     def draw_view_options(self,cache):
-        self.surface((230,150,1050,690));self.ink(cache,258,188,'MAP VIEW',25)
         style={'both':'Satellite + borders','satellite':'Satellite','borders':'Borders'}[self.map_style]
-        self.button(cache,(258,218,626,290),'Aircraft list',('traffic',None))
-        self.button(cache,(642,218,1022,290),style,('style',None))
         labels=self.traffic_view.labels_visible(self.labels)
         icons=self.traffic_view.icons_visible(self.aircraft_icons)
-        for index,(title,kind,active) in enumerate((('Labels '+('on' if labels else 'off'),'labels',labels),('Aircraft icons '+('on' if icons else 'off'),'aircraft_icons',icons),('Dots & trails '+('on' if self.traffic_view.history_trails else 'off'),'history_trails',self.traffic_view.history_trails))):
-            x=258+index*260;self.button(cache,(x,308,x+244,372),title,(kind,None),active=active)
-        self.button(cache,(258,390,502,462),'Range rings',('rings',None),active=self.rings)
-        self.button(cache,(518,390,762,462),'RX footprint',('rx_footprint',None),active=self.rx_footprint)
-        self.button(cache,(778,390,1022,462),'History window',('history_window',None),'All recorded' if self.history_seconds>86400 else trail_label(self.history_seconds))
-        self.button(cache,(258,480,626,544),'Start fresh',('start_fresh',None))
-        self.button(cache,(642,480,1022,544),'Reset panel',('reset_card',None))
-        self.text(cache,258,574,'Start fresh clears the view; saved history stays available.',18,self.MUTED,width=760)
-        self.button(cache,(258,610,1022,674),'Back',('close_options',None))
+        options=[('Aircraft list',('traffic',None),'',False,True),
+                 (style,('style',None),'',False,True),
+                 ('Labels '+('on' if labels else 'off'),('labels',None),'',labels,True),
+                 ('Aircraft icons '+('on' if icons else 'off'),('aircraft_icons',None),'',icons,True),
+                 ('Dots & trails '+('on' if self.traffic_view.history_trails else 'off'),('history_trails',None),'',self.traffic_view.history_trails,True),
+                 ('Range rings',('rings',None),'',self.rings,True),
+                 ('RX footprint',('rx_footprint',None),'',self.rx_footprint,True),
+                 ('History window',('history_window',None),'All recorded' if self.history_seconds>86400 else trail_label(self.history_seconds),False,True),
+                 ('Start fresh',('start_fresh',None),'Saved history stays available',False,True),
+                 ('Reset panel',('reset_card',None),'',False,True)]
+        self.draw_options_rail(cache,'ADS-B VIEW',options,self.options_page)
 
     def sorted_aircraft(self, state):
         return sorted(self.display_aircraft(state),key=(lambda p:-(p.get('alt_baro') if isinstance(p.get('alt_baro'),(int,float)) else -1e6)) if self.traffic_sort=='altitude' else (lambda p:(p.get('flight') or p['hex']).strip().lower()) if self.traffic_sort=='callsign' else (lambda p:p.get('seen',100)))
@@ -147,16 +163,22 @@ class AirspaceDashboard:
         historical=next((p for p in self.display_aircraft(state) if p['hex']==self.selected and p.get('historical')),None)
         if live or historical:plane=live if self.positioned(live) else historical or live;self.selected_plane=plane
         if plane:plane=aged(plane,time.time())
-        height=300 if plane else 78;width=342
+        height=300 if plane else 64;width=342
         x,y=self.card_position or (914,700-height)
         x=max(16,min(1264-width,x));y=max(174,min(700-height,y))
         self.card_box=(x,y,x+width,y+height);self.card_handle=(x,y,x+width,y+42)
         self.overlay_boxes.append(self.card_box)
-        self.ui.draw_logical_rounded_rect(*self.card_box,12,(*self.PANEL[:3],174),(*self.LINE[:3],120),1)
-        self.ink(cache,x+16,y+22,(plane.get('flight') or plane['hex']).strip() if plane else 'SELECT AN AIRCRAFT',23 if plane else 19,self.GOLD if plane else self.TEXT,width=250)
-        self.ink(cache,x+width-16,y+22,'DRAG',11,self.MUTED,anchor='rm')
+        self.ui.draw_logical_rounded_rect(*self.card_box,APP_UI_STYLE.button.radius,(*self.PANEL[:3],174),(*self.LINE[:3],120),1)
         if not plane:
-            self.text(cache,x+16,y+56,'Tap a plane on the map to inspect it.',14,self.MUTED,width=310);return
+            style=APP_UI_STYLE.button
+            for tx,ty,label,size,anchor in (
+                    (x+16,y+20,'SELECT AN AIRCRAFT',style.title_size,'lm'),
+                    (x+width-16,y+20,'DRAG',style.subtitle_size,'rm'),
+                    (x+16,y+44,'Tap a plane on the map to inspect it.',style.subtitle_size,'lm')):
+                self.ui.draw_text(cache,tx,ty,label,self.MUTED,size,True,False,anchor,family=style.font_family)
+            return
+        self.ink(cache,x+16,y+22,(plane.get('flight') or plane['hex']).strip(),23,self.GOLD,width=250)
+        self.ink(cache,x+width-16,y+22,'DRAG',11,self.MUTED,anchor='rm')
         self.text(cache,x+16,y+55,'ICAO '+plane['hex'].upper()+' · '+('978 UAT' if plane.get('band')=='978' else '1090 ES')+' · '+str(plane.get('squawk') or '—'),13,self.MUTED,width=310)
         for dx,dy,label,key,unit in ((16,88,'ALTITUDE','alt_baro','ft'),(178,88,'SPEED','gs','kt'),(16,146,'HEADING','track','°'),(178,146,'VERT RATE','baro_rate','ft/min')):
             self.text(cache,x+dx,y+dy,label,12,self.MUTED,width=148)
@@ -183,7 +205,7 @@ class AirspaceDashboard:
         valid=[p for p in self.display_aircraft(state,True) if not p.get('historical') and self.positioned(p)]
         self.ui.draw_logical_rect(0,0,1280,800,self.BG)
         self.draw_map(cache,state,valid)
-        self.header(cache,state,valid)
+        if not (self.view_options or self.settings_open):self.header(cache,state,valid)
         if self.history_window_open:self.draw_history_window(cache)
         elif self.view_options:self.draw_view_options(cache)
         elif self.settings_open:self.draw_settings(cache,state)

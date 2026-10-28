@@ -11,12 +11,299 @@ import kiwi_gl_display as ui  # noqa: E402
 
 
 class MenuIconTests(unittest.TestCase):
+    def test_decoder_tiles_have_eight_pixel_gaps_and_clear_back(self):
+        count = len(ui.DIGITAL_MENU_ITEMS)
+        offset = len(ui.SPECTRUM_MENU_ITEMS)
+        for group in (ui.HF_DECODER_ITEMS, ui.VHF_UHF_DECODER_ITEMS, ui.WEB_APP_MENU_ITEMS):
+            boxes = [ui.lcd_nav_box(offset + i, count, True) for i in range(len(group))]
+            for i, box in enumerate(boxes):
+                if i % 2:
+                    self.assertEqual(box[0] - boxes[i - 1][2], 8)
+                if i >= 2:
+                    self.assertEqual(box[1] - boxes[i - 2][3], 8)
+            offset += len(group)
+        self.assertGreaterEqual(ui.lcd_drawer_back_box()[1] - boxes[-1][3], 8)
+
+    def test_decoder_rail_starts_16_pixels_below_divider(self):
+        box=ui.lcd_nav_box(0,len(ui.DIGITAL_MENU_ITEMS),True)
+        self.assertEqual(box[1]-ui.LCD_DRAWER_HEADER_H,16)
+        self.assertEqual(ui.lcd_nav_box(len(ui.DIGITAL_MENU_ITEMS)-1,len(ui.DIGITAL_MENU_ITEMS),True),ui.lcd_drawer_back_box())
+
     def test_cursor_hidden_only_on_touchscreen(self):
         with mock.patch.object(ui, 'pygame') as pygame, mock.patch.object(ui, 'GL'):
             pygame.OPENGL=1;pygame.NOFRAME=2;pygame.FULLSCREEN=4
             for desktop in (False, True):
                 ui.setup_gl(desktop=desktop)
                 pygame.mouse.set_visible.assert_called_with(desktop)
+
+    def test_usb_probe_survives_missing_other_receiver_tool(self):
+        def run(command, **kwargs):
+            if command[0]=='airspyhf_info':
+                raise FileNotFoundError('airspyhf_info')
+            return mock.Mock(stdout='Found 1 device(s):\n  0: Nooelec, NESDR, SN: 123\nFound Rafael Micro R820T tuner',stderr='')
+        def thread(**kwargs):
+            return mock.Mock(start=kwargs['target'])
+        with mock.patch.object(ui.subprocess,'run',side_effect=run), \
+             mock.patch.object(ui.threading,'Thread',side_effect=thread):
+            lab=ui.RTLSDRLab(mock.Mock(),mock.Mock(),mock.Mock())
+            self.assertTrue(lab.snapshot()['present'])
+            self.assertIn('Nooelec',lab.snapshot()['device'])
+            lab.show('receivers')
+            self.assertEqual(lab.navigation_parent,'receivers')
+            self.assertFalse(lab.snapshot()['probing'])
+
+    def test_network_retry_yields_to_usb_before_handoff_deadline(self):
+        import threading
+        state = ui.SharedState('http://example.test:8073', 7075.0, 4, -95.0, 142, 245, 3, 'am', True)
+        for delay in (10.0, None):
+            state.set_external_audio(False)
+            stop = threading.Event()
+            entered = threading.Event()
+            finished = threading.Event()
+            def retry():
+                entered.set()
+                ui.wait_for_audio_retry(stop, state, state.snapshot()[5], delay)
+                finished.set()
+            worker = threading.Thread(target=retry)
+            worker.start()
+            self.assertTrue(entered.wait(1))
+            state.set_external_audio(True)
+            try:
+                self.assertTrue(finished.wait(0.5), 'USB must interrupt network retry and access-denied waits')
+            finally:
+                stop.set()
+                worker.join(1)
+
+    def test_usb_footer_identifies_device(self):
+        footer = ui.usb_receiver_footer({
+            'device': 'Realtek RTL2838, SN: 00000001',
+            'capabilities': mock.Mock(label='RTL-SDR'),
+            'preset': ('FM BROADCAST',),
+        })
+        self.assertEqual(footer, 'USB · Realtek RTL2838, SN: 00000001')
+
+    def test_usb_receiver_survives_saved_preferences_round_trip(self):
+        import tempfile
+        for source, capabilities in ui.LOCAL_RECEIVER_CAPABILITIES.items():
+            with self.subTest(source=source):
+                state = ui.SharedState('http://example.test:8073',7075.,4,-95.,142,245,3,'am',True)
+                with mock.patch.object(ui.RTLSDRLab,'probe'):
+                    lab=ui.RTLSDRLab(mock.Mock(),state,mock.Mock())
+                lab.source_inventory={source:dict(present=True,device=source)}
+                lab.select_source(source)
+                frequency=lab._presets()[0][1]/1000.
+                with mock.patch.object(ui.threading,'Thread'):
+                    self.assertTrue(lab.start(frequency,4))
+                saved=lab.remembered_receiver()
+                with tempfile.TemporaryDirectory() as directory:
+                    path=Path(directory)/'receiver.json'
+                    ui.save_remembered_view(path,'http://example.test:8073',7075.,4,'AM',True,{'usb_receiver':saved},'kiwi')
+                    loaded=ui.load_remembered_view(path)
+                self.assertEqual(loaded['freq_khz'],7075.)
+                restored=ui.RTLSDRLab.validate_remembered_receiver(loaded['preferences']['usb_receiver'])
+                self.assertEqual(restored['source_id'],source)
+                lab.thread=None;lab.source_inventory={}
+                self.assertFalse(lab.restore_receiver(restored))
+                lab.source_inventory={source:dict(present=True,device=source)}
+                with mock.patch.object(ui.threading,'Thread'):
+                    self.assertTrue(lab.restore_receiver(restored))
+                self.assertEqual(state.snapshot()[1],frequency)
+                self.assertEqual(lab.demod_snapshot()[0],'am')
+
+    def test_usb_selection_survives_worker_exit_until_explicit_stop(self):
+        state = ui.SharedState('http://example.test:8073', 7075., 4, -95., 142, 245, 3, 'am', True)
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), state, mock.Mock())
+        lab.source_inventory = {'rtl-sdr': dict(present=True, device='RTL-SDR')}
+        lab.select_source('rtl-sdr')
+        with mock.patch.object(ui.threading, 'Thread'):
+            self.assertTrue(lab.start(100100., 8))
+        saved = lab.remembered_receiver()
+        lab.thread.is_alive.return_value = False
+        # Worker cleanup restores the network view before shutdown saves again.
+        state.set_view(freq_khz=7075., zoom=4)
+        self.assertEqual(lab.remembered_receiver(), saved)
+        lab.stop()
+        self.assertIsNone(lab.remembered_receiver())
+
+    def test_invalid_saved_usb_receiver_is_ignored(self):
+        for saved in (None,{},dict(source_id='invalid'),dict(source_id='rtl-sdr',freq_khz=float('nan'),zoom=4)):
+            self.assertIsNone(ui.RTLSDRLab.validate_remembered_receiver(saved))
+
+    def test_usb_screen_controls_match_back_size_and_have_working_hit_targets(self):
+        from contextlib import ExitStack
+        ui.configure_output(True);ui.configure_popup_layout()
+        back = ui.RTL_LAB_BACK_BOX
+        for box, action in ((ui.RTL_LAB_PROBE_BOX,'source'),(ui.RTL_LAB_PRESET_BOX,'preset'),
+                            (ui.RTL_LAB_RUN_BOX,'run'),(back,'back')):
+            self.assertEqual((box[2]-box[0],box[3]-box[1]),(back[2]-back[0],back[3]-back[1]))
+            x,y=(box[0]+box[2])/2,(box[1]+box[3])/2
+            self.assertTrue(ui.contains(ui.RTL_LAB_PANEL_BOX,x,y))
+            self.assertEqual(ui.rtl_lab_option_at(x,y),action)
+        snapshot=dict(preset=('AIR AM',118e6,'am',32000),running=False,status='READY',
+                      capabilities=ui.RTL_SDR_CAPABILITIES,device='RTL-SDR V3',tuner='R820T',
+                      probing=False,detail='Ready to listen')
+        lab=mock.Mock();lab.snapshot.return_value=snapshot
+        with ExitStack() as stack:
+            for name in ('draw_logical_rect','draw_logical_rounded_rect','draw_settings_leaf_sidebar','draw_tests_button'):
+                stack.enter_context(mock.patch.object(ui,name))
+            text=stack.enter_context(mock.patch.object(ui,'draw_text'))
+            stack.enter_context(mock.patch.object(ui,'fit_station_text',side_effect=lambda cache,value,*a,**k:value))
+            ui.draw_rtl_lab_panel(mock.Mock(),lab)
+            title=next(call for call in text.call_args_list if call.args[3]=='RTL-SDR')
+            self.assertLess(title.args[2],ui.RTL_LAB_PROBE_BOX[1])
+
+    def test_usb_start_defaults_decoder_and_home_mode_to_am(self):
+        for capabilities in ui.LOCAL_RECEIVER_CAPABILITIES.values():
+            with self.subTest(source=capabilities.source_id):
+                state = ui.SharedState('http://example.test:8073', 7075., 4, -95., 142, 245, 3, 'usb', True)
+                with mock.patch.object(ui.RTLSDRLab, 'probe'):
+                    lab = ui.RTLSDRLab(mock.Mock(), state, mock.Mock())
+                lab.source_id = capabilities.source_id
+                lab.capabilities = capabilities
+                lab.present = True
+                for index, preset in enumerate(lab._presets()):
+                    lab.thread = None
+                    lab.preset_indices[lab.source_id] = index
+                    with mock.patch.object(ui.threading, 'Thread'):
+                        self.assertTrue(lab.start(preset[1] / 1000., 4))
+                    self.assertEqual(lab.demod_snapshot()[0], 'am')
+                    self.assertEqual(state.radio_snapshot()[0].upper(), 'AM')
+                    self.assertEqual(lab.preferred_home_mode(preset), 'AM')
+
+    def test_usb_category_hidden_geometry_matches_touch_targets(self):
+        ui.configure_output(True)
+        visible = ui.receiver_source_segments(True)
+        hidden = ui.receiver_source_segments(False)
+        self.assertEqual([source for source, _ in hidden], ['local', 'kiwi', 'openwebrx', 'fmdx', 'all'])
+        self.assertEqual(hidden[0][1], visible[0][1])
+        for source, (x0, y0, x1, y1) in hidden:
+            self.assertEqual(ui.picker_source_segment_at((x0+x1)/2, (y0+y1)/2, False), source)
+        self.assertEqual(ui.receiver_source_segments(True), visible)
+
+    def test_usb_hotplug_rescans_only_when_topology_changes(self):
+        import tempfile
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), mock.Mock(), mock.Mock())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(lab, 'probe', return_value=True) as probe:
+            root = Path(directory)
+            lab.refresh_usb_devices(now=1, usb_root=root)
+            self.assertEqual(probe.call_count, 1)
+            lab.refresh_usb_devices(now=2, usb_root=root)
+            self.assertEqual(probe.call_count, 1)
+            device = root / '1-1'
+            device.mkdir()
+            for name, value in (('idVendor', '0bda'), ('idProduct', '2838'), ('devnum', '2')):
+                (device / name).write_text(value)
+            lab.refresh_usb_devices(now=3, usb_root=root)
+            self.assertEqual(probe.call_count, 2)
+            lab.refresh_usb_devices(now=4, usb_root=root)
+            self.assertEqual(probe.call_count, 2)
+            for path in device.iterdir():
+                path.unlink()
+            device.rmdir()
+            # Busy receivers defer the rescan until their worker releases it.
+            probe.return_value = False
+            lab.refresh_usb_devices(now=5, usb_root=root)
+            probe.return_value = True
+            lab.refresh_usb_devices(now=6, usb_root=root)
+            self.assertEqual(probe.call_count, 4)
+
+    def test_usb_waterfall_tap_preserves_window_and_signal_position(self):
+        ui.configure_output(True)
+        center = 100100.0
+        span = 2400.0
+        width = ui.rf_canvas_width()
+        for fraction in (0.25, 0.75):
+            target = ui.waterfall_tap_frequency_khz(width * fraction, center, span)
+            state = ui.SharedState('http://example.test:8073', center, 4, -95., 142, 245, 3, 'am', True)
+            state.set_view(freq_khz=target, waterfall_center_khz=center)
+            view = ui.local_waterfall_center(state.snapshot()[1], state.waterfall_view_center_snapshot())
+            self.assertEqual(view, center)
+            # A signal at the new hardware center must remain under the tap,
+            # rather than jumping to the middle of the spectrum.
+            values = ui.np.zeros(1024)
+            values[512] = 1.0
+            remapped = ui.local_spectrum_in_view(values, target, view, span)
+            self.assertEqual(int(ui.np.argmax(remapped)), int(1024 * fraction))
+            self.assertAlmostEqual((target - view) / span + 0.5, fraction)
+            state.set_view(freq_khz=target)
+            self.assertEqual(ui.local_waterfall_center(target, state.waterfall_view_center_snapshot()), target)
+
+    def test_usb_category_is_highlighted_and_draws_device_row(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
+            draws = {}
+            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_back_button', 'draw_picker_two_line_button',
+                         'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):
+                draws[name] = stack.enter_context(mock.patch.object(ui, name))
+            cache = mock.Mock()
+            cache.texture.return_value = (None, 80, 20)
+            draws['draw_receiver_badge'].return_value = 60
+            stack.enter_context(mock.patch.object(ui, 'ui_button_pressed', return_value=False))
+            stack.enter_context(mock.patch.object(ui, 'fit_receiver_name', side_effect=lambda cache, name, *args: name))
+            ui.draw_station_picker(cache, [('rtl-sdr', 'RTL-SDR V3', 'USB')],
+                                   0, 'http://kiwisdr.local:8073', '', 'name_az', {},
+                                   route_filter='usb')
+            categories = draws['draw_receiver_filter_button'].call_args_list
+            self.assertTrue(next(call.args[3] for call in categories if call.args[2] == 'USB'))
+            self.assertFalse(next(call.args[3] for call in categories if call.args[2] == 'LAN'))
+            draws['draw_picker_two_line_button'].assert_not_called()
+            box = ui.station_tile(0, 0)
+            self.assertEqual(draws['draw_station_list_frame'].call_args.args[0], box)
+            title = next(call for call in draws['draw_text'].call_args_list if call.args[3] == 'RTL-SDR V3')
+            self.assertEqual(title.args[1:3], (box[0] + 16, box[1] + 28))
+            self.assertEqual(title.args[5], ui.RECEIVER_LIST_THEME.server_name_size)
+            self.assertEqual(title.args[8], 'lm')
+            badge = draws['draw_receiver_badge'].call_args.args
+            self.assertEqual(badge[1:3], (box[0] + 16, box[1] + 52))
+            self.assertEqual(badge[3].label, 'USB')
+
+    def test_active_usb_row_uses_network_selection_style(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
+            draws = {}
+            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_back_button', 'draw_station_list_frame',
+                         'draw_logical_rounded_rect', 'draw_text', 'draw_receiver_badge'):
+                draws[name] = stack.enter_context(mock.patch.object(ui, name))
+            cache = mock.Mock()
+            cache.texture.return_value = (None, 80, 20)
+            draws['draw_receiver_badge'].return_value = 60
+            stack.enter_context(mock.patch.object(ui, 'ui_button_pressed', return_value=False))
+            stack.enter_context(mock.patch.object(ui, 'fit_receiver_name', side_effect=lambda cache, name, *args: name))
+            server = 'http://kiwisdr.local:8073'
+            def render(rows, route, active):
+                ui.draw_station_picker(cache, rows, 0, server, '', 'name_az', {},
+                                       route_filter=route, active_usb_source=active)
+                return draws['draw_station_list_frame'].call_args.args[1:]
+            network = [('Kiwi', '', server)]
+            usb = [('rtl-sdr', 'RTL-SDR V3', 'USB')]
+            selected_style = render(network, 'lan', None)
+            self.assertEqual(render(usb, 'usb', 'rtl-sdr'), selected_style)
+            inactive_style = render(usb, 'usb', None)
+            self.assertNotEqual(inactive_style, selected_style)
+            self.assertEqual(render(usb, 'usb', 'airspyhf'), inactive_style)
+            self.assertEqual(render(network, 'lan', 'rtl-sdr'), inactive_style)
+
+    def test_usb_browsing_does_not_require_starting_audio(self):
+        with mock.patch.object(ui.RTLSDRLab, 'probe'):
+            lab = ui.RTLSDRLab(mock.Mock(), mock.Mock(), mock.Mock())
+        source = lab.source_id
+        lab.source_inventory = {source: {'present': True, 'device': 'RTL-SDR V3'}}
+        self.assertEqual(lab.receiver_rows()[0][1], 'RTL-SDR V3')
+        self.assertTrue(lab.select_source(source))
+        self.assertFalse(lab.is_running())
+        with mock.patch.object(lab, 'probe'):
+            lab.show('receivers')
+        self.assertEqual(lab.navigation_parent, 'receivers')
+        self.assertEqual(lab.receiver_rows()[0][1], 'RTL-SDR V3')
+        lab.state.set_external_audio.assert_not_called()
 
     def test_required_runtime_icons_exist_in_both_asset_roots(self):
         required = {
@@ -713,7 +1000,7 @@ class ReceiverBrowserTests(unittest.TestCase):
         ui.configure_popup_layout()
         segments = ui.receiver_source_segments()
         self.assertEqual([source for source, _box in segments],
-                         ["local", "kiwi", "openwebrx", "fmdx", "all"])
+                         ["usb", "local", "kiwi", "openwebrx", "fmdx", "all"])
         for box in (box for _source, box in segments):
             self.assertEqual((box[0], box[2]),
                              (ui.PICKER_EXIT_BOX[0], ui.PICKER_EXIT_BOX[2]))
@@ -1405,20 +1692,18 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(draw.call_args.args[3], "ERROR")
         self.assertEqual(draw.call_args.args[4], ui.APP_UI_STYLE.palette.secondary_text)
 
-    def test_deepgram_key_error_remains_in_vosc_rail(self):
+    def test_deepgram_key_error_remains_visible_in_shared_keyboard(self):
         ui.configure_output(True)
         with mock.patch.object(ui, "draw_logical_rect"), \
                 mock.patch.object(ui, "draw_logical_line"), \
-                mock.patch.object(ui, "draw_sidebar_header"), \
-                mock.patch.object(ui, "draw_lcd_drawer_heading"), \
-                mock.patch.object(ui, "draw_styled_text_button"), \
-                mock.patch.object(ui, "draw_radio_close_button"), \
-                mock.patch.object(ui, "fit_station_text", return_value="ENTER THE COMPLETE API KEY"), \
+                mock.patch.object(ui, "draw_network_button"), \
+                mock.patch.object(ui, "fit_station_text", side_effect=lambda _cache, text, *_args: text), \
                 mock.patch.object(ui, "draw_text") as draw:
             ui.draw_deepgram_setup(None, "short", "lower", "enter the complete API key")
         labels = [call.args[3] for call in draw.call_args_list]
-        self.assertIn("ERROR", labels)
-        self.assertIn("ENTER THE COMPLETE API KEY", labels)
+        self.assertIn("enter the complete API key", labels)
+        self.assertNotIn("short", labels)
+        self.assertIn("•••••", labels)
 
     def test_bottom_vosc_popup_owns_covered_zoom_buttons_until_moved(self):
         ui.configure_output(True)
@@ -1501,11 +1786,12 @@ class ReceiverListStyleTests(unittest.TestCase):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         with mock.patch.object(ui, "ui_button_pressed", return_value=False), \
                 mock.patch.object(ui, "draw_styled_button_frame", return_value=active) as frame, \
-                mock.patch.object(ui, "draw_logical_polyline") as star, \
+                mock.patch.object(ui, "draw_favorite_star") as star, \
                 mock.patch.object(ui, "draw_logical_circle") as gold_fill:
             ui.draw_favorite_waterfall_button(True)
         self.assertTrue(frame.call_args.kwargs["active"])
-        self.assertEqual(star.call_args.args[1], active.text)
+        self.assertEqual(star.call_args.args[3], active.text)
+        self.assertTrue(star.call_args.kwargs["filled"])
         gold_fill.assert_not_called()
 
     def test_distance_follows_the_badges_under_the_server_name(self):

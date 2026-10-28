@@ -1,6 +1,7 @@
 """Hell RX touchscreen: three full-width strips on the 1280 x 800 display."""
 import math
 from sstv_workspace import SSTVWorkspace
+from decoder_style import full_width_back_box
 from hell_modes import MODES, PRESETS, settings, selected_modes, fit_modes
 
 
@@ -76,7 +77,7 @@ class HellWorkspace(SSTVWorkspace):
     def draw(self, cache, receivers):
         receivers = self.kiwi_receivers(receivers)
         self.actions = []
-        self.ui.draw_logical_rect(0,0,1280,800,(7,18,25,255))
+        self.ui.draw_logical_rect(0,0,1280,800,self.theme_color('background',(7,18,25,255)))
         if self.reporting is not None:
             self.draw_report(cache)
             return
@@ -95,19 +96,18 @@ class HellWorkspace(SSTVWorkspace):
                 self.strip_image(item,(20,160,1260,400),expanded=True)
                 self.button(cache,(24,430,138,494),'LEFT',('pan_strip',-1))
                 self.button(cache,(904,430,1018,494),'RIGHT',('pan_strip',1))
-                self.text(cache,280,458,'Scroll across the strip · fixed letter size',20,width=710)
+                self.text(cache,280,458,'Scroll across the strip · fixed letter size',20,width=608)
                 self.text(cache,24,530,'Start' if self.strip_offset==0 else 'End' if self.strip_offset>=self.strip_max else 'Middle of strip',18)
-                self.button(cache,(24,728,260,792),'REPORT STATION',('report',item['id']))
-                self.button(cache,(1034,728,1270,792),'BACK',('back_image',None))
-                self.text(cache,276,746,'Read the callsign from the strip; reporting is optional.',18,width=742)
-                self.text(cache,276,776,self.message or ('OCR guess: '+item.get('ocr_text','—')),16,width=742)
+                self.footer_button(cache,(24,728,260,792),'REPORT STATION',('report',item['id']))
+                self.button(cache,full_width_back_box(),'BACK',('back_image',None))
+                self.footer_text(cache,276,746,'Read the callsign from the strip; reporting is optional.',18,width=742)
+                self.footer_text(cache,276,776,self.message or ('OCR guess: '+item.get('ocr_text','—')),16,width=742)
                 return
             self.enlarged = None
         self.text(cache,20,36,'Hell RX',29,(104,234,194))
-        self.text(cache,175,36,'Receivers' if self.decoders_open else 'Saved strips' if self.saved_view else 'Latest previews',23)
+        self.text(cache,175,36,'Receivers' if self.decoders_open else 'Saved strips' if self.saved_view else 'Latest previews',23,width=355)
         self.button(cache,(546,8,782,72),'GALLERY' if self.decoders_open else 'DECODERS',('gallery' if self.decoders_open else 'decoders',None))
         self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
-        self.button(cache,(1034,8,1270,72),'HOME',('home',None))
         if self.decoders_open:
             self.draw_decoders(cache)
             return
@@ -133,18 +133,18 @@ class HellWorkspace(SSTVWorkspace):
             self.text(cache,180,395,'Noise is displayed too. A strip is not proof of a decoded transmission.',19)
         for i,item in enumerate(visible):
             y = 86+i*210
-            self.ui.draw_logical_rect(16,y,1260,y+202,(17,34,42,255))
+            self.ui.draw_logical_rect(16,y,1260,y+202,self.theme_color('section_surface',(17,34,42,255)))
             live = ('LIVE' if item['kind']=='receiving' else
                     'POSSIBLE TEXT' if item.get('ocr_status')=='possible_text' else
                     'LATEST PREVIEW' if item['kind']=='preview' else 'SAVED')
             self.text(cache,26,y+17,f"{live} · {MODES[item['mode']]['label']} · {item['band']} · {item['receiver']} · {item['capture_utc']} · tap to scroll",16,width=1215)
             self.strip_image(item,(24,y+34,1252,y+192))
             self.actions.append(((16,y,1260,y+202),('image',item['id'])))
-        self.button(cache,(16,728,130,792),'PREVIOUS',('page',-1))
-        self.button(cache,(138,728,252,792),'NEXT',('page',1))
-        self.button(cache,(260,728,496,792),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
-        self.button(cache,(504,728,740,792),'ALL RECEIVERS',('filter',None))
-        self.button(cache,(748,728,984,792),'SHOW NEW STRIPS' if changed else 'REFRESH STRIPS',('refresh_strips',None))
+        self.footer_button(cache,(16,728,130,792),'PREVIOUS',('page',-1))
+        self.footer_button(cache,(138,728,252,792),'NEXT',('page',1))
+        self.footer_button(cache,(260,728,496,792),'LATEST' if self.saved_view else 'SAVED STRIPS',('saved_view',None))
+        self.footer_button(cache,(504,728,740,792),'ALL RECEIVERS',('filter',None))
+        self.footer_button(cache,(748,728,984,792),'SHOW NEW STRIPS' if changed else 'REFRESH STRIPS',('refresh_strips',None))
         self.text(cache,1000,708,f'{self.page+1}/{pages}',16)
 
     def draw_add(self,cache,receivers):
@@ -173,9 +173,9 @@ class HellWorkspace(SSTVWorkspace):
         self.button(cache,(512,529,748,593),'REVERSE',('reverse',None),'ON' if p.get('reverse') else 'OFF')
         self.text(cache,24,626,f"RF center: {(p['freq_khz']*1000+p['tone_hz'])/1e6:.6f} MHz · {len(selected_modes(p))} modes / one Kiwi channel",19)
         self.text(cache,24,658,'One OCR letter or digit keeps a strip. No text: only the latest preview per mode is kept.',16)
-        self.button(cache,(24,728,260,792),'CANCEL',('cancel_add',None))
-        self.text(cache,276,754,self.message,17,width=498)
-        self.button(cache,(782,728,1018,792),'SAVE' if self.edit_id else 'START DECODER',('create',None))
+        self.footer_button(cache,(24,728,260,792),'CANCEL',('cancel_add',None))
+        self.footer_text(cache,276,754,self.message,17,width=498)
+        self.footer_button(cache,(782,728,1018,792),'SAVE' if self.edit_id else 'START DECODER',('create',None))
 
     def draw_number(self,cache):
         self.text(cache,24,48,'USB dial frequency (kHz)' if self.field=='freq_khz' else 'Audio center (Hz)',28)
@@ -190,6 +190,10 @@ class HellWorkspace(SSTVWorkspace):
 
     def draw_report(self,cache):
         p=self.reporting
+        if getattr(self,'report_keyboard',False):
+            self.ui.draw_touch_keyboard(cache,{'call':'Heard callsign','reporter':'Receiver callsign','grid':'Receiver grid'}[self.report_field],
+                'PSK REPORTER',self.report_entry,mode=getattr(self,'keyboard_mode','upper'),submit='Done',rail_title='HELL')
+            return
         self.text(cache,24,36,'Report a station to PSK Reporter',28)
         self.text(cache,24,83,p['receiver']+' · '+p['server'],18,width=1230)
         self.text(cache,24,121,'Use the receiving antenna’s identity and location, not your own for a remote Kiwi.',18)
@@ -198,18 +202,24 @@ class HellWorkspace(SSTVWorkspace):
             self.button(cache,(x,151,x+236,215),label,('report_field',key),p[key],active=self.report_field==key)
         self.button(cache,(24,234,260,298),'REPORTING PERMISSION',('confirm_report',None),'YES' if p['confirmed'] else 'NO',active=p['confirmed'])
         self.text(cache,276,267,'Callsign is correct; I may report for this receiver and its location is correct.',17,width=740)
-        for y,row in enumerate(('1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM/')):
-            for x,c in enumerate(row):
-                left,top=24+x*122,322+y*72
-                self.button(cache,(left,top,left+114,top+64),c,('report_key',c))
-        self.button(cache,(24,616,260,680),'DELETE',('report_erase',None))
         self.button(cache,(268,616,504,680),'QUEUE REPORT',('send_report',None))
         self.button(cache,(512,616,748,680),'CANCEL',('cancel_report',None))
         self.text(cache,24,704,self.message,17,width=990)
-        self.text(cache,24,735,'Only confirmed reports are sent. Images are never uploaded.',16,width=990)
-        self.text(cache,24,770,'PSK Reporter uses UDP; delivery is unconfirmed.',16,width=990)
+        self.footer_text(cache,24,735,'Only confirmed reports are sent. Images are never uploaded.',16,width=990)
+        self.footer_text(cache,24,770,'PSK Reporter uses UDP; delivery is unconfirmed.',16,width=990)
 
     def tap(self,x,y,receivers):
+        if self.reporting is not None and getattr(self,'report_keyboard',False):
+            mode=getattr(self,'keyboard_mode','upper')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action in ('SAVE','CANCEL'):
+                if action=='SAVE':self.reporting[self.report_field]=self.report_entry
+                self.report_keyboard=False
+            elif action=='BACK':self.report_entry=self.report_entry[:-1]
+            elif action=='CLEAR':self.report_entry=''
+            elif action:self.report_entry=(self.report_entry+(' ' if action=='SPACE' else action))[:16]
+            return
         receivers = self.kiwi_receivers(receivers)
         action=next((a for box,a in reversed(self.actions) if self.ui.contains(box,x,y)),None)
         if action is None:return
@@ -251,8 +261,8 @@ class HellWorkspace(SSTVWorkspace):
                 if station and station.local_receiver(item['server']):
                     shared=station.snapshot();profile.update(reporter=shared['config']['callsign'] or profile.get('reporter',''),grid=shared['grid'] or profile.get('grid',''))
                 self.reporting=dict(image=value,call='',reporter=profile.get('reporter',''),grid=profile.get('grid',''),confirmed=False,receiver=item['receiver'],server=item['server'])
-                self.message='';self.report_field='call'
-            elif key=='report_field':self.report_field=value
+                self.message='';self.report_field='call';self.report_keyboard=False
+            elif key=='report_field':self.report_field=value;self.report_entry=self.reporting[value];self.report_keyboard=True
             elif key=='report_key':self.reporting[self.report_field]=(self.reporting[self.report_field]+value)[:16]
             elif key=='report_erase':self.reporting[self.report_field]=self.reporting[self.report_field][:-1]
             elif key=='confirm_report':self.reporting['confirmed']=not self.reporting['confirmed']

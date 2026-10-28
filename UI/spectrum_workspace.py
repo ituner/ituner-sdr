@@ -305,6 +305,17 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
         self.view=(low,low+span);self.inspection=None;self.history_page=0;self.wake.set()
 
     def tap(self,x,y):
+        if self.overlay=='label':
+            mode=getattr(self,'keyboard_mode','lower')
+            action=self.ui.touch_keyboard_action_at(x,y,mode)
+            if action in ('MODE','CAPS'):self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+            elif action in ('SAVE','CANCEL'):
+                if action=='SAVE':self.draft[self.label_target]=self.label_value
+                self.overlay='report' if self.label_target.startswith('report_') else 'watch'
+            elif action=='BACK':self.label_value=self.label_value[:-1]
+            elif action=='CLEAR':self.label_value=''
+            elif action:self.label_value=(self.label_value+(' ' if action=='SPACE' else action))[:200 if self.label_target=='report_notes' else 60]
+            return
         if self.dongles.open:return self.dongles.tap(x,y)
         for box,(action,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
@@ -312,7 +323,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
                 if action=='home':
                     self.overlay=None;self.exit_target='home';self.open=False
                 elif action=='back':
-                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'settings' if self.overlay in ('presets','usb','advanced') or self.overlay=='number' and self.edit_field!='focus' else None
+                    if self.overlay:self.overlay='report' if self.overlay=='label' and self.label_target.startswith('report_') else 'watch' if self.overlay=='label' or self.overlay=='number' and self.edit_field.startswith('watch_') else 'advanced' if self.overlay=='number' and self.edit_field in ('gain','ppm') else 'settings' if self.overlay in ('presets','usb','advanced') or self.overlay=='number' and self.edit_field!='focus' else None
                     elif self.screen in ('activity','compare','watch','reports'):self.screen='tools';self.page=0
                     elif self.screen!='survey':self.screen='survey';self.page=0
                     else:self.exit_target='digi';self.open=False
@@ -405,11 +416,9 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
             for i,key in enumerate(('DEL','CLEAR','SAVE')):self.button(cache,(820,250+i*145,1248,374+i*145),key,('key',key),active=key=='SAVE')
             return
         if self.overlay=='label':
-            self.text(cache,32,140,'Enter report notes' if self.label_target.startswith('report_') else 'Name this watched frequency',30,self.CYAN);self.text(cache,32,205,self.label_value[-70:] or 'Type with the keyboard',30,width=1180)
-            for row,letters in enumerate(('QWERTYUIOP','ASDFGHJKL','ZXCVBNM')):
-                for i,key in enumerate(letters):
-                    x=24+i*122;top=274+row*100;self.button(cache,(x,top,x+112,top+84),key,('letter',key))
-            self.button(cache,(24,600,740,684),'Space',('letter',' '));self.button(cache,(752,600,978,684),'Delete',('letter','DEL'));self.button(cache,(990,600,1256,684),'Save name',('letter','SAVE'),active=True);return
+            self.ui.draw_touch_keyboard(cache,'Enter report notes' if self.label_target.startswith('report_') else 'Name this watched frequency',
+                'SPECTRUM',self.label_value,mode=getattr(self,'keyboard_mode','lower'),submit='Save name',rail_title='SPECTRUM')
+            return
         if self.overlay=='watch':
             self.text(cache,32,142,'Add a frequency to your watchlist',30,self.CYAN)
             self.button(cache,(24,218,616,326),'Frequency',('number','watch_frequency'),f"{self.draft['watch_frequency']/1e6:.6f} MHz")
@@ -470,6 +479,7 @@ class SpectrumWorkspace(DecoderStyle, SSTVWorkspace):
         self.button(cache,(1130,10,1256,68),'Home',('home',None))
         if self.overlay:
             self.draw_overlay(cache)
+            if self.overlay=='label':return
         else:
             self.button(cache,(704,10,836,68),'Stop' if state.get('enabled') else 'Start',('stop' if state.get('enabled') else 'start',None),active=state.get('enabled',False))
             self.button(cache,(848,10,980,68),'Setup',('overlay','settings'))
