@@ -72,6 +72,9 @@ class SpectrumSurvey:
         with self.control_lock:return self._control(action,**values)
 
     def _control(self,action,**values):
+        if action in ('start','survey_start','watch_start','investigate'):
+            from dongle_notice import require_receiver
+            require_receiver('spectrum',values.get('selection',self.settings['selection']),self.hub.devices,lambda key:self._control('configure',selection=key),lambda:self.control(action,**dict(values,selection=self.settings['selection'])))
         if action=='stop':self.stop();return
         if action=='save':return self.save(values.get('label','Antenna baseline'))
         if action=='survey_start':

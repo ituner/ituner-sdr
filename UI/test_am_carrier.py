@@ -28,10 +28,12 @@ def rf_frame(center_khz, zoom, carrier_hz, sequence, cap=14, bandwidth=30000000,
 def complete(search, now=1, cap=14, carrier_hz=10000037, **kwargs):
     result = None
     for sequence in range(1, 25):
-        result = search.feed(rf_frame(search.center_hz/1000, search.zoom, carrier_hz,
+        candidate = search.feed(rf_frame(search.center_hz/1000, search.zoom, carrier_hz,
                                      sequence, cap=cap, **kwargs), 30000000, 14, cap,
                              now + sequence*.04)
-        if result is not None:
+        if candidate is not None:
+            result = candidate
+        if not search.active:
             break
     return result
 
@@ -47,7 +49,7 @@ class CarrierTests(unittest.TestCase):
                     self.assertIsNotNone(found)
                     self.assertLess(abs(found*1000 - (10000000+offset)), 2)
                     self.assertFalse(search.active)
-                    self.assertEqual(search.status, 'TUNED')
+                    self.assertEqual(search.status, 'READY')
 
     def test_noise_broad_signal_and_equal_competing_carriers_do_not_tune(self):
         for options in ({'noise': True}, {'broad': True}, {'neighbour': 10000737}):
@@ -126,6 +128,30 @@ class CarrierTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 100.0
+        clock = patch.object(ui.time, 'monotonic', side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def begin_idle(self, state):
+        self.assertIsNone(state.carrier_capture_request())
+        self.now += .29
+        self.assertIsNone(state.carrier_capture_request())
+        self.now += .02
+        self.assertIsNotNone(state.carrier_capture_request())
+
+    def prepare(self, state):
+        self.begin_idle(state)
+        for seq in range(1, 30):
+            request = state.carrier_capture_request()
+            if request is None:
+                break
+            self.now += .04
+            state.feed_carrier_frame(rf_frame(*request, 10000037, seq), 30000000, 14, 14)
+        self.assertTrue(state.carrier_ready_snapshot())
+        self.assertFalse(state.carrier_search.active)
+
     def state(self):
         state = ui.SharedState('http://example.test:8073', 10000, 6, -95,
                                142, 245, 3, 'am', False)
@@ -136,18 +162,19 @@ class IntegrationTests(unittest.TestCase):
         state = self.state()
         state.set_filter(-1900, 5100)
         before = state.radio_snapshot()
-        self.assertTrue(state.start_carrier_search())
-        for seq in range(1, 25):
-            request = state.carrier_capture_request()
-            if request is None:
-                break
-            state.feed_carrier_frame(rf_frame(*request, 10000037, seq), 30000000, 14, 14)
+        self.prepare(state)
+        self.assertEqual(state.snapshot()[1:3], (10000, 6))
+        self.assertIsNone(state.take_carrier_result())
+        self.assertTrue(ui.carrier_button_visible(state))
+        self.assertTrue(state.apply_prepared_carrier())
         self.assertEqual(state.snapshot()[1:3], (10000.037, 6))
         self.assertEqual(state.radio_snapshot(), before)
         self.assertEqual(state.waterfall_view_center_snapshot(), 10000)
         self.assertEqual(state.take_carrier_result(), 10000.037)
         self.assertIsNone(state.take_carrier_result())
-        self.assertEqual(state.carrier_status_snapshot(), 'TUNED')
+        self.assertFalse(state.carrier_ready_snapshot())
+        self.now += 1
+        self.assertIsNone(state.carrier_capture_request())
         self.assertFalse(state.spectrum_enabled_snapshot())
 
     def test_manual_actions_disconnect_and_receiver_switch_cancel_search(self):
@@ -159,23 +186,69 @@ class IntegrationTests(unittest.TestCase):
                        lambda s:s.set_external_waterfall(True),
                        lambda s:s.connection_streams.update(waterfall=False)):
             state = self.state()
-            state.start_carrier_search()
+            self.prepare(state)
             change(state)
+            self.assertFalse(state.carrier_ready_snapshot())
+            self.assertFalse(state.apply_prepared_carrier())
             self.assertIsNone(state.carrier_capture_request())
             self.assertIsNone(state.take_carrier_result())
 
     def test_no_live_stream_never_tunes(self):
         state = self.state()
         state.connection_streams['waterfall'] = False
-        self.assertFalse(state.start_carrier_search())
-        self.assertEqual(state.carrier_status_snapshot(), 'NO CARRIER')
+        self.assertFalse(state.apply_prepared_carrier())
+        self.assertEqual(state.carrier_status_snapshot(), '')
         self.assertEqual(state.snapshot()[1], 10000)
 
     def test_openwebrx_compatibility_endpoints_do_not_offer_kiwi_capture(self):
         state = self.state()
         with patch.object(ui.owrx, 'is_openwebrx_endpoint', return_value=True):
             self.assertFalse(ui.carrier_button_visible(state))
-            self.assertFalse(state.start_carrier_search())
+            self.assertFalse(state.apply_prepared_carrier())
+
+    def test_frequency_changes_and_held_gestures_restart_idle_timer(self):
+        state = self.state()
+        self.begin_idle(state)
+        state.set_view(freq_khz=10001)
+        self.assertIsNone(state.carrier_capture_request())
+        self.now += .2
+        state.note_carrier_activity()
+        self.assertIsNone(state.carrier_capture_request())
+        self.now += .29
+        self.assertIsNone(state.carrier_capture_request())
+        self.now += .02
+        self.assertEqual(state.carrier_capture_request(), (10001, 11))
+
+    def test_first_fine_result_is_ready_while_refining_without_retuning(self):
+        state = self.state()
+        self.begin_idle(state)
+        for seq in range(1, 11):
+            request = state.carrier_capture_request()
+            self.now += .04
+            state.feed_carrier_frame(rf_frame(*request, 10000037, seq), 30000000, 14, 14)
+        self.assertTrue(state.carrier_ready_snapshot())
+        self.assertTrue(state.carrier_search.active)
+        self.assertEqual(state.snapshot()[1], 10000)
+        # The time budget ends refinement even if no more rows arrive.
+        self.now += 2.1
+        self.assertIsNone(state.carrier_capture_request())
+        self.assertTrue(state.apply_prepared_carrier())
+        self.assertAlmostEqual(state.snapshot()[1], 10000.037, places=3)
+
+    def test_no_carrier_timeout_stays_hidden_without_repeated_scans(self):
+        state = self.state()
+        self.begin_idle(state)
+        self.now += 10
+        self.assertIsNone(state.carrier_capture_request())
+        self.assertFalse(ui.carrier_button_visible(state))
+        self.now += 100
+        self.assertIsNone(state.carrier_capture_request())
+
+    def test_tap_before_ready_does_not_start_search(self):
+        state = self.state()
+        self.assertFalse(state.apply_prepared_carrier())
+        self.assertFalse(state.carrier_search.active)
+        self.assertEqual(state.snapshot()[1], 10000)
 
     def test_pending_result_is_discarded_by_manual_tune(self):
         state = self.state()
@@ -192,6 +265,8 @@ class IntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(box[2]-box[0], 150)
         self.assertGreaterEqual(box[3]-box[1], 58)
         state = self.state()
+        self.assertFalse(ui.carrier_button_visible(state))
+        self.prepare(state)
         self.assertTrue(ui.carrier_button_visible(state))
         state.set_radio_mode('SAM')
         self.assertFalse(ui.carrier_button_visible(state))

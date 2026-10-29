@@ -254,6 +254,8 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
 from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
+from smart_seek import SmartSeek
+from smart_seek_view import SmartSeekView
 from meter_artwork import linear_strip_image
 
 
@@ -1371,7 +1373,7 @@ TEST_PATTERN_BOX = (42, 178, 468, 232)
 TEST_FONT_BOX = (492, 178, 918, 232)
 TEST_OPENWEBRX_BOX = (42, 244, 468, 298)
 TEST_RUN_BOX = (492, 244, 918, 298)
-TEST_DUAL_BOX = (492, 310, 918, 366)
+TEST_SINE_BOX = (492, 310, 918, 366)
 TEST_BACK_BOX = (0, 0, 0, 0)
 # This deliberately fixed public receiver is a protocol/display smoke test,
 # not a directory entry. The isolated Tests tile always restores the prior
@@ -1751,7 +1753,7 @@ POPUP_LAYOUT_BASE = {
               AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX),
     "tests": (TEST_PANEL_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
               TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX,
-              TEST_DUAL_BOX),
+              TEST_SINE_BOX),
     "rtl_lab": (RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX,
                 RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX),
     "wspr": (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES,
@@ -1781,7 +1783,7 @@ def configure_popup_layout():
     global AUDIO_DENOISE_BOX, AUDIO_NOTCH_BOX, AUDIO_DEEMP_BOX
     global AUDIO_FILTER_BOX, AUDIO_RESET_BOX, AUDIO_TONE_BOX, AUDIO_BACKEND_BOX
     global FONT_LAB_BACK_BOX, WSPR_EXPANDED_LOG_BACK_BOX
-    global TEST_PANEL_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_DUAL_BOX, TEST_BACK_BOX
+    global TEST_PANEL_BOX, TEST_DJ_BOX, TEST_RTL_BOX, TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX, TEST_RUN_BOX, TEST_SINE_BOX, TEST_BACK_BOX
     global RTL_LAB_PANEL_BOX, RTL_LAB_PROBE_BOX, RTL_LAB_PRESET_BOX, RTL_LAB_RUN_BOX, RTL_LAB_BACK_BOX
     global WSPR_PANEL_BOX, WSPR_GRAPH_BOX, WSPR_WINDOW_BOXES, WSPR_BAND_GRID_BOX, WSPR_IDENTITY_BOX
     global DJ_PANEL_BOX, DJ_TRACK_BOX, DJ_STEP_BOX, DJ_RANGE_BOX, DJ_RATE_BOX, DJ_RETURN_BOX
@@ -1929,7 +1931,7 @@ def configure_popup_layout():
     dy = offset("tests")
     (TEST_PANEL_BOX, TEST_DJ_BOX, TEST_RTL_BOX,
      TEST_PATTERN_BOX, TEST_FONT_BOX, TEST_OPENWEBRX_BOX,
-     TEST_RUN_BOX, TEST_DUAL_BOX) = (
+     TEST_RUN_BOX, TEST_SINE_BOX) = (
         popup_shift_box(box, dy) for box in POPUP_LAYOUT_BASE["tests"]
     )
     TEST_BACK_BOX = (0, 0, 0, 0)
@@ -1945,7 +1947,7 @@ def configure_popup_layout():
         TEST_FONT_BOX = (right_x0, rows[1], right_x1, rows[1] + row_h)
         TEST_OPENWEBRX_BOX = (left_x0, rows[2], left_x1, rows[2] + row_h)
         TEST_RUN_BOX = (right_x0, rows[2], right_x1, rows[2] + row_h)
-        TEST_DUAL_BOX = (right_x0, rows[3], right_x1, rows[3] + row_h)
+        TEST_SINE_BOX = (right_x0, rows[3], right_x1, rows[3] + row_h)
         TEST_BACK_BOX = lcd_drawer_back_box()
         FONT_LAB_BACK_BOX = lcd_drawer_back_box()
         WSPR_EXPANDED_LOG_BACK_BOX = lcd_drawer_back_box()
@@ -4607,10 +4609,16 @@ def carrier_waterfall_box():
     return x0, y1 + 10, stream_waterfall_box()[2], y1 + 68
 
 
+def smart_seek_waterfall_box():
+    x0, _y0, x1, y1 = carrier_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 68
+
+
 def carrier_button_visible(state):
     return (carrier_available(state.radio_snapshot()[0], state.receiver_type_snapshot())
             and not state.external_waterfall_snapshot()
-            and not owrx.is_openwebrx_endpoint(state.snapshot()[0]))
+            and not owrx.is_openwebrx_endpoint(state.snapshot()[0])
+            and state.carrier_ready_snapshot())
 
 
 def favorite_waterfall_box():
@@ -5007,6 +5015,10 @@ class SharedState:
     ):
         self.lock = threading.Lock()
         self.carrier_search = CarrierSearch()
+        self.smart_seek = SmartSeek()
+        self.carrier_idle_context = None
+        self.carrier_idle_since = time.monotonic()
+        self.carrier_attempted_context = None
         self.carrier_tuned_khz = None
         self.server = server
         self.receiver_type = "fmdx" if fmdx.is_fmdx_server(server) else "kiwi"
@@ -5226,6 +5238,7 @@ class SharedState:
 
     def set_view(self, freq_khz=None, zoom=None, waterfall_center_khz=None):
         with self.lock:
+            self.smart_seek.close()
             self.kiwi_landing.update(active=False, status="cancelled")
             self.carrier_search.finish("", time.monotonic())
             self.carrier_tuned_khz = None
@@ -5246,59 +5259,180 @@ class SharedState:
 
     def _carrier_context(self):
         return (self.server_generation, self.view_generation, self.radio_generation,
-                self.receiver_type, self.external_waterfall, self.stream_paused,
+                self.receiver_type, self.external_waterfall, self.external_audio, self.stream_paused,
                 bool(self.connection_streams.get("audio") and self.connection_streams.get("waterfall")))
 
-    def start_carrier_search(self):
+    def note_carrier_activity(self):
+        """Do not prepare a result while a tuning gesture is still held."""
+        with self.lock:
+            self.carrier_search.finish('', time.monotonic())
+            self.carrier_idle_context = None
+            self.carrier_attempted_context = None
+            self.carrier_idle_since = time.monotonic()
+
+    def _carrier_eligible(self):
+        return (carrier_available(self.radio_mode, self.receiver_type)
+                and not self.external_waterfall and not self.external_audio
+                and not self.stream_paused
+                and all(self.connection_streams.values())
+                and not self.kiwi_landing.get('active')
+                and not owrx.is_openwebrx_endpoint(self.server))
+
+    def _carrier_ready(self, now):
+        if self.smart_seek.open:
+            return False
+        search = self.carrier_search
+        search.poll(self._carrier_context(), now)
+        return self._carrier_eligible() and search.result_hz is not None
+
+    def carrier_ready_snapshot(self):
+        with self.lock:
+            return self._carrier_ready(time.monotonic())
+
+    def apply_prepared_carrier(self):
+        """Apply the prepared carrier on tap; never retune speculatively."""
         with self.lock:
             now = time.monotonic()
-            self.carrier_tuned_khz = None
-            if (not carrier_available(self.radio_mode, self.receiver_type)
-                    or self.external_waterfall or owrx.is_openwebrx_endpoint(self.server)):
+            if not self._carrier_ready(now):
                 return False
-            if self.stream_paused or not all(self.connection_streams.values()):
-                self.carrier_search.finish("NO CARRIER", now)
-                return False
-            self.kiwi_landing.update(active=False, status="cancelled")
-            self.carrier_search.start(self.freq_khz, self.high_cut-self.low_cut,
-                                      self._carrier_context(), now)
+            tuned = self.carrier_search.result_hz / 1000
+            if self.wf_view_center_khz is None:
+                self.wf_view_center_khz = self.freq_khz
+            self.freq_khz = clamp(tuned, 0, TUNING_MAX_KHZ)
+            self.view_generation += 1
+            self.carrier_tuned_khz = self.freq_khz
+            self.carrier_search.finish('', now)
+            # Do not immediately re-offer the correction just accepted.
+            self.carrier_idle_context = self.carrier_attempted_context = self._carrier_context()
+            self.carrier_idle_since = now
             return True
 
     def carrier_capture_request(self):
         with self.lock:
+            if self.smart_seek.open:
+                return None
             search = self.carrier_search
-            if search.poll(self._carrier_context(), time.monotonic()):
+            now = time.monotonic()
+            context = self._carrier_context()
+            search.poll(context, now)
+            if context != self.carrier_idle_context:
+                self.carrier_idle_context = context
+                self.carrier_idle_since = now
+                self.carrier_attempted_context = None
+            if not self._carrier_eligible():
+                search.finish('', now)
+                self.carrier_idle_since = now
+                self.carrier_attempted_context = None
+                return None
+            if (now - self.carrier_idle_since >= 0.3
+                    and self.carrier_attempted_context != context):
+                search.start(self.freq_khz, self.high_cut-self.low_cut, context, now)
+                self.carrier_attempted_context = context
+            if search.active:
                 return search.center_hz / 1000, search.zoom
             return None
 
     def carrier_status_snapshot(self):
         with self.lock:
-            search = self.carrier_search
-            now = time.monotonic()
-            search.poll(self._carrier_context(), now)
-            return search.status if search.active or now < search.until else ""
+            return 'READY' if self._carrier_ready(time.monotonic()) else ''
 
     def feed_carrier_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
         with self.lock:
             search = self.carrier_search
             now = time.monotonic()
-            if not search.poll(self._carrier_context(), now):
+            if not self._carrier_eligible() or not search.poll(self._carrier_context(), now):
                 return None
-            tuned = search.feed(message, bandwidth_hz, zoom_max, zoom_cap, now)
-            if tuned is not None:
-                # Keep the visible RF window and operator's cuts fixed. Only
-                # the VFO carrier changes, at 1 Hz rather than channel steps.
-                if self.wf_view_center_khz is None:
-                    self.wf_view_center_khz = self.freq_khz
-                self.freq_khz = clamp(tuned, 0, TUNING_MAX_KHZ)
-                self.view_generation += 1
-                self.carrier_tuned_khz = self.freq_khz
-            return tuned
+            # Cache/refine only. The listening VFO changes only on a tap.
+            return search.feed(message, bandwidth_hz, zoom_max, zoom_cap, now)
 
     def take_carrier_result(self):
         with self.lock:
             result, self.carrier_tuned_khz = self.carrier_tuned_khz, None
             return result
+
+    def _smart_seek_band(self):
+        return next((band for band in SW_BROADCAST_BANDS
+                     if band[0] <= self.freq_khz <= band[1]), None)
+
+    def smart_seek_available(self):
+        with self.lock:
+            return self._carrier_eligible() and self._smart_seek_band() is not None
+
+    def start_smart_seek(self, refresh=False):
+        with self.lock:
+            if not self._carrier_eligible():
+                return False
+            band = self._smart_seek_band()
+            if band is None:
+                return False
+            self.carrier_search.finish('', time.monotonic())
+            self.carrier_tuned_khz = None
+            self.smart_seek.start(*band, self._carrier_context(), time.monotonic(),
+                                  cache_key=(self.server, band[0], band[1]), refresh=refresh)
+            return True
+
+    def close_smart_seek(self, selected=None):
+        with self.lock:
+            if selected is not None and any(item.frequency_khz == selected for item in self.smart_seek.candidates):
+                self.smart_seek.selection = selected
+            self.smart_seek.close()
+            self.carrier_idle_since = time.monotonic()
+            self.carrier_idle_context = self._carrier_context()
+            self.carrier_attempted_context = None
+
+    def tune_smart_seek_candidate(self, frequency):
+        """Change audio while preserving the visible list and its RF survey."""
+        with self.lock:
+            now = time.monotonic()
+            self.smart_seek.poll(self._carrier_context(), now)
+            candidates = self.smart_seek.snapshot(now)['candidates']
+            if (not self.smart_seek.open or not self._carrier_eligible()
+                    or not any(item.frequency_khz == frequency for item in candidates)):
+                return False
+            self.freq_khz = frequency
+            self.wf_view_center_khz = None
+            self.view_generation += 1
+            self.spectrum_peak_values = ()
+            self.spectrum_peak_history.clear()
+            self.carrier_search.finish('', now)
+            self.carrier_tuned_khz = None
+            self.smart_seek.selection = frequency
+            # Only this explicit menu selection carries the survey across a
+            # VFO move. Other tuning/receiver changes still cancel capture.
+            self.smart_seek.context = self._carrier_context()
+            return True
+
+    def smart_seek_snapshot(self):
+        with self.lock:
+            self.smart_seek.poll(self._carrier_context(), time.monotonic())
+            if not self._carrier_eligible():
+                self.smart_seek.close()
+            snapshot = self.smart_seek.snapshot()
+            snapshot['playing_khz'] = self.freq_khz
+            return snapshot
+
+    def smart_seek_capture_request(self, bandwidth_hz=30000000, zoom_cap=14):
+        with self.lock:
+            if not self._carrier_eligible():
+                self.smart_seek.close()
+                return None
+            return self.smart_seek.request(self._carrier_context(), time.monotonic(), bandwidth_hz, zoom_cap)
+
+    def feed_smart_seek_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
+        with self.lock:
+            self.smart_seek.poll(self._carrier_context(), time.monotonic())
+            if not self._carrier_eligible():
+                self.smart_seek.close()
+                return
+            self.smart_seek.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
+
+    def move_smart_seek(self, delta):
+        with self.lock:
+            self.smart_seek.move(delta)
+
+    def set_smart_seek_sensitivity(self, value):
+        with self.lock:
+            self.smart_seek.sensitivity = int(clamp(value, 0, 100))
 
     def waterfall_view_center_snapshot(self):
         with self.lock:
@@ -5348,6 +5482,9 @@ class SharedState:
             self.fmdx_scan_request_generation += 1
             landing_profile = None
             if self.receiver_type == "fmdx":
+                # Show the complete audio-derived waterfall on entry instead
+                # of inheriting the previous receiver's narrower RF zoom.
+                self.zoom = 0
                 self.freq_khz = fmdx.receiver_frequency(server, self.freq_khz)
                 target = fmdx.nearest_station_frequency(self.fmdx_stations, self.freq_khz)
                 if target is not None:
@@ -8758,7 +8895,7 @@ def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
     visual = draw_styled_button_frame(
         box, active=active, pressed=pressed,
         fill_alpha=round(waterfall_button_fill_alpha(active, pressed) * alpha))
-    first, second = ("TUNE", "CARRIER") if not status else (status, "")
+    first, second = ("AUTO TUNE", "READY") if status == "READY" else (("TUNE", "CARRIER") if not status else (status, ""))
     color = (*visual.text[:3], round(255 * alpha))
     draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 - (10 if second else 0),
               first, color, 17, True, False, "cm", family="Liberation Sans")
@@ -11541,6 +11678,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
 def tests_option_at(x, y):
     if contains(TEST_BACK_BOX, x, y):
         return "back"
+    if contains(TEST_SINE_BOX, x, y):
+        return "audio_test"
     if contains(TEST_DJ_BOX, x, y):
         return "dj"
     if contains(TEST_RTL_BOX, x, y):
@@ -11607,6 +11746,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     if LCD_800_MODE:
         draw_settings_leaf_sidebar(text_cache, "APPS", "TOOLS & DIAGNOSTICS")
         for box, title, detail, active in (
+            (TEST_SINE_BOX, "AUDIO TEST", "SINE WAVE", False),
             (TEST_DJ_BOX, "DJ TUNE", "LIVE DIAL", False),
             (TEST_RTL_BOX, "LOCAL SDR", "USB RX", False),
             (TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES", False),
@@ -11624,6 +11764,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
     draw_text(text_cache, 36, y0 + 22, "TESTS", (229, 243, 246), 18, True, True, "lm")
+    draw_tests_button(text_cache, TEST_SINE_BOX, "AUDIO TEST", "SINE WAVE / OUTPUT LEVEL")
     draw_tests_button(text_cache, TEST_DJ_BOX, "DJ TUNE", "LIVE FINGER DIAL  /  100 Hz DETENTS")
     draw_tests_button(text_cache, TEST_RTL_BOX, "LOCAL SDR", "RTL-SDR + AIRSPY HF+  /  USB RECEIVERS")
     draw_tests_button(text_cache, TEST_PATTERN_BOX, pattern_name, f"{len(offsets_khz)} TUNES  /  RETURNS TO START")
@@ -20561,6 +20702,7 @@ UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS = 0.075
 _ui_confirmation_tone_last_at = 0.0
 _ui_confirmation_tone_payload = None
 TOOLBOX_CONTINUOUS_GESTURES = frozenset((
+    "audio_test",
     "audio_volume",
     "home_volume",
     "audio_squelch_level",
@@ -23060,6 +23202,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
             )
             sent_kiwi_zoom = kiwi.kiwi_zoom_level(zoom)
             carrier_view = None
+            carrier_owner = None
             carrier_restoring = False
             wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap = 30000000, 14, 14
             authenticated = False
@@ -23109,10 +23252,14 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                         ws.send_text(f"SET wf_speed={wf_speed}")
                     print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
 
-                capture = state.carrier_capture_request()
+                capture = state.smart_seek_capture_request(wf_bandwidth_hz, wf_zoom_cap)
+                capture_owner = "seek" if capture is not None else "carrier"
+                if capture is None:
+                    capture = state.carrier_capture_request()
                 if configured:
                     if capture is not None:
                         desired_capture = (capture[0], min(capture[1], wf_zoom_cap))
+                        carrier_owner = capture_owner
                         if carrier_view != desired_capture:
                             kiwi.send_wf_setup(ws, desired_capture[0], desired_capture[1], 4)
                             carrier_view = desired_capture
@@ -23179,7 +23326,10 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     if state.connection_ready(seen_server_generation, "waterfall"):
                         persist_live_station_health(server, "waterfall", True)
                     if carrier_view is not None:
-                        state.feed_carrier_frame(message, wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap)
+                        if carrier_owner == "seek":
+                            state.feed_smart_seek_frame(message, wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap)
+                        else:
+                            state.feed_carrier_frame(message, wf_bandwidth_hz, wf_zoom_max, wf_zoom_cap)
                         continue
                     if carrier_restoring:
                         packet_start, packet_zoom_flags = struct.unpack_from("<II", message, 4)
@@ -23359,6 +23509,9 @@ def main():
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
                 flush=True,
             )
+    if fmdx.is_fmdx_server(args.server):
+        # FM-DX opens at its widest available audio span, including restarts.
+        args.zoom = 0
     saved_audio_backend = remembered_preferences.get("audio_backend")
     if saved_audio_backend in AUDIO_BACKENDS:
         args.audio_backend = saved_audio_backend
@@ -23515,6 +23668,7 @@ def main():
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
     rc28_input = RC28Input()
+    seek_view = SmartSeekView(sys.modules[__name__], state)
     # VFO B is intentionally dormant until Dual opens. It has a complete
     # independent state/transport pair so it never reuses or retunes VFO A.
     dual_audio_mixer = DualVFOAudioMixer(args)
@@ -24109,6 +24263,9 @@ def main():
     from cw_monitor import CWManager
     from cw_workspace import CWWorkspace
     cw_manager = CWManager(kiwi, args.user)
+    from audio_test import AudioTestWorkspace
+    audio_test_workspace = AudioTestWorkspace(sys.modules[__name__], args, state,
+        available=lambda: not dual_audio_mixer.active_snapshot())
     from cw_listen import CWListener
     cw_manager.listener = CWListener(sys.modules[__name__], args, state,
                                     available=lambda: not dual_audio_mixer.active_snapshot())
@@ -24795,11 +24952,40 @@ def main():
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
         return True
 
+    def listen_to_seek_candidate(frequency):
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
+        if frequency is None:
+            return
+        snapshot = state.smart_seek_snapshot()
+        if not snapshot['open'] or not any(item.frequency_khz == frequency for item in snapshot['candidates']):
+            return
+        if not state.tune_smart_seek_candidate(frequency):
+            return
+        display_freq = candidate_freq = frequency
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+        remember_current_view()
+        wake_controls()
+
     def apply_rc28_events():
         """Apply RC-28 Tune/Zoom/Width/Volume editing on the render thread."""
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
         nonlocal rc28_zoom_detents, rc28_zoom_last_at, rc28_dial_mode, rc28_mode_osd_until
         for kind, value in rc28_input.drain():
+            if kind == "button" and value == "toggle_smart_seek":
+                if seek_view.open:
+                    seek_view.close()
+                else:
+                    state.start_smart_seek()
+                wake_controls()
+                continue
+            if seek_view.open:
+                if kind == "dial":
+                    seek_view.move(value)
+                elif kind == "button" and value == "cycle_dial_mode":
+                    listen_to_seek_candidate(seek_view.selected())
+                wake_controls()
+                continue
             if kind == "button":
                 if value == "cycle_dial_mode":
                     # The push control is the simple operational pair: Tune
@@ -25291,6 +25477,8 @@ def main():
             theme_editor.open = False
         if kind != "dual":
             dual_vfo_receiver_list_target = None
+        seek_view.close()
+        audio_test_workspace.close()
         station_workspace.open=False
         usb_radios_workspace.open=False
         application_update.open = False
@@ -25809,7 +25997,7 @@ def main():
             and not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not (adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+            and not (audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
             and not (wspr_panel_open or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open))
@@ -26022,6 +26210,8 @@ def main():
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            if audio_test_workspace.open and not tests_panel_open:
+                audio_test_workspace.close()
             if web_apps.return_to_decoders:
                 web_apps.return_to_decoders=False
                 digital_menu_open=True
@@ -26055,6 +26245,17 @@ def main():
                 if usb_notice_desktop is not None and event.type==pygame.MOUSEBUTTONUP:
                     usb_notice_desktop=None;continue
                 if web_apps.blocks_touch:
+                    continue
+                if event.type == pygame.KEYDOWN and seek_view.open:
+                    if event.key == pygame.K_ESCAPE:
+                        seek_view.close()
+                    elif event.key in (pygame.K_LEFT, pygame.K_UP):
+                        seek_view.move(-1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_DOWN):
+                        seek_view.move(1)
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        listen_to_seek_candidate(seek_view.selected())
+                    wake_controls()
                     continue
                 if event.type == pygame.QUIT:
                     # Ignore synthetic KMS/SDL QUIT during panel probing on
@@ -26203,7 +26404,9 @@ def main():
                         emit_desktop_touch(event.pos, "up")
                         desktop_pointer_down = False
                 elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
-                    if picker_open and picker_map_open:
+                    if seek_view.open:
+                        seek_view.move(1 if event.y < 0 else -1)
+                    elif picker_open and picker_map_open:
                         picker_map_zoom_target = None
                         picker_map_scale = clamp(
                             picker_map_scale * (1.22 if event.y > 0 else 1 / 1.22),
@@ -26345,7 +26548,7 @@ def main():
                                     or dual_vfo_picker_open or wspr_panel_open or wspr_add_open
                                     or wspr_identity_open
                                     or cw_workspace.open or qrss_workspace.open
-                                    or station_workspace.open or vhf_workspace.open or adsb_workspace.open or hell_workspace.open or sstv_workspace.open
+                                    or seek_view.open or station_workspace.open or vhf_workspace.open or adsb_workspace.open or hell_workspace.open or sstv_workspace.open
                                 )
                                 and not (asr_panel_open and contains(ASR_PANEL_BOX, x, y))
                                 and not (deepgram_setup_open and contains(deepgram_setup_surface_box(), x, y))
@@ -26411,7 +26614,12 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if application_update.open:
+                            if seek_view.open and x < rf_canvas_width():
+                                gesture = "smart_seek"
+                                seek_view.press(x, y)
+                            elif audio_test_workspace.open:
+                                gesture = "audio_test"
+                            elif application_update.open:
                                 gesture = "application_update"
                             elif theme_editor.open:
                                 gesture = "theme"
@@ -26437,6 +26645,9 @@ def main():
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
                                 sstv_workspace.drag_begin(x, y)
+                            elif (not home_sidebar_open and not picker_open and not dual_vfo_open
+                                  and state.smart_seek_available() and contains(smart_seek_waterfall_box(), x, y)):
+                                gesture = "smart_seek_start"
                             elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
 
@@ -26929,6 +27140,8 @@ def main():
                         elif gesture in ("vhf_workspace", "adsb_workspace", "sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
                             {"vhf_workspace": vhf_workspace, "adsb_workspace": adsb_workspace, "sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
+                        elif gesture == "smart_seek":
+                            seek_view.drag(x, y)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
                                 wspr_workspace_dragged = True
@@ -27770,6 +27983,24 @@ def main():
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
                             wake_controls()
+                        elif touch_started and gesture == "smart_seek":
+                            if seek_view.drag(x, y):
+                                seek_view.release(x, y)
+                            elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                listen_to_seek_candidate(seek_view.release(x, y))
+                            else:
+                                if abs(y-start_y) > abs(x-start_x)*1.2:
+                                    seek_view.swipe(start_y, y)
+                                else:
+                                    seek_view.press_action = None
+                            wake_controls()
+                        elif touch_started and gesture == "smart_seek_start":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                inertia_velocity_khz_s = 0.0
+                                inertia_active = False
+                                anim_start = 0.0
+                                state.start_smart_seek()
+                            wake_controls()
                         elif touch_started and gesture == "application_update":
                             if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 if app_update_ui.action(application_update, sys.modules[__name__], x, y) == "back":
@@ -28180,6 +28411,10 @@ def main():
                             wake_controls()
                         elif touch_started and gesture == "wspr_workspace_outside":
                             wake_controls()
+                        elif touch_started and gesture == "audio_test":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                audio_test_workspace.tap(x, y)
+                            wake_controls()
                         elif touch_started and gesture == "tests_panel":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -28187,6 +28422,8 @@ def main():
                                 if choice == "back":
                                     tests_panel_open = False
                                     restore_navigation_parent(tests_parent)
+                                elif choice == "audio_test":
+                                    audio_test_workspace.open = True
                                 elif choice == "dj":
                                     tests_panel_open = False
                                     open_dj_tune()
@@ -29009,8 +29246,8 @@ def main():
                             if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 inertia_velocity_khz_s = 0.0
                                 anim_start = 0.0
-                                state.start_carrier_search()
-                                print("gl AM carrier search requested", flush=True)
+                                state.apply_prepared_carrier()
+                                print("gl AM prepared carrier selected", flush=True)
                             wake_controls()
                         elif touch_started and gesture == "spectrum_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -29704,6 +29941,12 @@ def main():
                 animate_to(landed_khz, kiwi.zoom_to_span_khz(zoom), 0.16)
                 remember_current_view()
                 print(f"gl Kiwi landing {landing_status} {landed_khz:.3f} kHz", flush=True)
+            if inertia_active or (touch_started and gesture in (
+                'waterfall', 'frequency_identity_tune', 'frequency_drawer',
+                'zoom_plus', 'zoom_minus', 'dj_tune', 'dual_vfo',
+                'filter_drag', 'lcd_filter_shift', 'lcd_filter_width', 'home_passband',
+            )):
+                state.note_carrier_activity()
             carrier_tuned_khz = state.take_carrier_result()
             if carrier_tuned_khz is not None:
                 _server, freq_khz, zoom, _smeter, _view_gen, _server_gen = state.snapshot()
@@ -30085,10 +30328,12 @@ def main():
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
+                if state.smart_seek_available() and not dual_vfo_open:
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SMART SEEK", size=20)
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
-                        text_cache, status, 1.0 if status else controls_alpha(now))
+                        text_cache, status, 1.0)
             if waterfall_visible and audio_controls.get("mute", False) and not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -30244,7 +30489,7 @@ def main():
                     _audio_mode,
                     selected_audio_backend(args),
                 )
-            if tests_panel_open:
+            if tests_panel_open and not audio_test_workspace.open:
                 draw_tests_panel(
                     text_cache,
                     retune_pattern_index,
@@ -30467,6 +30712,8 @@ def main():
                 hell_workspace.draw(text_cache, wspr_receiver_choices())
             if sstv_workspace.open:
                 sstv_workspace.draw(text_cache, wspr_receiver_choices())
+            if audio_test_workspace.open:
+                audio_test_workspace.draw(text_cache, audio_volume)
             if station_workspace.open:
                 station_workspace.draw(text_cache)
             if usb_radios_workspace.open:
@@ -30494,6 +30741,8 @@ def main():
                         text_cache, theme_editor.notice_action, theme_editor.notice_detail,
                         green_osd_alpha(theme_notice_remaining, args.zoom_osd_seconds),
                     )
+            if seek_view.open:
+                seek_view.draw(text_cache)
             if application_update.open:
                 if now >= update_poll_at:
                     application_update.poll()
@@ -30556,6 +30805,10 @@ def main():
         # the current frequency, once. Unchanged state produces no write.
         write_wspr_local_log("renderer_stopped")
         write_remembered_view(save_current_frequency=True)
+        seek_view.shutdown()
+        audio_test_workspace.close()
+        if audio_test_workspace.test.thread:
+            audio_test_workspace.test.thread.join(timeout=2.0)
         rtl_lab.stop()
         stop_dual_vfo_clients()
         digital_web.close()

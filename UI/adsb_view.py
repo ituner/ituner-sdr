@@ -1,26 +1,34 @@
 """Display-only ADS-B viewing windows. Never changes recording or RF state."""
 import math
+import time
 from adsb_traffic import TRAIL_RETENTION, position_age
 
 LIVE_WINDOWS=(15,30,60,120,300)
-COVERAGE_WINDOWS=((300,'5 min'),(900,'15 min'),(1800,'30 min'),(3600,'1 hour'),
-                  (10800,'3 hours'),(21600,'6 hours'),(43200,'12 hours'),
-                  (86400,'24 hours'),(604800,'7 days'),(2592000,'30 days'),(0,'All recorded'))
+COVERAGE_WINDOWS=((60,'1 min'),(300,'5 min'),(1800,'30 min'),(3600,'1 hour'),
+                  (21600,'6 hours'),(86400,'24 hours'),(604800,'7 days'),(0,'All recorded'))
 
 
 class CoverageWindow:
     """Independent rolling dome window, with minute buckets for snapshot reuse."""
-    def __init__(self):self.seconds=3600
+    def __init__(self):self.seconds=3600;self.started_at=None;self.revision=0
 
-    def select(self, seconds):
+    def select(self, seconds, now=None):
         if seconds not in dict(COVERAGE_WINDOWS):raise ValueError('Invalid dome timespan')
-        self.seconds=seconds
+        self.seconds=seconds;self.revision+=1
+        self.started_at=None
+
+    def reset(self, now=None):
+        """Restart this display window without changing duration or stored history."""
+        self.started_at=time.time() if now is None else now
+        self.revision+=1
 
     @property
     def label(self):return dict(COVERAGE_WINDOWS)[self.seconds]
 
     def since(self, now):
-        return max(0,math.floor(now/60)*60-self.seconds) if self.seconds else 0
+        bucket=10 if self.seconds==60 else 60
+        cutoff=max(0,math.floor(now/bucket)*bucket-self.seconds) if self.seconds else 0
+        return max(self.started_at or 0,cutoff)
 
 
 def number(value):

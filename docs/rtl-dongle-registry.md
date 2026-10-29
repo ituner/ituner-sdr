@@ -32,28 +32,46 @@ cycles cannot be performed without affecting the other ports.
 
 The native application and its Airspace, Signal Observatory, Spectrum, Settings
 and HF companion pages show one shared receiver notice. Linux kernel USB hotplug
-messages wake a background discovery worker; a five-second fallback scan also
+messages wake a background discovery worker; a two-second fallback scan also
 checks inventory. The watcher reads descriptors without claiming an RF stream.
 Hub enumeration bursts are grouped. Names alone do not cause another popup.
 
-A normal connected-receiver list has a Close button and disappears after ten
-seconds. Shared IDs stay visible with a short explanation and **Yes, assign a
-new ID / Cancel**. Yes targets the displayed physical port and uses the same
-backed-up, serial-only EEPROM verification as the Dongles page. Nothing is written
-on detection or Cancel. Each row has its own **Assign ID** selector and status. Select a receiver, then
-**Yes, assign a new ID**; additional requests can be queued while earlier changes
-finish. Writes run sequentially, rechecking the approved physical attachment
-before each operation. A disconnect or changed USB address cancels that request.
-Queued approvals are held in memory and are not replayed after a restart.
+Known uniquely identified receivers stay quiet on app startup. Connected duplicate
+IDs get one three-minute **Duplicate ID found · Fix now / Later** reminder on
+each application start, even if previously deferred. Dismissal or timeout does not
+repeat the reminder during periodic scans and never changes EEPROM. A receiver first discovered
+at boot gets a one-time **New USB receiver** notice with **Review receivers** and
+**Later**. Every physical plug-in while running, including remembered receivers, gets a
+centered, larger fifteen-second notice showing the arriving device and its label/ID.
+Unique receivers get a nonblocking notice. A duplicate offers **Fix now / Later**;
+Every prompt offering Later (duplicate hotplug, duplicate startup, or first discovery)
+closes unattended after three minutes. Fix now opens explicit ID confirmation;
+Later or timeout writes nothing. Ordinary detection notices last fifteen seconds. Discovery history is saved in
+`notified-receivers.json` beside the registry, independently of decoder assignment.
+Existing registry entries are treated as remembered when upgrading.
 
-A successful write marks only that receiver **Reconnect → new ID**. The list
-continues updating for new plug-ins, including during an EEPROM operation
-(descriptor-only sysfs/libusb discovery) and while reconnects are pending.
-Pending reconnects are restored from verified registry records after reboot.
-Unplug/reconnect that dongle only, leaving the hub powered. Failed or unverified
-USB access never claims success. Dismissal lasts for that detection event, so a
-new plug-in or application/CM5 restart shows a fresh notice. No USB power switching
-is implemented by these prompts.
+Starting an unassigned decoder (including an old Auto setting), or one whose saved
+receiver is missing or ambiguous, opens **Choose receiver**. Select a free dongle
+and **Use receiver** to save the assignment and start. Cancel changes nothing.
+This shared start gate covers ADS-B/1090, UAT/978, AIS, APRS, rtl_433, Meteor-M,
+CubeSat, radiosonde and Spectrum Analyzer, through native and HTTP controls.
+External Ground Station/Satvisor retain their own receiver controls; HF decoders
+continue to use network receiver selection.
+
+Selecting a receiver with a duplicate ID opens the explicit ID-resolution dialog.
+A sole factory serial is usable without rewriting it. **Yes, assign a new ID**
+backs up and verifies the EEPROM; discovery, Later and Cancel never write it.
+Reconnect after a successful ID change, then press Start again. Queued writes
+remain serialized and recheck the physical USB attachment before programming.
+No queued approval survives restart. Historical reconnect records remain in
+management, but never reopen a startup popup. Finding a new serial at a different
+port also clears that receiver's pending reconnect indication in the notice.
+
+Inventory continues updating during open pickers and EEPROM writes, with read-only
+Refresh and last-check status. Busy receivers are labelled and unavailable in the
+start picker. A removed or re-enumerated receiver is revalidated before assigning
+or starting it. Empty pickers remain open for plug-in; hotplug does not replace an
+active choice. No USB power switching is performed.
 
 ### Hub power-cycle recovery
 
@@ -105,8 +123,8 @@ USB receiver pickers in ADS-B/1090, UAT/978, AIS, APRS, rtl_433, Meteor-M,
 CubeSat, radiosonde and Spectrum Analyzer share compact naming and availability
 labels. They retain explicit disconnected selections and preserve an open web
 choice during refresh. SoapySDR modes show identity conflicts as disabled choices
-and link to USB-Radios. Auto chooses through the existing receiver broker; no
-handoff behavior is changed. ADS-B web selection applies immediately, with a
+and link to USB-Radios. Manual Start with Auto opens the shared assignment picker.
+Saved explicit assignments keep the existing receiver broker handoff behavior. ADS-B web selection applies immediately, with a
 single Start or Stop action and automatically refreshed discovery. The receiver
 location form is collapsed under Receiver location. HF network-source pickers
 remain KiwiSDR/network selectors, since those decoders do not own local USB radios.

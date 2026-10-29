@@ -56,10 +56,12 @@ class CoverageTouch:
             self.wake.wait(.15);self.wake.clear()
             if not self.w.open or not self.w.coverage_open:continue
             try:
-                self.update_data(self.w.manager.coverage.snapshot(self.window.since(time.time())))
+                revision=self.window.revision
+                self.update_data(self.w.manager.coverage.snapshot(self.window.since(time.time())),revision)
             except Exception as exc:self.error=str(exc)
 
-    def update_data(self,data):
+    def update_data(self,data,revision=None):
+        if revision is not None and revision!=self.window.revision:return False
         self.pending=data.get('status')=='LOADING'
         if self.pending:
             if self.frame is None:return False
@@ -70,6 +72,7 @@ class CoverageTouch:
         frame=dome_gl.prepare(data,*settings,new_points=added,expanded=self.expanded)
         # Publish a complete scene in one swap. Never expose an empty loading scene.
         with self.lock:
+            if revision is not None and revision!=self.window.revision:return False
             self.frame=frame;self.data=data;self.frame_id+=1;self.error=''
             self.pulse_until=time.monotonic()+.8 if len(frame['highlights']) else 0
         self.last_key=key
@@ -106,8 +109,18 @@ class CoverageTouch:
         elif kind=='coverage_filter_aircraft' and self.selected_observation:
             key=self.selected_observation['hex'];self.aircraft=None if self.aircraft==key else key
         elif kind=='coverage_span':
-            self.window.select(value);self.window_open=False;self.pending=True
+            self.window.select(value);self.window_open=False
+            self.pending=True
             self.detail='All recorded at this site' if not value else 'Rolling '+self.window.label+' · updates automatically'
+        elif kind=='coverage_clock_reset':
+            self.window.reset();self.window_open=False
+            # Reset only the displayed window. Reject late snapshots using revision.
+            meta={k:v for k,v in self.data.get('meta',{}).items() if k in ('reference','reference_height_m','reference_height_known','retention_days','storage_limit')}
+            meta.update(window_since=self.window.started_at,retained_positions=0,positioned_aircraft=0,horizontal_range_max_km=0,slant_range_max_km=0,max_altitude_ft=None)
+            self.aircraft=None;self.selected_observation=None
+            self.update_data(dict(status='EMPTY',meta=meta,base=0,points=[],cells=[],aircraft=[],breaks=[]))
+            self.pending=True
+            self.detail='Clock reset · collecting new positions · saved history kept'
         elif kind=='coverage_mode':
             if value!=self.mode:self.tilt=25 if value=='space' else 55
             self.mode=value;self.detail='Drag to rotate · tap a cell or position to inspect'
@@ -127,13 +140,14 @@ class CoverageTouch:
         w.ink(cache,24,27,'AIRSPACE / RECEPTION DOME',25,w.TEXT)
         with self.lock:data=self.data;frame=self.frame;labels=self.labels;identity=self.frame_id
         meta=data.get('meta',{});count=meta.get('retained_positions',0)
-        summary=f"{self.window.label.upper()} · {count:,} positions · {meta.get('positioned_aircraft',0)} aircraft"+(' · updating…' if self.pending else '')
-        w.ink(cache,24,61,summary,18,w.MUTED)
+        summary=f"{self.window.label.upper()}"+(' · SINCE RESET' if self.window.started_at is not None else '')+f" · {count:,} positions · {meta.get('positioned_aircraft',0)} aircraft"+(' · updating…' if self.pending else '')
+        w.ink(cache,24,61,summary,18,w.MUTED,width=550)
         w.draw_back(cache,('back',None))
-        self.button(cache,(780,10,1110,72),'Time · '+self.window.label,'coverage_window',active=self.window_open)
+        self.button(cache,(580,10,820,72),'Time · '+self.window.label,'coverage_window',active=self.window_open)
+        self.button(cache,(832,10,990,72),'Reset','coverage_clock_reset')
         if self.window_open:
             w.ink(cache,80,135,'DOME TIMESPAN',25,w.TEXT)
-            w.ink(cache,80,176,'Rolling reception history · independent of the live map',20,w.MUTED)
+            w.ink(cache,80,176,'Choose rolling history · Reset starts the selected window from now',20,w.MUTED)
             for index,(seconds,label) in enumerate(COVERAGE_WINDOWS):
                 x=80+(index%3)*376;y=220+(index//3)*96
                 self.button(cache,(x,y,x+352,y+72),label,'coverage_span',seconds,seconds==self.window.seconds)
