@@ -637,12 +637,20 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(border, ui.APP_UI_STYLE.palette.pressed_border)
         self.assertEqual(icon, (0, 0, 0, 255))
 
-    def test_waterfall_zoom_matches_favorite_and_pause_size_and_spacing(self):
+    def test_listening_actions_form_square_grid_and_keep_home_zoom_spacing(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         favorite = ui.favorite_waterfall_box()
         pause = ui.stream_waterfall_box()
         expected_size = (pause[2] - pause[0], pause[3] - pause[1])
+        self.assertEqual(expected_size[0], expected_size[1])
+        tune, seek = ui.carrier_waterfall_box(), ui.smart_seek_waterfall_box()
+        for box in (tune, seek):
+            self.assertEqual((box[2]-box[0], box[3]-box[1]), expected_size)
+        self.assertEqual(tune[::2], favorite[::2])
+        self.assertEqual(seek[::2], pause[::2])
+        self.assertEqual((tune[1], tune[3]), (seek[1], seek[3]))
+        self.assertEqual(tune[1]-favorite[3], pause[0]-favorite[2])
         self.assertEqual(
             (favorite[2] - favorite[0], favorite[3] - favorite[1]),
             expected_size,
@@ -650,12 +658,12 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(
             (ui.ZOOM_MINUS_BOX[2] - ui.ZOOM_MINUS_BOX[0],
              ui.ZOOM_MINUS_BOX[3] - ui.ZOOM_MINUS_BOX[1]),
-            expected_size,
+            (ui.HOME_BOX[2]-ui.HOME_BOX[0], ui.HOME_BOX[3]-ui.HOME_BOX[1]),
         )
         self.assertEqual(
             (ui.ZOOM_PLUS_BOX[2] - ui.ZOOM_PLUS_BOX[0],
              ui.ZOOM_PLUS_BOX[3] - ui.ZOOM_PLUS_BOX[1]),
-            expected_size,
+            (ui.HOME_BOX[2]-ui.HOME_BOX[0], ui.HOME_BOX[3]-ui.HOME_BOX[1]),
         )
         self.assertEqual(
             ui.ZOOM_PLUS_BOX[0] - ui.ZOOM_MINUS_BOX[2],
@@ -808,7 +816,7 @@ class BoardLayoutTests(unittest.TestCase):
                 ui.apply_waterfall_palette_preset(state, palette)
             )
             self.assertEqual((floor, ceiling), ui.WATERFALL_PALETTE_PRESETS[palette])
-            self.assertFalse(auto)
+            self.assertTrue(auto)
             self.assertEqual(selected, palette)
             self.assertEqual(state.waterfall_snapshot()[:2], (floor, ceiling))
 
@@ -828,7 +836,7 @@ class BoardLayoutTests(unittest.TestCase):
             ui.WATERFALL_DEFAULT_FLOOR,
             ui.WATERFALL_DEFAULT_CEIL,
             ui.WATERFALL_DEFAULT_SPEED,
-            False,
+            True,
             ui.WATERFALL_DEFAULT_PALETTE,
         ))
         self.assertEqual(state.waterfall_snapshot(), reset_waterfall)

@@ -246,7 +246,7 @@ import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
 import receiver_catalog
-from directory_refresh import DailyDirectoryRefresh
+from directory_refresh import DailyDirectoryRefresh, checked_refresh, directory_age_label
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
@@ -259,7 +259,10 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
 from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
-from smart_seek import SmartSeek
+from smart_seek_catalogue import SmartSeekCatalogue
+from smart_seek_waterfall import SeekWaterfall
+from waterfall_levels import AutoWaterfallLevels
+import offline_schedules
 from smart_seek_view import SmartSeekView
 from meter_artwork import linear_strip_image
 
@@ -964,6 +967,7 @@ WIDE_VIEW_GROUP_BOX = (782, 338, 986, 412)
 # output configuration. Never use a fixed Y coordinate for this platform.
 LCD_CONTROL_GAP = 10
 HOME_BOX = (30, 13, 102, 71)
+WATERFALL_ACTIONS_TOP = 8
 TIME_SOURCE_LABEL = "UTC"
 # The top instruments share one right alignment in MIDDLE. LEFT keeps its
 # frequency and S-meter together at the canvas edge.
@@ -1269,6 +1273,7 @@ DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_LAYOUT_BOXES = ()
+DISPLAY_WATERFALL_MODE_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -1780,6 +1785,7 @@ def configure_popup_layout():
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
     global DISPLAY_RESET_BOX, DISPLAY_THEME_BOX, DISPLAY_LAYOUT_BOXES
+    global DISPLAY_WATERFALL_MODE_BOXES
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1819,6 +1825,7 @@ def configure_popup_layout():
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
     DISPLAY_THEME_BOX = (0, 0, 0, 0)
     DISPLAY_LAYOUT_BOXES = ()
+    DISPLAY_WATERFALL_MODE_BOXES = ()
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
@@ -1883,6 +1890,11 @@ def configure_popup_layout():
             (position, (rate_starts[index], layout_y0,
                         rate_starts[index] + rate_widths[index], layout_y0 + small_h))
             for index, position in enumerate(("left", "middle", "right"))
+        )
+        mode_y0 = layout_y0 + small_h + 8
+        DISPLAY_WATERFALL_MODE_BOXES = (
+            (True, (inner_x0, mode_y0, inner_x0+half_w, mode_y0+56)),
+            (False, (inner_x0+half_w+column_gap, mode_y0, inner_x1, mode_y0+56)),
         )
 
     dy = offset("filter")
@@ -2685,6 +2697,22 @@ def receiver_picker_command_boxes():
     )
 
 
+def receiver_directory_refresh_box():
+    """Shared list/globe action above the standard command grid."""
+    if LCD_800_MODE:
+        return (RECEIVER_PICKER_BACK_BOX[0], 504, RECEIVER_PICKER_BACK_BOX[2], 568)
+    return (806, 176, 948, 240)
+
+
+def draw_directory_refresh_button(text_cache, refreshing=False):
+    draw_styled_two_line_button(
+        text_cache, receiver_directory_refresh_box(),
+        "UPDATING..." if refreshing else "UPDATE LIST",
+        "Keep browsing" if refreshing else directory_age_label(GLOBE_DIRECTORY_CACHE),
+        active=refreshing,
+    )
+
+
 def receiver_list_notice_box():
     """Sort uses the exact same placement and size as the Zoom OSD."""
     return ZOOM_OSD_BOX
@@ -3385,7 +3413,7 @@ def select_frequency_identity_candidates(candidates, frequency_khz):
     return list(unique_by_key.values())[:4]
 
 
-def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ):
+def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, possible=False):
     """Parse the public Quick Search page without treating its HTML as code.
 
     The page merges EiBi, AOKI, HFCC, and ITU results. Those sources often
@@ -3430,7 +3458,7 @@ def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUE
                 "lon": longitude,
                 "source": source,
             })
-    return select_frequency_identity_candidates(candidates, frequency_khz)
+    return candidates if possible else select_frequency_identity_candidates(candidates, frequency_khz)
 
 
 def _frequency_identity_schedule_active(start_text, end_text, timestamp=None):
@@ -3461,7 +3489,7 @@ def _frequency_identity_schedule_active(start_text, end_text, timestamp=None):
     return now_minute >= start_minute_of_day or now_minute < end_minute_of_day
 
 
-def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, timestamp=None):
+def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, timestamp=None, possible=False):
     """Parse currently scheduled rows from Shortwave.Live's frequency page."""
     candidates = []
     for row_match in re.finditer(r"<tr[^>]*start_time=[\"']([^\"']+)[\"'][^>]*end_time=[\"']([^\"']+)[\"'][^>]*>(.*?)</tr>", document, re.I | re.S):
@@ -3495,90 +3523,63 @@ def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUE
             "lon": coordinates[1] if coordinates else None,
             "source": "Shortwave.Live",
         })
-    return select_frequency_identity_candidates(candidates, frequency_khz)
+    return candidates if possible else select_frequency_identity_candidates(candidates, frequency_khz)
 
 
 def lookup_shortwave_frequency(frequency_khz):
-    """Fetch a small, cached online AM/SW schedule lookup off the UI thread."""
-    lookup_frequency = round(float(frequency_khz) * 2.0) / 2.0
-    now = time.monotonic()
-    with FREQUENCY_ID_CACHE_LOCK:
-        cached = FREQUENCY_ID_CACHE.get(lookup_frequency)
-        if cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS:
-            return lookup_frequency, list(cached[1]), None
-    try:
-        request = Request(
-            SHORTWAVE_DB_QUICKSEARCH_URL,
-            data=urlencode({"freq": f"{lookup_frequency:.3f}"}).encode("ascii"),
-            headers={"User-Agent": CLIENT_NAME},
-            method="POST",
-        )
-        with urlopen(request, timeout=10) as response:
-            document = response.read(512 * 1024).decode("utf-8", "replace")
-        candidates = parse_shortwave_db_quicksearch(document, frequency_khz)
-        if not candidates:
-            fallback_frequency = int(round(float(frequency_khz) / 5.0) * 5)
-            fallback_request = Request(
-                SHORTWAVE_LIVE_KHZ_URL.format(frequency=fallback_frequency),
-                headers={"User-Agent": CLIENT_NAME},
-            )
-            with urlopen(fallback_request, timeout=10) as response:
-                fallback_document = response.read(512 * 1024).decode("utf-8", "replace")
-            candidates = parse_shortwave_live_frequency(fallback_document, frequency_khz)
-        with FREQUENCY_ID_CACHE_LOCK:
-            FREQUENCY_ID_CACHE[lookup_frequency] = (time.monotonic(), tuple(candidates))
-        return lookup_frequency, candidates, None
-    except Exception as exc:
-        return lookup_frequency, [], str(exc)
+    """Look up downloaded schedules; bulk refresh runs off the UI thread."""
+    return offline_schedules.lookup(float(frequency_khz), tolerance=FREQUENCY_ID_TOLERANCE_KHZ)
+
+
+def lookup_smart_seek_frequency(frequency_khz):
+    """Keep explicitly marked older-season names useful while browsing."""
+    return offline_schedules.lookup(float(frequency_khz), tolerance=FREQUENCY_ID_TOLERANCE_KHZ,
+                                    allow_old_season=True)
+
+
+def research_shortwave_frequency(frequency_khz):
+    """Explicit online research only; never called by automatic identification."""
+    frequency = float(frequency_khz)
+    requests = (
+        (Request(SHORTWAVE_DB_QUICKSEARCH_URL,
+                 data=urlencode({'freq':f'{frequency:.3f}'}).encode('ascii'),
+                 headers={'User-Agent':CLIENT_NAME}, method='POST'), parse_shortwave_db_quicksearch),
+        (Request(SHORTWAVE_LIVE_KHZ_URL.format(frequency=int(round(frequency/5)*5)),
+                 headers={'User-Agent':CLIENT_NAME}), parse_shortwave_live_frequency),
+    )
+    rows, errors = [], []
+    for request, parser in requests:
+        try:
+            with urlopen(request, timeout=10) as response:
+                data = response.read(512*1024+1)
+            if len(data) > 512*1024:
+                raise ValueError('Schedule page exceeds size limit')
+            rows.extend(parser(data.decode('utf-8','replace'), frequency,
+                               tolerance_khz=2.5, possible=True))
+        except Exception as error:
+            errors.append(str(error))
+    unique = {}
+    for row in sorted(rows, key=lambda r:abs(r['frequency_khz']-frequency)):
+        key = (row['frequency_khz'],row['station'].casefold(),
+               row.get('country','').casefold(),row.get('transmitter','').casefold())
+        if key not in unique:
+            unique[key] = dict(row)
+        else:
+            for field in ('power_kw','country','language'):
+                if not unique[key].get(field):
+                    unique[key][field] = row.get(field,'')
+    return frequency,list(unique.values())[:24],'; '.join(errors) or None
 
 
 def cached_frequency_identity_candidates(frequency_khz):
-    """Return a still-valid nearby scheduled frequency without network I/O."""
-    now = time.monotonic()
-    candidates = []
-    with FREQUENCY_ID_CACHE_LOCK:
-        for cached_at, cached_candidates in FREQUENCY_ID_CACHE.values():
-            if now - cached_at < FREQUENCY_ID_CACHE_SECONDS:
-                candidates.extend(cached_candidates)
-    return select_frequency_identity_candidates(candidates, frequency_khz)
-
-
-def _frequency_identity_prefetch_worker(frequency_khz):
-    try:
-        lookup_shortwave_frequency(frequency_khz)
-    finally:
-        with FREQUENCY_ID_CACHE_LOCK:
-            FREQUENCY_ID_PREFETCH_INFLIGHT.discard(round(float(frequency_khz) * 2.0) / 2.0)
+    """Read current UTC matches from the local index without network I/O."""
+    return offline_schedules.store.lookup(float(frequency_khz),
+        tolerance=FREQUENCY_ID_TOLERANCE_KHZ)[1]
 
 
 def prefetch_frequency_identity_neighbours(frequency_khz):
-    """Warm the immediately adjacent SW channels after a real lookup.
-
-    Prefetch is deliberately tiny: the two neighbouring 5 kHz channels on
-    either side. It never changes the receiver state and is skipped entirely
-    when a fresh answer is already cached or in flight.
-    """
-    base_frequency = round(float(frequency_khz) / 5.0) * 5.0
-    now = time.monotonic()
-    for offset in FREQUENCY_ID_PREFETCH_OFFSETS_KHZ:
-        target_frequency = base_frequency + offset
-        if not 2300.0 <= target_frequency <= 30000.0:
-            continue
-        cache_key = round(target_frequency * 2.0) / 2.0
-        with FREQUENCY_ID_CACHE_LOCK:
-            cached = FREQUENCY_ID_CACHE.get(cache_key)
-            if (
-                (cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS)
-                or cache_key in FREQUENCY_ID_PREFETCH_INFLIGHT
-            ):
-                continue
-            FREQUENCY_ID_PREFETCH_INFLIGHT.add(cache_key)
-        threading.Thread(
-            target=_frequency_identity_prefetch_worker,
-            args=(target_frequency,),
-            name=f"frequency-prefetch-{int(target_frequency)}",
-            daemon=True,
-        ).start()
+    # The local frequency index needs no adjacent-channel HTTP prefetch.
+    return None
 
 
 def frequency_identity_worker(result_queue, frequency_khz):
@@ -4443,6 +4444,8 @@ def configure_output(desktop=False):
     global LOGICAL_W, LOGICAL_H, WF_TEX_W, WF_TEX_H
     global ZOOM_MINUS_BOX, ZOOM_PLUS_BOX, ZOOM_GROUP_BOX
     global FILTER_TOGGLE_BOX, SPECTRUM_TOGGLE_BOX, VIEW_GROUP_BOX
+    global WATERFALL_ACTIONS_TOP
+    WATERFALL_ACTIONS_TOP = 8
     DESKTOP_MODE = bool(desktop)
     DESKTOP_1280_MODE = False
     LCD_800_MODE = True
@@ -4619,28 +4622,25 @@ def mute_waterfall_box():
 
 
 def stream_waterfall_box():
-    """Home-size icon aligned with the one-line connection annunciator."""
-    x1 = LCD_NAV_X0 - 18 if LCD_800_MODE else BASE_LOGICAL_W - 18
+    """Top-right square in the shared two-by-two listening controls."""
+    x1 = (LCD_NAV_X0 if LCD_800_MODE else BASE_LOGICAL_W) - 6
     width = HOME_BOX[2] - HOME_BOX[0]
-    height = HOME_BOX[3] - HOME_BOX[1]
-    x1 -= 40
+    height = width
     x0 = x1 - width
-    # Center this 72x58 target on the fixed connection OSD at y=154. It is
-    # deliberately a companion to that message rather than a second overlay
-    # farther down the waterfall.
-    y0 = 100
+    y0 = WATERFALL_ACTIONS_TOP
     return x0, y0, x1, y0 + height
 
 
 def carrier_waterfall_box():
-    """AM tuning tile below Favorite/Pause, clear of frequency and status."""
-    x0, _y0, _x1, y1 = favorite_waterfall_box()
-    return x0, y1 + 10, stream_waterfall_box()[2], y1 + 68
+    """TUNE occupies the square immediately below Favorite."""
+    x0, y0, x1, y1 = favorite_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
 
 
 def smart_seek_waterfall_box():
-    x0, _y0, x1, y1 = carrier_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 68
+    """SEEK occupies the square immediately below Play/Pause."""
+    x0, y0, x1, y1 = stream_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
 
 
 def carrier_button_visible(state):
@@ -5044,7 +5044,8 @@ class SharedState:
     ):
         self.lock = threading.Lock()
         self.carrier_search = CarrierSearch()
-        self.smart_seek = SmartSeek()
+        self.smart_seek = SmartSeekCatalogue(SW_BROADCAST_BANDS)
+        self.seek_waterfall = SeekWaterfall()
         self.carrier_idle_context = None
         self.carrier_idle_since = time.monotonic()
         self.carrier_attempted_context = None
@@ -5078,6 +5079,9 @@ class SharedState:
         self.wf_ceil = float(wf_ceil)
         self.wf_speed = clamp(int(wf_speed), 1, WATERFALL_MAX_SPEED)
         self.wf_auto = True
+        self.wf_live_levels = None
+        self.wf_level_context = None
+        self.wf_leveler = AutoWaterfallLevels()
         self.wf_palette = WATERFALL_DEFAULT_PALETTE
         self.wf_generation = 0
         # A waterfall tap tunes within the current RF window. Keep that
@@ -5151,6 +5155,8 @@ class SharedState:
         self.callsign_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_auto = True
+        self.spectrum_leveler = AutoWaterfallLevels()
+        self.spectrum_level_context = None
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
         self.spectrum_peak_history = deque()
@@ -5380,28 +5386,35 @@ class SharedState:
             return result
 
     def _smart_seek_band(self):
-        return next((band for band in SW_BROADCAST_BANDS
-                     if band[0] <= self.freq_khz <= band[1]), None)
+        return min(SW_BROADCAST_BANDS,
+                   key=lambda band: max(band[0]-self.freq_khz, self.freq_khz-band[1], 0))
 
     def smart_seek_available(self):
         with self.lock:
             return self._carrier_eligible() and self._smart_seek_band() is not None
 
-    def start_smart_seek(self, refresh=False):
+    def start_smart_seek(self, refresh=False, band_label=None):
         with self.lock:
+            self._set_seek_waterfall(False)
             if not self._carrier_eligible():
                 return False
-            band = self._smart_seek_band()
+            if band_label is None and refresh and self.smart_seek.open:
+                band_label = self.smart_seek.label
+            band = (next((b for b in SW_BROADCAST_BANDS if b[2] == band_label), None)
+                    if band_label is not None else self._smart_seek_band())
             if band is None:
                 return False
             self.carrier_search.finish('', time.monotonic())
             self.carrier_tuned_khz = None
+            # Opening starts fresh; switching within the menu requalifies
+            # the session's dimmed rows while retaining the other bands.
             self.smart_seek.start(*band, self._carrier_context(), time.monotonic(),
-                                  cache_key=(self.server, band[0], band[1]), refresh=refresh)
+                                  cache_key=(self.server, band[0], band[1]), refresh=refresh, adaptive=True)
             return True
 
     def close_smart_seek(self, selected=None):
         with self.lock:
+            self._set_seek_waterfall(False)
             if selected is not None and any(item.frequency_khz == selected for item in self.smart_seek.candidates):
                 self.smart_seek.selection = selected
             self.smart_seek.close()
@@ -5418,7 +5431,8 @@ class SharedState:
             if (not self.smart_seek.open or not self._carrier_eligible()
                     or not any(item.frequency_khz == frequency for item in candidates)):
                 return False
-            self.freq_khz = frequency
+            selected = next(item for item in candidates if item.frequency_khz == frequency)
+            self.freq_khz = selected.tuning_khz
             self.wf_view_center_khz = None
             self.view_generation += 1
             self.spectrum_peak_values = ()
@@ -5429,15 +5443,41 @@ class SharedState:
             # Only this explicit menu selection carries the survey across a
             # VFO move. Other tuning/receiver changes still cancel capture.
             self.smart_seek.context = self._carrier_context()
+            if self.seek_waterfall.enabled:
+                self.seek_waterfall.set(True, self.freq_khz, self._carrier_context())
             return True
+
+    def _set_seek_waterfall(self, enabled):
+        if enabled:
+            enabled = self.smart_seek.open and any(
+                min(abs(c.frequency_khz-self.freq_khz), abs(c.tuning_khz-self.freq_khz)) < .5
+                for c in self.smart_seek.candidates if c.frequency_khz not in self.smart_seek.suppressed)
+        self.seek_waterfall.set(enabled, self.freq_khz, self._carrier_context())
+        self.smart_seek.set_capture_paused(enabled, time.monotonic())
+
+    def toggle_seek_waterfall(self):
+        with self.lock:
+            self._set_seek_waterfall(not self.seek_waterfall.enabled)
+
+    def take_seek_waterfall(self):
+        with self.lock:
+            return self.seek_waterfall.take()
 
     def smart_seek_snapshot(self):
         with self.lock:
+            self.smart_seek.playing_khz = self.freq_khz
             self.smart_seek.poll(self._carrier_context(), time.monotonic())
             if not self._carrier_eligible():
                 self.smart_seek.close()
+            if not self.smart_seek.open:
+                self._set_seek_waterfall(False)
             snapshot = self.smart_seek.snapshot()
+            snapshot['waterfall'] = self.seek_waterfall.enabled
+            if self.seek_waterfall.enabled:
+                snapshot['phase'] = 'preview'
             snapshot['playing_khz'] = self.freq_khz
+            snapshot['bands'] = tuple(b[2] for b in SW_BROADCAST_BANDS
+                                      if b[0] < self.smart_seek.bandwidth_hz/1000)
             return snapshot
 
     def smart_seek_capture_request(self, bandwidth_hz=30000000, zoom_cap=14):
@@ -5445,15 +5485,23 @@ class SharedState:
             if not self._carrier_eligible():
                 self.smart_seek.close()
                 return None
+            if self.seek_waterfall.enabled and self.seek_waterfall.context != self._carrier_context():
+                self._set_seek_waterfall(False)
+            if self.seek_waterfall.enabled:
+                return self.seek_waterfall.request(bandwidth_hz, zoom_cap)
             return self.smart_seek.request(self._carrier_context(), time.monotonic(), bandwidth_hz, zoom_cap)
 
     def feed_smart_seek_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
         with self.lock:
+            self.smart_seek.playing_khz = self.freq_khz
             self.smart_seek.poll(self._carrier_context(), time.monotonic())
             if not self._carrier_eligible():
                 self.smart_seek.close()
                 return
-            self.smart_seek.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
+            if self.seek_waterfall.enabled:
+                self.seek_waterfall.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
+            else:
+                self.smart_seek.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
 
     def move_smart_seek(self, delta):
         with self.lock:
@@ -5462,6 +5510,11 @@ class SharedState:
     def set_smart_seek_sensitivity(self, value):
         with self.lock:
             self.smart_seek.sensitivity = int(clamp(value, 0, 100))
+
+    def note_smart_seek_identity(self, frequency, known, nominal=()):
+        with self.lock:
+            if self.smart_seek.open:
+                self.smart_seek.note_identity(frequency,known,nominal)
 
     def waterfall_view_center_snapshot(self):
         with self.lock:
@@ -5761,6 +5814,37 @@ class SharedState:
     def waterfall_snapshot(self):
         with self.lock:
             return self.wf_floor, self.wf_ceil, self.wf_speed, self.wf_auto, self.wf_palette, self.wf_generation
+
+    def waterfall_levels(self, samples, source_center_khz=None, source_span_khz=None):
+        """Use the same contrast rule for the currently visible native RF view."""
+        with self.lock:
+            context = (self.server_generation, self.view_generation, self.radio_generation,
+                       self.wf_auto, source_center_khz, source_span_khz)
+            if context != self.wf_level_context:
+                self.wf_leveler = AutoWaterfallLevels()
+                self.wf_level_context = context
+            visible = samples
+            span = receiver_display_span(self.zoom, self.receiver_type)
+            if source_center_khz is not None and source_span_khz and span < source_span_khz:
+                center = (local_waterfall_center(self.freq_khz, self.wf_view_center_khz)
+                          if self.external_waterfall else receiver_waterfall_center(
+                              self.freq_khz, span, self.receiver_type, self.wf_view_center_khz))
+                left = source_center_khz-source_span_khz/2
+                start = max(0, int((center-span/2-left)/source_span_khz*len(samples)))
+                end = min(len(samples), math.ceil((center+span/2-left)/source_span_khz*len(samples)))
+                if end > start:
+                    visible = samples[start:end]
+            levels = (self.wf_leveler.levels_for(visible) if self.wf_auto
+                      else (self.wf_floor, self.wf_ceil))
+            self.wf_live_levels = levels
+            return levels
+
+    def select_waterfall_mode(self, automatic):
+        with self.lock:
+            floor, ceiling = self.wf_live_levels or (self.wf_floor, self.wf_ceil)
+        if automatic:
+            return self.set_waterfall(auto=True)
+        return self.set_waterfall(floor=floor, ceil=ceiling, auto=False)
 
     def set_waterfall(self, floor=None, ceil=None, speed=None, auto=None, palette=None):
         with self.lock:
@@ -6275,6 +6359,7 @@ class SharedState:
     def set_spectrum_auto(self, enabled):
         with self.lock:
             self.spectrum_auto = bool(enabled)
+            self.spectrum_level_context = None
             return self.spectrum_auto
 
     def update_spectrum(self, samples, floor, ceiling):
@@ -6283,14 +6368,15 @@ class SharedState:
         with self.lock:
             spectrum_auto = self.spectrum_auto
             manual_floor, manual_ceiling = self.wf_floor, self.wf_ceil
-        if spectrum_auto:
-            ordered = sorted(samples)
-            median = ordered[len(ordered) // 2]
-            p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-            floor = clamp(median - 8, 40, 230)
-            ceiling = clamp(max(p98 + 72, floor + 95), floor + 55, 255)
-        else:
-            floor, ceiling = manual_floor, manual_ceiling
+            if spectrum_auto:
+                context = self.server_generation, self.view_generation, self.radio_generation
+                if context != self.spectrum_level_context:
+                    self.spectrum_leveler = AutoWaterfallLevels()
+                    self.spectrum_level_context = context
+                floor, ceiling = (self.wf_live_levels if self.wf_auto and self.wf_live_levels is not None
+                                  else self.spectrum_leveler.levels_for(samples))
+            else:
+                floor, ceiling = manual_floor, manual_ceiling
         scale = 1.0 / max(1.0, ceiling - floor)
         values = []
         for index in range(SPECTRUM_BINS):
@@ -7254,10 +7340,10 @@ class MiniWaterfallTexture:
             GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, row,
         )
 
-    def draw(self, x0, y0, x1, y1):
+    def draw(self, x0, y0, x1, y1, visible_fraction=None):
         # Kiwi ends at zoom 14. The card locally magnifies the narrow USB
         # WSPR activity window, wide enough to show 1200--1800 Hz in one view.
-        half = WSPR_MINI_WF_VISIBLE_FRACTION / 2.0
+        half = (WSPR_MINI_WF_VISIBLE_FRACTION if visible_fraction is None else visible_fraction) / 2.0
         u0, u1 = 0.5 - half, 0.5 + half
         first = self.height - self.row
         draw_textured_quad(self.tex, x0, y0, x1, y0 + (y1 - y0) * first / self.height,
@@ -8907,20 +8993,10 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
 def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
     if alpha <= 0:
         return
-    box = carrier_waterfall_box()
-    x0, y0, x1, y1 = box
-    active = status == "TUNING…"
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(
-        box, active=active, pressed=pressed,
-        fill_alpha=round(waterfall_button_fill_alpha(active, pressed) * alpha))
-    first, second = ("AUTO TUNE", "READY") if status == "READY" else (("TUNE", "CARRIER") if not status else (status, ""))
-    color = (*visual.text[:3], round(255 * alpha))
-    draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 - (10 if second else 0),
-              first, color, 17, True, False, "cm", family="Liberation Sans")
-    if second:
-        draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 + 12,
-                  second, color, 17, True, False, "cm", family="Liberation Sans")
+    # Visibility already means a correction is available. This is an action,
+    # not an announcement that the receiver has tuned automatically.
+    draw_styled_text_button(text_cache, carrier_waterfall_box(), "TUNE",
+                            style=replace(APP_UI_STYLE.button, label_size=18))
 
 
 def draw_favorite_waterfall_button(favorited):
@@ -9754,6 +9830,9 @@ def display_option_at(x, y):
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
                 return "layout", layout
+        for automatic, box in DISPLAY_WATERFALL_MODE_BOXES:
+            if contains(box, x, y):
+                return "waterfall_mode", automatic
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -9778,7 +9857,17 @@ def display_option_at(x, y):
 
 def apply_waterfall_palette_preset(state, palette):
     floor, ceiling = WATERFALL_PALETTE_PRESETS[palette]
-    return state.set_waterfall(floor=floor, ceil=ceiling, auto=False, palette=palette)
+    return state.set_waterfall(floor=floor, ceil=ceiling, palette=palette)
+
+
+def restore_waterfall_preferences(state, preferences):
+    """Migrate legacy implicit/manual presets to the requested Auto default."""
+    preferences = preferences if isinstance(preferences, dict) else {}
+    return state.set_waterfall(
+        floor=preferences.get('floor'), ceil=preferences.get('ceil'),
+        speed=preferences.get('speed'), palette=preferences.get('palette'),
+        auto=preferences.get('contrast_mode') != 'manual',
+    )
 
 
 def reset_display_view(state):
@@ -9787,7 +9876,7 @@ def reset_display_view(state):
         floor=WATERFALL_DEFAULT_FLOOR,
         ceil=WATERFALL_DEFAULT_CEIL,
         speed=WATERFALL_DEFAULT_SPEED,
-        auto=False,
+        auto=True,
         palette=WATERFALL_DEFAULT_PALETTE,
     )
     state.set_spectrum_enabled(True)
@@ -14358,6 +14447,10 @@ def receiver_map_render_rows(receivers, selected_server, pending_server, interac
     return rows, selected_key, pending_key, selected[0] if selected else None
 
 
+def receiver_visuals_hidden(globe_open, map_open, adsb_open):
+    return (globe_open and map_open) or adsb_open
+
+
 def globe_frame_rate(default_fps, globe_open, moving):
     """Spend extra frames only on an actively manipulated globe."""
     return max(default_fps, 60.0) if globe_open and moving else default_fps
@@ -14366,7 +14459,7 @@ def globe_frame_rate(default_fps, globe_open, moving):
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False, notice_alpha=220,
+    map_view="borders", interactive=False, notice_alpha=220, directory_refreshing=False,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -14539,6 +14632,7 @@ def draw_receiver_map(
             receiver_map_legend_swatch_color(legend_group, legend_active),
         )
 
+    draw_directory_refresh_button(text_cache, directory_refreshing)
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
     draw_picker_two_line_button(
         text_cache, RADIOGARDEN_VIEW_BOX, "VIEW",
@@ -14592,7 +14686,7 @@ def draw_filter_width_control(text_cache, box, label):
 
 
 def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, palette, spectrum_enabled,
-                             instrument_layout="middle"):
+                             instrument_layout="middle", waterfall_auto=True):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
@@ -14605,6 +14699,9 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         for layout, box in DISPLAY_LAYOUT_BOXES:
             draw_display_control(text_cache, box, layout.upper(),
                                  layout == visible_frequency_position(instrument_layout))
+        for automatic, box in DISPLAY_WATERFALL_MODE_BOXES:
+            draw_lcd_audio_tile(text_cache, box, "WATERFALL", "AUTO" if automatic else "MANUAL",
+                                waterfall_auto == automatic)
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
@@ -14618,12 +14715,12 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         ceiling_minimum = floor + 30.0
         draw_display_slider_section(
             text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
-            floor - 40.0, floor_maximum - 40.0, f"{floor:.0f}", True,
+            floor - 40.0, floor_maximum - 40.0, "AUTO" if waterfall_auto else f"{floor:.0f}", not waterfall_auto,
         )
         draw_display_slider_section(
             text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
             ceiling - ceiling_minimum, 255.0 - ceiling_minimum,
-            f"{ceiling:.0f}", True,
+            "AUTO" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto,
         )
         draw_lcd_drawer_heading(text_cache, DISPLAY_PALETTE_BOXES[0][1][0] + 4,
                                 DISPLAY_PALETTE_BOXES[0][1][1] - 16, "WATERFALL THEME")
@@ -14988,6 +15085,11 @@ def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_nea
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
     color = APP_UI_STYLE.palette.notice
     opacity = alpha / 255.0
+    if not notice.startswith("SORTED BY "):
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2,
+                  fit_station_text(text_cache, notice, x1 - x0 - 32, 22, True, False),
+                  color, 22, True, False, "cm", alpha=opacity)
+        return
     draw_text(text_cache, x0 + 18, y0 + 22, "SORTED BY", color,
               28, True, True, "lm", alpha=opacity)
     draw_logical_polyline(sort_chevron_points((x0, y0, x1, y1), sort_mode),
@@ -17937,7 +18039,7 @@ def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
     show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
-    active_usb_source=None, favorite_servers=(),
+    active_usb_source=None, favorite_servers=(), directory_refreshing=False,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -17970,6 +18072,8 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 23)
         draw_picker_two_line_button(text_cache, PICKER_SORT_BOX, "SORT", sort_mode.upper(), 20)
         draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
+
+    draw_directory_refresh_button(text_cache, directory_refreshing)
 
     leading_rows = 1 if show_fmdx_notice else 0
     if show_fmdx_notice:
@@ -19064,6 +19168,10 @@ def draw_ui(
     zoom_pressed=None,
     usb_receiver=False,
 ):
+    global WATERFALL_ACTIONS_TOP
+    # RIGHT places frequency and meter in the rail, leaving the RF corner
+    # free. Other layouts retain clearance below their top instrument strip.
+    WATERFALL_ACTIONS_TOP = 8 if instrument_layout == "right" else 88
     # Keep the large frequency's translucent strip aligned with the active
     # theme; RIGHT has no such strip over the RF canvas.
     show_large_instruments = instrument_layout != "right"
@@ -19452,7 +19560,8 @@ def publish_fmdx_pcm(
         state.connection_ready(server_generation, "waterfall")
         return True
     for samples in analyzer.feed(mono):
-        line = kiwi.waterfall_line(samples, mapper, 0.0, 255.0, width=WF_TEX_W)
+        floor, ceiling = state.waterfall_levels(samples, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ/1000.0)
+        line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
         state.update_spectrum(samples, 0.0, 255.0)
         row_item = (line, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0)
         for _ in range(max(1, int(getattr(args, "wf_row_pixels", 1)))):
@@ -20222,6 +20331,9 @@ class RTLSDRLab:
             levels[1] = max(levels[0] + 24.0, levels[1])
         normalized = np.clip((bins - levels[0]) / (levels[1] - levels[0]), 0.0, 1.0)
         values = (normalized * 255.0).astype(np.uint8)
+        display_floor, display_ceiling = self.state.waterfall_levels(values.tobytes(), center_khz, self.source_span_khz())
+        values = np.clip((values.astype(np.float32)-display_floor)*255.0/
+                         max(1.0, display_ceiling-display_floor), 0, 255).astype(np.uint8)
         rgba_line = np.empty((WF_TEX_W, 4), dtype=np.uint8)
         rgba_line[:, 0] = lut[0][values]
         rgba_line[:, 1] = lut[1][values]
@@ -22471,7 +22583,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
     """Adapt one OpenWebRX socket into the normal Home audio and waterfall."""
     player = session = None
     generation = None
-    leveler = mapper = None
+    mapper = None
     seen_wf_generation = None
     waterfall_rows = 0
     try:
@@ -22495,7 +22607,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent=CLIENT_NAME)
                 session.connect()
                 generation = server_generation
-                leveler = mapper = None
+                mapper = None
                 if player is None:
                     player = BufferedAudioPlayer(args, 1, state)
                 else:
@@ -22551,24 +22663,12 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 state.connection_ready(server_generation, "waterfall")
                 samples = bytes(clamp(int(round(value + 160.0)), 0, 255) for value in event.waterfall)
                 wf_floor, wf_ceil, _speed, wf_auto, palette, wf_generation = state.waterfall_snapshot()
-                if leveler is None or wf_generation != seen_wf_generation:
-                    if leveler is None and wf_auto:
-                        # OpenWebRX sends FFT dB values while Kiwi's saved
-                        # display range is calibrated to its unsigned W/F
-                        # bytes. Seed auto-level from the first actual row so
-                        # the OpenWebRX waterfall is visible immediately.
-                        ordered = sorted(samples)
-                        median = ordered[len(ordered) // 2]
-                        p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-                        wf_floor = clamp(median - 8, 40, 230)
-                        wf_ceil = clamp(max(p98 + 72, wf_floor + 95), wf_floor + 55, 255)
-                    if leveler is None:
-                        leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
-                    else:
-                        leveler.floor, leveler.ceiling, leveler.auto = wf_floor, wf_ceil, wf_auto
+                if mapper is None or wf_generation != seen_wf_generation:
                     mapper = waterfall_mapper(palette)
                     seen_wf_generation = wf_generation
-                floor, ceiling = leveler.levels_for(samples)
+                source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom))/1000.0
+                row_center_khz = float(session.center_frequency_hz or freq_khz*1000.0)/1000.0
+                floor, ceiling = state.waterfall_levels(samples, row_center_khz, source_span)
                 update_openwebrx_scope(state, samples, floor, ceiling)
                 line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                 source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom)) / 1000.0
@@ -23297,7 +23397,6 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
             state.connection_attempt(seen_server_generation, "waterfall")
             wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, seen_wf_generation = state.waterfall_snapshot()
             mapper = waterfall_mapper(wf_palette)
-            leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
             session_timestamp = state.kiwi_session_timestamp_snapshot(seen_server_generation)
             if session_timestamp is None:
                 continue
@@ -23354,9 +23453,6 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     seen_wf_generation = wf_generation
                     previous_speed = wf_speed
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
-                    leveler.floor = wf_floor
-                    leveler.ceiling = wf_ceil
-                    leveler.auto = wf_auto
                     mapper = waterfall_mapper(wf_palette)
                     if wf_speed != previous_speed:
                         ws.send_text(f"SET wf_speed={wf_speed}")
@@ -23454,7 +23550,10 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                             continue
                         carrier_restoring = False
                     samples = message[16:]
-                    floor, ceiling = leveler.levels_for(samples)
+                    source_zoom = min(sent_kiwi_zoom, wf_zoom_cap)
+                    source_span = wf_bandwidth_hz/(2**source_zoom*1000)
+                    source_center = rf_view_center_hz(sent_freq_khz*1000, wf_bandwidth_hz, source_zoom)/1000
+                    floor, ceiling = state.waterfall_levels(samples, source_center, source_span)
                     line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                     # Scope can be hidden for a waterfall-first screen. Do
                     # not calculate its 10-second peak history in that mode:
@@ -23717,14 +23816,7 @@ def main():
                 high_cut=filter_preferences.get("high_cut"),
             )
         waterfall_preferences = remembered_preferences.get("waterfall", {})
-        if isinstance(waterfall_preferences, dict):
-            state.set_waterfall(
-                floor=waterfall_preferences.get("floor"),
-                ceil=waterfall_preferences.get("ceil"),
-                speed=waterfall_preferences.get("speed"),
-                auto=waterfall_preferences.get("auto"),
-                palette=waterfall_preferences.get("palette"),
-            )
+        restore_waterfall_preferences(state, waterfall_preferences)
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
         if isinstance(remembered_preferences.get("spectrum_auto"), bool):
@@ -24543,10 +24635,12 @@ def main():
     ).start()
     public_result_queue = queue.Queue(maxsize=1)
     daily_directories = DailyDirectoryRefresh((
-        lambda: refresh_public_stations(public_result_queue),
-        lambda: refresh_globe_receivers(globe_result_queue),
-        lambda: refresh_openwebrx_stations(openwebrx_result_queue),
+        lambda: checked_refresh(lambda: refresh_public_stations(public_result_queue), PUBLIC_DIRECTORY_CACHE),
+        lambda: checked_refresh(lambda: refresh_globe_receivers(globe_result_queue), GLOBE_DIRECTORY_CACHE),
+        lambda: checked_refresh(lambda: refresh_openwebrx_stations(openwebrx_result_queue), openwebrx_directory.DEFAULT_CACHE),
     ))
+    manual_directory_refresh = False
+    directory_refresh_completed = 0
     retune_pattern_index = 0
     retune_sweep = None
     dj_tune_open = False
@@ -24733,6 +24827,7 @@ def main():
                 "ceil": round(float(ceiling), 1),
                 "speed": int(speed),
                 "auto": bool(auto),
+                "contrast_mode": "auto" if auto else "manual",
                 "palette": palette,
             },
             "dual_vfo": {
@@ -25086,7 +25181,7 @@ def main():
             return
         if not state.tune_smart_seek_candidate(frequency):
             return
-        display_freq = candidate_freq = frequency
+        display_freq = candidate_freq = state.snapshot()[1]
         anim_start = 0.0
         inertia_velocity_khz_s = 0.0
         remember_current_view()
@@ -26163,7 +26258,7 @@ def main():
             not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not (audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+            and not (seek_view.open or audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
                      or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
             and not ((wspr_panel_open and not (wspr_expanded_waterfall_open or wspr_expanded_graph_open)) or font_lab_open or rtl_lab_open
@@ -26437,7 +26532,7 @@ def main():
                     continue
                 if event.type == pygame.KEYDOWN and seek_view.open:
                     if event.key == pygame.K_ESCAPE:
-                        seek_view.close()
+                        seek_view.back()
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
                         seek_view.move(-1)
                     elif event.key in (pygame.K_RIGHT, pygame.K_DOWN):
@@ -26529,6 +26624,7 @@ def main():
                             picker_map_notice_until = time.monotonic() + 1.6
                         elif (
                             picker_open and picker_map_open and contains(PICKER_MAP_BOX, map_x, map_y)
+                            and not contains(receiver_directory_refresh_box(), map_x, map_y)
                             and not contains(RADIOGARDEN_LIST_BOX, map_x, map_y)
                             and not contains(RADIOGARDEN_EXIT_BOX, map_x, map_y)
                             and not contains(RADIOGARDEN_VIEW_BOX, map_x, map_y)
@@ -26803,7 +26899,7 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if seek_view.open and x < rf_canvas_width():
+                            if seek_view.open:
                                 gesture = "smart_seek"
                                 seek_view.press(x, y)
                             elif audio_test_workspace.open:
@@ -26872,6 +26968,8 @@ def main():
                             # waterfall target that happens to share the same
                             # coordinates underneath the browser (the source row
                             # overlaps the frequency readout, for example).
+                            elif picker_open and not search_open and contains(receiver_directory_refresh_box(), x, y):
+                                gesture = "picker_directory_refresh"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_LIST_BOX, x, y):
                                 gesture = "picker_map_list"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_EXIT_BOX, x, y):
@@ -28955,6 +29053,10 @@ def main():
                                             toggle_display_spectrum_control(state, kind)
                                         elif kind == "auto":
                                             toggle_display_spectrum_control(state, kind)
+                                        elif kind == "waterfall_mode":
+                                            floor, ceiling, speed, auto, palette, _generation = state.select_waterfall_mode(value)
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
                                         elif kind == "floor":
                                             floor += value
                                             auto = False
@@ -28967,7 +29069,7 @@ def main():
                                             floor, ceiling, speed, auto, palette, _generation = (
                                                 apply_waterfall_palette_preset(state, value)
                                             )
-                                        if kind not in ("layout", "palette", "spectrum", "auto", "reset"):
+                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -29658,6 +29760,14 @@ def main():
                             if moved <= args.tap_px:
                                 search_open = True
                                 keyboard_mode = "lower"
+                        elif touch_started and gesture == "picker_directory_refresh":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                if daily_directories.request():
+                                    manual_directory_refresh = True
+                                picker_map_notice = picker_list_notice = "UPDATING DIRECTORY"
+                                picker_map_notice_until = picker_list_notice_until = time.monotonic() + 3.0
+                                wake_controls()
                         elif touch_started and gesture == "picker_sort":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -30177,6 +30287,12 @@ def main():
                         )
                 else:
                     print("gl map feed unavailable; using saved GPS map", flush=True)
+            if daily_directories.completed != directory_refresh_completed:
+                directory_refresh_completed = daily_directories.completed
+                if manual_directory_refresh:
+                    picker_map_notice = picker_list_notice = daily_directories.result_message()
+                    picker_map_notice_until = picker_list_notice_until = time.monotonic() + 6.0
+                    manual_directory_refresh = False
             STATIONS = all_stations
             kiwi_landing_connected_at, landing_result = advance_kiwi_landing_connection(
                 state, "connected" if state.kiwi_landing_ready() else None, kiwi_landing_connected_at,
@@ -30210,7 +30326,7 @@ def main():
                 display_freq = freq_khz
                 display_span = receiver_display_span(zoom, state.receiver_type_snapshot())
 
-            if picker_open and picker_map_open:
+            if receiver_visuals_hidden(picker_open, picker_map_open, adsb_workspace.open):
                 MAIN_RADIO_VISUALS_HIDDEN.set()
             else:
                 MAIN_RADIO_VISUALS_HIDDEN.clear()
@@ -30276,7 +30392,7 @@ def main():
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
-            globe_covering_radio = picker_open and picker_map_open
+            globe_covering_radio = receiver_visuals_hidden(picker_open, picker_map_open, adsb_workspace.open)
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
@@ -30585,7 +30701,8 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SMART SEEK", size=20)
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SEEK",
+                                            style=replace(APP_UI_STYLE.button, label_size=18))
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
@@ -30663,6 +30780,7 @@ def main():
                         notice_alpha=green_osd_alpha(
                             picker_map_notice_until - time.monotonic(), 1.2,
                         ),
+                        directory_refreshing=daily_directories.busy,
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
@@ -30681,6 +30799,7 @@ def main():
                         usb_present=usb_present,
                         active_usb_source=rtl_lab.source_id if rtl_lab.is_running() else None,
                         favorite_servers=favorite_servers,
+                        directory_refreshing=daily_directories.busy,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
@@ -30709,6 +30828,7 @@ def main():
                     wf_palette,
                     spectrum_enabled,
                     instrument_layout,
+                    waterfall_auto=wf_auto,
                 )
             if filter_drawer_open and LCD_800_MODE:
                 draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
@@ -30958,7 +31078,7 @@ def main():
                     text_cache, rc28_dial_mode,
                     green_osd_alpha(rc28_osd_remaining, args.zoom_osd_seconds),
                 )
-            if not picker_open and not dual_vfo_open:
+            if not picker_open and not dual_vfo_open and not adsb_workspace.open:
                 draw_desktop_1280_navigation(text_cache)
             if adsb_workspace.open:
                 adsb_workspace.draw(text_cache)
@@ -31047,7 +31167,8 @@ def main():
                 or picker_map_zoom_target is not None or picker_map_lock_target is not None
                 or (args.desktop and desktop_map_dragged)
             )
-            clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
+            dome_interacting = adsb_workspace.open and adsb_workspace.coverage_open and (adsb_workspace.coverage_view.pointer_active or time.monotonic()<adsb_workspace.coverage_view.interaction_until)
+            clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, (picker_open and picker_map_open) or (adsb_workspace.open and adsb_workspace.coverage_open), globe_moving or dome_interacting))
     finally:
         if theme_frame_context is not None:
             theme_frame_context.__exit__(None, None, None)
