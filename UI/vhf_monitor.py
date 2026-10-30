@@ -134,6 +134,8 @@ class DecoderSession:
 
     def control(self, action, **values):
         if action=='start':
+            from dongle_notice import require_receiver
+            require_receiver(self.owner,self.settings['selection'],self.hub.devices,lambda key:self.control('configure',selection=key),lambda:self.control('start'))
             self.target=self.hub.broker.request(self.owner,[d for d in self.hub.devices if d.get('persistent')],self.settings['selection'],handoff=self.owner==self.mode)
             if self.target is None:raise ValueError('Receiver belongs to another decoder; automatic expansion only uses free dongles.')
         if action=='tle':

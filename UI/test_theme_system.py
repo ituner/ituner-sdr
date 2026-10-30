@@ -97,6 +97,7 @@ class ThemeSystemTests(unittest.TestCase):
         custom["colors"]["sidebar_header"] = [19, 29, 39, 255]
         apply_theme(custom)
         with patch.object(ui, "draw_logical_rect") as rectangles, patch.object(ui, "draw_logical_line"), \
+                patch.object(ui, "draw_logical_rounded_rect"), \
                 patch.object(ui, "draw_styled_text_button"), patch.object(ui, "draw_settings_leaf_sidebar"), \
                 patch.object(ui, "draw_network_status_card"), patch.object(ui, "draw_picker_button"), \
                 patch.object(ui, "draw_styled_button_frame", return_value=APP_UI_STYLE.button.resolve()), \

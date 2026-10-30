@@ -16,7 +16,9 @@ class AirspaceLayoutTests(unittest.TestCase):
         view.draw(Mock(), {})
         controls = [call.args for call in workspace.button.call_args_list]
         self.assertEqual(BOX, (180,154,1100,712))
-        self.assertEqual(len(controls), 11)
+        self.assertEqual(len(controls), 12)
+        reset = [box for _, box, _, action in controls if action[0] == "coverage_clock_reset"]
+        self.assertEqual(reset, [(832,10,990,72)])
         toolbar = [box for _, box, _, action in controls if action[0] in ('coverage_mode', 'coverage_signal', 'coverage_reset', 'site')]
         self.assertEqual(len(toolbar), 6)
         self.assertTrue(all(box[1:4:2] == (96,152) for box in toolbar))

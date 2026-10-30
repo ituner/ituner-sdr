@@ -589,10 +589,10 @@ class DrawerGeometryTests(unittest.TestCase):
                       if not item.kwargs.get("outline")]
         self.assertEqual(idle_fills, [(18, 24, 22, 255)] * 3)
 
-    def test_apps_no_longer_contains_dual_vfo_action(self):
-        cx = (ui.TEST_DUAL_BOX[0] + ui.TEST_DUAL_BOX[2]) / 2
-        cy = (ui.TEST_DUAL_BOX[1] + ui.TEST_DUAL_BOX[3]) / 2
-        self.assertIsNone(ui.tests_option_at(cx, cy))
+    def test_apps_spare_tile_opens_sine_test(self):
+        cx = (ui.TEST_SINE_BOX[0] + ui.TEST_SINE_BOX[2]) / 2
+        cy = (ui.TEST_SINE_BOX[1] + ui.TEST_SINE_BOX[3]) / 2
+        self.assertEqual(ui.tests_option_at(cx, cy), "audio_test")
 
     def test_lan_and_network_use_distinct_drawn_icons(self):
         surface = mock.Mock()

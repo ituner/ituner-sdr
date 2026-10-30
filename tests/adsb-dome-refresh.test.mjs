@@ -18,8 +18,16 @@ for(const [width,height] of [[340,360],[920,558],[1232,460]])for(const yaw of [0
 const {TrafficView,CoverageWindow,COVERAGE_WINDOWS}=await load('../UI/adsb_view.js');
 const window=new CoverageWindow();assert.equal(window.seconds,3600);
 assert.equal(window.since(10000),6360);assert.equal(window.since(10019),6360);assert.equal(window.since(10020),6420);
-for(const [seconds,label] of COVERAGE_WINDOWS){window.select(seconds);assert.equal(window.label,label);assert.equal(window.since(10000000),seconds?9999960-seconds:0);}
+for(const [seconds,label] of COVERAGE_WINDOWS){window.select(seconds,10000000);assert.equal(window.label,label);assert.equal(window.since(10000000),seconds===60?9999940:seconds?9999960-seconds:0);}
 assert.throws(()=>window.select(1));
+assert.deepEqual(COVERAGE_WINDOWS.map(([seconds])=>seconds),[60,300,1800,3600,21600,86400,604800,0]);
+window.select(60,1000.25);assert.equal(window.since(1000.25),940);window.reset(1000.25);assert.equal(window.since(1059),1000.25);assert.equal(window.since(1061),1000.25);assert.equal(window.since(1120),1060);
+window.reset(1123.5);assert.equal(window.since(1123.5),1123.5);
+window.select(300,1130);assert.equal(window.since(1130),780);assert.equal(window.startedAt,null);
+for(const [seconds] of COVERAGE_WINDOWS){window.select(seconds);window.reset(10000000.25);assert.equal(window.seconds,seconds);assert.equal(window.since(10000001),10000000.25);window.select(seconds);assert.equal(window.startedAt,null);assert.ok(window.since(10000001)<10000000.25);}
+const controls=await readFile(new URL('../UI/adsb_controls.js',import.meta.url),'utf8');
+assert.match(controls,/domeWindow.reset\(viewNow\(\)\)/);assert.doesNotMatch(controls,/reloadCoverage\(value===60\)/);
+const html=await readFile(new URL('../UI/adsb_map.html',import.meta.url),'utf8');assert.match(html,/<\/details><button id="dome-reset"/);
 const independent=new TrafficView(100);independent.startFresh(1000);independent.mode='history';
 assert.equal(new CoverageWindow().seconds,3600);
 
@@ -45,5 +53,18 @@ try{
   await reload();assert.equal(replacements.length,1);assert.match(summary.textContent,/Updating/);
   response=next;await reload();assert.equal(replacements.length,2);assert.equal(createCount,1);
   root.hidden=true;response=first;await reload();assert.equal(replacements.length,2);
+  // Fresh clears synchronously even while a previous history request is pending.
+  root.hidden=false;let since=700,release;const resetViews=[];
+  const freshReload=mountCoverage(root,()=>since,(_root,data)=>{resetViews.push(data);return data=>resetViews.push(data);});
+  response={...first,receiver_enabled:true,receiver_status:'RECEIVING'};await freshReload();
+  globalThis.fetch=()=>new Promise(resolve=>{release=()=>resolve({ok:true,text:async()=>JSON.stringify(first)});});
+  const oldRequest=freshReload();since=1000.25;await freshReload(true);
+  assert.equal(resetViews.at(-1).status,'EMPTY');assert.equal(resetViews.at(-1).points.length,0);
+  assert.equal(resetViews.at(-1).meta.window_since,since);assert.equal(resetViews.at(-1).meta.retained_positions,0);
+  assert.equal(resetViews.at(-1).meta.max_altitude_ft,null);
+  assert.equal(resetViews.at(-1).receiver_enabled,true);assert.equal(resetViews.at(-1).receiver_status,'RECEIVING');
+  release();await oldRequest;assert.equal(resetViews.at(-1).status,'EMPTY','Late history cannot undo reset');
+  since=1060;response=next;globalThis.fetch=async()=>({ok:true,text:async()=>JSON.stringify(response)});
+  await freshReload();assert.deepEqual(resetViews.at(-1),next,'Reception continues after the first minute');
 }finally{globalThis.fetch=originalFetch;globalThis.setInterval=originalInterval;}
 console.log('PASS: stable Live dome scope, new-sample identity, and no empty loading-frame replacement');

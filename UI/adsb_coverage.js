@@ -41,14 +41,21 @@ function distanceTicks(radius,pixels){
   if(ticks.length&&(radius-ticks.at(-1))/radius*pixels<72)ticks.pop();
   return [...ticks,radius];
 }
+export function emptyCoverage(data,since){
+  const meta=Object.fromEntries(Object.entries(data?.meta||{}).filter(([key])=>['reference','reference_height_m','reference_height_known','retention_days','storage_limit'].includes(key)));
+  Object.assign(meta,{window_since:since,retained_positions:0,positioned_aircraft:0,horizontal_range_max_km:0,slant_range_max_km:0,max_altitude_ft:null});
+  return {status:'EMPTY',meta,base:0,points:[],cells:[],aircraft:[],breaks:[],receiver_enabled:data?.receiver_enabled,receiver_status:data?.receiver_status};
+}
 export function mountCoverage(root,getSince=()=>null,createView=setup,getLive=()=>[]){
-  let update=null,busy=false,last='';
-  async function reload(){
-    if(root.hidden||busy)return;busy=true;
+  let update=null,busy=false,last='',current=null;
+  async function reload(reset=false){
+    if(root.hidden)return;
+    if(reset===true){current=emptyCoverage(current,getSince());if(update)update(current);else update=createView(root,current,reload,getLive);last='';}
+    if(busy)return;busy=true;
     const since=getSince();try{const r=await fetch('/api/coverage'+(since===null?'':'?since='+since));if(!r.ok)throw Error('Coverage unavailable');const body=await r.text(),data=JSON.parse(body);if(since!==getSince())return;
       if(data.error)throw Error(data.error);
       if(data.status==='LOADING'){root.querySelector('[data-summary]').textContent=update?'Updating reception window…':'Loading reception history…';return;}
-      if(body!==last){if(update)update(data);else update=createView(root,data,reload,getLive);last=body;}
+      if(body!==last){if(update)update(data);else update=createView(root,data,reload,getLive);last=body;current=data;}
     }catch(e){root.querySelector('[data-summary]').textContent='Coverage: '+e.message+' · retrying';}finally{busy=false;}
   }
   setInterval(reload,5000);return reload;
@@ -69,13 +76,13 @@ function setup(root,initial,reload,getLive){
     if(!['cells','trails','space'].includes(state.view))state.view='cells';if(!['visits','signal'].includes(state.colour))state.colour='visits';
     if(!['expanded','true'].includes(state.spaceScale))state.spaceScale='expanded';
     function metadata(){
-      $('receiver-state').textContent=' · '+(data.receiver_enabled?'ADS-B '+data.receiver_status:'ADS-B paused');
+      $('receiver-state').textContent=' · '+(data.receiver_enabled===undefined?'Receiver status loading…':data.receiver_enabled?'ADS-B '+data.receiver_status:'ADS-B paused');
       const selected=state.aircraft,choices=[['All positioned aircraft','all'],...data.aircraft.map(a=>[a.label+(a.label===a.hex?'':' · '+a.hex.toUpperCase()),a.hex])],choiceKey=JSON.stringify(choices);
       if($('aircraft').dataset.choices!==choiceKey){$('aircraft').replaceChildren(...choices.map(([label,value])=>new Option(label,value)));$('aircraft').dataset.choices=choiceKey;}
       state.aircraft=selected==='all'||data.aircraft.some(a=>a.hex===selected)?selected:'all';
       $('summary').textContent=meta.retained_positions+' positions · '+meta.positioned_aircraft+' aircraft'+(meta.first_position?' · '+fmtTime(meta.first_position)+' – '+fmtTime(meta.last_position):'')+(meta.excluded_other_sites?' · '+meta.excluded_other_sites+' positions from other sites excluded':'');
       $('reference').textContent=meta.reference?'Site '+meta.reference.lat.toFixed(5)+'°, '+meta.reference.lon.toFixed(5)+'° · '+(meta.reference_height_known?'antenna ellipsoid height set':'height unknown; 0 m assumed'):'Set antenna latitude / longitude in Receiver to build the dome.';
-      $('method').textContent='Blue = directly received positions; grey = unobserved, not confirmed obstruction. Retains up to 90 days / 250,000 positions. Coverage includes reception within 100 m of the current antenna site; other sites remain stored separately. The dome has its own rolling timespan, from five minutes to All recorded; a new page defaults to one hour. Live/History and Start fresh on the aircraft map do not change the dome. Window cutoffs advance once a minute. New samples glow briefly. All cells and statistics use the displayed observations; dots are thinned above 20,000. GNSS altitude preferred (above WGS84 ellipsoid); open circles use approximate barometric altitude. RSSI is readsb aircraft average, not calibrated gain. Cells: 4° azimuth × 2° elevation. Trails preserve continuous reception through display thinning; each original link is ≤15 s. Actual gaps remain disconnected. 3D height expansion is labelled with its factor; True scale uses equal horizontal and vertical units. Altitude readouts always retain their actual values. ADS-B may have been paused during this interval. Radius is furthest horizontal position; diameter = twice that radius, not continuous circular coverage.';
+      $('method').textContent='Blue = directly received positions; grey = unobserved, not confirmed obstruction. Retains up to 90 days / 250,000 positions. Coverage includes reception within 100 m of the current antenna site; other sites remain stored separately. Choose 1 min · fresh to clear the displayed dome and statistics and receive from now; selecting it again restarts the view. It then rolls without periodic clearing. Longer periods show recorded history; All recorded uses all retained data. A new page defaults to one hour. Live/History and Start fresh on the aircraft map do not change the dome. One-minute cutoffs advance in 10-second steps; other rolling cutoffs advance once a minute. New samples glow briefly. All cells and statistics use the displayed observations; dots are thinned above 20,000. GNSS altitude preferred (above WGS84 ellipsoid); open circles use approximate barometric altitude. RSSI is readsb aircraft average, not calibrated gain. Cells: 4° azimuth × 2° elevation. Trails preserve continuous reception through display thinning; each original link is ≤15 s. Actual gaps remain disconnected. 3D height expansion is labelled with its factor; True scale uses equal horizontal and vertical units. Altitude readouts always retain their actual values. ADS-B may have been paused during this interval. Radius is furthest horizontal position; diameter = twice that radius, not continuous circular coverage.';
       const r=meta.horizontal_range_max_km||0,alt=meta.max_altitude_ft;
       const stats=[['HORIZONTAL RADIUS',r.toFixed(2)+' km'],['DIAMETER · 2 × R',(2*r).toFixed(2)+' km'],['MAX SLANT RANGE',(meta.slant_range_max_km||0).toFixed(2)+' km'],['HIGHEST RECEIVED',alt==null?'—':alt.toLocaleString()+' ft / '+(alt*.0003048).toFixed(2)+' km']];
       for(const [index,name] of ['readouts','range-readouts'].entries())$(name).replaceChildren(...stats.slice(index*2,index*2+2).map(([label,value])=>{const item=document.createElement('div'),term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value;item.append(term,description);return item;}));

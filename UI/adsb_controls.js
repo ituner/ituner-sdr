@@ -169,11 +169,19 @@ function toggleFootprint(){if(!globe)return;globe.footprintEnabled=!globe.footpr
 for(const button of document.querySelectorAll('[data-layer-rx]'))button.onclick=toggleFootprint;
 footprintLegend();refreshFootprint();setInterval(refreshFootprint,10000);
 const domeWindow=new CoverageWindow(),domeTimespan=$('dome-timespan');
-domeTimespan.replaceChildren(...COVERAGE_WINDOWS.map(([value,label])=>new Option(label,value)));
-domeTimespan.value=String(domeWindow.seconds);
 const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()),undefined,()=>view.live(state?.aircraft||[],viewNow()));
-function renderDomeWindow(){document.querySelector('[data-dome-window-label]').textContent=domeWindow.seconds?'LAST '+domeWindow.label.toUpperCase()+' · LIVE UPDATES':'ALL RECORDED · LIVE UPDATES';}
-domeTimespan.onchange=()=>{domeWindow.select(Number(domeTimespan.value));renderDomeWindow();reloadCoverage();};
+function renderDomeWindow(){
+  document.querySelector('[data-dome-window-label]').textContent=(domeWindow.seconds?'LAST '+domeWindow.label.toUpperCase():'ALL RECORDED')+(domeWindow.startedAt!==null?' · SINCE RESET':'')+' · LIVE UPDATES';
+  domeTimespan.textContent='Time · '+domeWindow.label;
+  for(const button of $('dome-time-options').querySelectorAll('button'))button.setAttribute('aria-pressed',String(Number(button.dataset.seconds)===domeWindow.seconds));
+}
+$('dome-time-options').replaceChildren(...COVERAGE_WINDOWS.map(([value,label])=>{
+  const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('aria-label',label);button.dataset.seconds=String(value);
+  button.title=value?'Rolling reception history; does not restart at each interval.':'All retained reception history.';
+  button.onclick=()=>{domeWindow.select(value,viewNow());$('dome-time-menu').open=false;renderDomeWindow();reloadCoverage();};return button;
+}));
+$('dome-reset').onclick=()=>{domeWindow.reset(viewNow());$('dome-time-menu').open=false;renderDomeWindow();reloadCoverage(true);};
+$('dome-time-menu').addEventListener('keydown',event=>{if(event.key==='Escape'){$('dome-time-menu').open=false;domeTimespan.focus();}});
 renderDomeWindow();
 function coverageVisible(show){document.body.classList.toggle('coverage-open',show);$('coverage-panel').hidden=!show;$('coverage').setAttribute('aria-expanded',String(show));if(show){history.replaceState(null,'',location.pathname+'#coverage');showDrawer('logs',false,false);showDrawer('receiver',false,false);closeViewOptions();$('settings-menu').open=false;reloadCoverage();}if(location.hash==='#coverage'&&!show)history.replaceState(null,'',location.pathname);}
 $('coverage').onclick=()=>coverageVisible($('coverage-panel').hidden);$('close-coverage').onclick=()=>coverageVisible(false);

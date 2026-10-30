@@ -28,11 +28,11 @@ class ReceiverScoutPolicyTests(unittest.TestCase):
                             'draw_section_divider', 'draw_text')}
                         ui.draw_tests_panel(Mock(), 0, None)
                     calls = renderers['draw_lcd_audio_tile' if ui.LCD_800_MODE else 'draw_tests_button'].call_args_list
-                    self.assertEqual(len(calls), 6)
+                    self.assertEqual(len(calls), 7)
                     self.assertEqual({ui.tests_option_at((c.args[1][0]+c.args[1][2])/2,
                                                         (c.args[1][1]+c.args[1][3])/2)
                                       for c in calls},
-                                     {'dj', 'rtl', 'pattern', 'font_lab', 'openwebrx', 'run'})
+                                     {'dj', 'rtl', 'pattern', 'font_lab', 'openwebrx', 'run', 'audio_test'})
                     self.assertNotIn('CONSTELLATION', repr(calls).upper())
                     self.assertNotIn('SNR MAP', repr(calls).upper())
         finally:
