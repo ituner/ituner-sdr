@@ -721,6 +721,20 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(len(later), 10)
         self.assertIn(candidates[15], later)
 
+    def test_four_row_waterfall_at_bottom_remains_visible_without_covering_controls(self):
+        view = SmartSeekView(ui, self.state())
+        self.addCleanup(view.shutdown)
+        candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(18))
+        playing = candidates[9].frequency_khz
+        rows = view.visible_rows(candidates, playing, playing, waterfall=True)
+        self.assertEqual(rows, candidates[3:10])
+        self.assertEqual(view.first_visible, 3)
+        self.assertEqual(view.visible_rows(candidates, playing, playing, waterfall=True), rows)
+        # Scrolling past the playing row restores ten compact rows.
+        rows = view.visible_rows(candidates, candidates[17].frequency_khz, playing, waterfall=True)
+        self.assertEqual(rows, candidates[10:18])
+        self.assertNotIn(candidates[9], rows)
+
     def test_minimum_signal_slider_filters_weak_to_strong_without_tuning_or_sorting(self):
         state = self.state()
         state.start_smart_seek()

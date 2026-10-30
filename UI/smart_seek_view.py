@@ -76,6 +76,10 @@ def candidate_playing(candidate, frequency):
     return min(abs(candidate.frequency_khz-frequency),abs(candidate.tuning_khz-frequency)) < .5
 
 
+def candidate_slots(candidate, frequency, waterfall=False):
+    return (4 if waterfall else 2) if candidate_playing(candidate, frequency) else 1
+
+
 def station_detail_lines(match):
     location = match.country or 'Country not listed'
     if match.transmitter and match.transmitter.casefold() != match.country.casefold():
@@ -189,7 +193,7 @@ class SmartSeekView:
             return
         last, slots = len(candidates), 0
         while last > 0:
-            size = 2 if candidate_playing(candidates[last-1],snapshot['playing_khz']) else 1
+            size = candidate_slots(candidates[last-1], snapshot['playing_khz'], snapshot.get('waterfall', False))
             if slots+size > self.PAGE_SIZE:
                 break
             slots += size
@@ -317,8 +321,8 @@ class SmartSeekView:
                 self.state.note_smart_seek_identity(frequency,bool(matches),
                     tuple(m.frequency_khz for m in matches if m.frequency_khz is not None))
 
-    def visible_rows(self, candidates, selected, playing_khz):
-        """Keep row heights fixed; the listening row consumes two slots."""
+    def visible_rows(self, candidates, selected, playing_khz, waterfall=False):
+        """Keep the selected row fully visible, including a four-slot waterfall."""
         if not candidates:
             self.first_visible = 0
             return ()
@@ -328,7 +332,7 @@ class SmartSeekView:
         def end_at(start):
             used, end = 0, start
             while end < len(candidates):
-                slots = 2 if candidate_playing(candidates[end],playing_khz) else 1
+                slots = candidate_slots(candidates[end], playing_khz, waterfall)
                 if used+slots > self.PAGE_SIZE:
                     break
                 used += slots
@@ -348,7 +352,7 @@ class SmartSeekView:
         if generation != self.waterfall_generation:
             if self.waterfall_texture is not None:
                 self.waterfall_texture.close()
-            self.waterfall_texture = ui.MiniWaterfallTexture(width=512, height=96)
+            self.waterfall_texture = ui.MiniWaterfallTexture(width=512, height=192)
             self.waterfall_generation = generation
             self.waterfall_style = None
         _floor, _ceiling, _speed, _auto, palette, _revision = self.state.waterfall_snapshot()
@@ -438,7 +442,7 @@ class SmartSeekView:
         progress = (snapshot['completed']+snapshot['window_progress'])/max(1, snapshot['total'])
         ui.draw_logical_rect(20, 92, 20+(width-40)*progress, 96, (68, 202, 168, 255))
         candidates = snapshot['candidates']
-        visible = self.visible_rows(candidates, snapshot['selected'], snapshot['playing_khz'])
+        visible = self.visible_rows(candidates, snapshot['selected'], snapshot['playing_khz'], waterfall)
         self.visible_count = max(1, len(visible))
         self._names_for_page(candidates)
         gap = 4
@@ -452,7 +456,7 @@ class SmartSeekView:
             y = row_y
             playing = candidate_playing(candidate,snapshot['playing_khz'])
             preview = playing and waterfall
-            row_height = card_height*(2 if playing else 1)
+            row_height = card_height*candidate_slots(candidate, snapshot['playing_khz'], waterfall)
             box = (x, y, x+card_width, y+row_height)
             row_y += row_height+gap
             selected = candidate.frequency_khz == snapshot['selected']
