@@ -296,9 +296,53 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(window.since(10019),6360)
         self.assertEqual(window.since(10020),6420)
         for seconds,label in COVERAGE_WINDOWS:
-            window.select(seconds);self.assertEqual(window.label,label)
-            self.assertEqual(window.since(10000000),9999960-seconds if seconds else 0)
+            window.select(seconds,10000000);self.assertEqual(window.label,label)
+            self.assertEqual(window.since(10000000),9999940 if seconds==60 else 9999960-seconds if seconds else 0)
         with self.assertRaises(ValueError):window.select(1)
+
+    def test_fresh_minute_starts_now_rolls_without_periodic_reset_and_can_restart(self):
+        window=CoverageWindow();window.select(60,1000.25)
+        self.assertEqual(window.since(1000.25),940)
+        window.reset(1000.25)
+        self.assertEqual(window.since(1000.25),1000.25)
+        self.assertEqual(window.since(1059),1000.25)
+        self.assertEqual(window.since(1061),1000.25)
+        self.assertEqual(window.since(1120),1060)
+        window.reset(1123.5);self.assertEqual(window.since(1123.5),1123.5)
+        window.select(300,1130);self.assertIsNone(window.started_at)
+        self.assertEqual(window.since(1130),780)
+        self.assertEqual([v for v,_ in COVERAGE_WINDOWS],[60,300,1800,3600,21600,86400,604800,0])
+
+    def test_reset_preserves_each_duration_and_selection_restores_history(self):
+        for seconds,_ in COVERAGE_WINDOWS:
+            window=CoverageWindow();window.select(seconds)
+            revision=window.revision;window.reset(10000000.25)
+            self.assertEqual(window.seconds,seconds)
+            self.assertEqual(window.revision,revision+1)
+            self.assertEqual(window.since(10000001),10000000.25)
+            window.select(seconds)
+            self.assertIsNone(window.started_at)
+            self.assertLess(window.since(10000001),10000000.25)
+
+    def test_native_fresh_minute_clears_scene_and_stats_rejects_old_request_and_keeps_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now=time.time();c=ReceptionCoverage(tmp);c.add([row(now-20)]);c.tick(SITE)
+            data=c.snapshot();view=CoverageTouch(ADSBWorkspace(Mock(),Mock()))
+            view.update_data(data);old_revision=view.window.revision
+            self.assertEqual(view.data['meta']['retained_positions'],1)
+            view.selected_observation={'hex':'abc123'};view.aircraft='abc123'
+            view.action('coverage_span',300)
+            self.assertEqual(view.data['meta']['retained_positions'],1)
+            with patch('adsb_view.time.time',return_value=now):view.action('coverage_clock_reset',None)
+            self.assertEqual(view.window.seconds,300)
+            self.assertEqual(view.data['points'],[]);self.assertEqual(view.data['meta']['retained_positions'],0)
+            self.assertEqual(view.data['meta']['horizontal_range_max_km'],0)
+            self.assertIsNone(view.data['meta']['max_altitude_ft']);self.assertIsNone(view.selected_observation)
+            self.assertIsNone(view.aircraft);self.assertFalse(view.update_data(data,old_revision))
+            self.assertEqual(view.data['points'],[])
+            self.assertEqual(c.snapshot()['meta']['retained_positions'],1)
+            view.action('coverage_span',300);self.assertTrue(view.update_data(data,view.window.revision))
+            self.assertEqual(view.data['meta']['retained_positions'],1);c.close()
 
     def test_native_dome_window_is_independent_and_back_cancels_picker(self):
         w=ADSBWorkspace(Mock(),Mock());w.coverage_open=True

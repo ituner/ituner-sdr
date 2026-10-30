@@ -1,4 +1,4 @@
-"""One-shot AM carrier acquisition from uncoloured Kiwi RF waterfall rows."""
+"""Idle AM carrier acquisition from uncoloured Kiwi RF waterfall rows."""
 import math
 import statistics
 import struct
@@ -66,13 +66,16 @@ class CarrierSearch:
         self.result_hz = None
         self.last_sequence = None
         self.geometry = None
+        self.estimates = deque(maxlen=3)
+        self.refine_until = None
 
     def start(self, frequency_khz, width_hz, context, now):
         self.__init__()
         self.context = context
         self.active = True
         self.status = 'TUNING…'
-        self.deadline = now + 9.0
+        # Bound the temporary high-resolution W/F capture on quiet bands.
+        self.deadline = now + 4.0
         self.center_hz = self.target_hz = frequency_khz * 1000
         self.radius_hz = min(2500, max(250, abs(width_hz) / 2))
         self.zoom = 11
@@ -81,13 +84,15 @@ class CarrierSearch:
         self.active = False
         self.status = status
         self.until = now + 2.5
+        if not status:
+            self.result_hz = None
 
     def poll(self, context, now):
-        if self.active:
-            if context != self.context:
-                self.finish('', now)
-            elif now >= self.deadline:
-                self.finish('NO CARRIER', now)
+        if context != self.context:
+            self.finish('', now)
+        elif self.active and (now >= self.deadline or
+                              (self.refine_until is not None and now >= self.refine_until)):
+            self.finish('READY' if self.result_hz is not None else 'NO CARRIER', now)
         return self.active
 
     def feed(self, message, bandwidth_hz, zoom_max, zoom_cap, now):
@@ -118,6 +123,9 @@ class CarrierSearch:
         self.rows.append(message[16:])
         candidate = carrier_peak(self.rows, first_hz, bin_hz, self.target_hz, self.radius_hz)
         if candidate is None or not math.isfinite(candidate):
+            if self.zoom == 14 and len(self.rows) >= 5:
+                self.result_hz = None
+                self.estimates.clear()
             return None
         if self.zoom == 11:
             self.center_hz = self.target_hz = candidate
@@ -126,6 +134,15 @@ class CarrierSearch:
             self.rows.clear()
             self.geometry = None
             return None
-        self.result_hz = round(candidate)
-        self.finish('TUNED', now)
+        # Independent five-row estimates avoid treating overlapping windows
+        # as extra evidence. Offer the first fine result while refining it.
+        self.estimates.append(candidate)
+        self.result_hz = round(statistics.median(self.estimates))
+        self.status = 'READY'
+        self.rows.clear()
+        if self.refine_until is None:
+            self.refine_until = now + 2.0
+        tolerance = max(1.0, bin_hz * 0.5)
+        if len(self.estimates) == 3 and max(self.estimates)-min(self.estimates) <= tolerance:
+            self.finish('READY', now)
         return self.result_hz / 1000

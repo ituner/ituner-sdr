@@ -179,6 +179,11 @@ class ADSBManager:
             self.coverage.mark_break(stamp)
 
     def control(self, action, selection=None, position=None, height_m=None, band=None):
+        if action=='start':
+            from dongle_notice import require_receiver
+            selected=self.uat.selection if band=='978' else self.selection
+            blocked=[self.assigned['id']] if band=='978' and self.assigned else [self.uat.assigned['id']] if band!='978' and self.uat.assigned else []
+            require_receiver('uat' if band=='978' else 'adsb',selected,self.devices,lambda key:self.control('assign',selection=key,band=band),lambda:self.control('start',band=band),blocked)
         if action in ('comparison_start','comparison_stop','comparison_reset'):
             with self.lock:
                 if action=='comparison_reset':

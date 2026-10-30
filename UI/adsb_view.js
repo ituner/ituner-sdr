@@ -1,11 +1,12 @@
 // Display windows only: capture and coverage are independent of these controls.
 const RETENTION=86400, LIVE_WINDOWS=[15,30,60,120,300], finite=Number.isFinite;
-export const COVERAGE_WINDOWS=[[300,'5 min'],[900,'15 min'],[1800,'30 min'],[3600,'1 hour'],[10800,'3 hours'],[21600,'6 hours'],[43200,'12 hours'],[86400,'24 hours'],[604800,'7 days'],[2592000,'30 days'],[0,'All recorded']];
+export const COVERAGE_WINDOWS=[[60,'1 min'],[300,'5 min'],[1800,'30 min'],[3600,'1 hour'],[21600,'6 hours'],[86400,'24 hours'],[604800,'7 days'],[0,'All recorded']];
 export class CoverageWindow{
-  constructor(){this.seconds=3600;}
-  select(seconds){if(!COVERAGE_WINDOWS.some(([value])=>value===seconds))throw Error('Invalid dome timespan');this.seconds=seconds;}
+  constructor(){this.seconds=3600;this.startedAt=null;this.revision=0;}
+  select(seconds,now=Date.now()/1000){if(!COVERAGE_WINDOWS.some(([value])=>value===seconds))throw Error('Invalid dome timespan');this.seconds=seconds;this.startedAt=null;this.revision++;}
+  reset(now=Date.now()/1000){this.startedAt=now;this.revision++;}
   get label(){return COVERAGE_WINDOWS.find(([value])=>value===this.seconds)[1];}
-  since(now){return this.seconds?Math.max(0,Math.floor(now/60)*60-this.seconds):0;}
+  since(now){const bucket=this.seconds===60?10:60,cutoff=this.seconds?Math.max(0,Math.floor(now/bucket)*bucket-this.seconds):0;return Math.max(this.startedAt??0,cutoff);}
 }
 export function aged(raw,now){const p={...raw};p.last_seen_at=finite(p.last_seen_at)?p.last_seen_at:now-(p.seen??100);if(!('position_time' in p))p.position_time=finite(p.seen_pos)?now-p.seen_pos:null;p.seen=Math.max(0,now-p.last_seen_at);p.seen_pos=finite(p.position_time)?Math.max(0,now-p.position_time):1e9;return p;}
 export function positioned(p){return Boolean(p&&finite(p.lat)&&Math.abs(p.lat)<=90&&finite(p.lon)&&Math.abs(p.lon)<=180&&p.seen_pos<15);}

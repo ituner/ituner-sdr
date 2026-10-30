@@ -4,6 +4,17 @@ Open **ADS-B → Reception dome**, beside **Live** in the viewing row, on the
 touchscreen or Airspace web page (`http://cm5.local:8090/#coverage`). The black view uses the same stored
 observations on both screens, without claiming an SDR or starting ADS-B.
 
+**Time** offers **1 min**, **5 min**, **30 min**, **1 hour** (default),
+**6 hours**, **24 hours**, **7 days**, and **All recorded**. Selecting a duration
+shows rolling history; it does not restart the clock. **Reset**, immediately to
+its right, clears the displayed dome, aircraft selection and measurements and
+accepts only positions received from that moment, keeping the selected duration.
+After filling that duration it rolls rather than periodically clearing. Reset
+can be pressed again at any time. Selecting a duration again returns to its
+retained rolling history, and All recorded restores all retained site history.
+The one-minute cutoff advances in ten-second steps; other windows use minute
+steps. Neither control deletes logs, resets a decoder or changes the map window.
+
 - **Sky cells** projects received directions onto an angular hemisphere, in
   4° azimuth × 2° elevation cells. Blue means received; grey means unknown.
 - **Sky trails** shows received positions projected onto that hemisphere, with brighter connecting lines. Display thinning preserves links only where the original observations establish continuous reception; real gaps remain split.

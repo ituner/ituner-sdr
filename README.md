@@ -34,6 +34,9 @@ addresses, setup and receiver ownership notes, see
 
 ### Software version
 
+The [0.2.0 release notes](docs/release-0.2.0.md) describe Smart Seek and the
+receiver, audio-test and coverage updates synchronized from the CM5.
+
 [`VERSION`](VERSION) is the source of the `major.minor.patch` release number,
 starting at 0.1.0. Increase patch for fixes, minor for new features, and major
 for incompatible changes. Bump it for each release, rebuild the splash with
