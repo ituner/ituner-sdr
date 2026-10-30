@@ -154,7 +154,7 @@ class ReceiverTests(unittest.TestCase):
         child.terminate.assert_called_once()
         self.assertEqual(self.manager.status,'WAITING FOR USB')
 
-    def test_live_aircraft_written_as_jsonl(self):
+    def test_live_aircraft_written_as_jsonl_when_log_buffer_flushes(self):
         self.manager.enabled=True
         self.manager.process=self.child()
         self.manager.assigned=DEVICE
@@ -163,6 +163,8 @@ class ReceiverTests(unittest.TestCase):
         (self.manager.data/'aircraft.json').write_text(json.dumps(dict(now=time.time(),messages=10,aircraft=[plane])))
         self.manager._step()
         self.assertEqual(self.manager.status,'RECEIVING')
+        for handler in self.manager.flight_log.handlers:
+            handler.flush()
         logged=json.loads((self.manager.root/'flights.jsonl').read_text())
         self.assertEqual(logged['aircraft'],plane)
         self.assertEqual(logged['device']['serial'],'123')

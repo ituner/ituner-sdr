@@ -2,11 +2,11 @@ import struct
 import math
 import unittest
 from concurrent.futures import Future
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import kiwi_gl_display as ui
 from smart_seek import SmartSeek, SeekCandidate, detect_stations
-from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines
+from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines, station_frequency, frequency_label
 from test_am_carrier import rf_frame as carrier_frame
 
 
@@ -32,6 +32,34 @@ def rf_frame(center_khz, zoom, carrier_hz, sequence, unmodulated=False, **option
 
 
 class DetectorTests(unittest.TestCase):
+    def wide_am_rows(self, clipped=False, adjacent=False):
+        rows = []
+        centers = [500]+([550] if adjacent else [])
+        for sequence in range(24):
+            row = [110]*1024
+            for center in centers:
+                for i in range(center-45,center+46):
+                    if abs(i-center) >= 2:
+                        row[i] = max(row[i],round(135+8*math.sin(sequence*.7)))
+                for i in range(center-2,center+3):
+                    row[i] = max(row[i],round((255 if clipped else 220)-45*(i-center)**2))
+                # Persistent music-tone lobes in both modulation sidebands.
+                for side in (-28,28):
+                    for i in range(center+side-2,center+side+3):
+                        row[i] = max(row[i],round(180+5*math.sin(sequence*.7)-45*(i-center-side)**2))
+            rows.append(bytes(row))
+        return rows
+
+    def test_strong_wide_am_station_does_not_publish_music_lobes_as_stations(self):
+        for clipped in (False,True):
+            found = detect_stations(self.wide_am_rows(clipped),7200000,100,7200,7300)
+            self.assertEqual(len(found),1)
+            self.assertAlmostEqual(found[0].frequency_khz,7250,delta=.1)
+
+    def test_sideband_suppression_keeps_a_real_station_five_khz_away(self):
+        found = detect_stations(self.wide_am_rows(adjacent=True),7200000,100,7200,7300)
+        self.assertEqual([p.frequency_khz for p in found],[7250,7255])
+
     def detect(self, **options):
         frames = [rf_frame(7325, 7, 7300000, seq, **options) for seq in range(1, 10)]
         start = struct.unpack_from('<I', frames[0], 4)[0]
@@ -255,6 +283,141 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(search.candidates[0].frequency_khz, 7300)
 
 
+class AdaptiveSurveyTests(unittest.TestCase):
+    def start(self):
+        search = SmartSeek()
+        search.start(7200,7450,'41 m',('rx',),100,refresh=True,adaptive=True)
+        return search
+
+    def drive(self, search, end, carrier=7300000, unmodulated=False, noise=False):
+        now, sequence = 100,0
+        while now < end:
+            request = search.request(('rx',),now)
+            now += .125
+            sequence += 1
+            if request:
+                center,zoom = request
+                search.feed(rf_frame(center,zoom,carrier,sequence,
+                                     unmodulated=unmodulated,noise=noise),30000000,14,14,now)
+        return now
+
+    def test_one_overview_then_continuous_local_passes_preserve_rows(self):
+        search = self.start()
+        center,zoom = search.request(('rx',),100)
+        self.assertEqual(zoom,6)
+        self.drive(search,125)
+        self.assertTrue(search.overview_done)
+        self.assertGreaterEqual(search.pass_count,1)
+        self.assertEqual(len(search.candidates),1)
+        self.assertAlmostEqual(search.candidates[0].tuning_khz,7300,delta=.12)
+        self.assertEqual(search.evidence[search.candidates[0].frequency_khz]['status'],'AM signal')
+        self.assertEqual((search.low,search.high),(7200,7450))
+        search.close()
+        self.assertIsNone(search.request(('rx',),126))
+
+    def test_overview_orders_fine_windows_by_strength_without_publishing_coarse_peaks(self):
+        search = self.start()
+        search.request(('rx',),100)
+        search.worker.candidates = [SeekCandidate(7400,40),SeekCandidate(7205,10)]
+        search._finish_worker(102)
+        self.assertGreater(search.windows[0],7350)
+        self.assertEqual(search.candidates,[])
+
+    def review(self, unmodulated=False, noise=False, target=7302.8):
+        search = self.start()
+        search.overview_done = True
+        search.active = False
+        search.index = len(search.windows)
+        search.next_pass_at = 1000
+        search._merge([SeekCandidate(target,20)])
+        search.note_identity(target,False)
+        self.drive(search,107,unmodulated=unmodulated,noise=noise)
+        return search
+
+    def test_long_recheck_corrects_a_sideband_in_place(self):
+        search = self.review()
+        self.assertEqual(search.candidates[0].frequency_khz,7302.8)
+        self.assertAlmostEqual(search.candidates[0].tuning_khz,7300,delta=.04)
+        self.assertEqual(search.evidence[7302.8]['status'],'AM signal')
+        self.assertNotIn(7302.8,search.identities)
+
+    def test_long_recheck_distinguishes_unmodulated_carrier_from_unconfirmed_noise(self):
+        carrier = self.review(unmodulated=True,target=7300)
+        self.assertEqual(carrier.evidence[7300]['status'],'Carrier only')
+        noise = self.review(noise=True,target=7300)
+        self.assertEqual(noise.evidence[7300]['status'],'Unconfirmed')
+
+    def test_rechecks_are_bounded_and_context_change_cancels_every_phase(self):
+        search = self.start()
+        search.request(('rx',),100)
+        self.assertIsNone(search.request(('other receiver',),100.2))
+        self.assertFalse(search.open)
+        self.assertIsNone(search.worker)
+        search = self.start()
+        search.overview_done = True
+        search.active = False
+        search.index = len(search.windows)
+        search.next_pass_at = 1000
+        search._merge([SeekCandidate(7300,30)])
+        search.note_identity(7300,False)
+        first = search.request(('rx',),100)
+        self.assertEqual(first[1],10)
+        self.assertEqual(search.request(('rx',),101),first)
+        self.assertIsNone(search.request(('other receiver',),101.1))
+
+    def test_signal_strength_accumulates_without_reordering_or_holding_peak_forever(self):
+        search = self.start()
+        search._merge([SeekCandidate(7300,40)],accumulate=True)
+        search._merge([SeekCandidate(7300.05,20)],accumulate=True)
+        self.assertEqual(search.candidates[0].frequency_khz,7300)
+        self.assertGreater(search.candidates[0].prominence,20)
+        self.assertLess(search.candidates[0].prominence,40)
+
+    def test_strong_discoveries_precede_weak_and_existing_meters_wait_for_full_observation(self):
+        search = self.start()
+        search._merge([SeekCandidate(7300,15),SeekCandidate(7350,35)])
+        self.assertEqual([c.frequency_khz for c in search.candidates],[7350,7300])
+        search._merge([SeekCandidate(7300,45)])
+        self.assertEqual(search.candidates[1].prominence,15)
+        search._merge([SeekCandidate(7300,45)],accumulate=True)
+        self.assertGreater(search.candidates[1].prominence,15)
+        self.assertLess(search.candidates[1].prominence,45)
+        self.assertEqual([c.frequency_khz for c in search.candidates],[7350,7300])
+
+    def test_two_reviews_per_pass_and_cooldown_leave_time_for_band_coverage(self):
+        search = self.start()
+        search.overview_done = True
+        search._merge([SeekCandidate(7300+i*10,30-i) for i in range(4)])
+        for candidate in search.candidates:
+            search.note_identity(candidate.frequency_khz,False)
+        for now in (100,106):
+            search.active = False
+            search._start_review(now)
+            self.assertIsNotNone(search.worker)
+            search.worker.close()
+            search._finish_worker(now+5)
+        search._start_review(112)
+        self.assertIsNone(search.worker)
+        self.assertEqual(len(search.reviewed_at),2)
+        search.reviews_this_pass = 0
+        search._start_review(113)
+        self.assertEqual(search.review_target,7320)
+
+    def test_stalled_short_capture_does_not_claim_a_completed_five_second_review(self):
+        search = self.start()
+        search.overview_done = True
+        search.active = False
+        search.index = len(search.windows)
+        search._merge([SeekCandidate(7300,30)])
+        search.note_identity(7300,False)
+        center,zoom = search.request(('rx',),100)
+        for sequence in range(1,10):
+            search.feed(rf_frame(center,zoom,7300000,sequence,unmodulated=True),
+                        30000000,14,14,100+sequence*.125)
+        search.poll(('rx',),109)
+        self.assertNotIn(7300,search.evidence)
+
+
 class IntegrationTests(unittest.TestCase):
     def state(self, zoom=14):
         state = ui.SharedState('http://example.test:8073', 7325, zoom, -95, 142, 245, 4, 'am', False)
@@ -271,6 +434,149 @@ class IntegrationTests(unittest.TestCase):
         state.close_smart_seek()
         self.assertEqual((state.snapshot(), state.radio_snapshot()), before)
         self.assertFalse(state.smart_seek_snapshot()['open'])
+
+    def test_nominal_frequency_display_keeps_measured_carrier_for_listening(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7298.8,30)])
+        matches = schedule_matches([dict(frequency_khz=7300,station='BBC',country='United Kingdom',
+                                         time='0000-2400')],ui._frequency_identity_schedule_active)
+        self.assertEqual(station_frequency(7298.8,matches),(7300,False))
+        self.assertEqual(frequency_label(7300),'7,300 kHz')
+        self.assertTrue(state.tune_smart_seek_candidate(7298.8))
+        self.assertEqual(state.freq_khz,7298.8)
+
+    def test_background_carrier_refinement_waits_for_explicit_tap_to_retune(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7302.8,30)])
+        self.assertTrue(state.tune_smart_seek_candidate(7302.8))
+        state.smart_seek.candidates[0] = SeekCandidate(7302.8,32,7300)
+        snapshot = state.smart_seek_snapshot()
+        self.assertEqual(snapshot['playing_khz'],7302.8)
+        self.assertTrue(state.tune_smart_seek_candidate(7302.8))
+        self.assertEqual(state.freq_khz,7300)
+        self.assertEqual(state.smart_seek.selection,7302.8)
+        self.assertTrue(state.smart_seek.open)
+
+    def test_names_follow_refined_carrier_and_cached_names_still_guide_new_scan(self):
+        state = self.state()
+        state.start_smart_seek()
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        candidate = SeekCandidate(7302.8,30)
+        view.matches[7302.8] = ()
+        view.lookup_targets[7302.8] = 7302.8
+        view._names_for_page([candidate])
+        self.assertEqual(state.smart_seek.identities[7302.8],(False,()))
+        candidate = SeekCandidate(7302.8,30,7300)
+        view.executor.submit = Mock(return_value=Future())
+        view._names_for_page([candidate])
+        self.assertNotIn(7302.8,view.matches)
+        view.executor.submit.assert_called_once_with(ui.lookup_shortwave_frequency,7300)
+
+    def test_unknown_channel_is_marked_approximate_and_ambiguous_matches_keep_rf_value(self):
+        self.assertEqual(station_frequency(5879.891,()),(5880,True))
+        self.assertEqual(station_frequency(5882.5,()),(5882.5,False))
+        matches = (BroadcastMatch('A','China',frequency_khz=7300),
+                   BroadcastMatch('B','Romania',frequency_khz=7300.8))
+        self.assertEqual(station_frequency(7300.4,matches),(7300.4,False))
+
+    def test_band_chooser_starts_only_chosen_band_and_refresh_keeps_that_band(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7300,30)])
+        before = state.freq_khz, state.radio_snapshot()
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        view.actions = [((0,0,100,70),('band','31 m'))]
+        view.press(20,20)
+        self.assertIsNone(view.release(20,20))
+        self.assertEqual(state.smart_seek_snapshot()['label'],'31 m')
+        self.assertEqual((state.smart_seek.low,state.smart_seek.high),(9400,9900))
+        self.assertEqual(state.smart_seek.candidates,[])
+        self.assertEqual((state.freq_khz,state.radio_snapshot()),before)
+        state.start_smart_seek(refresh=True)
+        self.assertEqual(state.smart_seek_snapshot()['label'],'31 m')
+        self.assertFalse(state.start_smart_seek(band_label='not a band'))
+        self.assertEqual(state.smart_seek_snapshot()['label'],'31 m')
+
+    def test_pages_and_drag_scroll_viewport_without_tuning_and_back_restores_listening(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7205+i*5,30) for i in range(30)])
+        before = state.freq_khz
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        view.scroll_rows(10)
+        self.assertEqual(view.first_visible,10)
+        view.scroll_rows(-10)
+        self.assertEqual(view.first_visible,0)
+        view.actions = [((0,100,1200,156),('tune',7205))]
+        view.press(20,120)
+        self.assertTrue(view.drag(20,0))
+        self.assertGreater(view.first_visible,0)
+        self.assertIsNone(view.release(20,0))
+        self.assertEqual(state.freq_khz,before)
+        view.actions = [(ui.RAIL_BACK_BOX,('close',None))]
+        view.press(1100,750)
+        self.assertIsNone(view.release(1100,750))
+        self.assertFalse(view.open)
+        self.assertEqual(state.freq_khz,before)
+
+    def test_frequency_identity_uses_offline_lookup_and_never_queries_web_pages(self):
+        with patch.object(ui.offline_schedules,'lookup',return_value=(7300,[],None)) as lookup, \
+             patch.object(ui,'urlopen') as network:
+            self.assertEqual(ui.lookup_shortwave_frequency(7300),(7300,[],None))
+            ui.prefetch_frequency_identity_neighbours(7300)
+            lookup.assert_called_once()
+            network.assert_not_called()
+
+    def test_unknown_row_research_has_priority_and_never_tunes(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7300,30)])
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        pending = Future()
+        with patch.object(view.executor,'submit',return_value=pending) as submit:
+            view.actions = [((20,100,1260,156),('tune',7300)),
+                            ((1088,100,1260,156),('research',7300))]
+            before = state.freq_khz
+            view.press(1150,125)
+            self.assertIsNone(view.release(1150,125))
+            self.assertEqual(view.research_frequency,7300)
+            self.assertEqual(state.freq_khz,before)
+            submit.assert_called_once_with(ui.research_shortwave_frequency,7300)
+            self.assertIsNone(view.selected())
+            view.back()
+            self.assertTrue(view.open)
+            self.assertIsNone(view.research_frequency)
+            view.press(100,125)
+            self.assertEqual(view.release(100,125),7300)
+
+    def test_online_research_is_explicit_and_keeps_nearby_suggestions(self):
+        document = ('<h2>Test schedules</h2><table class="results"><tr>'+
+                    ''.join('<td>'+value+'</td>' for value in
+                    ('7302','0000-2400','Example Radio','Romania','English','daily','100','Galbeni'))+
+                    '</tr></table>')
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = document.encode()
+        with patch.object(ui,'urlopen',return_value=response) as network:
+            frequency,rows,error = ui.research_shortwave_frequency(7300)
+        self.assertEqual(network.call_count,2)
+        self.assertEqual(frequency,7300)
+        self.assertEqual(rows[0]['frequency_khz'],7302)
+        self.assertEqual(rows[0]['station'],'Example Radio')
+        self.assertIsNone(error)
+
+    def test_online_research_failure_leaves_offline_browsing_usable(self):
+        with patch.object(ui,'urlopen',side_effect=OSError('offline')):
+            frequency,rows,error = ui.research_shortwave_frequency(7300)
+        self.assertEqual((frequency,rows),(7300,[]))
+        self.assertTrue(error)
 
     def test_live_context_changes_cancel_and_prevent_stale_capture(self):
         for action in (lambda s:s.set_view(freq_khz=7400), lambda s:s.set_radio_mode('USB'),
@@ -296,16 +602,18 @@ class IntegrationTests(unittest.TestCase):
         with patch.object(ui.owrx, 'is_openwebrx_endpoint', return_value=True):
             self.assertFalse(state.start_smart_seek())
 
-    def test_outside_broadcast_bands_neither_offers_nor_starts_seek(self):
+    def test_outside_broadcast_bands_starts_in_nearest_broadcast_allocation(self):
         for frequency in (4200, 4500, 7075, 10000, 14200, 27000):
             with self.subTest(frequency=frequency):
                 state = self.state()
                 state.set_view(freq_khz=frequency)
                 before = state.snapshot()
-                self.assertFalse(state.smart_seek_available())
-                self.assertFalse(state.start_smart_seek())
-                self.assertFalse(state.smart_seek_snapshot()['open'])
-                self.assertIsNone(state.smart_seek_capture_request())
+                self.assertTrue(state.smart_seek_available())
+                self.assertTrue(state.start_smart_seek())
+                band = min(ui.SW_BROADCAST_BANDS,
+                           key=lambda b:max(b[0]-frequency, frequency-b[1], 0))
+                self.assertEqual((state.smart_seek.low, state.smart_seek.high), band[:2])
+                self.assertEqual(state.smart_seek_snapshot()['label'], band[2])
                 self.assertEqual(state.snapshot(), before)
 
     def test_every_broadcast_band_uses_its_exact_boundaries(self):
@@ -321,7 +629,7 @@ class IntegrationTests(unittest.TestCase):
     def test_encoder_selection_and_safe_press_do_not_tune_implicitly(self):
         state = self.state()
         state.start_smart_seek()
-        state.smart_seek._merge([SeekCandidate(7300, 20), SeekCandidate(7350, 25)])
+        state.smart_seek._merge([SeekCandidate(7300, 20), SeekCandidate(7350, 20)])
         view = SmartSeekView(ui, state)
         self.addCleanup(view.shutdown)
         view.move(1)
@@ -375,11 +683,11 @@ class IntegrationTests(unittest.TestCase):
         self.addCleanup(view.shutdown)
         candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(12))
         initial = view.visible_rows(candidates, candidates[0].frequency_khz, 7325)
-        self.assertEqual(initial, candidates[:8])
-        playing = candidates[7].frequency_khz
+        self.assertEqual(initial, candidates[:10])
+        playing = candidates[9].frequency_khz
         expanded = view.visible_rows(candidates, playing, playing)
         self.assertEqual(view.first_visible, 1)
-        self.assertEqual(expanded, candidates[1:8])
+        self.assertEqual(expanded, candidates[1:10])
         appended = candidates+(SeekCandidate(7400, 30),)
         self.assertEqual(view.visible_rows(appended, playing, playing), expanded)
         self.assertEqual(view.first_visible, 1)
@@ -389,9 +697,9 @@ class IntegrationTests(unittest.TestCase):
         self.addCleanup(view.shutdown)
         candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(18))
         first = view.visible_rows(candidates, candidates[0].frequency_khz, candidates[0].frequency_khz)
-        self.assertEqual(len(first), 7)
+        self.assertEqual(len(first), 9)
         later = view.visible_rows(candidates, candidates[15].frequency_khz, candidates[0].frequency_khz)
-        self.assertEqual(len(later), 8)
+        self.assertEqual(len(later), 10)
         self.assertIn(candidates[15], later)
 
     def test_minimum_signal_slider_filters_weak_to_strong_without_tuning_or_sorting(self):
@@ -404,14 +712,14 @@ class IntegrationTests(unittest.TestCase):
         view.actions = [(box, ('signal', None))]
         y = (box[1]+box[3])/2
         view.press(32, y)
-        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7300, 7350])
+        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350, 7300])
         self.assertTrue(view.drag(320, y))
         self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350])
         self.assertIsNone(view.release(320, y))
         self.assertIsNone(view.press_action)
         view.press(32, y)
         view.release(32, y)
-        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7300, 7350])
+        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350, 7300])
         self.assertEqual(state.snapshot()[1], 7325)
         self.assertTrue(view.open)
 
@@ -433,9 +741,50 @@ class IntegrationTests(unittest.TestCase):
             state.close_smart_seek()
         with patch.object(ui.time, 'monotonic', return_value=250):
             self.assertTrue(state.start_smart_seek())
-            self.assertTrue(state.smart_seek_snapshot()['cached'])
-            self.assertEqual(tuple(state.smart_seek.candidates), candidates)
-            self.assertIsNone(state.smart_seek_capture_request())
+            self.assertFalse(state.smart_seek_snapshot()['cached'])
+            self.assertEqual(tuple(state.smart_seek.candidates), ())
+            self.assertIsNotNone(state.smart_seek_capture_request())
+
+    def test_local_pass_repeats_without_other_bands_and_reopen_is_empty(self):
+        with patch.object(ui.time, 'monotonic') as clock:
+            clock.return_value = 100
+            state = self.state()
+            state.start_smart_seek()
+            initial_frequency = state.freq_khz
+            now, sequence = 100, 0
+            while state.smart_seek.active:
+                clock.return_value = now
+                center, zoom = state.smart_seek_capture_request()
+                now += .08
+                clock.return_value = now
+                sequence += 1
+                state.feed_smart_seek_frame(rf_frame(center, zoom, 7300000, sequence),
+                                            30000000, 14, 14)
+            self.assertTrue(state.smart_seek.candidates)
+            self.assertTrue(all(7200 <= p.frequency_khz <= 7450 for p in state.smart_seek.candidates))
+            clock.return_value = now+60
+            self.assertIsNotNone(state.smart_seek_capture_request())
+            self.assertTrue(state.smart_seek_snapshot()['open'])
+            self.assertEqual(state.freq_khz, initial_frequency)
+            state.close_smart_seek()
+            state.start_smart_seek()
+            self.assertEqual(state.smart_seek_snapshot()['candidates'], ())
+            self.assertFalse(state.smart_seek_snapshot()['cached'])
+            self.assertIsNotNone(state.smart_seek_capture_request())
+
+    def test_progress_tracks_received_rows_in_the_current_local_window(self):
+        with patch.object(ui.time, 'monotonic') as clock:
+            clock.return_value = 100
+            state = self.state()
+            state.start_smart_seek()
+            self.assertEqual(state.smart_seek_snapshot()['window_progress'], 0)
+            center, zoom = state.smart_seek_capture_request()
+            clock.return_value = 100.1
+            state.feed_smart_seek_frame(rf_frame(center, zoom, 7300000, 1), 30000000, 14, 14)
+            clock.return_value = 100.4
+            snapshot = state.smart_seek_snapshot()
+            self.assertGreater(snapshot['window_progress'], 0)
+            self.assertEqual(snapshot['scanning_khz'], center)
 
 
 

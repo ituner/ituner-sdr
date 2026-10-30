@@ -246,7 +246,7 @@ import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
 import receiver_catalog
-from directory_refresh import DailyDirectoryRefresh
+from directory_refresh import DailyDirectoryRefresh, checked_refresh, directory_age_label
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
@@ -259,7 +259,8 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
                           aviation_image_box, aviation_needle_segment, needle_point,
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
 from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
-from smart_seek import SmartSeek
+from smart_seek_catalogue import SmartSeekCatalogue
+import offline_schedules
 from smart_seek_view import SmartSeekView
 from meter_artwork import linear_strip_image
 
@@ -964,6 +965,7 @@ WIDE_VIEW_GROUP_BOX = (782, 338, 986, 412)
 # output configuration. Never use a fixed Y coordinate for this platform.
 LCD_CONTROL_GAP = 10
 HOME_BOX = (30, 13, 102, 71)
+WATERFALL_ACTIONS_TOP = 8
 TIME_SOURCE_LABEL = "UTC"
 # The top instruments share one right alignment in MIDDLE. LEFT keeps its
 # frequency and S-meter together at the canvas edge.
@@ -2685,6 +2687,22 @@ def receiver_picker_command_boxes():
     )
 
 
+def receiver_directory_refresh_box():
+    """Shared list/globe action above the standard command grid."""
+    if LCD_800_MODE:
+        return (RECEIVER_PICKER_BACK_BOX[0], 504, RECEIVER_PICKER_BACK_BOX[2], 568)
+    return (806, 176, 948, 240)
+
+
+def draw_directory_refresh_button(text_cache, refreshing=False):
+    draw_styled_two_line_button(
+        text_cache, receiver_directory_refresh_box(),
+        "UPDATING..." if refreshing else "UPDATE LIST",
+        "Keep browsing" if refreshing else directory_age_label(GLOBE_DIRECTORY_CACHE),
+        active=refreshing,
+    )
+
+
 def receiver_list_notice_box():
     """Sort uses the exact same placement and size as the Zoom OSD."""
     return ZOOM_OSD_BOX
@@ -3385,7 +3403,7 @@ def select_frequency_identity_candidates(candidates, frequency_khz):
     return list(unique_by_key.values())[:4]
 
 
-def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ):
+def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, possible=False):
     """Parse the public Quick Search page without treating its HTML as code.
 
     The page merges EiBi, AOKI, HFCC, and ITU results. Those sources often
@@ -3430,7 +3448,7 @@ def parse_shortwave_db_quicksearch(document, frequency_khz, tolerance_khz=FREQUE
                 "lon": longitude,
                 "source": source,
             })
-    return select_frequency_identity_candidates(candidates, frequency_khz)
+    return candidates if possible else select_frequency_identity_candidates(candidates, frequency_khz)
 
 
 def _frequency_identity_schedule_active(start_text, end_text, timestamp=None):
@@ -3461,7 +3479,7 @@ def _frequency_identity_schedule_active(start_text, end_text, timestamp=None):
     return now_minute >= start_minute_of_day or now_minute < end_minute_of_day
 
 
-def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, timestamp=None):
+def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUENCY_ID_TOLERANCE_KHZ, timestamp=None, possible=False):
     """Parse currently scheduled rows from Shortwave.Live's frequency page."""
     candidates = []
     for row_match in re.finditer(r"<tr[^>]*start_time=[\"']([^\"']+)[\"'][^>]*end_time=[\"']([^\"']+)[\"'][^>]*>(.*?)</tr>", document, re.I | re.S):
@@ -3495,90 +3513,57 @@ def parse_shortwave_live_frequency(document, frequency_khz, tolerance_khz=FREQUE
             "lon": coordinates[1] if coordinates else None,
             "source": "Shortwave.Live",
         })
-    return select_frequency_identity_candidates(candidates, frequency_khz)
+    return candidates if possible else select_frequency_identity_candidates(candidates, frequency_khz)
 
 
 def lookup_shortwave_frequency(frequency_khz):
-    """Fetch a small, cached online AM/SW schedule lookup off the UI thread."""
-    lookup_frequency = round(float(frequency_khz) * 2.0) / 2.0
-    now = time.monotonic()
-    with FREQUENCY_ID_CACHE_LOCK:
-        cached = FREQUENCY_ID_CACHE.get(lookup_frequency)
-        if cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS:
-            return lookup_frequency, list(cached[1]), None
-    try:
-        request = Request(
-            SHORTWAVE_DB_QUICKSEARCH_URL,
-            data=urlencode({"freq": f"{lookup_frequency:.3f}"}).encode("ascii"),
-            headers={"User-Agent": CLIENT_NAME},
-            method="POST",
-        )
-        with urlopen(request, timeout=10) as response:
-            document = response.read(512 * 1024).decode("utf-8", "replace")
-        candidates = parse_shortwave_db_quicksearch(document, frequency_khz)
-        if not candidates:
-            fallback_frequency = int(round(float(frequency_khz) / 5.0) * 5)
-            fallback_request = Request(
-                SHORTWAVE_LIVE_KHZ_URL.format(frequency=fallback_frequency),
-                headers={"User-Agent": CLIENT_NAME},
-            )
-            with urlopen(fallback_request, timeout=10) as response:
-                fallback_document = response.read(512 * 1024).decode("utf-8", "replace")
-            candidates = parse_shortwave_live_frequency(fallback_document, frequency_khz)
-        with FREQUENCY_ID_CACHE_LOCK:
-            FREQUENCY_ID_CACHE[lookup_frequency] = (time.monotonic(), tuple(candidates))
-        return lookup_frequency, candidates, None
-    except Exception as exc:
-        return lookup_frequency, [], str(exc)
+    """Look up downloaded schedules; bulk refresh runs off the UI thread."""
+    return offline_schedules.lookup(float(frequency_khz), tolerance=FREQUENCY_ID_TOLERANCE_KHZ)
+
+
+def research_shortwave_frequency(frequency_khz):
+    """Explicit online research only; never called by automatic identification."""
+    frequency = float(frequency_khz)
+    requests = (
+        (Request(SHORTWAVE_DB_QUICKSEARCH_URL,
+                 data=urlencode({'freq':f'{frequency:.3f}'}).encode('ascii'),
+                 headers={'User-Agent':CLIENT_NAME}, method='POST'), parse_shortwave_db_quicksearch),
+        (Request(SHORTWAVE_LIVE_KHZ_URL.format(frequency=int(round(frequency/5)*5)),
+                 headers={'User-Agent':CLIENT_NAME}), parse_shortwave_live_frequency),
+    )
+    rows, errors = [], []
+    for request, parser in requests:
+        try:
+            with urlopen(request, timeout=10) as response:
+                data = response.read(512*1024+1)
+            if len(data) > 512*1024:
+                raise ValueError('Schedule page exceeds size limit')
+            rows.extend(parser(data.decode('utf-8','replace'), frequency,
+                               tolerance_khz=2.5, possible=True))
+        except Exception as error:
+            errors.append(str(error))
+    unique = {}
+    for row in sorted(rows, key=lambda r:abs(r['frequency_khz']-frequency)):
+        key = (row['frequency_khz'],row['station'].casefold(),
+               row.get('country','').casefold(),row.get('transmitter','').casefold())
+        if key not in unique:
+            unique[key] = dict(row)
+        else:
+            for field in ('power_kw','country','language'):
+                if not unique[key].get(field):
+                    unique[key][field] = row.get(field,'')
+    return frequency,list(unique.values())[:24],'; '.join(errors) or None
 
 
 def cached_frequency_identity_candidates(frequency_khz):
-    """Return a still-valid nearby scheduled frequency without network I/O."""
-    now = time.monotonic()
-    candidates = []
-    with FREQUENCY_ID_CACHE_LOCK:
-        for cached_at, cached_candidates in FREQUENCY_ID_CACHE.values():
-            if now - cached_at < FREQUENCY_ID_CACHE_SECONDS:
-                candidates.extend(cached_candidates)
-    return select_frequency_identity_candidates(candidates, frequency_khz)
-
-
-def _frequency_identity_prefetch_worker(frequency_khz):
-    try:
-        lookup_shortwave_frequency(frequency_khz)
-    finally:
-        with FREQUENCY_ID_CACHE_LOCK:
-            FREQUENCY_ID_PREFETCH_INFLIGHT.discard(round(float(frequency_khz) * 2.0) / 2.0)
+    """Read current UTC matches from the local index without network I/O."""
+    return offline_schedules.store.lookup(float(frequency_khz),
+        tolerance=FREQUENCY_ID_TOLERANCE_KHZ)[1]
 
 
 def prefetch_frequency_identity_neighbours(frequency_khz):
-    """Warm the immediately adjacent SW channels after a real lookup.
-
-    Prefetch is deliberately tiny: the two neighbouring 5 kHz channels on
-    either side. It never changes the receiver state and is skipped entirely
-    when a fresh answer is already cached or in flight.
-    """
-    base_frequency = round(float(frequency_khz) / 5.0) * 5.0
-    now = time.monotonic()
-    for offset in FREQUENCY_ID_PREFETCH_OFFSETS_KHZ:
-        target_frequency = base_frequency + offset
-        if not 2300.0 <= target_frequency <= 30000.0:
-            continue
-        cache_key = round(target_frequency * 2.0) / 2.0
-        with FREQUENCY_ID_CACHE_LOCK:
-            cached = FREQUENCY_ID_CACHE.get(cache_key)
-            if (
-                (cached and now - cached[0] < FREQUENCY_ID_CACHE_SECONDS)
-                or cache_key in FREQUENCY_ID_PREFETCH_INFLIGHT
-            ):
-                continue
-            FREQUENCY_ID_PREFETCH_INFLIGHT.add(cache_key)
-        threading.Thread(
-            target=_frequency_identity_prefetch_worker,
-            args=(target_frequency,),
-            name=f"frequency-prefetch-{int(target_frequency)}",
-            daemon=True,
-        ).start()
+    # The local frequency index needs no adjacent-channel HTTP prefetch.
+    return None
 
 
 def frequency_identity_worker(result_queue, frequency_khz):
@@ -4443,6 +4428,8 @@ def configure_output(desktop=False):
     global LOGICAL_W, LOGICAL_H, WF_TEX_W, WF_TEX_H
     global ZOOM_MINUS_BOX, ZOOM_PLUS_BOX, ZOOM_GROUP_BOX
     global FILTER_TOGGLE_BOX, SPECTRUM_TOGGLE_BOX, VIEW_GROUP_BOX
+    global WATERFALL_ACTIONS_TOP
+    WATERFALL_ACTIONS_TOP = 8
     DESKTOP_MODE = bool(desktop)
     DESKTOP_1280_MODE = False
     LCD_800_MODE = True
@@ -4619,28 +4606,24 @@ def mute_waterfall_box():
 
 
 def stream_waterfall_box():
-    """Home-size icon aligned with the one-line connection annunciator."""
-    x1 = LCD_NAV_X0 - 18 if LCD_800_MODE else BASE_LOGICAL_W - 18
+    """Home-size icon at the RF corner, above the useful signal area."""
+    x1 = (LCD_NAV_X0 if LCD_800_MODE else BASE_LOGICAL_W) - 6
     width = HOME_BOX[2] - HOME_BOX[0]
     height = HOME_BOX[3] - HOME_BOX[1]
-    x1 -= 40
     x0 = x1 - width
-    # Center this 72x58 target on the fixed connection OSD at y=154. It is
-    # deliberately a companion to that message rather than a second overlay
-    # farther down the waterfall.
-    y0 = 100
+    y0 = WATERFALL_ACTIONS_TOP
     return x0, y0, x1, y0 + height
 
 
 def carrier_waterfall_box():
     """AM tuning tile below Favorite/Pause, clear of frequency and status."""
     x0, _y0, _x1, y1 = favorite_waterfall_box()
-    return x0, y1 + 10, stream_waterfall_box()[2], y1 + 68
+    return x0, y1 + 4, stream_waterfall_box()[2], y1 + 62
 
 
 def smart_seek_waterfall_box():
     x0, _y0, x1, y1 = carrier_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 68
+    return x0, y1 + 4, x1, y1 + 62
 
 
 def carrier_button_visible(state):
@@ -5044,7 +5027,7 @@ class SharedState:
     ):
         self.lock = threading.Lock()
         self.carrier_search = CarrierSearch()
-        self.smart_seek = SmartSeek()
+        self.smart_seek = SmartSeekCatalogue(SW_BROADCAST_BANDS)
         self.carrier_idle_context = None
         self.carrier_idle_since = time.monotonic()
         self.carrier_attempted_context = None
@@ -5380,24 +5363,29 @@ class SharedState:
             return result
 
     def _smart_seek_band(self):
-        return next((band for band in SW_BROADCAST_BANDS
-                     if band[0] <= self.freq_khz <= band[1]), None)
+        return min(SW_BROADCAST_BANDS,
+                   key=lambda band: max(band[0]-self.freq_khz, self.freq_khz-band[1], 0))
 
     def smart_seek_available(self):
         with self.lock:
             return self._carrier_eligible() and self._smart_seek_band() is not None
 
-    def start_smart_seek(self, refresh=False):
+    def start_smart_seek(self, refresh=False, band_label=None):
         with self.lock:
             if not self._carrier_eligible():
                 return False
-            band = self._smart_seek_band()
+            if band_label is None and refresh and self.smart_seek.open:
+                band_label = self.smart_seek.label
+            band = (next((b for b in SW_BROADCAST_BANDS if b[2] == band_label), None)
+                    if band_label is not None else self._smart_seek_band())
             if band is None:
                 return False
             self.carrier_search.finish('', time.monotonic())
             self.carrier_tuned_khz = None
+            # Opening starts fresh; switching within the menu requalifies
+            # the session's dimmed rows while retaining the other bands.
             self.smart_seek.start(*band, self._carrier_context(), time.monotonic(),
-                                  cache_key=(self.server, band[0], band[1]), refresh=refresh)
+                                  cache_key=(self.server, band[0], band[1]), refresh=refresh, adaptive=True)
             return True
 
     def close_smart_seek(self, selected=None):
@@ -5418,7 +5406,8 @@ class SharedState:
             if (not self.smart_seek.open or not self._carrier_eligible()
                     or not any(item.frequency_khz == frequency for item in candidates)):
                 return False
-            self.freq_khz = frequency
+            selected = next(item for item in candidates if item.frequency_khz == frequency)
+            self.freq_khz = selected.tuning_khz
             self.wf_view_center_khz = None
             self.view_generation += 1
             self.spectrum_peak_values = ()
@@ -5433,11 +5422,14 @@ class SharedState:
 
     def smart_seek_snapshot(self):
         with self.lock:
+            self.smart_seek.playing_khz = self.freq_khz
             self.smart_seek.poll(self._carrier_context(), time.monotonic())
             if not self._carrier_eligible():
                 self.smart_seek.close()
             snapshot = self.smart_seek.snapshot()
             snapshot['playing_khz'] = self.freq_khz
+            snapshot['bands'] = tuple(b[2] for b in SW_BROADCAST_BANDS
+                                      if b[0] < self.smart_seek.bandwidth_hz/1000)
             return snapshot
 
     def smart_seek_capture_request(self, bandwidth_hz=30000000, zoom_cap=14):
@@ -5449,6 +5441,7 @@ class SharedState:
 
     def feed_smart_seek_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
         with self.lock:
+            self.smart_seek.playing_khz = self.freq_khz
             self.smart_seek.poll(self._carrier_context(), time.monotonic())
             if not self._carrier_eligible():
                 self.smart_seek.close()
@@ -5462,6 +5455,11 @@ class SharedState:
     def set_smart_seek_sensitivity(self, value):
         with self.lock:
             self.smart_seek.sensitivity = int(clamp(value, 0, 100))
+
+    def note_smart_seek_identity(self, frequency, known, nominal=()):
+        with self.lock:
+            if self.smart_seek.open:
+                self.smart_seek.note_identity(frequency,known,nominal)
 
     def waterfall_view_center_snapshot(self):
         with self.lock:
@@ -8907,20 +8905,10 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
 def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
     if alpha <= 0:
         return
-    box = carrier_waterfall_box()
-    x0, y0, x1, y1 = box
-    active = status == "TUNING…"
-    pressed = ui_button_pressed(box)
-    visual = draw_styled_button_frame(
-        box, active=active, pressed=pressed,
-        fill_alpha=round(waterfall_button_fill_alpha(active, pressed) * alpha))
-    first, second = ("AUTO TUNE", "READY") if status == "READY" else (("TUNE", "CARRIER") if not status else (status, ""))
-    color = (*visual.text[:3], round(255 * alpha))
-    draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 - (10 if second else 0),
-              first, color, 17, True, False, "cm", family="Liberation Sans")
-    if second:
-        draw_text(text_cache, (x0+x1)/2, (y0+y1)/2 + 12,
-                  second, color, 17, True, False, "cm", family="Liberation Sans")
+    # Visibility already means a correction is available. This is an action,
+    # not an announcement that the receiver has tuned automatically.
+    draw_styled_text_button(text_cache, carrier_waterfall_box(), "AUTO TUNE",
+                            style=replace(APP_UI_STYLE.button, label_size=20))
 
 
 def draw_favorite_waterfall_button(favorited):
@@ -14358,6 +14346,10 @@ def receiver_map_render_rows(receivers, selected_server, pending_server, interac
     return rows, selected_key, pending_key, selected[0] if selected else None
 
 
+def receiver_visuals_hidden(globe_open, map_open, adsb_open):
+    return (globe_open and map_open) or adsb_open
+
+
 def globe_frame_rate(default_fps, globe_open, moving):
     """Spend extra frames only on an actively manipulated globe."""
     return max(default_fps, 60.0) if globe_open and moving else default_fps
@@ -14366,7 +14358,7 @@ def globe_frame_rate(default_fps, globe_open, moving):
 def draw_receiver_map(
     text_cache, receivers, yaw, pitch, scale, selected_server, pending_server,
     connection_status, station_health, notice="", garden_mode=False, hover_server=None,
-    map_view="borders", interactive=False, notice_alpha=220,
+    map_view="borders", interactive=False, notice_alpha=220, directory_refreshing=False,
 ):
     """RadioGarden-style globe: stationary center, live Kiwi receiver dots."""
     box = PICKER_MAP_BOX
@@ -14539,6 +14531,7 @@ def draw_receiver_map(
             receiver_map_legend_swatch_color(legend_group, legend_active),
         )
 
+    draw_directory_refresh_button(text_cache, directory_refreshing)
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
     draw_picker_two_line_button(
         text_cache, RADIOGARDEN_VIEW_BOX, "VIEW",
@@ -14988,6 +14981,11 @@ def draw_receiver_sort_notice(text_cache, notice, alpha, sort_mode="distance_nea
     draw_green_osd_panel((x0, y0, x1, y1), alpha)
     color = APP_UI_STYLE.palette.notice
     opacity = alpha / 255.0
+    if not notice.startswith("SORTED BY "):
+        draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2,
+                  fit_station_text(text_cache, notice, x1 - x0 - 32, 22, True, False),
+                  color, 22, True, False, "cm", alpha=opacity)
+        return
     draw_text(text_cache, x0 + 18, y0 + 22, "SORTED BY", color,
               28, True, True, "lm", alpha=opacity)
     draw_logical_polyline(sort_chevron_points((x0, y0, x1, y1), sort_mode),
@@ -17937,7 +17935,7 @@ def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
     show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
-    active_usb_source=None, favorite_servers=(),
+    active_usb_source=None, favorite_servers=(), directory_refreshing=False,
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -17970,6 +17968,8 @@ def draw_station_picker(
         draw_picker_button(text_cache, PICKER_SEARCH_BOX, "SEARCH", 23)
         draw_picker_two_line_button(text_cache, PICKER_SORT_BOX, "SORT", sort_mode.upper(), 20)
         draw_radio_close_button(text_cache, PICKER_EXIT_BOX)
+
+    draw_directory_refresh_button(text_cache, directory_refreshing)
 
     leading_rows = 1 if show_fmdx_notice else 0
     if show_fmdx_notice:
@@ -19064,6 +19064,10 @@ def draw_ui(
     zoom_pressed=None,
     usb_receiver=False,
 ):
+    global WATERFALL_ACTIONS_TOP
+    # RIGHT places frequency and meter in the rail, leaving the RF corner
+    # free. Other layouts retain clearance below their top instrument strip.
+    WATERFALL_ACTIONS_TOP = 8 if instrument_layout == "right" else 88
     # Keep the large frequency's translucent strip aligned with the active
     # theme; RIGHT has no such strip over the RF canvas.
     show_large_instruments = instrument_layout != "right"
@@ -24543,10 +24547,12 @@ def main():
     ).start()
     public_result_queue = queue.Queue(maxsize=1)
     daily_directories = DailyDirectoryRefresh((
-        lambda: refresh_public_stations(public_result_queue),
-        lambda: refresh_globe_receivers(globe_result_queue),
-        lambda: refresh_openwebrx_stations(openwebrx_result_queue),
+        lambda: checked_refresh(lambda: refresh_public_stations(public_result_queue), PUBLIC_DIRECTORY_CACHE),
+        lambda: checked_refresh(lambda: refresh_globe_receivers(globe_result_queue), GLOBE_DIRECTORY_CACHE),
+        lambda: checked_refresh(lambda: refresh_openwebrx_stations(openwebrx_result_queue), openwebrx_directory.DEFAULT_CACHE),
     ))
+    manual_directory_refresh = False
+    directory_refresh_completed = 0
     retune_pattern_index = 0
     retune_sweep = None
     dj_tune_open = False
@@ -25086,7 +25092,7 @@ def main():
             return
         if not state.tune_smart_seek_candidate(frequency):
             return
-        display_freq = candidate_freq = frequency
+        display_freq = candidate_freq = state.snapshot()[1]
         anim_start = 0.0
         inertia_velocity_khz_s = 0.0
         remember_current_view()
@@ -26163,7 +26169,7 @@ def main():
             not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not (audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+            and not (seek_view.open or audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
                      or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
             and not ((wspr_panel_open and not (wspr_expanded_waterfall_open or wspr_expanded_graph_open)) or font_lab_open or rtl_lab_open
@@ -26437,7 +26443,7 @@ def main():
                     continue
                 if event.type == pygame.KEYDOWN and seek_view.open:
                     if event.key == pygame.K_ESCAPE:
-                        seek_view.close()
+                        seek_view.back()
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
                         seek_view.move(-1)
                     elif event.key in (pygame.K_RIGHT, pygame.K_DOWN):
@@ -26529,6 +26535,7 @@ def main():
                             picker_map_notice_until = time.monotonic() + 1.6
                         elif (
                             picker_open and picker_map_open and contains(PICKER_MAP_BOX, map_x, map_y)
+                            and not contains(receiver_directory_refresh_box(), map_x, map_y)
                             and not contains(RADIOGARDEN_LIST_BOX, map_x, map_y)
                             and not contains(RADIOGARDEN_EXIT_BOX, map_x, map_y)
                             and not contains(RADIOGARDEN_VIEW_BOX, map_x, map_y)
@@ -26803,7 +26810,7 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if seek_view.open and x < rf_canvas_width():
+                            if seek_view.open:
                                 gesture = "smart_seek"
                                 seek_view.press(x, y)
                             elif audio_test_workspace.open:
@@ -26872,6 +26879,8 @@ def main():
                             # waterfall target that happens to share the same
                             # coordinates underneath the browser (the source row
                             # overlaps the frequency readout, for example).
+                            elif picker_open and not search_open and contains(receiver_directory_refresh_box(), x, y):
+                                gesture = "picker_directory_refresh"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_LIST_BOX, x, y):
                                 gesture = "picker_map_list"
                             elif picker_open and picker_map_open and contains(RADIOGARDEN_EXIT_BOX, x, y):
@@ -29658,6 +29667,14 @@ def main():
                             if moved <= args.tap_px:
                                 search_open = True
                                 keyboard_mode = "lower"
+                        elif touch_started and gesture == "picker_directory_refresh":
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                if daily_directories.request():
+                                    manual_directory_refresh = True
+                                picker_map_notice = picker_list_notice = "UPDATING DIRECTORY"
+                                picker_map_notice_until = picker_list_notice_until = time.monotonic() + 3.0
+                                wake_controls()
                         elif touch_started and gesture == "picker_sort":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -30177,6 +30194,12 @@ def main():
                         )
                 else:
                     print("gl map feed unavailable; using saved GPS map", flush=True)
+            if daily_directories.completed != directory_refresh_completed:
+                directory_refresh_completed = daily_directories.completed
+                if manual_directory_refresh:
+                    picker_map_notice = picker_list_notice = daily_directories.result_message()
+                    picker_map_notice_until = picker_list_notice_until = time.monotonic() + 6.0
+                    manual_directory_refresh = False
             STATIONS = all_stations
             kiwi_landing_connected_at, landing_result = advance_kiwi_landing_connection(
                 state, "connected" if state.kiwi_landing_ready() else None, kiwi_landing_connected_at,
@@ -30210,7 +30233,7 @@ def main():
                 display_freq = freq_khz
                 display_span = receiver_display_span(zoom, state.receiver_type_snapshot())
 
-            if picker_open and picker_map_open:
+            if receiver_visuals_hidden(picker_open, picker_map_open, adsb_workspace.open):
                 MAIN_RADIO_VISUALS_HIDDEN.set()
             else:
                 MAIN_RADIO_VISUALS_HIDDEN.clear()
@@ -30276,7 +30299,7 @@ def main():
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
-            globe_covering_radio = picker_open and picker_map_open
+            globe_covering_radio = receiver_visuals_hidden(picker_open, picker_map_open, adsb_workspace.open)
             focus_progress = waterfall_focus_progress(now)
             spectrum_enabled, spectrum_values, spectrum_peak_values = state.spectrum_snapshot()
             _state_mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
@@ -30585,7 +30608,8 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SMART SEEK", size=20)
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SMART SEEK",
+                                            style=replace(APP_UI_STYLE.button, label_size=20))
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
@@ -30663,6 +30687,7 @@ def main():
                         notice_alpha=green_osd_alpha(
                             picker_map_notice_until - time.monotonic(), 1.2,
                         ),
+                        directory_refreshing=daily_directories.busy,
                     )
                 elif search_open:
                     draw_station_search(text_cache, all_stations, station_query, station_sort, keyboard_mode)
@@ -30681,6 +30706,7 @@ def main():
                         usb_present=usb_present,
                         active_usb_source=rtl_lab.source_id if rtl_lab.is_running() else None,
                         favorite_servers=favorite_servers,
+                        directory_refreshing=daily_directories.busy,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
@@ -30958,7 +30984,7 @@ def main():
                     text_cache, rc28_dial_mode,
                     green_osd_alpha(rc28_osd_remaining, args.zoom_osd_seconds),
                 )
-            if not picker_open and not dual_vfo_open:
+            if not picker_open and not dual_vfo_open and not adsb_workspace.open:
                 draw_desktop_1280_navigation(text_cache)
             if adsb_workspace.open:
                 adsb_workspace.draw(text_cache)
@@ -31047,7 +31073,8 @@ def main():
                 or picker_map_zoom_target is not None or picker_map_lock_target is not None
                 or (args.desktop and desktop_map_dragged)
             )
-            clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, picker_open and picker_map_open, globe_moving))
+            dome_interacting = adsb_workspace.open and adsb_workspace.coverage_open and (adsb_workspace.coverage_view.pointer_active or time.monotonic()<adsb_workspace.coverage_view.interaction_until)
+            clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, (picker_open and picker_map_open) or (adsb_workspace.open and adsb_workspace.coverage_open), globe_moving or dome_interacting))
     finally:
         if theme_frame_context is not None:
             theme_frame_context.__exit__(None, None, None)

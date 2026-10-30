@@ -1,6 +1,6 @@
 """Real observation times, display windows and new-arrival semantics."""
 import unittest
-from adsb_view import TrafficView, aged, positioned, freshness
+from adsb_view import TrafficView, aged, positioned, freshness, dome_contact, dome_altitude, reception_age
 
 
 def plane(key='a', heard=100, position=100):
@@ -10,6 +10,25 @@ def plane(key='a', heard=100, position=100):
 
 
 class ViewTests(unittest.TestCase):
+    def test_dome_reception_ages_are_readable_and_do_not_show_raw_timestamps(self):
+        for seconds,label in ((0,'0 s ago'),(3.9,'3 s ago'),(65,'1 min 5 s ago'),(3670,'1 h 1 min ago'),(90000,'1 d 1 h ago')):
+            self.assertEqual(reception_age(seconds),label)
+        self.assertEqual(reception_age(float('nan')),'Unknown')
+
+    def test_selected_dome_altitude_follows_actual_reports_and_ages_without_new_geometry(self):
+        first=dict(hex='a',last_seen_at=100,alt_geom=10000,gs=230)
+        contact=dome_contact([first],'a',102);self.assertTrue(contact['live']);self.assertIn('10,000',dome_altitude(contact))
+        newer=dict(first,last_seen_at=104,alt_geom=10500)
+        contact=dome_contact([newer],'a',105,contact);self.assertIn('10,500',dome_altitude(contact))
+        contact=dome_contact([first],'a',110,contact);self.assertEqual(contact['alt_geom'],10500)
+        contact=dome_contact([],'a',120,contact);self.assertFalse(contact['live']);self.assertEqual(contact['seen'],16)
+        self.assertIsNone(dome_contact([],'other',120,contact))
+        self.assertIsNone(dome_contact([dict(hex='a',seen=0,alt_baro=10000)],'a',120))
+        self.assertIsNone(dome_contact([dict(first,last_seen_at=500)],'a',120))
+        self.assertIn('BARO',dome_altitude(dict(alt_geom=None,alt_baro=9500)))
+        self.assertEqual(dome_altitude(dict(alt_baro='ground')),'On ground')
+        self.assertIsNone(dome_altitude(dict(alt_geom=float('nan'))))
+
     def test_history_icons_can_be_hidden_without_changing_names_trails_or_records(self):
         view=TrafficView(100);view.mode='history';tracks={'old':[dict(time=90,lat=44,lon=26)]}
         self.assertTrue(view.icons_visible(False))

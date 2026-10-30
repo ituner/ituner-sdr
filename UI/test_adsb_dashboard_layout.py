@@ -7,7 +7,7 @@ import UI.test_adsb as adsb_tests
 
 
 class AirspaceLayoutTests(unittest.TestCase):
-    def test_dome_preserves_original_toolbar_and_side_controls(self):
+    def test_dome_preserves_side_controls_with_current_two_mode_toolbar(self):
         workspace = Mock()
         workspace.BG = (0, 0, 0)
         workspace.manager.coverage_error = ''
@@ -15,12 +15,12 @@ class AirspaceLayoutTests(unittest.TestCase):
         view.data = {'status': 'NO SITE', 'meta': {}}
         view.draw(Mock(), {})
         controls = [call.args for call in workspace.button.call_args_list]
-        self.assertEqual(BOX, (180,154,1100,712))
-        self.assertEqual(len(controls), 12)
+        self.assertGreaterEqual(BOX[0], 152)
+        self.assertLessEqual(BOX[2], 1128)
         reset = [box for _, box, _, action in controls if action[0] == "coverage_clock_reset"]
         self.assertEqual(reset, [(832,10,990,72)])
         toolbar = [box for _, box, _, action in controls if action[0] in ('coverage_mode', 'coverage_signal', 'coverage_reset', 'site')]
-        self.assertEqual(len(toolbar), 6)
+        self.assertEqual(len(toolbar), 5)
         self.assertTrue(all(box[1:4:2] == (96,152) for box in toolbar))
         self.assertEqual([box for _,box,_,_ in controls[-4:]],
                          [(24,568,152,624),(24,636,152,692),

@@ -259,7 +259,10 @@ class IntegrationTests(unittest.TestCase):
     def test_control_is_clear_of_frequency_favorite_pause_and_retry_notice(self):
         ui.configure_output(True)
         box = ui.carrier_waterfall_box()
-        self.assertGreaterEqual(box[1], ui.favorite_waterfall_box()[3]+10)
+        self.assertEqual(box[1], ui.favorite_waterfall_box()[3]+4)
+        self.assertEqual(ui.stream_waterfall_box()[1],8)
+        self.assertEqual(ui.stream_waterfall_box()[2],ui.rf_canvas_width()-6)
+        self.assertLessEqual(ui.smart_seek_waterfall_box()[3],190)
         self.assertGreater(box[0], ui.rf_canvas_width()/2)
         self.assertLessEqual(box[2], ui.rf_canvas_width())
         self.assertGreaterEqual(box[2]-box[0], 150)

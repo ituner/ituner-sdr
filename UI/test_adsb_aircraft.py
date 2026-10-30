@@ -107,6 +107,7 @@ class AircraftDetailsTests(unittest.TestCase):
         w.manager.aircraft_details.snapshot.return_value=dict(status='ready',manufacturer='Cessna',model='172S Skyhawk',registration='N123AB',photo_cached=True,photo=dict(credit='Photo: Airport-Data.com'))
         view.draw_aircraft(Mock(),dict(aircraft=[]))
         labels=[c.args[3] for c in w.ink.call_args_list]
-        self.assertIn('Cessna',labels);self.assertIn('172S Skyhawk',labels);self.assertIn('10,000 GNSS',labels)
-        self.assertEqual([label for label in labels if label.startswith('ICAO ')],['ICAO ABC123 · N123AB'])
+        self.assertIn('Cessna',' '.join(labels));self.assertIn('172S Skyhawk',' '.join(labels));self.assertIn('10,000 ft',labels)
+        self.assertEqual([label for label in labels if label.startswith('ICAO ')], ['ICAO ABC123'])
+        self.assertIn('N123AB', labels)
         view.draw_photo.assert_called_once();self.assertEqual(view.selected_observation['time'],1000)
