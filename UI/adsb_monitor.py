@@ -22,8 +22,9 @@ from dongle_notice import inject_notice, notice_post
 from station_profile import distance_m
 from adsb_ground import GroundMap
 from adsb_aircraft import AircraftDetails
-from adsb_coverage import ReceptionCoverage
-from adsb_logs import LOG_FILES, read_log_tail
+from adsb_coverage import ReceptionCoverage, coverage_payload
+from adsb_persistence import BufferedFlightHandler, PERSIST_SECONDS
+from adsb_logs import LOG_FILES, read_log_tail, log_line
 from adsb_globe import GlobeAssets
 from adsb_traffic import BANDS, TrafficHistory, receiver_position
 from adsb_uat import UATReceiver, age_aircraft, merge_aircraft
@@ -121,7 +122,7 @@ class ADSBManager:
         self.history = TrafficHistory()
         self.history_path = self.root/'trails.json.gz'
         self.history.load(self.history_path,time.time())
-        self.next_history_save = 0
+        self.next_history_save = time.monotonic()+PERSIST_SECONDS
         for item in self.log_cache['flights']['entries']:
             if isinstance(item.get('time'), (int,float)) and 0<=time.time()-item['time'] <= self.history.retention:
                 self.history.ingest([item.get('aircraft') or {}], item['time'])
@@ -167,7 +168,7 @@ class ADSBManager:
 
     def _logger(self, name, size, backups):
         logger = logging.Logger(f'adsb-{name}-{id(self)}')
-        handler = RotatingFileHandler(self.root/(name+'.jsonl'), maxBytes=size, backupCount=backups)
+        handler = BufferedFlightHandler(self.root/(name+'.jsonl'),size,backups) if name=='flights' else RotatingFileHandler(self.root/(name+'.jsonl'),maxBytes=size,backupCount=backups)
         handler.setFormatter(logging.Formatter('%(message)s'))
         logger.addHandler(handler)
         return logger
@@ -299,7 +300,7 @@ class ADSBManager:
     def _save_history(self, force=False):
         now=time.monotonic()
         if not force and now<self.next_history_save:return
-        self.next_history_save=now+60
+        self.next_history_save=now+PERSIST_SECONDS
         try:
             with self.lock:self.history.save(self.history_path,time.time())
         except (OSError,ValueError) as exc:self._event('history_save_error',detail=str(exc))
@@ -314,6 +315,12 @@ class ADSBManager:
         now = time.monotonic()
         if now < self.next_logs: return
         logs = {kind: read_log_tail(self.root, kind) for kind in LOG_FILES}
+        pending=[]
+        for handler in self.flight_log.handlers:
+            if isinstance(handler,BufferedFlightHandler):pending.extend(json.loads(line) for line in handler.pending_lines())
+        if pending:
+            entries=(logs['flights']['entries']+pending)[-160:]
+            logs['flights'].update(entries=entries,lines=[log_line(item,'flights') for item in entries])
         with self.lock: self.log_cache = logs
         self.next_logs = now + 2
 
@@ -481,6 +488,8 @@ class ADSBManager:
             try:
                 with self.lock: site = dict(self.position) if self.position else None
                 self.coverage.tick(site)
+                for handler in self.flight_log.handlers:
+                    if isinstance(handler,BufferedFlightHandler):handler.flush_if_due()
                 self.coverage_error = ''
             except Exception as exc:
                 if str(exc) != self.coverage_error: self._event('coverage_error', detail=str(exc))
@@ -488,7 +497,8 @@ class ADSBManager:
             self.wake.wait(1)
             self.wake.clear()
         self._save_history(force=True)
-        self.coverage.close()
+        try:self.coverage.close()
+        except Exception as exc:self._event('coverage_save_error',detail=str(exc))
         self._stop()
         self.uat.stop()
         self.weather.stop()
@@ -544,7 +554,9 @@ class ADSBHandler(BaseHTTPRequestHandler):
                 self.send(image or b'', 'image/png', status=200 if image else 404)
             elif path == '/api/coverage':
                 state=manager.snapshot()
-                self.send(json.dumps(dict(manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None), error=manager.coverage_error, receiver_enabled=state['enabled'], receiver_status=state['status'])).encode())
+                data=manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None)
+                payload=coverage_payload(data,float(query['after'][0]) if 'after' in query else None,query.get('cache_key',[None])[0])
+                self.send(json.dumps(dict(payload,error=manager.coverage_error,receiver_enabled=state['enabled'],receiver_status=state['status'])).encode())
             elif path == '/api/footprint':
                 data=manager.coverage.maximum_snapshot() if query.get('scope')==['maximum'] else manager.coverage.snapshot(float(query['since'][0]) if 'since' in query else None);meta=data.get('meta',{})
                 self.send(json.dumps(dict(status=data.get('status'),scope=data.get('scope','selected window'),error=manager.coverage_error,footprint=data.get('footprint'),retained_positions=meta.get('retained_positions',0),first_position=meta.get('first_position'),last_position=meta.get('last_position'))).encode())
@@ -561,7 +573,8 @@ class ADSBHandler(BaseHTTPRequestHandler):
             elif path == '/api/log':
                 kind = query.get('kind', ['flights'])[0]
                 if kind not in LOG_FILES: raise ValueError('Unknown log type')
-                data = (manager.root/LOG_FILES[kind]).read_bytes()
+                handler=next((h for h in manager.flight_log.handlers if isinstance(h,BufferedFlightHandler)),None)
+                data=handler.read_log() if kind=='flights' and handler else (manager.root/LOG_FILES[kind]).read_bytes()
                 self.send(data, 'text/plain; charset=utf-8' if kind == 'diagnostics' else 'application/x-ndjson')
             elif path == '/api/globe/view':
                 self.send(json.dumps(manager.globe.view(query)).encode())

@@ -16,29 +16,43 @@ The one-minute cutoff advances in ten-second steps; other windows use minute
 steps. Neither control deletes logs, resets a decoder or changes the map window.
 
 - **Sky cells** projects received directions onto an angular hemisphere, in
-  4° azimuth × 2° elevation cells. Blue means received; grey means unknown.
-- **Sky trails** shows received positions projected onto that hemisphere, with brighter connecting lines. Display thinning preserves links only where the original observations establish continuous reception; real gaps remain split.
+  4° azimuth × 2° elevation cells. Blue means received in sample-count mode;
+  Signal uses the same blue-to-red strength scale as 3D distance. Grey means unknown.
 - **3D distance** fits the ground disk and every displayed aircraft to the viewport.
   Height defaults to **Fit height**, with the expansion factor explicitly shown
-  on the plot. **True scale · 1:1** (web Height display / touchscreen Height)
+  in the side readouts. **True scale · 1:1** (web Height display / touchscreen Height)
   restores equal horizontal and vertical units. Horizontal range, altitude
   readouts and point details always retain actual values. One graduated ground
-  ruler and a height axis replace per-point distance labels. Entering this view
+  ruler and a height axis replace per-point distance labels. Maximum altitude,
+  aircraft/source and scale notes stay beside the 3D plot, without central
+  caption overlays. The wider native plot and tighter camera margins enlarge
+  the projection while keeping compass and distance graduations readable. Entering this view
   uses a lower 25° camera tilt to reveal vertical separation. Drag to rotate; use sliders (web) or
   rotation/tilt buttons (touch). Tap a dot, any part of a trail, or an observed
   sky cell to open an aircraft information card without filtering the scene.
-  The card shows the recorded sample time, altitude/source, RSSI, horizontal
-  and slant range, azimuth and elevation. Current speed/heading/squawk appear
-  separately as Live now only while radio contact is fresh. A sky cell selects
+  After a tap, the card follows that aircraft's newest received position for
+  RSSI, horizontal/slant range, azimuth and elevation. Its main altitude follows
+  the latest actual report, independently of geometry updates. The prominent
+  reception age resets on that aircraft's reports; there is no separate ageing
+  clock anchored to the original tap. New recorded position evidence can update
+  it even if a brief live report fell between web polls. Other aircraft, redraws
+  and unchanged history cannot reset it. The compact age reads in seconds, then minutes/hours. No reports are
+  extrapolated, and selecting another aircraft cannot reuse the previous one's
+  telemetry. The web card refreshes once a second; the native card follows live
+  application snapshots. Current speed/heading/squawk appear with reception age.
+  A sky cell selects
   its latest retained sample; it can contain reception from several aircraft.
   Only this aircraft explicitly filters the display; Show all restores it.
   Close or Back (touch) / Escape (web) dismisses the card first. Reset restores
   all aircraft. Empty/unobserved sky does not fabricate an aircraft.
+- **Map on/off** is directly on the main dome header in both interfaces.
+  Turning it on from a sky mode opens **3D distance** and shows the satellite
+  ground reference. Turning it off removes imagery without changing reception.
 - **RX radius** is the maximum observed horizontal distance from the configured
   antenna. Diameter is twice that radius: a reference circle, not a claim of
   complete circular coverage. Maximum slant range includes vertical distance.
 - **Maximum altitude** is the highest received aircraft altitude in the retained
-  history, in feet and kilometres. Its label near the zenith is a statistic;
+  history, in feet and kilometres. Its side readout in 3D (zenith label in sky modes) is a statistic;
   that aircraft was not necessarily overhead. GNSS altitude is above the WGS84
   ellipsoid; barometric fallback is approximate. It is not height above antenna.
 
@@ -50,25 +64,41 @@ approximation until the antenna itself is surveyed. Height updates are shared
 with touch through the station profile, independently of receiver tuning.
 
 `coverage.sqlite3` in the ADS-B data directory stores direct ADS-B positions
-independently of the 24-hour traffic trails. Retention is up to 90 days and
-250,000 positions, whichever limit is reached first. Startup imports retained
+independently of the 24-hour traffic trails. Every reception is preserved for at least seven days. Older records may remain up to 90 days within a 250,000-position target; this target never deletes records younger than seven days. Startup imports retained
 `flights.jsonl*` logs idempotently. New entries follow the normal five-second
 flight logging cadence. SQLite reuses pages as older positions expire. Sky-cell
-statistics and extrema use the full retained history. To bound UI payloads, dot
-views are thinned above 20,000 positions, preserving maximum altitude/range.
+statistics and extrema use the full retained history. The selected window supplies up to 250,000 representative positions to both interfaces, so the current approximately 172,000-point week is loaded completely. Larger seven-day archives remain complete on disk while display sampling bounds the RAM and graphics workload. The previous 100,000-dot cap is removed. Received coordinates, altitudes, signal values and IDs are held in cached RAM snapshots and prepared geometry, while the source observations remain persistent in SQLite. Rotation uses those arrays without a disk read or network request.
 Links between retained dots are built before thinning: a longer displayed segment
 is only confirmed when all intervening original links pass the time, movement
 and receiver-lifecycle checks. It does not invent continuity across a gap.
 
 The `/api/coverage` endpoint reads a cached snapshot built on the receiver
 worker. The native renderer builds cached 3D geometry off the GL/touch thread, then
-rotates vector arrays and submits batched OpenGL triangles and lines. No dome
+rotates vector arrays and submits batched OpenGL points, triangles and lines. Dense stationary projections run on a separate worker; camera and history revisions reject outdated completions, so starting another drag never waits for a dense projection. Moving
+frames use a cached overview of up to 1,800 real dots and 2,200 actual trail
+segments; Sky Cells retains its complete bounded grid. Picking buffers are rebuilt
+after motion settles, and stationary frames refine through 8,000, 30,000 and 100,000 dots to the complete saved set over about three seconds after release, using exactly the same camera bounds. A held finger stays in preview even when it pauses. The side readout shows the current and available dot counts. Sky Cells prioritizes speed with an 8° × 4° overview during interaction and fixed 4° × 2° reception cells at rest. It does not build a fine 1° mesh. Dense settled clouds use one logical-pixel dots; rotating previews use 2.4-pixel dots. Picking still accepts a wider touch radius. A cached convex support hull keeps camera fitting independent of history size. Native GNSS dots use one GPU point each instead of 24 triangle vertices, while approximate barometric dots retain open rings. History preparation is deferred during a native drag; the web avoids parsing history responses during a drag. No saved
+points, statistics or reception continuity are removed by this display preview. No dome
 bitmap is repainted or uploaded while dragging. Readouts sit beside the larger
 dome as plain text. The web view caches its grid and trigonometry, avoids
 resizing an unchanged canvas, and uses lower pixel density during a drag before
-restoring full sharpness on release. Unknown sky uses a faint wire shell;
+restoring full sharpness on release or a short slider pause. Web trails and dots
+are batched by colour; dense histories use smaller markers to reduce overlap. Unknown sky uses a faint wire shell;
 received cell boundaries and counts keep their original resolution. History
 remains visible with ADS-B paused; the receiver state is shown separately.
+
+Only **Sky Cells** and **3D Distance** are exposed as view choices. Both offer
+**50–400% zoom**: native −/+ controls in 25% steps (up to 400%), and the web Zoom slider or
+mouse wheel. Above 100%, the projection extends faintly behind the side controls
+at 14% opacity; the central plot stays bright and controls/readouts remain on top.
+Navigation and the status footer remain outside the drawing region.
+
+**Signal** colours use a fixed −45 to −5 dBFS scale: blue → cyan → green → yellow
+→ red. The same scale colours cells, dots and confirmed trail links (using their
+endpoint average), without renormalizing when history grows. Missing RSSI uses a
+muted neutral colour. The legend shows the scale; these are relative receiver
+measurements, not calibrated power or an assertion that a closer aircraft must
+be stronger. Statistics still use the complete selected history.
 
 Positions must be directly received ADS-B, with finite coordinates, a numeric
 altitude and position age ≤10 seconds. Duplicates are removed. WGS84 ECEF→ENU
@@ -117,7 +147,13 @@ until history for the current site is ready.
 
 Tapping a received point or sky trail shows the aircraft manufacturer, model,
 registration and ICAO type when known, alongside the selected sample's recorded
-telemetry. The native touchscreen and browser share the same lookup cache.
+telemetry. The thumbnail sits beside the callsign in the header; aircraft identity uses
+the full width below it instead of reserving a separate photo column.
+The two-column card uses tight vertical spacing and a small thumbnail so it
+leaves more of the globe visible. The native card is 316 pixels wide, with labels above values inside its two
+columns, readable telemetry and unchanged 56-pixel touch controls. Reception age
+is shown simply as “1 s ago”; the age row does not reserve a telemetry column. The native touchscreen
+and browser share the same lookup cache.
 The installed tar1090 aircraft database provides an offline fallback; opening a
 card requests fuller identity from adsbdb (PlaneBase), with hexdb as fallback.
 Only the six-digit aircraft ICAO address is sent, never the receiver location or
@@ -150,3 +186,11 @@ on one background worker and uploaded once per patch/detail change; camera
 rotation reuses the same texture. No image downloads or geographic reprojection
 run on the touchscreen drawing thread. Missing regional tiles fall back to the
 bundled world image. The renderer keeps at most two 512-pixel ground patches.
+
+3D Distance shows received-position dots without connecting lines or a line toggle. Ground rulers, range rings and aircraft selection remain available. Pressing the plot immediately enters preview quality, before a swipe threshold is crossed; a tap still selects using the last completed picking geometry.
+
+After the first web history download, a reference-keyed delta request sends only an overlapping 30-second tail plus current metadata. The browser merges it into its RAM history, preserving aircraft IDs, late observations, window expiry and receiver breaks. Changing to a larger time window or moving the antenna requires a new full snapshot. Sampled histories above the display budget refresh at most every 30 seconds. Rotation itself makes no history request.
+
+Five-second reception samples are ingested into an in-memory SQLite working database. The on-card database is loaded once at startup. New/changed rows, footprint bookkeeping and pruning are committed incrementally every five minutes; the full database is not recopied for each save. Flight JSONL records are RAM-buffered on the same cadence, and traffic-trail persistence also uses five minutes. Live short windows, statistics, log tails and log downloads include the unsaved RAM data. A normal shutdown flushes pending data; abrupt power loss may discard the last five minutes. Receiver lifecycle/configuration logs can still write when settings or hardware change.
+
+The native app suppresses covered Home instruments and waterfall FFT work while ADS-B is full screen, and requests 60 FPS during dome touch/zoom interaction. Preview begins at pointer-down, not after crossing a movement threshold. Picking stays in numeric arrays and is vectorized on demand; it does not rebuild hundreds of thousands of Python hit tuples each frame. Inactive history windows stop rebuilding after 12 seconds without a reader, and bulk WGS84 projection uses NumPy.

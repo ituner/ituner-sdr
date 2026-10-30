@@ -8,8 +8,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 from urllib.request import urlopen, Request
-from adsb_coverage import ReceptionCoverage, ecef, enu, observation, retained_trail_links
-from adsb_coverage_touch import paint, CoverageTouch
+from adsb_coverage import ReceptionCoverage, ecef, enu, observation, retained_trail_links, coverage_payload
+from adsb_coverage_touch import paint, CoverageTouch, BOX, GL_WIDTH, GL_HEIGHT
 from adsb_view import CoverageWindow, COVERAGE_WINDOWS
 import adsb_coverage_gl as dome_gl
 from adsb_monitor import ADSBManager
@@ -35,6 +35,234 @@ class CoverageTests(unittest.TestCase):
         self.assertGreater(center-width/2,height[2])
         self.assertLess(center+width/2,1128)  # right-side dome instruments
 
+    def test_complete_week_is_not_pruned_by_the_older_history_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now=time.time();c=ReceptionCoverage(tmp)
+            c.add([row(now-i) for i in range(20)]+[row(now-8*86400)])
+            with patch('adsb_coverage.MAX_POINTS',5):c.tick(SITE,now=now)
+            data=c.snapshot();self.assertEqual(data['meta']['retained_positions'],20)
+            self.assertEqual(len(data['points']),20);self.assertEqual(data['meta']['full_retention_days'],7)
+            c.close()
+
+    def test_delta_is_small_reference_safe_and_preserves_late_reception_overlap(self):
+        data=dict(status='READY',base=1000,meta=dict(reference=SITE,reference_height_m=0,first_position=1000,last_position=1100),aircraft=[],points=[[i,0,0,0,0,1,-20,1,'A'] for i in range(101)],segments=[[0,1]])
+        full=coverage_payload(data);tail=coverage_payload(data,1070,full['cache_key'])
+        self.assertTrue(tail['delta']);self.assertEqual(len(tail['points']),31)
+        self.assertNotIn('segments',tail);self.assertEqual(len(data['points']),101)
+        self.assertNotIn('delta',coverage_payload(data,1070,'other-site'))
+        self.assertNotIn('delta',coverage_payload(dict(data,meta=dict(data['meta'],sampled=True)),1070,full['cache_key']))
+
+    def test_sky_cells_use_fast_overview_and_fixed_reception_cells(self):
+        data=dict(base=1000,meta={},aircraft=[dict(hex='a',label='A')],points=[[0,0,10000,10000,3000,10000,-20,1,'A']])
+        scene=dome_gl.prepare(data,'cells',True)
+        coarse=dome_gl.project(scene,0,55,966,558,interactive=True)
+        fine=dome_gl.project(scene,0,55,966,558,fine_cells=True)
+        self.assertEqual(len(scene['cells']),4050);self.assertEqual(len(scene['preview']['cells']),1035)
+        self.assertEqual(coarse['cell_degrees'],8);self.assertEqual(fine['cell_degrees'],4)
+        self.assertTrue(any(h[4]==0 for h in fine['hits']))
+        self.assertEqual(len(data['points']),1)
+
+    def test_first_touch_immediately_uses_preview_but_a_tap_still_selects(self):
+        data=dict(base=1000,meta={},aircraft=[dict(hex='abc123',label='A')],points=[[i,0,10000+i,20000,3000,10000,-20,1,'A'] for i in range(9000)])
+        w=ADSBWorkspace(Mock(),Mock());view=w.coverage_view;view.mode='space';scene=dome_gl.prepare(data,'space')
+        view.interaction_until=0;view.pick_data=data
+        full=view.projection(scene,1);hit=full['hits'][-1];w.dragged=False
+        view.drag_begin(hit[0]+BOX[0],hit[1]+BOX[1])
+        preview=view.projection(scene,1)
+        self.assertEqual(preview['drawn_positions'],1800)
+        view.drag_end();view.tap(hit[0]+BOX[0],hit[1]+BOX[1])
+        self.assertEqual(view.selected_observation['hex'],'abc123')
+        self.assertFalse(len(full['pick_segments']))
+
+    def test_bulk_enu_and_cached_camera_bounds_preserve_geometry(self):
+        from adsb_geometry import enu_positions, camera_hull
+        rows=[(0,'a',44.5,26.1,10000),(0,'b',45.1,25.5,40000)]
+        actual=enu_positions(rows,SITE,ecef(SITE['lat'],SITE['lon'],0))
+        expected=[enu(r[2],r[3],r[4]*.3048,SITE) for r in rows]
+        np.testing.assert_allclose(actual,expected,atol=1e-6)
+        cloud=np.random.default_rng(42).normal(size=(12000,3)).astype(np.float32);hull=camera_hull(cloud)
+        self.assertLess(len(hull),2048)
+        for yaw,tilt in ((0,25),(50,65),(210,8)):
+            full=dome_gl.space_frame(cloud,4,yaw,tilt,966,558);small=dome_gl.space_frame(hull,4,yaw,tilt,966,558)
+            self.assertLessEqual(small[0],full[0]+1e-4)
+            if len(hull)!=8:
+                self.assertAlmostEqual(full[0],small[0],places=4)
+                np.testing.assert_allclose(full[1],small[1],atol=1e-4)
+            a,t=math.radians(yaw),math.radians(tilt)
+            matrix=np.asarray(((math.cos(a),-math.sin(a),0),(-math.sin(a)*math.sin(t),-math.cos(a)*math.sin(t),-math.cos(t))))
+            screen=cloud@matrix.T*small[0]+small[1]
+            self.assertGreaterEqual(screen[:,0].min(),28-1e-3);self.assertLessEqual(screen[:,0].max(),938+1e-3)
+            self.assertGreaterEqual(screen[:,1].min(),36-1e-3);self.assertLessEqual(screen[:,1].max(),522+1e-3)
+
+    def test_signal_palette_is_fixed_and_unknown_is_not_reported_as_weak(self):
+        weak=dome_gl.signal_colour(-45);strong=dome_gl.signal_colour(-5)
+        self.assertGreater(weak[2],weak[0]);self.assertGreater(strong[0],strong[2])
+        self.assertEqual(dome_gl.signal_colour(-100),weak)
+        self.assertEqual(dome_gl.signal_colour(1),strong)
+        self.assertEqual(dome_gl.signal_colour(None),(*dome_gl.MUTED,.65))
+
+    def test_moving_preview_bounds_work_without_changing_saved_scene_or_camera(self):
+        points=[[i,0,10000+i,20000,1000+i%3000,10000,-35+i%30,1,'TEST'] for i in range(7000)]
+        data=dict(base=1000,meta=dict(horizontal_range_max_km=30,max_altitude_ft=10000),aircraft=[dict(hex='a',label='TEST')],points=points,segments=[[i-1,i] for i in range(1,len(points))])
+        for mode in ('cells','trails','space'):
+            scene=dome_gl.prepare(data,mode,True)
+            fast=dome_gl.project(scene,35,55,966,558,interactive=True)
+            full=dome_gl.project(scene,35,55,966,558)
+            np.testing.assert_allclose(fast['camera'][2],full['camera'][2])
+            self.assertAlmostEqual(fast['camera'][1],full['camera'][1])
+            self.assertFalse(fast['hits']);self.assertTrue(full['hits'])
+            if mode!='cells':
+                self.assertEqual(len(scene['dots']),len(points))
+                self.assertLessEqual(len(scene['preview']['dots']),dome_gl.PREVIEW_POINTS)
+                self.assertLess(sum(len(v) for _,v,_ in fast['batches']),sum(len(v) for _,v,_ in full['batches'])/2)
+                self.assertFalse(len(fast['pick_segments']))
+                self.assertEqual(bool(len(full['pick_segments'])),mode=='trails')
+                self.assertGreater(len(np.unique(scene['colours'],axis=0)),4)
+        self.assertEqual(len(data['points']),7000)
+
+    def test_native_full_detail_returns_after_motion_without_new_reception(self):
+        view=ADSBWorkspace(Mock(),Mock()).coverage_view
+        scene=dome_gl.prepare(dict(meta={},aircraft=[],points=[]),'space')
+        view.interaction_until=10.16
+        with patch('adsb_coverage_touch.time.monotonic',return_value=10):
+            fast=view.projection(scene,1);self.assertTrue(view.project_key[-1])
+        with patch('adsb_coverage_touch.time.monotonic',return_value=10.17):
+            full=view.projection(scene,1);self.assertFalse(view.project_key[-1])
+            self.assertIs(full,view.projection(scene,1))
+        self.assertIsNot(fast,full)
+
+    def test_stationary_cloud_refines_in_stages_and_finger_hold_cannot_restore_detail(self):
+        view=ADSBWorkspace(Mock(),Mock()).coverage_view
+        points=[[i,0,10000+i,20000,1000,10000,-20,1,'TEST'] for i in range(40000)]
+        scene=dome_gl.prepare(dict(base=1000,meta={},aircraft=[dict(hex='a',label='TEST')],points=points,segments=[]),'space')
+        view.pointer_active=True;view.w.dragged=True;view.interaction_until=10
+        with patch('adsb_coverage_touch.time.monotonic',return_value=20):
+            moving=view.projection(scene,1)
+            self.assertEqual(moving['drawn_positions'],1800)
+            view.drag_end()
+            first=view.projection(scene,1)
+        with patch('adsb_coverage_touch.time.monotonic',return_value=20.5):middle=view.projection(scene,1)
+        with patch('adsb_coverage_touch.time.monotonic',return_value=21.4):full=view.projection(scene,1)
+        self.assertEqual([f['drawn_positions'] for f in (first,middle,full)],[8000,30000,40000])
+        for count in (0,1,17,40000):
+            ids=dome_gl.refinement_indices(count,count)
+            self.assertEqual(len(set(ids)),count)
+            np.testing.assert_array_equal(dome_gl.refinement_indices(count,1800),ids[:1800])
+        for frame in (moving,first,middle,full):
+            np.testing.assert_allclose(frame['camera'][2],full['camera'][2])
+            self.assertAlmostEqual(frame['camera'][1],full['camera'][1])
+        point_batch=next(batch for batch in full['batches'] if batch[0]=='points')
+        self.assertEqual(len(point_batch[1]),40000) # One GPU vertex per real GNSS sample.
+        self.assertEqual(full['dot_radius']*2,1)
+        picked=full['hits'][-1]
+        self.assertIsNotNone(dome_gl.pick_observation(full,picked[0],picked[1]))
+        without_lines=dome_gl.project(scene,0,55,966,558,connections=False)
+        self.assertEqual(without_lines['drawn_positions'],40000)
+        self.assertFalse(len(without_lines['pick_segments']))
+
+    def test_dense_refinement_cannot_block_a_new_drag_or_publish_an_old_camera(self):
+        import threading
+        view=ADSBWorkspace(Mock(),Mock()).coverage_view
+        points=[[i,0,10000+i,20000,1000,10000,-20,1,'TEST'] for i in range(9000)]
+        scene=dome_gl.prepare(dict(base=1000,meta={},aircraft=[dict(hex='a',label='TEST')],points=points,segments=[]),'space')
+        entered=threading.Event();release=threading.Event();project=dome_gl.project
+        def slow(*args,**kwargs):
+            if kwargs.get('point_limit',0)>8000:entered.set();release.wait(5)
+            return project(*args,**kwargs)
+        try:
+            with patch('adsb_coverage_touch.time.monotonic',return_value=20),patch('adsb_coverage_touch.dome_gl.project',side_effect=slow):
+                view.interaction_until=10
+                first=view.projection(scene,1,asynchronous=True)
+                self.assertEqual(first['drawn_positions'],8000);self.assertTrue(entered.wait(2))
+                view.pointer_active=True;view.w.dragged=True;view.yaw=45
+                moving=view.projection(scene,1,asynchronous=True)
+                self.assertEqual(moving['drawn_positions'],1800)
+                release.set();view.projection_future.result(timeout=5)
+                view.pointer_active=False
+                next_frame=view.projection(scene,1,asynchronous=True)
+                self.assertEqual(next_frame['drawn_positions'],8000)
+                self.assertEqual(view.project_key[1],45)
+        finally:
+            release.set()
+            if view.projection_pool:view.projection_pool.shutdown(wait=True)
+
+    def test_zoom_enlarges_each_view_without_changing_statistics_and_clamps_at_400(self):
+        data=dict(base=1000,meta=dict(max_altitude_ft=10000,horizontal_range_max_km=20),aircraft=[dict(hex='a',label='A')],points=[[0,0,10000,0,3000,10000,-10,1,'A']])
+        for mode in ('cells','trails','space'):
+            scene=dome_gl.prepare(data,mode)
+            normal=dome_gl.project(scene,20,55,966,558)
+            center=np.asarray((966/2,558/2))
+            for zoom in (1.5,1.75,2,3,4):
+                zoomed=dome_gl.project(scene,20,55,966,558,zoom=zoom)
+                np.testing.assert_allclose(zoomed['camera'][2],center+(normal['camera'][2]-center)*zoom,atol=1e-4)
+                self.assertAlmostEqual(zoomed['camera'][1],normal['camera'][1]*zoom)
+            np.testing.assert_allclose(dome_gl.project(scene,20,55,966,558,zoom=5)['camera'][2],zoomed['camera'][2])
+            self.assertEqual(scene['meta']['max_altitude_ft'],10000)
+        view=ADSBWorkspace(Mock(),Mock()).coverage_view
+        for _ in range(20):view.action('coverage_zoom',.25)
+        self.assertEqual(view.zoom,4)
+        for _ in range(20):view.action('coverage_zoom',-.25)
+        self.assertEqual(view.zoom,.5)
+
+    def test_only_two_native_modes_and_zoom_controls_keep_touch_size(self):
+        w=ADSBWorkspace(Mock(),Mock());w.coverage_view.draw(Mock(),dict(aircraft=[]))
+        self.assertEqual([value for _,(kind,value) in w.actions if kind=='coverage_mode'],['cells','space'])
+        boxes=[box for box,(kind,_) in w.actions if kind=='coverage_zoom']
+        self.assertEqual(len(boxes),2)
+        self.assertTrue(all(box[2]-box[0]>=56 and box[3]-box[1]>=56 for box in boxes))
+
+    def test_faint_zoom_extension_reuses_vertices_and_preserves_original_colours(self):
+        scene=dome_gl.prepare(dict(meta={},aircraft=[],points=[]),'space')
+        frame=dome_gl.project(scene,0,55,966,558,zoom=1.5)
+        ui=Mock();ui.logical_to_native.side_effect=lambda x,y:(800-y,x)
+        dome_gl.draw(ui,frame,BOX,opacity=.14);faded=frame['faded_native']
+        dome_gl.draw(ui,frame,BOX,opacity=.14);self.assertIs(frame['faded_native'],faded)
+        for original,dimmed in zip(frame['native'][1],faded[2]):
+            self.assertIs(original[1],dimmed[1])
+            np.testing.assert_allclose(dimmed[2][:,3],original[2][:,3]*.14)
+        dome_gl.draw(ui,frame,BOX)
+
+    def test_native_selected_card_updates_altitude_without_replacing_the_recorded_pick(self):
+        w=ADSBWorkspace(Mock(),Mock());view=w.coverage_view
+        picked=dict(base=1000,meta={},aircraft=[dict(hex='abc123',label='TEST')],points=[[0,0,1000,2000,3000,10000,-22,1,'TEST']])
+        view.selected_observation=dome_gl.observation_info(picked,0);w.ink=Mock()
+        report=dict(hex='abc123',last_seen_at=2000,alt_geom=12000,gs=230,track=120)
+        def text():return ' '.join(str(c.args[3]) for c in w.ink.call_args_list)
+        with patch('adsb_coverage_touch.time.time',return_value=2001):view.draw_aircraft(Mock(),dict(aircraft=[report]))
+        self.assertIn('12,000 ft',text());self.assertIn('Altitude',text());self.assertIn('1 s ago',text());self.assertNotIn('Selected ·',text())
+        w.ink.reset_mock()
+        with patch('adsb_coverage_touch.time.time',return_value=2005):view.draw_aircraft(Mock(),dict(aircraft=[dict(report,last_seen_at=2004,alt_geom=12500)]))
+        self.assertIn('12,500 ft',text());self.assertEqual(view.selected_observation['altitude'],10000)
+        w.ink.reset_mock()
+        with patch('adsb_coverage_touch.time.time',return_value=2025):view.draw_aircraft(Mock(),dict(aircraft=[]))
+        self.assertIn('Altitude',text());self.assertIn('21 s ago',text());self.assertNotIn('LIVE',text())
+
+    def test_selected_dome_follows_new_positions_and_packet_age_resets_only_for_that_aircraft(self):
+        w=ADSBWorkspace(Mock(),Mock());view=w.coverage_view;w.ink=Mock()
+        first=dict(base=1000,meta={},aircraft=[dict(hex='abc123',label='TEST'),dict(hex='other',label='OTHER')],points=[[0,0,1000,2000,3000,10000,-22,1,'TEST']])
+        view.update_data(first);view.selected_observation=dome_gl.observation_info(first,0)
+        next_data=dict(first,points=[*first['points'],[1007,0,1200,2300,3300,12500,-20,1,'TEST']])
+        view.update_data(next_data)
+        self.assertEqual(view.selected_observation['time'],2007);self.assertEqual(view.selected_observation['altitude'],12500)
+        def text():return ' '.join(str(c.args[3]) for c in w.ink.call_args_list)
+        with patch('adsb_coverage_touch.time.time',return_value=2008):view.draw_aircraft(Mock(),dict(aircraft=[]))
+        self.assertIn('1 s ago',text());w.ink.reset_mock()
+        other_data=dict(first,points=[*next_data['points'],[1010,1,1000,2000,3000,20000,-20,1,'OTHER']])
+        view.update_data(other_data)
+        with patch('adsb_coverage_touch.time.time',return_value=2012):view.draw_aircraft(Mock(),dict(aircraft=[]))
+        self.assertIn('5 s ago',text());w.ink.reset_mock()
+        packet=dict(hex='abc123',last_seen_at=2014,alt_geom=13000,gs=230,track=90)
+        with patch('adsb_coverage_touch.time.time',return_value=2015):view.draw_aircraft(Mock(),dict(aircraft=[packet]))
+        self.assertIn('1 s ago',text());self.assertIn('13,000 ft',text())
+
+    def test_native_map_toggle_is_in_main_header_and_opens_3d_when_enabled(self):
+        w=ADSBWorkspace(Mock(),Mock());view=w.coverage_view;view.draw(Mock(),dict(aircraft=[]))
+        box=next(box for box,action in w.actions if action[0]=='coverage_ground')
+        self.assertLess(box[1],80)
+        self.assertFalse(view.ground_enabled);self.assertEqual(view.mode,'cells')
+        view.action('coverage_ground',None);self.assertTrue(view.ground_enabled);self.assertEqual(view.mode,'space')
+        view.action('coverage_ground',None);self.assertFalse(view.ground_enabled)
+
     def test_aircraft_card_buttons_consume_taps_above_underlying_dome_controls(self):
         ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
         w=ADSBWorkspace(ui,Mock());w.coverage_open=True;view=w.coverage_view
@@ -51,9 +279,9 @@ class CoverageTests(unittest.TestCase):
         w=ADSBWorkspace(ui,Mock());w.coverage_open=True;view=w.coverage_view
         data=dict(base=1000,meta={},aircraft=[dict(hex='abc123',label='TEST')],points=[[0,0,10000,20000,3000,10000,-22,1,'TEST']],cells=[[24,6,1,-22,1,23000]])
         for mode in ('cells','trails','space'):
-            view.mode=mode;view.projected=dome_gl.project(dome_gl.prepare(data,mode),0,55,920,558);view.pick_data=data
+            view.mode=mode;view.projected=dome_gl.project(dome_gl.prepare(data,mode),0,55,GL_WIDTH,GL_HEIGHT);view.pick_data=data
             hit=next(h for h in view.projected['hits'] if h[4] is not None)
-            view.tap(hit[0]+180,hit[1]+154)
+            view.tap(hit[0]+BOX[0],hit[1]+BOX[1])
             self.assertEqual(view.selected_observation['hex'],'abc123')
             self.assertEqual(view.selected_observation['time'],1000)
             self.assertEqual(view.selected_observation['altitude'],10000)
@@ -65,7 +293,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_trail_midpoint_opens_an_actual_endpoint_sample_not_an_invented_position(self):
         data=dict(base=1000,meta=dict(horizontal_range_max_km=100),aircraft=[dict(hex='abc123',label='TEST')],points=[[0,0,-25000,0,5000,16000,-25,1,'TEST'],[100,0,25000,0,6000,20000,-20,1,'TEST']],segments=[[0,1]])
-        frame=dome_gl.project(dome_gl.prepare(data,'space'),0,25,920,558)
+        frame=dome_gl.project(dome_gl.prepare(data,'trails'),0,25,920,558)
         middle=frame['pick_segments'][0].mean(axis=0)
         index=dome_gl.pick_observation(frame,*middle)
         self.assertIn(index,(0,1))
@@ -98,8 +326,8 @@ class CoverageTests(unittest.TestCase):
                 for tilt in (8,25,55,90):
                     frame=dome_gl.project(expanded,yaw,tilt,*size)
                     for x,y,*_ in frame['hits']:
-                        self.assertTrue(30<=x<=size[0]-30,(x,size))
-                        self.assertTrue(60<=y<=size[1]-60,(y,size))
+                        self.assertTrue(24<=x<=size[0]-24,(x,size))
+                        self.assertTrue(32<=y<=size[1]-32,(y,size))
         self.assertEqual(points[1][5],45000)
 
     def test_other_cells_do_not_dim_existing_reception(self):
@@ -286,7 +514,7 @@ class CoverageTests(unittest.TestCase):
                 raster,labels,hits=paint(data,mode,0,55,True)
                 self.assertEqual(len(raster),1232*460*4)
                 self.assertEqual(raster[:4],bytes((0,0,0,255)))
-                self.assertTrue(any('MAX ALT 10,000 ft' in item[2] for item in labels))
+                self.assertEqual(any('MAX ALT 10,000 ft' in item[2] for item in labels),mode!='space')
                 self.assertTrue(hits)
             c.close()
 
@@ -373,7 +601,8 @@ class CoverageTests(unittest.TestCase):
             for mode in ('cells','trails','space'):
                 scene=dome_gl.prepare(data,mode)
                 frame=dome_gl.project(scene,35,55,920,590)
-                self.assertTrue(any('MAX ALT 10,000 ft' in item[2] for item in frame['labels']))
+                self.assertEqual(any('MAX ALT 10,000 ft' in item[2] for item in frame['labels']),mode!='space')
+                if mode=='space':self.assertFalse(any('not necessarily overhead' in item[2] for item in frame['labels']))
                 self.assertTrue(frame['hits'])
                 if mode=='cells':
                     self.assertEqual(len(scene['cells']),4050)

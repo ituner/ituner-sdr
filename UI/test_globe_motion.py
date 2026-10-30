@@ -85,3 +85,9 @@ class GlobeMotionTests(unittest.TestCase):
         for globe,moving in ((False,False),(False,True),(True,False)):
             self.assertEqual(ui.globe_frame_rate(30,globe,moving),30)
         self.assertEqual(ui.globe_frame_rate(90,True,True),90)
+
+    def test_full_screen_adsb_hides_covered_radio_rendering(self):
+        self.assertTrue(ui.receiver_visuals_hidden(False,False,True))
+        self.assertTrue(ui.receiver_visuals_hidden(True,True,False))
+        self.assertFalse(ui.receiver_visuals_hidden(False,False,False))
+        self.assertFalse(ui.receiver_visuals_hidden(True,False,False))

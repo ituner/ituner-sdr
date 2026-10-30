@@ -24,6 +24,7 @@ import render_sdr_frontend_mockup as sdr_ui
 from client_identity import CLIENT_NAME
 from local_receivers import create_connection as local_connection
 from kiwi_occupancy import occupancy
+from waterfall_levels import AutoWaterfallLevels
 
 
 FB = Path("/dev/fb0")
@@ -672,18 +673,17 @@ class WaterfallLeveler:
         self.floor = floor
         self.ceiling = ceiling
         self.auto = auto
+        self.levels = AutoWaterfallLevels()
+        self.was_auto = False
 
     def levels_for(self, samples):
         if not self.auto or not samples:
+            self.was_auto = False
             return self.floor, self.ceiling
-
-        ordered = sorted(samples)
-        median = ordered[len(ordered) // 2]
-        p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-        target_floor = clamp(median - 8, 40, 230)
-        target_ceiling = clamp(max(p98 + 72, target_floor + 95), target_floor + 55, 255)
-        self.floor = 0.92 * self.floor + 0.08 * target_floor
-        self.ceiling = 0.92 * self.ceiling + 0.08 * target_ceiling
+        if not self.was_auto:
+            self.levels = AutoWaterfallLevels()
+        self.was_auto = True
+        self.floor, self.ceiling = self.levels.levels_for(samples)
         return self.floor, self.ceiling
 
 

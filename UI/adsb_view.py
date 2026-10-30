@@ -35,6 +35,37 @@ def number(value):
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+def dome_contact(planes,key,now,previous=None):
+    """Latest actual receiver report for a selected aircraft, including its age."""
+    candidates=[]
+    for raw in [*planes,previous]:
+        if not raw or raw.get('hex')!=key:continue
+        stamp=raw.get('last_seen_at')
+        if not number(stamp) or stamp>now+5:continue
+        candidates.append(dict(raw,last_seen_at=stamp))
+    if not candidates:return None
+    contact=max(candidates,key=lambda row:row['last_seen_at'])
+    contact['seen']=max(0,now-contact['last_seen_at']);contact['live']=contact['seen']<15
+    return contact
+
+
+def dome_altitude(contact):
+    if not contact:return None
+    if number(contact.get('alt_geom')):return f"{contact['alt_geom']:,.0f} ft GNSS"
+    if number(contact.get('alt_baro')):return f"{contact['alt_baro']:,.0f} ft BARO≈"
+    if contact.get('alt_baro')=='ground':return 'On ground'
+    return None
+
+
+def reception_age(seconds):
+    if not number(seconds):return 'Unknown'
+    seconds=max(0,int(seconds))
+    if seconds<60:return f'{seconds} s ago'
+    if seconds<3600:return f'{seconds//60} min {seconds%60} s ago'
+    if seconds<86400:return f'{seconds//3600} h {seconds%3600//60} min ago'
+    return f'{seconds//86400} d {seconds%86400//3600} h ago'
+
+
 def aged(plane, now):
     p = dict(plane)
     if not number(p.get('last_seen_at')):

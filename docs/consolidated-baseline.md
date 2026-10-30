@@ -9,6 +9,10 @@ The shared runtime source matches both running machines. This does not mean
 LCD's historical dirty Git checkout was reset, or that both operating systems,
 drivers, private preferences and optional dependencies are identical.
 
+The waterfall defaults described below record the original accepted baseline.
+The later Auto/Manual display update defaults to automatic local contrast; see
+[Waterfall display settings](waterfall-display.md).
+
 ## What belongs in GitHub
 
 - Shared application source, including the live OpenWebRX modules and local

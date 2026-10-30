@@ -165,6 +165,7 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.yaw, self.pitch = self.ui.radiogarden_pan_angles(*self.drag_origin,x-sx,y-sy,self.MAP,self.scale)
 
     def swipe(self, sx=None, sy=None, x=None, y=None):
+        if self.coverage_open:self.coverage_view.drag_end()
         if self.radio_info and self.radio_info.open:return False
         if self.dongles and self.dongles.open:return False
         if sy is not None and y is not None and abs(y-sy)>60 and abs(y-sy)>abs(x-sx)*1.5:

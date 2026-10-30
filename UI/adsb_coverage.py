@@ -1,7 +1,7 @@
 """Persistent, directly received ADS-B positions and WGS84 reception geometry.
 
 No missing position is classified as an obstruction. Storage is independent of
-24-hour map trails; retain up to 90 days / 250,000 positions (whichever is less).
+24-hour map trails; preserve seven complete days, with bounded older history.
 Only the receiver worker writes; HTTP and touch read immutable cached snapshots.
 """
 import json
@@ -13,10 +13,25 @@ from bisect import bisect_right
 from station_profile import distance_m
 from adsb_footprint import build_footprint, footprint_from_peaks, SECTOR_DEGREES
 from pathlib import Path
+from adsb_persistence import PERSIST_SECONDS
+from adsb_geometry import camera_hull, enu_positions
 
 RETENTION = 90 * 86400
+FULL_RETENTION = 7 * 86400
 MAX_POINTS = 250000
-DISPLAY_POINTS = 20000
+DISPLAY_POINTS = MAX_POINTS
+
+
+def coverage_payload(data,after=None,cache_key=None):
+    """Transmit a small overlapping tail after the initial immutable RAM snapshot."""
+    meta=data.get('meta',{});site=meta.get('reference') or {}
+    key=json.dumps([site.get('lat'),site.get('lon'),meta.get('reference_height_m')],separators=(',',':'))
+    result=dict(data,cache_key=key)
+    if (data.get('status')=='READY' and cache_key==key and finite(after)
+            and after<=meta.get('last_position',0) and not meta.get('sampled')):
+        result.update(delta=True,after=after,points=[p for p in data['points'] if data.get('base',0)+p[0]>=after])
+        result.pop('segments',None) # Client rebuilds confirmed links from every retained point and break.
+    return result
 
 
 def retained_trail_links(points, keep, breaks, base):
@@ -95,6 +110,7 @@ class ReceptionCoverage:
         self.requested = True
         self.next_prune = 0
         self.height = None
+        self.next_flush=time.monotonic()+PERSIST_SECONDS;self.pending_prune_at=None
         try:
             value = json.loads((self.root/'coverage-settings.json').read_text()).get('height_m')
             if finite(value) and -500 <= value <= 9000: self.height = value
@@ -120,6 +136,7 @@ class ReceptionCoverage:
                 if since not in self.scoped:
                     if len(self.scoped)>=4:self.scoped.pop(next(iter(self.scoped)))
                     self.scoped[since]=dict(key=None,next_build=0,data=dict(status='LOADING',meta=dict(window_since=since,retained_positions=0,positioned_aircraft=0,**{k:self.data.get('meta',{}).get(k) for k in ('reference','reference_height_m','reference_height_known')}),aircraft=[],points=[],cells=[],breaks=[],base=0,footprint={}))
+                self.scoped[since]['used_at']=time.monotonic()
                 return self.scoped[since]['data']
         with self.lock:
             self.requested = True
@@ -131,8 +148,12 @@ class ReceptionCoverage:
 
     def _open(self):
         if self.db is not None: return
-        self.db = sqlite3.connect(str(self.root/'coverage.sqlite3'))
-        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db = sqlite3.connect(':memory:')
+        path=self.root/'coverage.sqlite3'
+        if path.exists():
+            disk=sqlite3.connect(str(path))
+            try:disk.backup(self.db)
+            finally:disk.close()
         self.db.execute('''CREATE TABLE IF NOT EXISTS positions (
             time REAL, hex TEXT, lat REAL, lon REAL, altitude REAL, gnss INTEGER,
             rssi REAL, label TEXT, PRIMARY KEY(time,hex,lat,lon))''')
@@ -151,14 +172,55 @@ class ReceptionCoverage:
                 if site:self.db.execute('INSERT OR IGNORE INTO coverage_meta VALUES (?,?)',('legacy_site',json.dumps(site)))
             except (OSError,ValueError,AttributeError):pass
         self.db.commit()
+        self.db.execute('CREATE TEMP TABLE dirty_positions(time,hex,lat,lon,PRIMARY KEY(time,hex,lat,lon))')
 
     def add(self, rows):
         self._open()
         values = [p for p in (observation(row) for row in rows) if p]
         before = self.db.total_changes
         self.db.executemany('INSERT OR IGNORE INTO positions (time,hex,lat,lon,altitude,gnss,rssi,label,site_lat,site_lon) VALUES (?,?,?,?,?,?,?,?,?,?)', values)
+        added=self.db.total_changes-before
+        if added:self.db.executemany('INSERT OR IGNORE INTO dirty_positions VALUES (?,?,?,?)',(p[:4] for p in values))
         self.db.commit()
-        self.revision += self.db.total_changes-before
+        self.revision += added
+
+    def flush(self,force=False):
+        """Persist only changed rows every five minutes; view queries stay in RAM."""
+        now=time.monotonic()
+        if self.db is None or not force and now<self.next_flush:return False
+        disk=sqlite3.connect(str(self.root/'coverage.sqlite3'))
+        try:
+            schema=list(self.db.execute("SELECT type,sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('table','index') AND name NOT LIKE 'sqlite_%' ORDER BY type DESC"))
+            with disk:
+                for kind,sql in schema:
+                    if kind=='table':disk.execute(sql.replace('CREATE TABLE ','CREATE TABLE IF NOT EXISTS ',1))
+                known={r[1] for r in disk.execute('PRAGMA table_info(positions)')}
+                columns=list(self.db.execute('PRAGMA table_info(positions)'))
+                for _,name,kind,_required,default,_pk in columns:
+                    if name not in known:disk.execute(f'ALTER TABLE positions ADD COLUMN {name} {kind}'+(f' DEFAULT {default}' if default is not None else ''))
+                for kind,sql in schema:
+                    if kind=='index':disk.execute(sql.replace('CREATE INDEX ','CREATE INDEX IF NOT EXISTS ',1))
+                names=','.join(r[1] for r in columns);marks=','.join('?' for _ in columns)
+                rows=self.db.execute('SELECT p.* FROM positions p JOIN dirty_positions d USING(time,hex,lat,lon)').fetchall()
+                disk.executemany(f'INSERT INTO positions ({names}) VALUES ({marks}) ON CONFLICT(time,hex,lat,lon) DO UPDATE SET footprint_saved=excluded.footprint_saved',rows)
+                # These small tables carry lifetime maxima and site bookkeeping.
+                for table in ('footprint_peaks','footprint_sites','coverage_meta'):
+                    disk.execute('DELETE FROM '+table)
+                    values=self.db.execute('SELECT * FROM '+table).fetchall()
+                    if values:disk.executemany('INSERT INTO '+table+' VALUES ('+','.join('?' for _ in values[0])+')',values)
+                disk.executemany('INSERT OR IGNORE INTO breaks VALUES (?)',self.db.execute('SELECT time FROM breaks'))
+                if self.pending_prune_at is not None:self.prune(disk,self.pending_prune_at)
+            self.db.execute('DELETE FROM dirty_positions');self.db.commit()
+            self.pending_prune_at=None;self.next_flush=now+PERSIST_SECONDS
+            return True
+        finally:disk.close()
+
+    @staticmethod
+    def prune(db,now):
+        db.execute('DELETE FROM positions WHERE time < ?', (now-RETENTION,))
+        recent=db.execute('SELECT count(*) FROM positions WHERE time >= ?',(now-FULL_RETENTION,)).fetchone()[0]
+        db.execute('DELETE FROM positions WHERE rowid IN (SELECT rowid FROM positions WHERE time < ? ORDER BY time DESC LIMIT -1 OFFSET ?)',(now-FULL_RETENTION,max(0,MAX_POINTS-recent)))
+        db.execute('DELETE FROM breaks WHERE time < ?', (now-RETENTION,))
 
     def import_logs(self):
         if self.imported: return
@@ -199,15 +261,13 @@ class ReceptionCoverage:
         if pending:
             self.db.executemany('INSERT OR IGNORE INTO breaks VALUES (?)', [(t,) for t in pending]); self.db.commit(); self.revision += 1
         if now >= self.next_prune:
-            self.db.execute('DELETE FROM positions WHERE time < ?', (now-RETENTION,))
-            self.db.execute('DELETE FROM positions WHERE rowid IN (SELECT rowid FROM positions ORDER BY time DESC LIMIT -1 OFFSET ?)', (MAX_POINTS,))
-            self.db.execute('DELETE FROM breaks WHERE time < ?', (now-RETENTION,))
+            self.prune(self.db,now);self.pending_prune_at=now
             self.db.commit(); self.next_prune = now+3600; self.revision += 1
         with self.lock:
             height = self.height
             key = (self.revision, json.dumps(site, sort_keys=True), height)
             full=self.requested and (key!=self.key or self.error) and now>=self.next_build
-            scopes=[since for since,cache in self.scoped.items() if cache['key']!=key and now>=cache['next_build']]
+            scopes=[since for since,cache in self.scoped.items() if cache['key']!=key and now>=cache['next_build'] and time.monotonic()-cache.get('used_at',0)<12]
             if full:self.requested=False
         if full:
             data=self.build(site,height)
@@ -216,6 +276,7 @@ class ReceptionCoverage:
             data=self.build(site,height,since)
             with self.lock:
                 if since in self.scoped:self.scoped[since].update(data=data,key=key,next_build=now+5)
+        self.flush()
 
     def accumulate_maximum(self,site):
         legacy=self.db.execute("SELECT value FROM coverage_meta WHERE key='legacy_site'").fetchone()
@@ -244,6 +305,7 @@ class ReceptionCoverage:
                             DO UPDATE SET radius=MAX(radius,excluded.radius),positions=positions+excluded.positions''',
                             (ident,int(sector['azimuth_deg']//SECTOR_DEGREES),sector['radius_m'],sector['positions']))
                     self.db.execute('UPDATE footprint_sites SET first_position=MIN(first_position,?),last_position=MAX(last_position,?) WHERE id=?',(group['first'],group['last'],ident))
+                self.db.executemany('INSERT OR IGNORE INTO dirty_positions SELECT time,hex,lat,lon FROM positions WHERE rowid=?',saved)
                 self.db.executemany('UPDATE positions SET footprint_saved=1 WHERE rowid=?',saved)
             if not saved:break
             self.peak_revision+=1
@@ -261,7 +323,7 @@ class ReceptionCoverage:
 
     def build(self, site, height, since=None):
         meta = dict(window_since=since,reference=site, reference_height_m=height or 0, reference_height_known=height is not None,
-                    retention_days=90, storage_limit=MAX_POINTS, retained_positions=0, positioned_aircraft=0,
+                    retention_days=90, full_retention_days=7, storage_limit=MAX_POINTS, retained_positions=0, positioned_aircraft=0,
                     altitude_sources={}, horizontal_range_max_km=0, slant_range_max_km=0, max_altitude_ft=None,
                     rssi_min=-40, rssi_max=0)
         empty = dict(status='NO SITE' if not site else 'EMPTY', meta=meta, base=0, points=[], cells=[], aircraft=[], breaks=[], footprint=build_footprint(site,[]))
@@ -272,15 +334,15 @@ class ReceptionCoverage:
             self.db.execute('INSERT OR IGNORE INTO coverage_meta VALUES (?,?)',('legacy_site',json.dumps(site)));self.db.commit()
         anchor=json.loads(legacy[0]) if legacy else site
         count=len(rows)
-        rows=[r for r in rows if distance_m(dict(lat=r[8],lon=r[9]) if r[8] is not None and r[9] is not None else anchor,site)<=100]
+        rows=[r for r in rows if (r[8]==site['lat'] and r[9]==site['lon']) or distance_m(dict(lat=r[8],lon=r[9]) if r[8] is not None and r[9] is not None else anchor,site)<=100]
         meta.update(excluded_other_sites=count-len(rows),coverage_site_radius_m=100)
         if not rows: return empty
         origin = ecef(site['lat'], site['lon'], 0)
         names = {}; points = []; cells = {}; addresses = sorted({r[1] for r in rows}); indexes = {a:i for i,a in enumerate(addresses)}
         base = math.floor(rows[0][0]); max_range = 0; max_slant = 0; max_alt = None; max_alt_index = 0; max_range_index = 0; sources = {'GNSS':0,'barometric approximation':0}
-        for t, address, lat, lon, alt, gnss, rssi, label, _site_lat, _site_lon in rows:
+        for row,(e,n,u) in zip(rows,enu_positions(rows,site,origin)):
+            t,address,lat,lon,alt,gnss,rssi,label,_site_lat,_site_lon=row
             if label: names[address] = label
-            e, n, u = enu(lat, lon, alt*.3048, site, origin)
             distance = math.hypot(e, n); up = u-(height or 0)
             az = math.degrees(math.atan2(e,n)) % 360; el = math.degrees(math.atan2(up,distance))
             sources['GNSS' if gnss else 'barometric approximation'] += 1
@@ -301,17 +363,16 @@ class ReceptionCoverage:
                     cells_observed=len(cells), rssi_min=min(levels) if levels else -40, rssi_max=max(levels) if levels else 0)
         # All cells and extrema use the complete history. Bound only rendered dots.
         breaks = [r[0] for r in self.db.execute('SELECT time FROM breaks WHERE time >= ? ORDER BY time', (base,))]
-        keep=(set(range(0,len(points),math.ceil(len(points)/DISPLAY_POINTS))) | {max_alt_index,max_range_index,len(points)-1}
+        keep=({i*(len(points)-1)//max(1,DISPLAY_POINTS-1) for i in range(DISPLAY_POINTS)} | {max_alt_index,max_range_index,len(points)-1}
               if len(points)>DISPLAY_POINTS else set(range(len(points))))
-        segments=retained_trail_links(points,keep,breaks,base)
         points=[p for i,p in enumerate(points) if i in keep]
-        meta.update(displayed_positions=len(points),trail_segments=len(segments))
+        meta.update(displayed_positions=len(points),display_limit=DISPLAY_POINTS,sampled=len(points)<meta['retained_positions'])
         return dict(status='READY', meta=meta, base=base, aircraft=[dict(hex=a,label=names.get(a,a)) for a in addresses], points=points,
-                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,segments=segments,
-                    footprint=build_footprint(site,((r[2],r[3]) for r in rows)))
+                    cells=[[a,e,v[0],v[1]/v[2] if v[2] else None,len(v[3]),v[4]] for (a,e),v in cells.items()], breaks=breaks,
+                    hull=camera_hull([p[2:5] for p in points]).tolist(),footprint=build_footprint(site,((r[2],r[3]) for r in rows)))
 
     def mark_break(self, stamp):
         with self.lock:self.pending_breaks.append(stamp)
 
     def close(self):
-        if self.db is not None: self.db.close(); self.db = None
+        if self.db is not None:self.flush(force=True);self.db.close();self.db=None

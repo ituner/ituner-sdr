@@ -235,7 +235,7 @@ class MenuIconTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
             draws = {}
-            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+            for name in ('draw_logical_rect', 'draw_receiver_action_button', 'draw_directory_refresh_button',
                          'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
                          'draw_receiver_back_button', 'draw_picker_two_line_button',
                          'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):

@@ -6,7 +6,8 @@
     "floor": 142.0,
     "ceil": 245.0,
     "speed": 4,
-    "auto": false,
-    "palette": "kiwi"
+    "auto": true,
+    "palette": "kiwi",
+    "contrast_mode": "auto"
   }
 }

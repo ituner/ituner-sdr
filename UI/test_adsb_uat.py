@@ -207,11 +207,15 @@ class DualBandTests(unittest.TestCase):
             with patch.object(manager.uat,'step',return_value=payload):manager._step_uat()
             self.assertEqual(manager.snapshot()['aircraft'][0]['band'],'978')
             self.assertEqual(manager.track_snapshot()['abc123'][-1]['band'],'978')
-            logged=json.loads((Path(root)/'flights.jsonl').read_text())
+            self.assertFalse((Path(root)/'flights.jsonl').exists())
+            logged=json.loads(manager.flight_log.handlers[0].read_log())
             self.assertEqual(logged['device']['serial'],'978')
             self.assertEqual(logged['aircraft']['band'],'978')
             self.assertEqual(manager.coverage.db.execute('SELECT count(*) FROM positions').fetchone()[0],1)
+            manager._refresh_logs()
+            self.assertEqual(manager.log_snapshot('flights')['entries'][0]['aircraft']['band'],'978')
             manager.close();manager.coverage.close()
+            self.assertEqual(json.loads((Path(root)/'flights.jsonl').read_text())['aircraft']['band'],'978')
 
 
 if __name__=='__main__':unittest.main()
