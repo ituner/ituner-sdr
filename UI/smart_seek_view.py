@@ -80,6 +80,25 @@ def candidate_slots(candidate, frequency, waterfall=False):
     return (4 if waterfall else 2) if candidate_playing(candidate, frequency) else 1
 
 
+def wrap_station_title(text, measure, width, max_lines=2):
+    """Use word boundaries before resorting to an ellipsis in a tall card."""
+    words = str(text).split()
+    lines = []
+    while words and len(lines) < max_lines:
+        line = words.pop(0)
+        while words and measure(line+' '+words[0]) <= width:
+            line += ' '+words.pop(0)
+        if len(lines) == max_lines-1 and words:
+            line += ' '+' '.join(words)
+            words = []
+        if measure(line) > width:
+            while line and measure(line+'…') > width:
+                line = line[:-1]
+            line = line.rstrip()+'…'
+        lines.append(line)
+    return tuple(lines)
+
+
 def station_detail_lines(match):
     location = match.country or 'Country not listed'
     if match.transmitter and match.transmitter.casefold() != match.country.casefold():
@@ -473,15 +492,34 @@ class SmartSeekView:
                 ink(x+76,y+44,'Rechecking…' if dim_row else snapshot['signal_status'].get(candidate.frequency_khz,''),14,(146,166,179),max_width=120)
             displayed_matches = (matches or ())[:2 if playing else 4]
             for match_index, match in enumerate(displayed_matches):
-                column, row = (0, match_index) if preview else (match_index % 2, match_index // 2)
-                column_width = (card_width*.54-208 if preview else
-                                (card_width-208)/(2 if len(matches) > 1 else 1))
+                if preview:
+                    match_x = x+200
+                    column_width = card_width*.54-208
+                    top = y+match_index*row_height/len(displayed_matches)
+                    multiple = len(displayed_matches) > 1
+                    size = 24 if multiple else 28
+                    title_x = match_x+76
+                    font = cache.font(size, bold=True, family='Liberation Sans')
+                    title = wrap_station_title(match.name, lambda s: font.size(s)[0], column_width-86)
+                    if match.old_schedule:
+                        ink(match_x-14, top+26, '*', 18, (210, 181, 119))
+                    ui.draw_country_flag(match.country, match_x, top+6, 60, 40,
+                                         alpha=.4 if dim_row else 1)
+                    for line, text in enumerate(title):
+                        ink(title_x, top+26+line*(28 if multiple else 34), text, size)
+                    details = station_detail_lines(match)
+                    if multiple:
+                        details = (details[0], details[1]+' · '+details[2])
+                    for line, text in enumerate(details):
+                        ink(match_x, top+(80+line*22 if multiple else 100+line*34),
+                            text, 16 if multiple else 20, (166, 190, 202), max_width=column_width-12)
+                    continue
+                column, row = match_index % 2, match_index // 2
+                column_width = (card_width-208)/(2 if len(matches) > 1 else 1)
                 match_x = x+200+column*column_width
                 crowded = not playing and len(matches) > 2
-                match_y = y+(20+row*54 if preview else 20 if playing else 15+row*26 if crowded else card_height/2)
+                match_y = y+(20 if playing else 15+row*26 if crowded else card_height/2)
                 flag_width, flag_height = (52, 30) if crowded else (60, 40)
-                if preview and len(matches) > 1:
-                    flag_width, flag_height = 52, 32
                 if match.old_schedule:
                     ink(match_x-14, match_y, '*', 18, (210, 181, 119))
                 ui.draw_country_flag(match.country, match_x, match_y-flag_height/2,
@@ -491,26 +529,24 @@ class SmartSeekView:
                     max_width=column_width-flag_width-26)
                 if playing:
                     details = station_detail_lines(match)
-                    if preview and len(matches) > 1:
-                        details = (' · '.join(filter(None, (match.country, match.language, match.schedule))),)
                     for line, text in enumerate(details):
-                        ink(match_x, y+(45+row*54 if preview and len(matches) > 1 else 49+line*26), text, 18, (166, 190, 202),
+                        ink(match_x, y+49+line*26, text, 18, (166, 190, 202),
                             max_width=column_width-12)
             if playing and matches and len(matches) > 2:
                 ink(x+12, y+81, f'+{len(matches)-2} matches', 16, (146, 166, 179), max_width=175)
             if playing and abs(displayed_frequency-candidate.tuning_khz) > .001:
-                ink(x+12,y+103,'RF '+frequency_label(candidate.tuning_khz),14,
+                ink(x+12,y+(row_height-22 if preview else 103),'RF '+frequency_label(candidate.tuning_khz),14,
                     (146,166,179),max_width=175)
             if not matches:
                 classification = snapshot['signal_status'].get(candidate.frequency_khz,'')
                 label = classification if classification in ('Carrier only','Unconfirmed') else 'Unknown'
                 ink(x+200, y+card_height/2, 'Checking…' if matches is None else label, 28,
                     (146, 166, 179))
-                if playing and not preview:
+                if playing:
                     ink(x+200, y+76, 'Schedule and transmitter details unavailable.', 18,
                         (146, 166, 179), max_width=card_width*.54-220 if preview else card_width-220)
                 if matches is not None:
-                    button((x+200, y+40, x+365, y+row_height-4) if preview else
+                    button((x+200, y+112, x+365, y+170) if preview else
                            (width-192, y, width-20, y+card_height), 'RESEARCH',
                            ('research',candidate.frequency_khz))
             if preview:

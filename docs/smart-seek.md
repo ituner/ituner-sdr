@@ -101,7 +101,7 @@ Full-screen touch and rendering do not inherit the Home rail relocation.
 playing. Turn it on to expand the playing row to four standard rows tall and
 show a continuous 100 kHz RF waterfall in its right half. With the waterfall
 off, the playing row returns to its normal two-row height. A gold marker shows the actual tuned frequency and nearby
-5 kHz frequency labels provide context. This temporarily gives the existing
+frequency labels provide context. This temporarily gives the existing
 W/F connection exclusively to the preview: all band scans and uncertain-signal
 checks pause, with their observation deadlines preserved. Turn it off to resume
 scanning. Tuning another row moves the preview to that station; closing Smart
@@ -109,6 +109,8 @@ Seek, Refresh, band selection and Research return the stream to scanning.
 Home's zoom and RF tuning are not changed. The preview follows the current
 waterfall palette with its own automatic local contrast, buffers at most 32 source rows and keeps
 a small GPU history. It opens no additional receiver connection.
+The expanded card wraps full station titles onto two lines and separates
+location, power/language and UTC schedule vertically beside the waterfall.
 
 The survey uses raw, uncompressed 1024-bin W/F rows independently of display
 zoom. One two-second wide overview of the selected band prioritizes promising

@@ -6,7 +6,7 @@ from unittest.mock import patch, Mock
 
 import kiwi_gl_display as ui
 from smart_seek import SmartSeek, SeekCandidate, detect_stations
-from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines, station_frequency, frequency_label
+from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines, station_frequency, frequency_label, wrap_station_title
 from test_am_carrier import rf_frame as carrier_frame
 
 
@@ -734,6 +734,18 @@ class IntegrationTests(unittest.TestCase):
         rows = view.visible_rows(candidates, candidates[17].frequency_khz, playing, waterfall=True)
         self.assertEqual(rows, candidates[10:18])
         self.assertNotIn(candidates[9], rows)
+
+    def test_expanded_titles_use_two_lines_before_truncating(self):
+        for title, width in (('Korean Broadcasting System', 20),
+                             ('World Christian Broadcasting Corporation', 26)):
+            lines = wrap_station_title(title, len, width)
+            self.assertEqual(' '.join(lines), title)
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(all(len(line) <= width for line in lines))
+        lines = wrap_station_title('One extremely long station name that cannot fit', len, 12)
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[-1].endswith('…'))
+        self.assertTrue(all(len(line) <= 12 for line in lines))
 
     def test_minimum_signal_slider_filters_weak_to_strong_without_tuning_or_sorting(self):
         state = self.state()
