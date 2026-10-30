@@ -261,6 +261,7 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
 from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
 from smart_seek_catalogue import SmartSeekCatalogue
 from smart_seek_waterfall import SeekWaterfall
+from waterfall_levels import AutoWaterfallLevels
 import offline_schedules
 from smart_seek_view import SmartSeekView
 from meter_artwork import linear_strip_image
@@ -1272,6 +1273,7 @@ DISPLAY_CEIL_MINUS_BOX = (578, 130, 650, 180)
 DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_LAYOUT_BOXES = ()
+DISPLAY_WATERFALL_MODE_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -1783,6 +1785,7 @@ def configure_popup_layout():
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
     global DISPLAY_RESET_BOX, DISPLAY_THEME_BOX, DISPLAY_LAYOUT_BOXES
+    global DISPLAY_WATERFALL_MODE_BOXES
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1822,6 +1825,7 @@ def configure_popup_layout():
     DISPLAY_RESET_BOX = (0, 0, 0, 0)
     DISPLAY_THEME_BOX = (0, 0, 0, 0)
     DISPLAY_LAYOUT_BOXES = ()
+    DISPLAY_WATERFALL_MODE_BOXES = ()
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
@@ -1886,6 +1890,11 @@ def configure_popup_layout():
             (position, (rate_starts[index], layout_y0,
                         rate_starts[index] + rate_widths[index], layout_y0 + small_h))
             for index, position in enumerate(("left", "middle", "right"))
+        )
+        mode_y0 = layout_y0 + small_h + 8
+        DISPLAY_WATERFALL_MODE_BOXES = (
+            (True, (inner_x0, mode_y0, inner_x0+half_w, mode_y0+56)),
+            (False, (inner_x0+half_w+column_gap, mode_y0, inner_x1, mode_y0+56)),
         )
 
     dy = offset("filter")
@@ -5069,6 +5078,9 @@ class SharedState:
         self.wf_ceil = float(wf_ceil)
         self.wf_speed = clamp(int(wf_speed), 1, WATERFALL_MAX_SPEED)
         self.wf_auto = True
+        self.wf_live_levels = None
+        self.wf_level_context = None
+        self.wf_leveler = AutoWaterfallLevels()
         self.wf_palette = WATERFALL_DEFAULT_PALETTE
         self.wf_generation = 0
         # A waterfall tap tunes within the current RF window. Keep that
@@ -5142,6 +5154,8 @@ class SharedState:
         self.callsign_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_auto = True
+        self.spectrum_leveler = AutoWaterfallLevels()
+        self.spectrum_level_context = None
         self.spectrum_values = ()
         self.spectrum_peak_values = ()
         self.spectrum_peak_history = deque()
@@ -5800,6 +5814,37 @@ class SharedState:
         with self.lock:
             return self.wf_floor, self.wf_ceil, self.wf_speed, self.wf_auto, self.wf_palette, self.wf_generation
 
+    def waterfall_levels(self, samples, source_center_khz=None, source_span_khz=None):
+        """Use the same contrast rule for the currently visible native RF view."""
+        with self.lock:
+            context = (self.server_generation, self.view_generation, self.radio_generation,
+                       self.wf_auto, source_center_khz, source_span_khz)
+            if context != self.wf_level_context:
+                self.wf_leveler = AutoWaterfallLevels()
+                self.wf_level_context = context
+            visible = samples
+            span = receiver_display_span(self.zoom, self.receiver_type)
+            if source_center_khz is not None and source_span_khz and span < source_span_khz:
+                center = (local_waterfall_center(self.freq_khz, self.wf_view_center_khz)
+                          if self.external_waterfall else receiver_waterfall_center(
+                              self.freq_khz, span, self.receiver_type, self.wf_view_center_khz))
+                left = source_center_khz-source_span_khz/2
+                start = max(0, int((center-span/2-left)/source_span_khz*len(samples)))
+                end = min(len(samples), math.ceil((center+span/2-left)/source_span_khz*len(samples)))
+                if end > start:
+                    visible = samples[start:end]
+            levels = (self.wf_leveler.levels_for(visible) if self.wf_auto
+                      else (self.wf_floor, self.wf_ceil))
+            self.wf_live_levels = levels
+            return levels
+
+    def select_waterfall_mode(self, automatic):
+        with self.lock:
+            floor, ceiling = self.wf_live_levels or (self.wf_floor, self.wf_ceil)
+        if automatic:
+            return self.set_waterfall(auto=True)
+        return self.set_waterfall(floor=floor, ceil=ceiling, auto=False)
+
     def set_waterfall(self, floor=None, ceil=None, speed=None, auto=None, palette=None):
         with self.lock:
             next_floor = self.wf_floor if floor is None else clamp(float(floor), 40.0, 220.0)
@@ -6313,6 +6358,7 @@ class SharedState:
     def set_spectrum_auto(self, enabled):
         with self.lock:
             self.spectrum_auto = bool(enabled)
+            self.spectrum_level_context = None
             return self.spectrum_auto
 
     def update_spectrum(self, samples, floor, ceiling):
@@ -6321,14 +6367,15 @@ class SharedState:
         with self.lock:
             spectrum_auto = self.spectrum_auto
             manual_floor, manual_ceiling = self.wf_floor, self.wf_ceil
-        if spectrum_auto:
-            ordered = sorted(samples)
-            median = ordered[len(ordered) // 2]
-            p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-            floor = clamp(median - 8, 40, 230)
-            ceiling = clamp(max(p98 + 72, floor + 95), floor + 55, 255)
-        else:
-            floor, ceiling = manual_floor, manual_ceiling
+            if spectrum_auto:
+                context = self.server_generation, self.view_generation, self.radio_generation
+                if context != self.spectrum_level_context:
+                    self.spectrum_leveler = AutoWaterfallLevels()
+                    self.spectrum_level_context = context
+                floor, ceiling = (self.wf_live_levels if self.wf_auto and self.wf_live_levels is not None
+                                  else self.spectrum_leveler.levels_for(samples))
+            else:
+                floor, ceiling = manual_floor, manual_ceiling
         scale = 1.0 / max(1.0, ceiling - floor)
         values = []
         for index in range(SPECTRUM_BINS):
@@ -9782,6 +9829,9 @@ def display_option_at(x, y):
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
                 return "layout", layout
+        for automatic, box in DISPLAY_WATERFALL_MODE_BOXES:
+            if contains(box, x, y):
+                return "waterfall_mode", automatic
     if contains(DISPLAY_SPECTRUM_BOX, x, y):
         return "spectrum", None
     if contains(DISPLAY_AUTO_BOX, x, y):
@@ -9806,7 +9856,17 @@ def display_option_at(x, y):
 
 def apply_waterfall_palette_preset(state, palette):
     floor, ceiling = WATERFALL_PALETTE_PRESETS[palette]
-    return state.set_waterfall(floor=floor, ceil=ceiling, auto=False, palette=palette)
+    return state.set_waterfall(floor=floor, ceil=ceiling, palette=palette)
+
+
+def restore_waterfall_preferences(state, preferences):
+    """Migrate legacy implicit/manual presets to the requested Auto default."""
+    preferences = preferences if isinstance(preferences, dict) else {}
+    return state.set_waterfall(
+        floor=preferences.get('floor'), ceil=preferences.get('ceil'),
+        speed=preferences.get('speed'), palette=preferences.get('palette'),
+        auto=preferences.get('contrast_mode') != 'manual',
+    )
 
 
 def reset_display_view(state):
@@ -9815,7 +9875,7 @@ def reset_display_view(state):
         floor=WATERFALL_DEFAULT_FLOOR,
         ceil=WATERFALL_DEFAULT_CEIL,
         speed=WATERFALL_DEFAULT_SPEED,
-        auto=False,
+        auto=True,
         palette=WATERFALL_DEFAULT_PALETTE,
     )
     state.set_spectrum_enabled(True)
@@ -14625,7 +14685,7 @@ def draw_filter_width_control(text_cache, box, label):
 
 
 def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, palette, spectrum_enabled,
-                             instrument_layout="middle"):
+                             instrument_layout="middle", waterfall_auto=True):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
@@ -14638,6 +14698,9 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         for layout, box in DISPLAY_LAYOUT_BOXES:
             draw_display_control(text_cache, box, layout.upper(),
                                  layout == visible_frequency_position(instrument_layout))
+        for automatic, box in DISPLAY_WATERFALL_MODE_BOXES:
+            draw_lcd_audio_tile(text_cache, box, "WATERFALL", "AUTO" if automatic else "MANUAL",
+                                waterfall_auto == automatic)
         draw_lcd_audio_tile(
             text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
             "ON" if spectrum_enabled else "OFF", spectrum_enabled,
@@ -14651,12 +14714,12 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         ceiling_minimum = floor + 30.0
         draw_display_slider_section(
             text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
-            floor - 40.0, floor_maximum - 40.0, f"{floor:.0f}", True,
+            floor - 40.0, floor_maximum - 40.0, "AUTO" if waterfall_auto else f"{floor:.0f}", not waterfall_auto,
         )
         draw_display_slider_section(
             text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
             ceiling - ceiling_minimum, 255.0 - ceiling_minimum,
-            f"{ceiling:.0f}", True,
+            "AUTO" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto,
         )
         draw_lcd_drawer_heading(text_cache, DISPLAY_PALETTE_BOXES[0][1][0] + 4,
                                 DISPLAY_PALETTE_BOXES[0][1][1] - 16, "WATERFALL THEME")
@@ -19496,7 +19559,8 @@ def publish_fmdx_pcm(
         state.connection_ready(server_generation, "waterfall")
         return True
     for samples in analyzer.feed(mono):
-        line = kiwi.waterfall_line(samples, mapper, 0.0, 255.0, width=WF_TEX_W)
+        floor, ceiling = state.waterfall_levels(samples, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ/1000.0)
+        line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
         state.update_spectrum(samples, 0.0, 255.0)
         row_item = (line, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0)
         for _ in range(max(1, int(getattr(args, "wf_row_pixels", 1)))):
@@ -20266,6 +20330,9 @@ class RTLSDRLab:
             levels[1] = max(levels[0] + 24.0, levels[1])
         normalized = np.clip((bins - levels[0]) / (levels[1] - levels[0]), 0.0, 1.0)
         values = (normalized * 255.0).astype(np.uint8)
+        display_floor, display_ceiling = self.state.waterfall_levels(values.tobytes(), center_khz, self.source_span_khz())
+        values = np.clip((values.astype(np.float32)-display_floor)*255.0/
+                         max(1.0, display_ceiling-display_floor), 0, 255).astype(np.uint8)
         rgba_line = np.empty((WF_TEX_W, 4), dtype=np.uint8)
         rgba_line[:, 0] = lut[0][values]
         rgba_line[:, 1] = lut[1][values]
@@ -22515,7 +22582,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
     """Adapt one OpenWebRX socket into the normal Home audio and waterfall."""
     player = session = None
     generation = None
-    leveler = mapper = None
+    mapper = None
     seen_wf_generation = None
     waterfall_rows = 0
     try:
@@ -22539,7 +22606,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 session = owrx.OpenWebRxSession(server, output_rate=args.audio_rate, user_agent=CLIENT_NAME)
                 session.connect()
                 generation = server_generation
-                leveler = mapper = None
+                mapper = None
                 if player is None:
                     player = BufferedAudioPlayer(args, 1, state)
                 else:
@@ -22595,24 +22662,12 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 state.connection_ready(server_generation, "waterfall")
                 samples = bytes(clamp(int(round(value + 160.0)), 0, 255) for value in event.waterfall)
                 wf_floor, wf_ceil, _speed, wf_auto, palette, wf_generation = state.waterfall_snapshot()
-                if leveler is None or wf_generation != seen_wf_generation:
-                    if leveler is None and wf_auto:
-                        # OpenWebRX sends FFT dB values while Kiwi's saved
-                        # display range is calibrated to its unsigned W/F
-                        # bytes. Seed auto-level from the first actual row so
-                        # the OpenWebRX waterfall is visible immediately.
-                        ordered = sorted(samples)
-                        median = ordered[len(ordered) // 2]
-                        p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-                        wf_floor = clamp(median - 8, 40, 230)
-                        wf_ceil = clamp(max(p98 + 72, wf_floor + 95), wf_floor + 55, 255)
-                    if leveler is None:
-                        leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
-                    else:
-                        leveler.floor, leveler.ceiling, leveler.auto = wf_floor, wf_ceil, wf_auto
+                if mapper is None or wf_generation != seen_wf_generation:
                     mapper = waterfall_mapper(palette)
                     seen_wf_generation = wf_generation
-                floor, ceiling = leveler.levels_for(samples)
+                source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom))/1000.0
+                row_center_khz = float(session.center_frequency_hz or freq_khz*1000.0)/1000.0
+                floor, ceiling = state.waterfall_levels(samples, row_center_khz, source_span)
                 update_openwebrx_scope(state, samples, floor, ceiling)
                 line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                 source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom)) / 1000.0
@@ -23341,7 +23396,6 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
             state.connection_attempt(seen_server_generation, "waterfall")
             wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, seen_wf_generation = state.waterfall_snapshot()
             mapper = waterfall_mapper(wf_palette)
-            leveler = kiwi.WaterfallLeveler(wf_floor, wf_ceil, auto=wf_auto)
             session_timestamp = state.kiwi_session_timestamp_snapshot(seen_server_generation)
             if session_timestamp is None:
                 continue
@@ -23398,9 +23452,6 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     seen_wf_generation = wf_generation
                     previous_speed = wf_speed
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
-                    leveler.floor = wf_floor
-                    leveler.ceiling = wf_ceil
-                    leveler.auto = wf_auto
                     mapper = waterfall_mapper(wf_palette)
                     if wf_speed != previous_speed:
                         ws.send_text(f"SET wf_speed={wf_speed}")
@@ -23498,7 +23549,10 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                             continue
                         carrier_restoring = False
                     samples = message[16:]
-                    floor, ceiling = leveler.levels_for(samples)
+                    source_zoom = min(sent_kiwi_zoom, wf_zoom_cap)
+                    source_span = wf_bandwidth_hz/(2**source_zoom*1000)
+                    source_center = rf_view_center_hz(sent_freq_khz*1000, wf_bandwidth_hz, source_zoom)/1000
+                    floor, ceiling = state.waterfall_levels(samples, source_center, source_span)
                     line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
                     # Scope can be hidden for a waterfall-first screen. Do
                     # not calculate its 10-second peak history in that mode:
@@ -23761,14 +23815,7 @@ def main():
                 high_cut=filter_preferences.get("high_cut"),
             )
         waterfall_preferences = remembered_preferences.get("waterfall", {})
-        if isinstance(waterfall_preferences, dict):
-            state.set_waterfall(
-                floor=waterfall_preferences.get("floor"),
-                ceil=waterfall_preferences.get("ceil"),
-                speed=waterfall_preferences.get("speed"),
-                auto=waterfall_preferences.get("auto"),
-                palette=waterfall_preferences.get("palette"),
-            )
+        restore_waterfall_preferences(state, waterfall_preferences)
         if isinstance(remembered_preferences.get("spectrum_enabled"), bool):
             state.set_spectrum_enabled(remembered_preferences["spectrum_enabled"])
         if isinstance(remembered_preferences.get("spectrum_auto"), bool):
@@ -24779,6 +24826,7 @@ def main():
                 "ceil": round(float(ceiling), 1),
                 "speed": int(speed),
                 "auto": bool(auto),
+                "contrast_mode": "auto" if auto else "manual",
                 "palette": palette,
             },
             "dual_vfo": {
@@ -29004,6 +29052,10 @@ def main():
                                             toggle_display_spectrum_control(state, kind)
                                         elif kind == "auto":
                                             toggle_display_spectrum_control(state, kind)
+                                        elif kind == "waterfall_mode":
+                                            floor, ceiling, speed, auto, palette, _generation = state.select_waterfall_mode(value)
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
                                         elif kind == "floor":
                                             floor += value
                                             auto = False
@@ -29016,7 +29068,7 @@ def main():
                                             floor, ceiling, speed, auto, palette, _generation = (
                                                 apply_waterfall_palette_preset(state, value)
                                             )
-                                        if kind not in ("layout", "palette", "spectrum", "auto", "reset"):
+                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -30775,6 +30827,7 @@ def main():
                     wf_palette,
                     spectrum_enabled,
                     instrument_layout,
+                    waterfall_auto=wf_auto,
                 )
             if filter_drawer_open and LCD_800_MODE:
                 draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)

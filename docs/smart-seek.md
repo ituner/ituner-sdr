@@ -107,7 +107,8 @@ checks pause, with their observation deadlines preserved. Turn it off to resume
 scanning. Tuning another row moves the preview to that station; closing Smart
 Seek, Refresh, band selection and Research return the stream to scanning.
 Home's zoom and RF tuning are not changed. The preview follows the current
-waterfall palette with its own automatic local contrast, buffers at most 32 source rows and keeps
+waterfall palette and the Auto/Manual contrast choice in Display settings.
+Auto adapts to this preview window independently. It buffers at most 32 source rows and keeps
 a small GPU history. It opens no additional receiver connection.
 The expanded card wraps full station titles onto two lines and separates
 location, power/language and UTC schedule vertically beside the waterfall.

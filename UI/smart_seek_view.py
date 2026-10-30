@@ -374,14 +374,14 @@ class SmartSeekView:
             self.waterfall_texture = ui.MiniWaterfallTexture(width=512, height=192)
             self.waterfall_generation = generation
             self.waterfall_style = None
-        _floor, _ceiling, _speed, _auto, palette, _revision = self.state.waterfall_snapshot()
-        style = palette
+        floor, ceiling, _speed, automatic, palette, _revision = self.state.waterfall_snapshot()
+        style = palette, automatic
         if style != self.waterfall_style:
             self.waterfall_leveler = PreviewLeveler()
             self.waterfall_mapper = ui.waterfall_mapper(palette)
             self.waterfall_style = style
         for samples in rows:
-            low, high = self.waterfall_leveler.levels_for(samples)
+            low, high = self.waterfall_leveler.levels_for(samples) if automatic else (floor, ceiling)
             image = ui.kiwi.waterfall_line(samples, self.waterfall_mapper, low, high, width=512)
             self.waterfall_texture.push_rgba(image.convert('RGBA').tobytes())
         x0, y0, x1, y1 = box

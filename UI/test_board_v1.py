@@ -808,7 +808,7 @@ class BoardLayoutTests(unittest.TestCase):
                 ui.apply_waterfall_palette_preset(state, palette)
             )
             self.assertEqual((floor, ceiling), ui.WATERFALL_PALETTE_PRESETS[palette])
-            self.assertFalse(auto)
+            self.assertTrue(auto)
             self.assertEqual(selected, palette)
             self.assertEqual(state.waterfall_snapshot()[:2], (floor, ceiling))
 
@@ -828,7 +828,7 @@ class BoardLayoutTests(unittest.TestCase):
             ui.WATERFALL_DEFAULT_FLOOR,
             ui.WATERFALL_DEFAULT_CEIL,
             ui.WATERFALL_DEFAULT_SPEED,
-            False,
+            True,
             ui.WATERFALL_DEFAULT_PALETTE,
         ))
         self.assertEqual(state.waterfall_snapshot(), reset_waterfall)
