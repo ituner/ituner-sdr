@@ -13,7 +13,8 @@ NUMERIC={k for k,_ in LOCATION}
 class StationWorkspace(DecoderStyle):
     def __init__(self,ui,station):
         self.ui=ui;self.station=station;self.open=False;self.page='identity';self.draft={};self.field=None;self.caps=False;self.value='';self.message='';self.actions=[];self.dirty=False
-    def show(self):
+    def show(self,parent='settings'):
+        self.navigation_parent=parent
         self.draft=dict(self.station.snapshot()['config']);self.open=True;self.field=None;self.message='';self.dirty=False
     def ink(self,cache,x,y,text,size=20,color=None,anchor='lm',width=None):
         text=str(text)
@@ -39,7 +40,15 @@ class StationWorkspace(DecoderStyle):
                 self.draft[self.field]=candidate;self.dirty=True;self.field=None;self.message='Press Save to apply to all local applications.'
             except ValueError as exc:self.message=str(exc)
         elif len(self.value)<(200 if self.field=='local_kiwi_url' else 120):self.value+=value
+    def keyboard_tap(self,x,y):
+        mode=getattr(self,'keyboard_mode','lower')
+        action=self.ui.touch_keyboard_action_at(x,y,mode)
+        if action in ('MODE','CAPS'):
+            self.keyboard_mode=self.ui.touch_keyboard_next_mode(mode,action)
+        elif action:
+            self.key({'SAVE':'DONE','BACK':'DELETE','SPACE':' '}.get(action,action))
     def tap(self,x,y):
+        if self.field is not None:return self.keyboard_tap(x,y)
         for box,(kind,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             if kind=='back':self.open=False
@@ -52,20 +61,10 @@ class StationWorkspace(DecoderStyle):
                 except (ValueError,OSError) as exc:self.message=str(exc)
             return
     def keyboard(self,cache):
-        ui=self.ui;ui.draw_logical_rect(0,0,1280,800,self.BG)
-        self.ink(cache,24,34,dict(IDENTITY+LOCATION).get(self.field,self.field),26)
-        value=self.value or ('Unknown / blank' if self.field in NUMERIC else 'Blank')
-        ui.draw_logical_rounded_rect(24,78,1256,150,self.RADIUS,self.PANEL,self.LINE,1)
-        self.ink(cache,42,113,value[-90:],25,width=1180)
-        rows=['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM./-']
-        for r,row in enumerate(rows):
-            if not self.caps:row=row.lower()
-            width=104;offset=(1280-len(row)*114+10)/2
-            for col,key in enumerate(row):self.button(cache,(offset+col*114,190+r*88,offset+col*114+width,264+r*88),key,('key',key))
-        for box,label,key in (((24,560,172,630),'Space',' '),((184,560,324,630),'Shift','SHIFT'),((336,560,426,630),':',':'),((438,560,598,630),'Delete','DELETE'),((610,560,750,630),'Clear','CLEAR'),((762,560,1256,630),'Done','DONE')):
-            self.button(cache,box,label,('key',key),key=='DONE')
-        self.ink(cache,24,690,self.message or 'Blank numeric fields mean unknown. GPS may supply the antenna position.',18,self.MUTED,width=1230)
-        self.draw_back(cache,('key','CANCEL'))
+        self.ui.draw_touch_keyboard(cache,dict(IDENTITY+LOCATION).get(self.field,self.field),
+            'Blank numeric fields mean unknown.' if self.field in NUMERIC else 'Enter text',
+            self.value,mode=getattr(self,'keyboard_mode','lower'),submit='Done',error=self.message,
+            rail_title='RADIO INFO' if self.station is not None else 'USB-RADIOS',rail_detail='BACK TO INFORMATION' if self.station is not None else 'BACK TO USB-RADIOS')
     def draw(self,cache):
         self.actions=[]
         if self.field is not None:self.keyboard(cache);return

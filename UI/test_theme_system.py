@@ -100,10 +100,11 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_logical_rounded_rect"), \
                 patch.object(ui, "draw_styled_text_button"), patch.object(ui, "draw_settings_leaf_sidebar"), \
                 patch.object(ui, "draw_network_status_card"), patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_styled_button_frame", return_value=APP_UI_STYLE.button.resolve()), \
                 patch.object(ui, "fit_station_text", side_effect=lambda _cache, value, *_args, **_kwargs: value), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_network_manager(None, {"devices": {}, "networks": [], "ok": True}, False, None)
-            self.assertIn(("Network", tuple(custom["colors"]["text"])),
+            self.assertIn(("Wi-Fi / ETHERNET", tuple(custom["colors"]["text"])),
                           [(item.args[3], tuple(item.args[4])) for item in text.call_args_list])
             text.reset_mock()
             ui.draw_cpu_utilization_graph(None, (), None, (20, 30, 900, 400))
@@ -337,6 +338,7 @@ class ThemeSystemTests(unittest.TestCase):
             with patch.object(ui, "draw_logical_rounded_rect") as frame, \
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
+                    patch.object(ui, "GL"), \
                     patch.object(ui, "ui_button_pressed", return_value=False):
                 ui.draw_zoom_button(None, ui.ZOOM_MINUS_BOX, "-")
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+")
@@ -349,6 +351,7 @@ class ThemeSystemTests(unittest.TestCase):
             with patch.object(ui, "draw_logical_rounded_rect") as frame, \
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
+                    patch.object(ui, "GL"), \
                     patch.object(ui, "ui_button_pressed", return_value=True):
                 ui.draw_stream_waterfall_button(None, True)
                 ui.draw_favorite_waterfall_button(True)

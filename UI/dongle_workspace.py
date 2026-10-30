@@ -40,6 +40,7 @@ class DongleWorkspace(StationWorkspace):
         elif value=='CLEAR':self.value=''
         elif len(self.value)<(48 if self.field=='Nickname · optional' else 8):self.value+=value
     def tap(self,x,y):
+        if self.field is not None:return self.keyboard_tap(x,y)
         for box,(kind,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
             if kind=='key':self.key(value)

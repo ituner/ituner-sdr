@@ -150,6 +150,10 @@ def _customize(ui, cache, editor, boxes):
 
 
 def _overlay(ui, cache, editor):
+    if editor.overlay == 'name':
+        ui.draw_touch_keyboard(cache,'THEME NAME','Enter a name of 1–32 characters',editor.buffer,
+            mode=getattr(editor,'keyboard_mode','lower'),submit='Done',error=editor.error,rail_title='THEMES')
+        return
     palette = _palette(ui)
     ui.draw_logical_rect(0, 0, 1280, 800, (0, 0, 0, 215))
     ui.draw_logical_rounded_rect(
@@ -174,6 +178,7 @@ def _overlay(ui, cache, editor):
 
 
 def draw_theme_screen(cache, editor, ui):
+    editor.keyboard_ui = ui
     palette = _palette(ui)
     if editor.fullscreen:
         _preview(ui, cache, editor, (0, 0, 1280, 800))

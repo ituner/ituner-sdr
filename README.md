@@ -238,6 +238,14 @@ The minimum desktop packages exercise the UI, live receiver, waterfall and
 local audio. NumPy and SciPy enable the Python decoder paths. FFmpeg is needed
 for FM-DX MP3 audio.
 
+**Install the bundled fonts before opening the desktop app.** The files are in
+[`assets/fonts/`](assets/fonts/README.md): Oxanium (big frequency), Roboto,
+Liberation Sans/Mono/Serif, and DejaVu Sans. The Python UI looks up these font
+families through the operating system; keeping the files in the repository
+alone does not make them available to the desktop window. Use the steps for
+your operating system below, then fully quit and reopen the app if it was
+already running.
+
 ### macOS
 
 Install Python and the native audio/decoder tools with Homebrew, then create a
@@ -251,8 +259,13 @@ python3.12 -m venv UI/.venv
 source UI/.venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+mkdir -p "$HOME/Library/Fonts"
+find assets/fonts -type f -name '*.ttf' -exec cp -f {} "$HOME/Library/Fonts/" \;
 python UI/kiwi_gl_display.py --desktop --fps 30
 ```
+
+This installs the bundled fonts for your macOS user. You can also open the
+`.ttf` files from `assets/fonts/` in Font Book and choose **Install**.
 
 For a clean test that ignores the previously selected receiver:
 
@@ -275,6 +288,13 @@ Set-ExecutionPolicy -Scope Process Bypass
 UI\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+```
+
+Before starting the app, open `assets\fonts` in File Explorer. Open each font
+family folder, select its `.ttf` files, right-click, and choose **Install**
+(or **Show more options → Install**). Install Oxanium too. Then run:
+
+```powershell
 python UI\kiwi_gl_display.py --desktop --fps 30
 ```
 
@@ -300,6 +320,9 @@ python3 -m venv UI/.venv
 source UI/.venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install pygame PyOpenGL Pillow sounddevice numpy scipy
+mkdir -p "$HOME/.local/share/fonts/ituner-sdr"
+find assets/fonts -type f -name '*.ttf' -exec cp -f {} "$HOME/.local/share/fonts/ituner-sdr/" \;
+fc-cache -f "$HOME/.local/share/fonts/ituner-sdr"
 SDL_VIDEODRIVER=wayland python UI/kiwi_gl_display.py --desktop --fps 30
 ```
 
@@ -485,3 +508,13 @@ AIS, APRS, rtl_433, Meteor-M LRPT, CubeSat telemetry and RS41/DFM radiosondes ar
 Pi and Mac installations support **SYSTEM → UPDATES** with on-demand GitHub
 checks, release notes, confirmed installation and rollback. See
 [application updates](docs/application-updates.md) for one-time setup and scope.
+
+### USB receivers on the Pi
+
+Open **RECEIVERS → USB** for the local RTL-SDR (including Nooelec NESDR)
+and Airspy HF+ controls. Opening the page rescans devices. SOURCE selects the
+receiver family; choose a preset and START LOCAL AUDIO to listen through HOME.
+BACK returns to RECEIVERS. USB devices are separate from LAN/network stations
+and have no location on the receiver globe. Install `rtl-sdr` / `airspyhf`
+tools on Linux for discovery. A receiver must first appear in `lsusb`; an empty
+USB bus cannot be resolved by changing the receiver list.

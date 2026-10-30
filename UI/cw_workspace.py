@@ -1,6 +1,7 @@
 """1280×800 CW console: stable waterfall, four signal rows and readable text."""
 import math
 from sstv_workspace import SSTVWorkspace
+from decoder_style import footer_content_box
 from cw_modes import PRESETS,settings,center_offset,bounds,display_bounds,signal_markers,VIEW_SPANS
 
 
@@ -71,7 +72,7 @@ class CWWorkspace(SSTVWorkspace):
         return True
 
     def draw(self,cache,receivers):
-        self.actions=[];self.ui.draw_logical_rect(0,0,1280,800,(7,18,25,255))
+        self.actions=[];self.ui.draw_logical_rect(0,0,1280,800,self.theme_color('background',(7,18,25,255)))
         receivers=[r for r in receivers if getattr(self.ui,'station_receiver_type',lambda r:'kiwi')(r)=='kiwi']
         if self.field:
             self.text(cache,24,44,self.field.replace('_',' ').upper()+' · 0 WPM = AUTO',26)
@@ -88,7 +89,6 @@ class CWWorkspace(SSTVWorkspace):
         self.button(cache,(418,8,532,72),'HISTORY',('history',None),active=self.history_open)
         self.button(cache,(540,8,654,72),'RECEIVERS',('decoders',None),active=self.decoders_open)
         self.button(cache,(790,8,1026,72),'ADD DECODER',('add',None))
-        self.button(cache,(1034,8,1270,72),'HOME',('home',None))
         if self.decoders_open:self.draw_receivers(cache);return
         if self.history_open:
             rows=self.manager.history();pages=max(1,math.ceil(len(rows)/3));self.page=min(self.page,pages-1)
@@ -96,10 +96,10 @@ class CWWorkspace(SSTVWorkspace):
             self.button(cache,(138,78,252,142),'NEXT',('page',1))
             self.text(cache,270,106,f'{self.page+1} / {pages} · Saved across restarts · latest 200 entries · export from /cw',18,width=750)
             for i,row in enumerate(rows[self.page*3:self.page*3+3]):
-                y=146+i*210;self.ui.draw_logical_rect(16,y,1260,y+198,(17,34,42,255))
-                self.text(cache,30,y+24,f"{row['rf_hz']/1e6:.6f} MHz · {row['wpm']:g} WPM · {row['receiver']} · {row.get('engine','ggmorse')}",20,width=1200)
+                y=146+i*184;self.ui.draw_logical_rect(16,y,1020,y+178,self.theme_color('section_surface',(17,34,42,255)))
+                self.text(cache,30,y+24,f"{row['rf_hz']/1e6:.6f} MHz · {row['wpm']:g} WPM · {row['receiver']} · {row.get('engine','ggmorse')}",20,width=970)
                 self.text(cache,30,y+55,row['start_utc']+' → '+row['end_utc'],17)
-                self.lines(cache,row['text'],30,y+92,count=3,size=24)
+                self.lines(cache,row['text'],30,y+92,width=970,count=3,size=24)
             if not rows:self.text(cache,220,320,'Decoded text is saved here automatically.',27)
             return
         rows=self.manager.snapshot()
@@ -121,7 +121,7 @@ class CWWorkspace(SSTVWorkspace):
         self.button(cache,(1034,78,1270,142),'STOP' if row['running'] else 'START',('toggle',row['id']))
         tracks=row.get('tracks',[])
         if not any(t['id']==self.selected_track for t in tracks):self.selected_track=tracks[0]['id'] if tracks else None
-        self.ui.draw_logical_rect(16,150,1260,524,(10,29,38,255))
+        self.ui.draw_logical_rect(16,150,1260,524,self.theme_color('spectrum_field',(10,29,38,255)))
         session=self.manager.sessions.get(row['id'])
         if session and row.get('running'):
             from cw_waterfall import WaterfallTexture
@@ -136,19 +136,19 @@ class CWWorkspace(SSTVWorkspace):
         if hi-lo>3001 or decode_hi<hi:
             left=18+1240*max(0,min(1,(decode_lo-lo)/(hi-lo)))
             right=18+1240*max(0,min(1,(decode_hi-lo)/(hi-lo)))
-            self.ui.draw_logical_rect(18,152,left,490,(4,12,20,120))
-            self.ui.draw_logical_rect(right,152,1258,490,(4,12,20,120))
-            for edge in (left,right):self.ui.draw_logical_line(edge,152,edge,490,(104,234,194,255),2)
+            self.ui.draw_logical_rect(18,152,left,490,(*self.theme_color('background',(4,12,20,255))[:3],120))
+            self.ui.draw_logical_rect(right,152,1258,490,(*self.theme_color('background',(4,12,20,255))[:3],120))
+            for edge in (left,right):self.ui.draw_logical_line(edge,152,edge,490,self.theme_color('focus',(104,234,194,255)),2)
             self.text(cache,max(22,min(1090,left+6)),478,'DECODE',16,(104,234,194))
         if hi-lo>3001:self.actions.append(((18,152,1258,490),('tune_point',(row['id'],row['freq_khz'],lo,hi))))
         for i in range(7):
             fraction=i/6;x=18+1240*fraction
-            self.ui.draw_logical_line(x,480,x,490,(172,205,217,255),1)
+            self.ui.draw_logical_line(x,480,x,490,self.theme_color('spectrum_tick',(172,205,217,255)),1)
             self.text(cache,max(24,min(1130,x-59)),510,
                       f"{(row['freq_khz']*1000+lo+(hi-lo)*fraction)/1e6:.6f}",17)
         for marker in signal_markers(row,self.selected_track):
             x=18+1240*marker['fraction']
-            color=(255,210,103) if marker['selected'] else ((104,234,194) if marker['active'] else (151,163,176))
+            color=self.theme_color('waiting' if marker['selected'] else 'ready' if marker['active'] else 'secondary_text', (255,210,103) if marker['selected'] else ((104,234,194) if marker['active'] else (151,163,176)))[:3]
             if marker['active']:self.ui.draw_logical_line(x,152,x,490,(*color,220),2 if marker['selected'] else 1)
             else:
                 for y in range(152,490,16):self.ui.draw_logical_line(x,y,x,min(y+8,490),(*color,210),2 if marker['selected'] else 1)
@@ -166,19 +166,20 @@ class CWWorkspace(SSTVWorkspace):
                 self.button(cache,(x,563,x+236,627),f"{i+1} · {t['rf_hz']/1e6:.6f} MHz",('track',t['id']),
                     f"{t['wpm']:g} WPM · "+('TRACKING' if t['active'] else 'FADING'),self.selected_track==t['id'])
             else:
-                self.ui.draw_logical_rect(x,563,x+236,627,(17,34,42,255))
+                self.ui.draw_logical_rect(x,563,x+236,627,self.theme_color('section_surface',(17,34,42,255)))
                 self.text(cache,x+12,598,'Searching…' if not i else 'Available signal slot',17,width=212)
         chosen=next((t for t in tracks if t['id']==self.selected_track),None)
-        self.ui.draw_logical_rect(16,647,1020,784,(17,34,42,255))
-        self.text(cache,30,669,'DECODED TEXT · '+(f"{chosen['rf_hz']/1e6:.6f} MHz" if chosen else 'waiting'),20,(104,234,194))
+        footer_dx=footer_content_box()[0]-18
+        self.ui.draw_logical_rect(16+footer_dx,647,1020+footer_dx,784,self.theme_color('section_surface',(17,34,42,255)))
+        self.text(cache,30+footer_dx,669,'DECODED TEXT · '+(f"{chosen['rf_hz']/1e6:.6f} MHz" if chosen else 'waiting'),20,(104,234,194),width=970)
         listening=row.get('listen',{})
         is_listening=bool(listening.get('track_id'))
         if chosen or is_listening:
-            self.button(cache,(782,646,1018,710),'STOP LISTENING' if is_listening else 'LISTEN TO SLOT',
+            self.button(cache,(1034,563,1270,627),'STOP LISTENING' if is_listening else 'LISTEN TO SLOT',
                         ('listen',(row['id'],None if is_listening else chosen['id'])),active=is_listening)
         if self.message or listening.get('error'):
-            self.text(cache,30,770,self.message or listening['error'],16,(255,210,103),width=980)
-        self.lines(cache,(chosen['text'] if chosen else '') or 'Text appears after several seconds of Morse. Tap a signal to follow it.',30,704,width=970,count=3,size=22)
+            self.text(cache,30+footer_dx,770,self.message or listening['error'],16,(255,210,103),width=980)
+        self.lines(cache,(chosen['text'] if chosen else '') or 'Text appears after several seconds of Morse. Tap a signal to follow it.',30+footer_dx,704,width=970,count=2,size=22)
 
     def close(self):
         for texture in self.live_textures.values():texture.close()
@@ -186,9 +187,10 @@ class CWWorkspace(SSTVWorkspace):
         super().close()
 
     def draw_receivers(self,cache):
+        footer_dx=footer_content_box()[0]-18
         for i,row in enumerate(self.manager.snapshot()):
             x=16+i%2*630;y=90+i//2*202
-            self.ui.draw_logical_rect(x,y,x+612,y+188,(17,34,42,255))
+            self.ui.draw_logical_rect(x,y,x+612,y+188,self.theme_color('section_surface',(17,34,42,255)))
             self.text(cache,x+14,y+26,f"{row['band']} · {row['freq_khz']+center_offset(row):.3f} kHz · {row['cw_mode']}",22,width=580)
             self.text(cache,x+14,y+60,row['name'],18,width=580)
             self.text(cache,x+14,y+90,row['status']+' · '+row.get('detail',''),16,width=580)
@@ -197,10 +199,10 @@ class CWWorkspace(SSTVWorkspace):
                 left=x+14+index*122
                 self.button(cache,(left,y+122,left+114,y+186),label,(action,row['id']))
         if self.delete_armed:
-            self.text(cache,24,748,'Remove receiver? Saved text is kept.',21)
-            self.button(cache,(782,728,896,792),'REMOVE',('confirm_delete',self.delete_armed))
-            self.button(cache,(904,728,1018,792),'CANCEL',('cancel_delete',None))
-        else:self.text(cache,24,744,self.message or 'Tap a receiver card to open its live view.',19,width=990)
+            self.text(cache,24+footer_dx,748,'Remove receiver? Saved text is kept.',21,width=740)
+            self.button(cache,(782+footer_dx,728,896+footer_dx,792),'REMOVE',('confirm_delete',self.delete_armed))
+            self.button(cache,(904+footer_dx,728,1018+footer_dx,792),'CANCEL',('cancel_delete',None))
+        else:self.text(cache,24+footer_dx,744,self.message or 'Tap a receiver card to open its live view.',19,width=990)
 
     def draw_add(self,cache,receivers):
         self.text(cache,24,32,'EDIT CW RECEIVER' if self.edit_id else 'ADD CW RECEIVER',28,(104,234,194))

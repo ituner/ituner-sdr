@@ -153,7 +153,7 @@ class CoverageTouch:
                 self.button(cache,(x,y,x+352,y+72),label,'coverage_span',seconds,seconds==self.window.seconds)
             w.draw_status(cache,'Choose a timespan · Back cancels','Retains up to 90 days / 250,000 positions',full_width=True)
             return
-        for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','usb',None,False)):
+        for box,title,kind,value,active in (((24,96,218,152),'Sky cells','coverage_mode','cells',self.mode=='cells'),((230,96,424,152),'Sky trails','coverage_mode','trails',self.mode=='trails'),((436,96,654,152),'True 3D distance','coverage_mode','space',self.mode=='space'),((666,96,912,152),'Signal' if not self.signal else 'Signal colour ON','coverage_signal',None,self.signal),((924,96,1124,152),'All aircraft','coverage_reset',None,False),((1136,96,1256,152),'Site','site',None,False)):
             self.button(cache,box,title,kind,value,active)
         r=meta.get('horizontal_range_max_km',0);alt=meta.get('max_altitude_ft')
         for x,y,title,value in ((24,244,'Radius',f'{r:.1f} km'),(24,312,'Diameter',f'{2*r:.1f} km'),(1124,244,'Slant range',f"{meta.get('slant_range_max_km',0):.1f} km"),(1124,312,'Highest',f'{alt:,.0f} ft' if alt is not None else '—')):
@@ -167,8 +167,8 @@ class CoverageTouch:
             dome_gl.draw(ui,self.projected,BOX,max(0,min(1,(self.pulse_until-time.monotonic())/.8)))
             for x,y,text,size,color in self.projected['labels']:w.ink(cache,BOX[0]+x,BOX[1]+y,text,size,color,anchor='cm')
         if self.error or w.manager.coverage_error or data.get('status') in (None,'LOADING','EMPTY','NO SITE'):
-            text=self.error or w.manager.coverage_error or {'EMPTY':'No aircraft positions in this viewing window yet.','NO SITE':'Set antenna latitude / longitude in Receiver.'}.get(data.get('status'),'Loading reception history…')
-            w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=1100)
+            text=self.error or w.manager.coverage_error or {'EMPTY':'No aircraft positions in this viewing window yet.','NO SITE':'Tap Site to enter antenna latitude / longitude.'}.get(data.get('status'),'Loading reception history…')
+            w.ink(cache,640,464,text,22,w.MUTED,anchor='cm',width=880)
         factor=frame.get('height_scale',1) if frame else 1
         if self.mode=='space':
             w.button(cache,(24,382,152,450),'Ground',('coverage_ground',None),'Map on' if self.ground_enabled else 'Map off',active=self.ground_enabled)
@@ -240,10 +240,9 @@ class CoverageTouch:
         p=self.selected_observation;self.panel_actions=[]
         if p is None:return
         w=self.w;x,y,x1,y1=AIRCRAFT_PANEL
-        w.ui.draw_logical_rounded_rect(x,y,x1,y1,14,(*w.PANEL[:3],235),(*BLUE,200),1)
+        w.ui.draw_logical_rounded_rect(x,y,x1,y1,w.RADIUS,(*w.PANEL[:3],235),(*BLUE,200),1)
         first=len(w.actions)
         w.ink(cache,x+12,y+22,p['label'],24,w.GOLD,width=300)
-        w.ink(cache,x+12,y+46,'ICAO '+p['hex'].upper()+(' · latest cell sample' if self.mode=='cells' else ''),15,w.MUTED,width=300)
         w.button(cache,(x1-68,y+8,x1-12,y+64),'×',('coverage_close_aircraft',None))
         service=getattr(w.manager,'aircraft_details',None)
         info=service.snapshot(p['hex']) if service is not None else {}
@@ -255,8 +254,9 @@ class CoverageTouch:
         model=info.get('model') or info.get('icao_type') or ('Model unavailable' if info.get('status')!='loading' else '')
         lines=textwrap.wrap(model,width=27 if photo else 38)
         for index,line in enumerate(lines[:2]):w.ink(cache,x+12,y+105+index*21,line,17,w.TEXT,width=width)
-        if info.get('registration'):
-            w.ink(cache,x+12,y+46,'ICAO '+p['hex'].upper()+' · '+info['registration'],15,w.MUTED,width=300)
+        identity='ICAO '+p['hex'].upper()
+        identity+=' · '+info['registration'] if info.get('registration') else (' · latest cell sample' if self.mode=='cells' else '')
+        w.ink(cache,x+12,y+46,identity,15,w.MUTED,width=300)
         if photo:
             self.draw_photo(service.photo_path(p['hex']),(x+290,y+68,x1-12,y+132))
             w.ink(cache,x+290,y+142,'Airport-Data.com',11,w.MUTED,width=106)

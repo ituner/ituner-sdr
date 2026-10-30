@@ -65,26 +65,22 @@ class SearchTests(unittest.TestCase):
         ui=SimpleNamespace(contains=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3],draw_logical_rect=Mock(),draw_text=Mock())
         workspace=SimpleNamespace(ui=ui,draw=Mock(),tap=Mock(),close=Mock(),swipe=Mock(return_value=False))
         install_search(workspace,'qrss',self.search)
-        workspace.draw(None,[]);workspace.tap(1152,688,[])
+        workspace.draw(None,[]);workspace.tap(1152,40,[])
         self.assertTrue(workspace.log_search_view.open)
         self.assertFalse(workspace.swipe(50,35,50,35))
         self.assertTrue(workspace.swipe(50,35,50,135))
         workspace.log_search_view.future.result();workspace.close()
 
-    def test_search_view_keyboard_keeps_back_clear(self):
+    def test_search_view_keyboard_has_only_shared_keyboard_actions(self):
         from log_search_workspace import SearchView
         from unittest.mock import Mock
-        ui=SimpleNamespace(draw_logical_rect=Mock(),draw_text=Mock(),
-                           fit_station_text=lambda cache,value,*args:str(value))
+        ui=SimpleNamespace(draw_touch_keyboard=Mock(),touch_keyboard_action_at=Mock(return_value='CANCEL'))
         view=SearchView(ui,self.search)
         try:
             view.keyboard=True;view.draw(None)
-            back=next(box for box,action in view.actions if action==('back',None))
-            self.assertEqual(back,(1034,728,1270,792))
-            for box,action in view.actions:
-                self.assertIn((box[2]-box[0],box[3]-box[1]),((114,64),(236,64)),action)
-                if box!=back:
-                    self.assertTrue(box[2]<=back[0] or box[3]<=back[1],action)
+            ui.draw_touch_keyboard.assert_called_once()
+            self.assertEqual(view.actions,[])
+            view.tap(50,740);self.assertFalse(view.keyboard)
         finally:view.close()
 
     def test_validation(self):

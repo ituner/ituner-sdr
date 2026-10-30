@@ -27,7 +27,9 @@ import sys
 import tempfile
 import threading
 import time
-from ui_chrome import draw_status_clock, RAIL_BACK_BOX
+from caption_reveal import CaptionReveal
+from main_volume_control import MainVolumeControl
+from ui_chrome import draw_status_clock, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
 import html
@@ -214,9 +216,12 @@ except ImportError:
 
 try:
     import numpy as np
-    import onnxruntime as ort
 except ImportError:
     np = None
+
+try:
+    import onnxruntime as ort
+except ImportError:
     ort = None
 
 # The deployed radio is a KMSDRM fullscreen application. On macOS, leave SDL
@@ -298,7 +303,7 @@ def mode_annunciator_active(label, active_mode, digital):
     """Map compact panel labels onto Kiwi's internal demodulator names."""
     return (
         label == active_mode
-        or (label == "FM" and active_mode == "NBFM")
+        or (label == "FM" and active_mode in ("NBFM", "NFM", "WFM"))
         or (label == "FM" and active_mode == fmdx.MODE_LABEL)
         or (label == "IQ" and active_mode != fmdx.MODE_LABEL and str(digital).upper() == "IQ")
     )
@@ -1534,7 +1539,7 @@ WSPR_CAPACITY_REFRESH_SECONDS = 20.0
 MAIN_RECEIVER_CAPACITY_REFRESH_SECONDS = 20.0
 WSPR_CAPACITY_TIMEOUT_SECONDS = 4.0
 WSPR_DECODE_BOX = (904, 6, 1018, 70)
-WSPR_CPU_BOX = (760, 12, 936, 62)
+WSPR_CPU_BOX = (720, 6, 896, 70)
 WSPR_ADD_BOX = (1026, 6, 1140, 70)
 WSPR_HOME_BOX = (1148, 6, 1262, 70)
 WSPR_CPU_DETAIL_BOX = (280, 114, 1000, 698)
@@ -1959,7 +1964,12 @@ def configure_popup_layout():
     )
 
     if LCD_800_MODE:
+        RTL_LAB_PANEL_BOX = (0, 0, LOGICAL_W, LOGICAL_H)
         RTL_LAB_BACK_BOX = lcd_drawer_back_box()
+        rail_left, _, rail_right, _ = RTL_LAB_BACK_BOX
+        RTL_LAB_PROBE_BOX = (rail_left, 128, rail_right, 192)
+        RTL_LAB_PRESET_BOX = (rail_left, 208, rail_right, 272)
+        RTL_LAB_RUN_BOX = (rail_left, 288, rail_right, 352)
 
     dy = offset("wspr")
     (WSPR_PANEL_BOX, WSPR_GRAPH_BOX, base_wspr_windows,
@@ -2508,9 +2518,9 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
+    ("network", "Wi-Fi / ETHERNET"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
-    ("network", "NETWORK"),
     ("stats", "CPU LOAD"),
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
@@ -2643,9 +2653,9 @@ RECEIVER_PICKER_BACK_BOX = (
 )
 
 
-def receiver_source_segments():
-    """Return the five source categories just below the rail title line."""
-    names = receiver_catalog.SOURCE_FILTERS
+def receiver_source_segments(usb_present=True):
+    """Include direct USB radios alongside the network source categories."""
+    names = (("usb",) if usb_present else ()) + receiver_catalog.SOURCE_FILTERS
     # This also seeds module-level geometry before configure_output() runs.
     x0 = RECEIVER_PICKER_MAIN_W + RECEIVER_PICKER_MARGIN
     x1 = x0 + RECEIVER_PICKER_SIDEBAR_W - 2 * RECEIVER_PICKER_MARGIN
@@ -2684,11 +2694,11 @@ def boxes_overlap(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def picker_source_segment_at(x, y):
+def picker_source_segment_at(x, y, usb_present=True):
     """Return the source segment under a tap, or ``None``."""
     if not LCD_800_MODE:
         return None
-    for source, box in PICKER_SOURCE_SEGMENT_BOXES:
+    for source, box in receiver_source_segments(usb_present):
         if contains(box, x, y):
             return source
     return None
@@ -4127,23 +4137,11 @@ def health_prioritized_stations(stations, station_health, sort_mode):
 
 
 def keyboard_rows(mode):
-    if mode == "numeric":
-        return SEARCH_NUMERIC_KEY_ROWS
-    if mode == "lower":
-        return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in SEARCH_KEY_ROWS)
-    return SEARCH_KEY_ROWS
+    return network_keyboard_rows("symbols" if mode == "numeric" else mode)
 
 
 def search_key_at(x, y, mode):
-    for keys, x0, y0, key_w in keyboard_rows(mode):
-        if y0 <= y < y0 + 70 and x0 <= x < x0 + len(keys) * key_w:
-            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
-            if key == "<":
-                return "BACK"
-            if key == ">":
-                return "ENTER"
-            return " " if key == "~" else key
-    return None
+    return touch_keyboard_action_at(x, y, mode)
 
 
 def frequency_entry_layout():
@@ -4528,6 +4526,20 @@ def waterfall_view_center_khz(tuned_khz, span_khz):
     return clamp(float(tuned_khz), half_span, TUNING_MAX_KHZ - half_span)
 
 
+def local_waterfall_center(tuned_khz, pinned_center_khz=None):
+    """A tap tunes USB hardware without moving the displayed RF window."""
+    return float(tuned_khz if pinned_center_khz is None else pinned_center_khz)
+
+
+def local_spectrum_in_view(values, source_center_khz, view_center_khz, span_khz):
+    """Place USB FFT bins at their absolute RF positions after a retune."""
+    if not len(values) or source_center_khz == view_center_khz:
+        return values
+    bins = np.arange(len(values), dtype=np.float64)
+    offset = (view_center_khz - source_center_khz) * len(values) / span_khz
+    return np.interp(bins + offset, bins, values, left=0.0, right=0.0)
+
+
 def waterfall_tap_frequency_khz(x, view_center_khz, span_khz, canvas_width=None):
     """Read the RF frequency under a waterfall tap without recentering it."""
     width = max(1.0, rf_canvas_width() if canvas_width is None else float(canvas_width))
@@ -4554,6 +4566,26 @@ def main_receiver_retry_delay(failure_count):
     if failure_count <= MAIN_RECONNECT_MID_ATTEMPTS:
         return MAIN_RECONNECT_MID_SECONDS
     return MAIN_RECONNECT_STEADY_SECONDS
+
+
+def wait_for_audio_retry(stop_event, state, server_generation, delay=None):
+    """Yield back to the audio owner promptly when a receiver is changed."""
+    deadline = None if delay is None else time.monotonic() + delay
+    while not stop_event.is_set():
+        if (state.external_audio_snapshot() or state.stream_paused_snapshot()
+                or state.snapshot()[5] != server_generation):
+            return False
+        remaining = 0.05 if deadline is None else deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if stop_event.wait(min(0.05, remaining)):
+            return True
+    return True
+
+
+def usb_receiver_footer(snapshot):
+    device = snapshot["device"] or snapshot["capabilities"].label
+    return f"USB · {device}"
 
 
 def active_vosk_model_path():
@@ -4583,10 +4615,7 @@ def contains_with_guard(box, x, y, guard=CONTROL_TOUCH_GUARD_PX):
 
 def mute_waterfall_box():
     """A visible, dismissible explanation for intentional silence."""
-    x1 = LCD_NAV_X0 - 18 if LCD_800_MODE else BASE_LOGICAL_W - 18
-    x0 = x1 - 270
-    y0 = sdr_ui.TOP_H + 38
-    return x0, y0, x1, y0 + 70
+    return ZOOM_OSD_BOX
 
 
 def stream_waterfall_box():
@@ -6284,14 +6313,15 @@ class SharedState:
             # gradual decay. Keep the recent sweep maxima, then draw their
             # per-bin envelope behind the live trace.
             now = time.monotonic()
-            self.spectrum_peak_history.append((now, tuple(values)))
+            self.spectrum_peak_history.append((now, np.asarray(values, dtype=np.float64)))
             cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
             while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
                 self.spectrum_peak_history.popleft()
-            self.spectrum_peak_values = tuple(
-                max(frame[index] for _timestamp, frame in self.spectrum_peak_history)
-                for index in range(len(values))
-            )
+            # Reduce whole sweeps in NumPy: a Python scan of every bin in
+            # every retained frame blocks audio/UI on this shared lock.
+            self.spectrum_peak_values = tuple(np.maximum.reduce(
+                [frame for _timestamp, frame in self.spectrum_peak_history]
+            ).tolist())
 
     def update_spectrum_values(self, values):
         """Accept already-normalized bins from an external local I/Q source."""
@@ -6310,14 +6340,15 @@ class SharedState:
                 # the hold window before combining frames of different width.
                 self.spectrum_peak_history.clear()
             now = time.monotonic()
-            self.spectrum_peak_history.append((now, values))
+            self.spectrum_peak_history.append((now, np.asarray(values, dtype=np.float64)))
             cutoff = now - SPECTRUM_PEAK_HOLD_SECONDS
             while self.spectrum_peak_history and self.spectrum_peak_history[0][0] < cutoff:
                 self.spectrum_peak_history.popleft()
-            self.spectrum_peak_values = tuple(
-                max(frame[index] for _timestamp, frame in self.spectrum_peak_history)
-                for index in range(len(values))
-            )
+            # Reduce whole sweeps in NumPy: a Python scan of every bin in
+            # every retained frame blocks audio/UI on this shared lock.
+            self.spectrum_peak_values = tuple(np.maximum.reduce(
+                [frame for _timestamp, frame in self.spectrum_peak_history]
+            ).tolist())
 
 
 TEXT_TEXTURE_CACHE_LIMIT = 2048
@@ -8627,7 +8658,7 @@ def draw_navigation_button(text_cache, box, title, subtitle):
         (subtitle, 13 if taller_tile else 12, subtitle_y, visual.text if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
-        draw_text(text_cache, cx, round(cy), str(text).upper(), color,
+        draw_text(text_cache, cx, round(cy), str(text) if text == "Wi-Fi / ETHERNET" else str(text).upper(), color,
                   size, True, False, "cm", family=style.font_family)
     return visual
 
@@ -8845,24 +8876,12 @@ def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
 
 def draw_muted_waterfall_badge(text_cache):
     """Keep an intentional mute obvious without obscuring live RF detail."""
-    x0, y0, x1, y1 = mute_waterfall_box()
-    accent = (*MUTE_ACCENT, 246)
-    quiet = (208, 226, 230)
-    cy = (y0 + y1) / 2
-    draw_logical_rect(x0, y0, x1, y1, (10, 16, 23, 152))
-    draw_logical_line(x0, y0, x1, y0, accent, 2)
-    draw_logical_line(x0, y1, x1, y1, accent, 2)
-    # Simple speaker silhouette and a prominent mute slash keep this legible
-    # on the 800 px panel without depending on an icon-font glyph.
-    draw_logical_rect(x0 + 18, cy - 9, x0 + 29, cy + 9, accent)
-    draw_logical_polyline(
-        ((x0 + 29, cy - 9), (x0 + 45, cy - 21), (x0 + 45, cy + 21), (x0 + 29, cy + 9)),
-        accent,
-        2.5,
-    )
-    draw_logical_line(x0 + 13, cy - 24, x0 + 50, cy + 24, accent, 4)
-    draw_text(text_cache, x0 + 66, cy - 10, "AUDIO MUTED", accent[:3], 21, True, True, "lm")
-    draw_text(text_cache, x0 + 66, cy + 16, "TAP TO UNMUTE", quiet, 14, True, True, "lm")
+    box = mute_waterfall_box()
+    x0, y0, _x1, _y1 = box
+    red = themed_instrument_color("danger_border", MUTE_ACCENT)[:3]
+    draw_analog_osd_panel(box, 246, red, (8, 0, 0))
+    draw_text(text_cache, x0 + 18, y0 + 22, "AUDIO MUTED", red, 28, True, True, "lm")
+    draw_text(text_cache, x0 + 18, y0 + 64, "TAP TO UNMUTE", red, 28, True, True, "lm")
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
@@ -8905,7 +8924,7 @@ def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
 
 
 def draw_favorite_waterfall_button(favorited):
-    """Draw a fine-lined favorite star inside the shared touch target."""
+    """Fill the favorite star only when the receiver is saved."""
     x0, y0, x1, y1 = favorite_waterfall_box()
     pressed = ui_button_pressed((x0, y0, x1, y1))
     visual = draw_styled_button_frame(
@@ -8914,7 +8933,7 @@ def draw_favorite_waterfall_button(favorited):
     )
     edge = visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    draw_logical_polyline(regular_star_points(cx, cy, 17), edge, 2)
+    draw_favorite_star(cx, cy, 17, edge, filled=favorited)
 
 
 def draw_audio_transport_graph(text_cache, history, box):
@@ -11846,6 +11865,32 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     name, frequency_hz, mode, _rate = snapshot["preset"]
     running = snapshot["running"]
     status = snapshot["status"]
+    if LCD_800_MODE:
+        palette = APP_UI_STYLE.palette
+        source_label = snapshot["capabilities"].label
+        draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, palette.background)
+        draw_settings_leaf_sidebar(text_cache, "USB RECEIVER", source_label)
+        draw_text(text_cache, 24, 48, source_label, palette.text, 32, True, False, "lm", family="Liberation Sans")
+        device = fit_station_text(text_cache, snapshot["device"], 976, 20, False, False, family="Liberation Sans")
+        draw_text(text_cache, 24, 92, device, palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
+        draw_logical_rounded_rect(24, 136, 1000, 352, APP_UI_STYLE.button.radius,
+                                  palette.section_surface, palette.border, 1)
+        draw_text(text_cache, 48, 176, name, palette.section_heading, 22, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, 48, 238, f"{frequency_hz / 1e6:.3f} MHz", palette.text, 38, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, 48, 306, "LOCAL AUDIO ACTIVE" if running else "STARTS IN AM", palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
+        tuner = snapshot["tuner"] or "Tuner information unavailable"
+        tuner = fit_station_text(text_cache, tuner, 976, 18, False, False, family="Liberation Sans")
+        draw_text(text_cache, 24, 398, tuner, palette.secondary_text, 18, False, False, "lm", family="Liberation Sans")
+        draw_tests_button(text_cache, RTL_LAB_PROBE_BOX, "SOURCE", source_label, snapshot["probing"])
+        draw_tests_button(text_cache, RTL_LAB_PRESET_BOX, "PRESET", name)
+        draw_tests_button(text_cache, RTL_LAB_RUN_BOX,
+                          "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
+                          "LISTEN ON THIS DEVICE", running)
+        draw_logical_rect(0, STATUS_TOP, 1024, 800, palette.footer_background)
+        detail = fit_station_text(text_cache, f"{status} · {snapshot['detail']}", 988, 18, True, False, family="Liberation Sans")
+        draw_text(text_cache, 18, 739, detail, palette.footer_primary, 18, True, False, "lm", family="Liberation Sans")
+        draw_status_clock(sys.modules[__name__], text_cache)
+        return
     status_color = {
         "READY": (111, 234, 177), "LIVE": (111, 234, 177),
         "STARTING": (244, 193, 104), "PROBING": (244, 193, 104),
@@ -11870,10 +11915,10 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     )
     draw_tests_button(
         text_cache, RTL_LAB_RUN_BOX, "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
-        "KIWI AUDIO PAUSES ONLY WHILE THIS TEST RUNS" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
+        "LISTEN ON THIS DEVICE" if not running else f"{source_label} PCM → EXISTING USB AUDIO OUTPUT",
         running,
     )
-    draw_settings_leaf_sidebar(text_cache, "LOCAL SDR", "BACK TO APPS")
+    draw_settings_leaf_sidebar(text_cache, "USB RECEIVERS", "BACK TO " + rtl_lab.navigation_parent.upper())
     detail = fit_station_text(text_cache, snapshot["detail"], x1 - x0 - 48, 15, False, False, family="Liberation Sans")
     draw_text(text_cache, x0 + 24, y1 - 18, detail, (149, 190, 194), 15, False, True, "lm", family="Liberation Sans")
 
@@ -12699,93 +12744,46 @@ def wspr_identity_open_box():
     return x1 - 210, y0 + 4, x1 - 14, y0 + 44
 
 
-def wspr_identity_layout():
-    x0, y0, x1, y1 = WSPR_IDENTITY_BOX
-    field_x0, field_x1 = x0 + 132, x1 - 26
-    reporter = (field_x0, y0 + 42, field_x1, y0 + 84)
-    grid = (field_x0, y0 + 94, field_x1, y0 + 136)
-    key_y0 = y0 + 154
-    keys = []
-    for row_index, row in enumerate(WSPR_IDENTITY_KEY_ROWS):
-        key_gap = 7
-        key_w = (field_x1 - (x0 + 26) - key_gap * (len(row) - 1)) / len(row)
-        for index, key in enumerate(row):
-            left = x0 + 26 + index * (key_w + key_gap)
-            keys.append((key, (left, key_y0 + row_index * 42, left + key_w, key_y0 + row_index * 42 + 34)))
-    defaults = (x0 + 26, y1 - 48, x0 + 214, y1 - 12)
-    cancel = (x0 + 228, y1 - 48, x0 + 410, y1 - 12)
-    save = (x1 - 214, y1 - 48, x1 - 26, y1 - 12)
-    return reporter, grid, tuple(keys), defaults, cancel, save
+def wspr_identity_layout(mode="upper"):
+    boxes = network_password_boxes()
+    x0, y0, x1, _ = boxes["panel"]
+    reporter = (x0 + 24, y0 + 48, x0 + 330, y0 + 104)
+    grid = (x0 + 346, y0 + 48, x1 - 24, y0 + 104)
+    defaults = (x0 + 462, y0 + 208, x1 - 24, y0 + 268)
+    return reporter, grid, touch_keyboard_key_boxes(mode), defaults, boxes["cancel"], boxes["join"]
 
 
-def wspr_identity_action_at(x, y):
-    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout()
-    if contains(reporter, x, y):
-        return "field", "reporter"
-    if contains(grid, x, y):
-        return "field", "grid"
-    for key, box in keys:
+def wspr_identity_action_at(x, y, mode="upper"):
+    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout(mode)
+    for name, box in (("reporter", reporter), ("grid", grid)):
         if contains(box, x, y):
-            return "key", key
+            return "field", name
     if contains(defaults, x, y):
         return "defaults", None
-    if contains(cancel, x, y):
-        return "cancel", None
-    if contains(save, x, y):
-        return "save", None
+    action = touch_keyboard_action_at(x, y, mode)
+    if action in ("MODE", "CAPS"):
+        return "mode", action
+    if action in ("CANCEL", "SAVE", "CLEAR"):
+        return action.lower(), None
+    if action:
+        return "key", "<" if action == "BACK" else (" " if action == "SPACE" else action)
     return None
 
 
-def draw_wspr_identity_panel(text_cache, values, active_field, error=""):
-    x0, y0, x1, y1 = WSPR_IDENTITY_BOX
-    reporter, grid, keys, defaults, cancel, save = wspr_identity_layout()
-    identity = wspr_log_identity(values)
-    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 146))
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 248))
-    draw_logical_line(x0, y0, x1, y0, (114, 222, 182, 168), 1)
-    draw_text(text_cache, x0 + 24, y0 + 19, "WSPR REPORTER ID", themed_instrument_color("text", (232, 246, 247)), 20, True, True, "lm", family="Liberation Sans")
-    state_text = "UPLOAD READY" if identity["upload_ready"] else "LOCAL LOG ONLY"
-    state_color = themed_instrument_color("ready", (104, 243, 176)) if identity["upload_ready"] else themed_instrument_color("waiting", (241, 181, 108))
-    draw_text(text_cache, x1 - 26, y0 + 19, state_text, state_color, 13, True, True, "rm", family="Liberation Sans")
-
-    def field(box, label, value, selected, placeholder):
-        bx0, by0, bx1, by1 = box
-        draw_text(text_cache, x0 + 26, (by0 + by1) / 2, label, themed_instrument_color("secondary_text", (157, 192, 198)), 15, True, True, "lm", family="Liberation Sans")
-        fill = (13, 37, 43, 250) if selected else (10, 28, 35, 242)
-        edge = (93, 237, 173, 230) if selected else (86, 126, 137, 142)
-        draw_logical_rect(bx0, by0, bx1, by1, fill)
-        draw_logical_line(bx0, by0, bx1, by0, edge, 2 if selected else 1)
-        draw_logical_line(bx0, by1, bx1, by1, (45, 79, 88, 170), 1)
-        text = value or placeholder
-        color = themed_instrument_color("text", (232, 246, 247)) if value else themed_instrument_color("secondary_text", (130, 157, 164))
-        draw_text(text_cache, bx0 + 14, (by0 + by1) / 2, text, color, 21, True, True, "lm", family="Liberation Sans")
-
-    field(reporter, "REPORTER", values.get("reporter", ""), active_field == "reporter", "SWL")
-    field(grid, "GRID", values.get("grid", ""), active_field == "grid", "MAIDENHEAD  e.g. JN63")
-    for key, box in keys:
-        bx0, by0, bx1, by1 = box
-        draw_logical_rect(bx0, by0, bx1, by1, (16, 34, 42, 236))
-        draw_logical_line(bx0, by0, bx1, by0, (95, 144, 153, 126), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, "DEL" if key == "<" else key, themed_instrument_color("text", (221, 238, 240)), 17 if key == "<" else 20, True, True, "cm", family="Liberation Sans")
-
-    def action(box, label, accent, active=False):
-        bx0, by0, bx1, by1 = box
-        draw_logical_rect(bx0, by0, bx1, by1, accent if active else (15, 32, 40, 242))
-        draw_logical_line(bx0, by0, bx1, by0, accent if active else (81, 123, 133, 140), 1)
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label, themed_instrument_color("text", (238, 250, 250)), 16, True, True, "cm", family="Liberation Sans")
-
-    action(defaults, "SWL DEFAULT", (37, 87, 73, 244), True)
-    action(cancel, "CANCEL", (15, 32, 40, 242))
-    action(save, "SAVE", (40, 112, 83, 246), True)
-    message = error or "Grid is optional for local logs; a valid 4/6-char grid is required before external upload."
-    draw_text(text_cache, x0 + 26, y1 - 63, message, themed_instrument_color("waiting", (245, 157, 119)) if error else themed_instrument_color("secondary_text", (139, 184, 190)), 12, True, True, "lm", family="Liberation Sans")
+def draw_wspr_identity_panel(text_cache, values, active_field, error="", mode="upper"):
+    draw_touch_keyboard(text_cache, "WSPR REPORTER ID", "", values.get(active_field, ""), mode,
+                        submit="Save", error=error, rail_title="WSPR", rail_detail="REPORTER ID")
+    reporter, grid, _, defaults, _, _ = wspr_identity_layout(mode)
+    draw_network_button(text_cache, reporter, "REPORTER: " + values.get("reporter", "SWL"), 22, active_field == "reporter")
+    draw_network_button(text_cache, grid, "GRID: " + values.get("grid", ""), 22, active_field == "grid")
+    draw_network_button(text_cache, defaults, "SWL DEFAULT", 22)
 
 
 def draw_wspr_panel(text_cache, sessions, page, window_index, history, selected_band, smeter_dbm, identity_values):
     """Session planner now; future local FPGA decode workers bind to bands."""
     x0, y0, x1, y1 = WSPR_PANEL_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, (0, 0, 0, 106))
-    draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 238))
+    draw_logical_rect(0, sdr_ui.TOP_H, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
     draw_text(text_cache, 36, y0 + 22, "WSPR", themed_instrument_color("text", (232, 246, 247)), 21, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 146, y0 + 22, f"{len(sessions):02d} SELECTED", themed_instrument_color("ready", (98, 241, 169)), 14, True, True, "lm", family="Liberation Sans")
@@ -12910,10 +12908,10 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
                                  rate_info=None):
     """Dense left log plus a right-side receiver/decode status column."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     side_x0 = x1 - 166
     log_x0, log_x1 = x0 + 12, side_x0 - 12
-    draw_logical_line(side_x0, y0 + 8, side_x0, y1 - 8, (83, 151, 151, 146), 1)
+    draw_logical_line(side_x0, y0 + 8, side_x0, y1 - 8, APP_UI_STYLE.palette.divider, 1)
     decode_status = str(snapshot.get("decode_status", "ARMED"))
     decode_detail = str(snapshot.get("decode_detail", ""))
     status_color = {
@@ -12945,7 +12943,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         ("km", "MI" if theme_system.runtime_theme["units"] == "imperial" else "KM", "rm"),
     ):
         draw_text(text_cache, columns[key], y0 + 16, label, header_color, 13, True, True, anchor, family="Liberation Mono")
-    draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, (84, 142, 148, 112), 1)
+    draw_logical_line(log_x0, y0 + 27, log_x1, y0 + 27, APP_UI_STYLE.palette.divider, 1)
     # Seven compact rows make the in-card decode view useful without forcing
     # the operator into the full log. A slightly tighter baseline still gives
     # the existing 13 px mono text enough air at this 1280x800 tile size.
@@ -12955,7 +12953,7 @@ def draw_wspr_decode_placeholder(text_cache, box, tile, snapshot, receiver_grid=
         draw_text(text_cache, (log_x0 + log_x1) / 2, (y0 + y1) / 2 + 4, waiting, status_color, 13, True, True, "cm", family="Liberation Sans")
     for index, spot in enumerate(spots):
         y = y0 + 40 + index * 19
-        draw_logical_line(log_x0, y + 11, log_x1, y + 11, (75, 116, 124, 72), 1)
+        draw_logical_line(log_x0, y + 11, log_x1, y + 11, APP_UI_STYLE.palette.divider, 1)
         distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
         values = {
             "utc": str(spot.get("utc", "----"))[-4:],
@@ -13002,9 +13000,9 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
     snapshot = monitor.snapshot() if monitor is not None else {}
     x0, x1 = 28, rf_canvas_width() - 28
     header_h = WSPR_EXPANDED_LOG_HEADER_H
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR LOG", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
@@ -13025,7 +13023,7 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
         ("km", "DISTANCE mi" if theme_system.runtime_theme["units"] == "imperial" else "DISTANCE km", "rm"),
     ):
         draw_text(text_cache, columns[key], header_h + 30, label, themed_instrument_color("secondary_text", (112, 181, 184)), 16, True, True, anchor, family="Liberation Mono")
-    draw_logical_line(x0, header_h + 43, x1, header_h + 43, (92, 158, 160, 145), 1)
+    draw_logical_line(x0, header_h + 43, x1, header_h + 43, APP_UI_STYLE.palette.divider, 1)
     spots = tuple(snapshot.get("decoded_spots", ()))
     max_scroll = max(0, len(spots) - WSPR_EXPANDED_LOG_ROWS)
     scroll_rows = int(clamp(scroll_rows, 0, max_scroll))
@@ -13035,7 +13033,7 @@ def draw_wspr_expanded_log(text_cache, tile, monitor, receiver_grid, scroll_rows
         draw_text(text_cache, (x0 + x1) / 2, (header_h + LOGICAL_H) / 2, detail, status_color, 21, True, True, "cm", family="Liberation Sans")
     for index, spot in enumerate(visible):
         y = header_h + 72 + index * WSPR_EXPANDED_LOG_ROW_H
-        draw_logical_line(x0, y + 17, x1, y + 17, (75, 121, 127, 74), 1)
+        draw_logical_line(x0, y + 17, x1, y + 17, APP_UI_STYLE.palette.divider, 1)
         distance = wspr_distance_km(receiver_grid, str(spot.get("grid", "?"))[:6])
         values = {
             "utc": str(spot.get("utc", "----"))[-4:],
@@ -13058,9 +13056,9 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     x0, x1 = 28, rf_canvas_width() - 28
     wf_y0, wf_y1 = header_h + 12, LOGICAL_H - 38
     snapshot = monitor.snapshot() if monitor is not None else {}
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 10, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 760, 21, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR WATERFALL", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
@@ -13074,7 +13072,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     draw_text(text_cache, x1, 28, state_text, state_color, 18, True, True, "rm", family="Liberation Sans")
     draw_text(text_cache, x1, 57, f"{count}/{WSPR_EXPANDED_WF_HISTORY_ROWS} RAM ROWS  ·  {status}", themed_instrument_color("secondary_text", (160, 205, 208)), 14, True, True, "rm", family="Liberation Mono")
 
-    draw_logical_rect(x0, wf_y0, x1, wf_y1, (1, 7, 14, 255))
+    draw_logical_rect(x0, wf_y0, x1, wf_y1, APP_UI_STYLE.palette.waterfall_low)
     if texture is not None and count:
         if not texture.draw_history(x0, wf_y0, x1, wf_y1, scroll_rows):
             loaded = min(count, int(texture.history_backfill_index))
@@ -13086,7 +13084,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
     else:
         draw_text(text_cache, (x0 + x1) / 2, (wf_y0 + wf_y1) / 2, "WAITING FOR WSPR WATERFALL ROWS", themed_instrument_color("secondary_text", (126, 169, 177)), 20, True, True, "cm", family="Liberation Sans")
     for ax0, ay0, ax1, ay1 in ((x0, wf_y0, x1, wf_y0), (x0, wf_y1, x1, wf_y1), (x0, wf_y0, x0, wf_y1), (x1, wf_y0, x1, wf_y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (86, 166, 170, 150), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     footer = "SWIPE UP FOR OLDER WATERFALL  ·  TAP BACK TO RETURN" if max_scroll else "BUILDING 800-ROW RAM HISTORY"
     draw_text(text_cache, x0, LOGICAL_H - 18, footer, themed_instrument_color("secondary_text", (113, 187, 182)), 14, True, True, "lm", family="Liberation Sans")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
@@ -13095,7 +13093,7 @@ def draw_wspr_expanded_waterfall(text_cache, tile, monitor, texture, scroll_rows
 def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid, graph_cache):
     """Show a pure WSPR distance-versus-time scatter plot."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (3, 12, 17, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     spots = tuple(snapshot.get("decoded_spots", ()))
     model = graph_cache.model_for(tile_id, spots, receiver_grid)
     draw_text(text_cache, x0 + 12, y0 + 15, "DISTANCE / TIME", themed_instrument_color("text", (203, 235, 234)), 14, True, True, "lm", family="Liberation Sans")
@@ -13112,7 +13110,7 @@ def draw_wspr_distance_history(text_cache, box, tile_id, snapshot, receiver_grid
     distance_top = model["distance_top"]
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 78), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 6, y - 1,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (123, 176, 180)), 11, True, True, "rm", family="Liberation Mono")
@@ -13153,29 +13151,29 @@ def draw_wspr_expanded_distance_graph(text_cache, tile, history_cache, window_in
     header_h = 146
     plot_x0, plot_x1 = x0 + 74, x1 - 24
     plot_y0, plot_y1 = header_h + 22, LOGICAL_H - 64
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), header_h, (8, 29, 35, 250))
-    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), header_h, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, header_h - 1, rf_canvas_width(), header_h - 1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     receiver = fit_station_text(text_cache, str(tile.get("name", "CURRENT RECEIVER")), 680, 20, True, False, "Liberation Sans")
     draw_text(text_cache, x0, 28, f"{band} m  WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0, 57, receiver, themed_instrument_color("secondary_text", (149, 211, 207)), 18, True, False, "lm", family="Liberation Sans")
     state = "LOADING HISTORY" if loading else ("PRECOMPUTED" if ready else "WAITING")
     draw_text(text_cache, 888, 57, state, (118, 224, 185) if ready else (234, 187, 106), 15, True, True, "lm", family="Liberation Sans")
-    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, APP_UI_STYLE.palette.background)
     max_distance = max((distance for _stamp, distance in points), default=0.0)
     distance_top = max(1000, int(math.ceil(max_distance / 1000.0)) * 1000)
     distance_unit = "mi" if theme_system.runtime_theme["units"] == "imperial" else "km"
     for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (83, 142, 148, 94), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 11, y,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (151, 199, 200)), 15, True, True, "rm", family="Liberation Mono")
     draw_text(text_cache, plot_x1, plot_y0 - 11, distance_unit, themed_instrument_color("secondary_text", (108, 185, 180)), 13, True, True, "rm", family="Liberation Sans")
     for index in range(1, 5):
         x = plot_x0 + (plot_x1 - plot_x0) * index / 5
-        draw_logical_line(x, plot_y0, x, plot_y1, (74, 127, 132, 56), 1)
+        draw_logical_line(x, plot_y0, x, plot_y1, APP_UI_STYLE.palette.spectrum_grid, 1)
     cutoff = now - window_s
     for stamp, distance in points:
         x = plot_x0 + (plot_x1 - plot_x0) * clamp((stamp - cutoff) / window_s, 0.0, 1.0)
@@ -13222,7 +13220,7 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
     window_s = WSPR_DISTANCE_WINDOWS[window_index]
     now = time.time()
     border = (104, 239, 184, 230) if focused else (81, 154, 158, 154)
-    draw_logical_rect(x0, y0, x1, y1, (5, 18, 24, 246))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, border, 1)
     band = str(tile.get("band", "?"))
@@ -13232,11 +13230,11 @@ def draw_wspr_distance_mrtg_card(text_cache, box, tile, history_cache, window_in
     draw_text(text_cache, x1 - 12, y0 + 17, f"{len(points)}", themed_instrument_color("ready", (111, 229, 181)), 14, True, True, "rm", family="Liberation Mono")
     plot_x0, plot_x1 = x0 + 49, x1 - 14
     plot_y0, plot_y1 = y0 + 38, y1 - 30
-    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, (2, 9, 14, 255))
+    draw_logical_rect(plot_x0, plot_y0, plot_x1, plot_y1, APP_UI_STYLE.palette.background)
     distance_top = max(1000, int(math.ceil(max((distance for _stamp, distance in points), default=0.0) / 1000.0)) * 1000)
     for fraction in (0.0, 0.5, 1.0):
         y = plot_y1 - (plot_y1 - plot_y0) * fraction
-        draw_logical_line(plot_x0, y, plot_x1, y, (76, 134, 140, 90), 1)
+        draw_logical_line(plot_x0, y, plot_x1, y, APP_UI_STYLE.palette.spectrum_grid, 1)
         draw_text(text_cache, plot_x0 - 7, y,
                   theme_system.distance_axis_label(distance_top * fraction),
                   themed_instrument_color("secondary_text", (126, 184, 186)), 11, True, True, "rm", family="Liberation Mono")
@@ -13258,9 +13256,9 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     """A familiar MRTG overview: two detailed receiver histories per page."""
     window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
     boxes, page, page_count = wspr_expanded_graph_boxes(len(tiles), page)
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (2, 11, 16, 255))
-    draw_logical_rect(0, 0, rf_canvas_width(), 140, (8, 29, 35, 250))
-    draw_logical_line(0, 139, rf_canvas_width(), 139, (81, 184, 166, 176), 1)
+    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(0, 0, rf_canvas_width(), 140, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(0, 139, rf_canvas_width(), 139, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, 28, 28, "WSPR DISTANCE", themed_instrument_color("text", (235, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", themed_instrument_color("secondary_text", (139, 205, 201)), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
@@ -13276,7 +13274,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
                 focused=str(tile.get("id", "")) == str(focused_id),
             )
         else:
-            draw_logical_rect(*box, (4, 14, 20, 160))
+            draw_logical_rect(*box, APP_UI_STYLE.palette.section_surface)
     draw_text(text_cache, rf_canvas_width() - 30, LOGICAL_H - 19, f"{page + 1}/{page_count}", themed_instrument_color("secondary_text", (132, 194, 191)), 14, True, True, "rm", family="Liberation Mono")
     draw_settings_leaf_sidebar(text_cache, "WSPR", "BACK TO MONITORS")
 
@@ -13302,7 +13300,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
                    "waiting" if status in ("CONNECTING", "RETRY", "NO W/F") else
                    "focus" if status == "AUDIO FFT" else "secondary_text")
     color = themed_instrument_color(status_role, color)[:3]
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 238))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
         draw_logical_line(ax0, ay0, ax1, ay1, (*color, 150), 1)
     band = str(tile.get("band", "?"))
@@ -13320,8 +13318,8 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     if leader:
         # Annunciator, not another button: a compact bright indicator placed
         # in the instrument header immediately before receiver capacity.
-        draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, (19, 91, 65, 240))
-        draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, (120, 255, 187, 250), 1.5)
+        draw_logical_rect(leader_x0, y0 + 7, leader_x1, y0 + 33, APP_UI_STYLE.palette.selected_surface)
+        draw_logical_line(leader_x0, y0 + 7, leader_x1, y0 + 7, APP_UI_STYLE.palette.ready, 1.5)
         draw_text(text_cache, (leader_x0 + leader_x1) / 2, y0 + 20, "LEADER", themed_instrument_color("ready", (202, 255, 220)), 12, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, capacity_x, y0 + 20, capacity_label, capacity_color, 15, True, True, "rm", family="Liberation Sans")
     draw_wspr_cycle_timer(x1 - 28, y0 + 22, 10)
@@ -13331,7 +13329,7 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
     # card's redundant bottom status rail.
     wf_box = (x0 + 14, y0 + 38, x1 - 14, y1 - (14 if view == 1 else 48))
     if view == 0:
-        draw_logical_rect(*wf_box, (2, 8, 15, 245))
+        draw_logical_rect(*wf_box, APP_UI_STYLE.palette.waterfall_low)
         if texture is not None:
             texture.draw(*wf_box)
         else:
@@ -13362,8 +13360,8 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
         }.get(status, ("W/F WAIT", (30, 42, 48, 205), (165, 194, 198)))
         source_width = 122 if source_label == "AUDIO FFT" else 112
         source_box = (wf_box[0] + 8, wf_box[1] + 8, wf_box[0] + 8 + source_width, wf_box[1] + 31)
-        draw_logical_rect(*source_box, source_fill)
-        draw_logical_line(source_box[0], source_box[1], source_box[2], source_box[1], (*source_color, 190), 1)
+        draw_logical_rect(*source_box, APP_UI_STYLE.palette.section_surface)
+        draw_logical_line(source_box[0], source_box[1], source_box[2], source_box[1], APP_UI_STYLE.palette.divider, 1)
         draw_text(text_cache, (source_box[0] + source_box[2]) / 2, (source_box[1] + source_box[3]) / 2, source_label, themed_instrument_color("ready" if status == "LIVE" else "waiting" if status in ("NO W/F", "RETRY", "CONNECTING") else "secondary_text", source_color), 13, True, True, "cm", family="Liberation Sans")
     if view != 1:
         level = snapshot["smeter_dbm"]
@@ -13403,12 +13401,12 @@ def draw_wspr_session_card(text_cache, box, tile, monitor, texture, capacity=(No
 
 def draw_wspr_add_card(text_cache, box):
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (10, 29, 35, 218))
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (77, 171, 153, 165), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2 - 15
-    draw_logical_line(cx - 22, cy, cx + 22, cy, (96, 236, 175, 230), 3)
-    draw_logical_line(cx, cy - 22, cx, cy + 22, (96, 236, 175, 230), 3)
+    draw_logical_line(cx - 22, cy, cx + 22, cy, APP_UI_STYLE.palette.ready, 3)
+    draw_logical_line(cx, cy - 22, cx, cy + 22, APP_UI_STYLE.palette.ready, 3)
     draw_text(text_cache, cx, cy + 43, "ADD WSPR", themed_instrument_color("text", (225, 249, 245)), 22, True, True, "cm", family="Liberation Sans")
     draw_text(text_cache, cx, cy + 66, "CURRENT RADIO PRESELECTED", themed_instrument_color("ready", (118, 190, 181)), 13, True, True, "cm", family="Liberation Sans")
 
@@ -13482,13 +13480,13 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
     snapshot = monitor.snapshot() if monitor is not None else {"status": "QUEUED", "smeter_dbm": None}
     paused = bool(tile.get("paused", False))
     status = "STOPPED" if paused else snapshot.get("status", "QUEUED")
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 172))
-    draw_logical_rect(x0, y0, x1, y1, (8, 22, 29, 242))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (88, 207, 179, 178), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     band = str(tile.get("band", "?"))
     name = str(tile.get("name", "CURRENT RECEIVER"))
-    status_color = (92, 241, 177) if status == "LIVE" else (244, 188, 104) if status == "CONNECTING" else (173, 193, 197)
+    status_color = getattr(APP_UI_STYLE.palette, "ready" if status == "LIVE" else "waiting" if status == "CONNECTING" else "secondary_text")
     draw_text(text_cache, x0 + 32, y0 + 38, f"{band} m WSPR", themed_instrument_color("text", (232, 247, 247)), 25, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 32, y0 + 38, status, status_color, 16, True, True, "rm", family="Liberation Sans")
     if band_picker_open:
@@ -13509,19 +13507,14 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
             station_name, location, server, used, total = station_fields(station)
             local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
             active = server.rstrip("/") == str(tile.get("server", "")).rstrip("/")
-            draw_logical_rect(*box, (27, 76, 66, 232) if active else (14, 31, 39, 235))
-            draw_logical_line(
-                box[0], box[1], box[2], box[1],
-                (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)),
-                1,
-            )
+            draw_styled_button_frame(box, selected=active)
             draw_text(text_cache, box[0] + 16, box[1] + 23, fit_station_text(text_cache, station_name, box[2] - box[0] - 32, 18, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 18, True, False, "lm", family="Liberation Sans")
             detail = location or server
             if used is not None and total is not None:
                 detail += f"  ·  {used}/{total}"
             if local_receiver:
                 detail = "LAN  ·  kiwisdr.local"
-            draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 13, False, False, "lm", family="Liberation Sans")
+            draw_text(text_cache, box[0] + 16, box[1] + 49, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 13, False, False, "Liberation Sans"), APP_UI_STYLE.palette.ready if local_receiver else APP_UI_STYLE.palette.secondary_text, 13, False, False, "lm", family="Liberation Sans")
         draw_text(text_cache, x0 + 32, y0 + 300, "WSPR HF BAND", themed_instrument_color("ready", (117, 238, 180)), 18, True, True, "lm", family="Liberation Sans")
         for label, frequency, box in boxes["hf_band_boxes"]:
             active = label == band
@@ -13534,8 +13527,8 @@ def draw_wspr_tile_settings(text_cache, tile, monitor, receiver_rows, receiver_p
                   True, True, "cm", family="Liberation Sans")
         return
     receiver_box = boxes["receiver"]
-    draw_logical_rect(*receiver_box, (14, 37, 44, 235))
-    draw_logical_line(receiver_box[0], receiver_box[1], receiver_box[2], receiver_box[1], (91, 171, 164, 165), 1)
+    draw_logical_rect(*receiver_box, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(receiver_box[0], receiver_box[1], receiver_box[2], receiver_box[1], APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 22, fit_station_text(text_cache, name, receiver_box[2] - receiver_box[0] - 170, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (232, 246, 247)), 19, True, False, "lm", family="Liberation Sans")
     location = str(tile.get("location", "") or tile.get("server", ""))
     draw_text(text_cache, receiver_box[0] + 16, receiver_box[1] + 56, fit_station_text(text_cache, location, receiver_box[2] - receiver_box[0] - 170, 14, False, False, "Liberation Sans"), themed_instrument_color("secondary_text", (160, 195, 199)), 14, False, False, "lm", family="Liberation Sans")
@@ -13595,8 +13588,8 @@ def wspr_tile_settings_action_at(x, y, receiver_rows, receiver_page, receiver_pi
 def draw_wspr_cpu_debug_backdrop(text_cache):
     """Keep the expanded CPU debug view readable without leaving WSPR."""
     x0, y0, x1, y1 = WSPR_CPU_DETAIL_BOX
-    draw_logical_rect(0, WSPR_WORKSPACE_HEADER_H, LOGICAL_W, LOGICAL_H, (0, 5, 8, 172))
-    draw_logical_rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, (11, 38, 44, 232))
+    draw_logical_rect(0, WSPR_WORKSPACE_HEADER_H, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, APP_UI_STYLE.palette.section_surface)
     draw_text(text_cache, (x0 + x1) / 2, y0 - 19, "CPU DEBUG  ·  TAP PANEL TO RETURN", themed_instrument_color("ready", (148, 224, 213)), 15, True, True, "cm", family="Liberation Sans")
 
 
@@ -13625,10 +13618,10 @@ def draw_wspr_decoder_settings(text_cache, profile, osd_depth):
     """Large global controls for the decoding work that follows each capture."""
     boxes = wspr_decoder_settings_layout()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 178))
-    draw_logical_rect(x0, y0, x1, y1, (8, 23, 30, 246))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     for ax0, ay0, ax1, ay1 in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
-        draw_logical_line(ax0, ay0, ax1, ay1, (93, 216, 181, 196), 1)
+        draw_logical_line(ax0, ay0, ax1, ay1, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, x0 + 28, y0 + 38, "WSPR DECODE", themed_instrument_color("text", (236, 248, 248)), 28, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 28, y0 + 68, "GLOBAL PROFILE  ·  APPLIES ON THE NEXT TWO-MINUTE DECODE", themed_instrument_color("ready", (126, 203, 191)), 14, True, True, "lm", family="Liberation Sans")
     details = {
@@ -13670,7 +13663,7 @@ def wspr_decoder_settings_action_at(x, y):
 
 def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, cpu_percent=None, receiver_grid=None,
                         decode_rates=None, mini_distance_cache=None):
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 9, 14, 253))
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
     card_boxes = wspr_workspace_card_boxes(len(tiles), scroll_y)
     for index, box in enumerate(card_boxes):
         if box[3] < WSPR_WORKSPACE_HEADER_H or box[1] > LOGICAL_H:
@@ -13684,10 +13677,10 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
                 (decode_rates or {}).get(key), mini_distance_cache,
             )
         else:
-            draw_logical_rect(*box, (5, 14, 20, 142))
+            draw_logical_rect(*box, APP_UI_STYLE.palette.section_surface)
     # Cards may scroll under this fixed header. Redraw it after the grid so
     # the header also forms the viewport's clean clipping edge.
-    draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, (8, 22, 29, 250))
+    draw_logical_rect(0, 0, LOGICAL_W, WSPR_WORKSPACE_HEADER_H, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(0, WSPR_WORKSPACE_HEADER_H - 1, LOGICAL_W)
     draw_text(text_cache, 22, 27, "WSPR MONITOR", themed_instrument_color("text", (234, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     live_count = sum(
@@ -13703,12 +13696,12 @@ def draw_wspr_workspace(text_cache, tiles, scroll_y, monitor_manager, textures, 
     draw_styled_two_line_button(text_cache, WSPR_DECODE_BOX, "DECODE", decode_detail,
                                 active=decode_active)
     cpu_x0, cpu_y0, cpu_x1, cpu_y1 = WSPR_CPU_BOX
-    draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, (11, 37, 43, 212))
-    draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, (87, 211, 190, 156), 1)
+    draw_logical_rect(cpu_x0, cpu_y0, cpu_x1, cpu_y1, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(cpu_x0, cpu_y0, cpu_x1, cpu_y0, APP_UI_STYLE.palette.divider, 1)
     cpu_label = "CPU --" if cpu_percent is None else f"CPU {cpu_percent:.0f}%"
     draw_text(text_cache, (cpu_x0 + cpu_x1) / 2, (cpu_y0 + cpu_y1) / 2, cpu_label, themed_instrument_color("ready", (163, 238, 226)), 17, True, True, "cm", family="Liberation Sans")
     draw_styled_text_button(text_cache, WSPR_ADD_BOX, "ADD WSPR")
-    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "HOME")
+    draw_styled_text_button(text_cache, WSPR_HOME_BOX, "BACK")
 
 
 def wspr_add_layout():
@@ -13741,9 +13734,9 @@ def wspr_add_band_boxes():
 def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page, selected_server):
     panel, bands_box, receivers_box, cancel, create, prev, next_box = wspr_add_layout()
     x0, y0, x1, y1 = panel
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (0, 5, 8, 224))
-    draw_logical_rect(x0, y0, x1, y1, (8, 20, 27, 250))
-    draw_logical_line(x0, y0, x1, y0, (87, 209, 175, 200), 1)
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.background)
+    draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+    draw_logical_line(x0, y0, x1, y0, APP_UI_STYLE.palette.divider, 1)
     draw_text(text_cache, 42, 57, "ADD WSPR SESSION", themed_instrument_color("text", (232, 247, 247)), 27, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, 42, 80, "LAN KIWI IS PRESELECTED · CHOOSE A DIFFERENT RECEIVER OR BAND BEFORE CREATE", themed_instrument_color("ready", (120, 196, 185)), 14, True, True, "lm", family="Liberation Sans")
     draw_text(text_cache, receivers_box[0], 96, "RECEIVER · LAN FIRST", themed_instrument_color("secondary_text", (177, 209, 213)), 16, True, True, "lm", family="Liberation Sans")
@@ -13759,15 +13752,14 @@ def draw_wspr_add_sheet(text_cache, selected_band, receiver_rows, receiver_page,
         box = (bx0, by0 + index * (row_h + 8), bx1, by0 + index * (row_h + 8) + row_h)
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
         active = server.rstrip("/") == str(selected_server or "").rstrip("/")
-        draw_logical_rect(*box, (27, 76, 66, 232) if active else (14, 31, 39, 235))
-        draw_logical_line(box[0], box[1], box[2], box[1], (87, 237, 174, 230) if active else ((76, 205, 176, 210) if local_receiver else (87, 122, 131, 125)), 1)
+        draw_styled_button_frame(box, selected=active)
         draw_text(text_cache, box[0] + 16, box[1] + 24, fit_station_text(text_cache, name, box[2] - box[0] - 32, 19, True, False, "Liberation Sans"), themed_instrument_color("text", (235, 247, 248)), 19, True, False, "lm", family="Liberation Sans")
         detail = location or server
         if used is not None and total is not None:
             detail += f"  ·  {used}/{total}"
         if local_receiver:
             detail = "LAN  ·  kiwisdr.local"
-        draw_text(text_cache, box[0] + 16, box[1] + 51, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 14, False, False, "Liberation Sans"), (116, 229, 197) if local_receiver else (141, 181, 187), 14, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, box[0] + 16, box[1] + 51, fit_station_text(text_cache, detail, box[2] - box[0] - 32, 14, False, False, "Liberation Sans"), APP_UI_STYLE.palette.ready if local_receiver else APP_UI_STYLE.palette.secondary_text, 14, False, False, "lm", family="Liberation Sans")
     for box, label, active in ((cancel, "CANCEL", False), (create, "CREATE", True), (prev, "< PREV", False), (next_box, "NEXT >", False)):
         draw_wspr_button(text_cache, box, label, active=active)
     pages = max(1, math.ceil(len(receiver_rows) / 3))
@@ -13783,7 +13775,7 @@ def wspr_workspace_action_at(x, y, tiles, scroll_y):
         if contains(WSPR_DECODE_BOX, x, y):
             return "decoder_settings", None
         if contains(WSPR_HOME_BOX, x, y):
-            return "home", None
+            return "back", None
         if contains(WSPR_ADD_BOX, x, y):
             return "add", None
     for index, box in enumerate(wspr_workspace_card_boxes(len(tiles), scroll_y)):
@@ -14932,6 +14924,19 @@ def draw_vosc_error_osd(text_cache, message, alpha):
     draw_text(text_cache, x1 - 18, y0 + 22, detail, color, 28, True, True, "rm")
 
 
+def draw_web_app_notice_osd(text_cache, notice, alpha):
+    """Web-app feedback shares Zoom's bounds, typography, wash and fade."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
+    color = APP_UI_STYLE.palette.notice
+    for message, y, size in ((notice[0], y0 + 22, 28), (notice[1], y0 + 65, 24)):
+        text = fit_station_text(text_cache, str(message).upper(), x1 - x0 - 36, size, True, True)
+        draw_text(text_cache, x0 + 18, y, text, color, size, True, True, "lm", alpha=alpha / 255.0)
+
+
 def draw_theme_notice_osd(text_cache, action, detail, alpha):
     """Theme feedback uses the Zoom popup's position, wash and typography."""
     alpha = clamp(int(alpha), 0, 255)
@@ -14951,13 +14956,18 @@ def draw_theme_notice_osd(text_cache, action, detail, alpha):
               24, True, True, "lm", alpha=opacity)
 
 
-def draw_green_osd_panel(box, alpha):
-    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+def draw_analog_osd_panel(box, alpha, color, background):
+    """Shared analog notice wash and scanlines, with a semantic accent."""
     x0, y0, x1, y1 = box
-    draw_logical_rect(x0, y0, x1, y1, (0, 8, 4, int(alpha * 0.42)))
+    draw_logical_rect(x0, y0, x1, y1, (*background, int(alpha * 0.42)))
     for offset, line_alpha in ((32, 0.20), (64, 0.12)):
         y = y0 + offset
-        draw_logical_line(x0 + 4, y, x1 - 4, y, (*APP_UI_STYLE.palette.notice, int(alpha * line_alpha)), 1)
+        draw_logical_line(x0 + 4, y, x1 - 4, y, (*color, int(alpha * line_alpha)), 1)
+
+
+def draw_green_osd_panel(box, alpha):
+    """The shared green CRT wash and scanlines used by Zoom and Sort."""
+    draw_analog_osd_panel(box, alpha, APP_UI_STYLE.palette.notice, (0, 8, 4))
 
 
 def sort_chevron_points(box, sort_mode):
@@ -15607,14 +15617,23 @@ def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
         yield label, (left, top, left + cell_w, top + cell_h)
 
 
+def home_mode_enabled(label, usb_receiver=False):
+    """Match HOME availability to the implemented local demodulators."""
+    return not usb_receiver or RTLSDRLab._demod_for_home_mode(label, 0) is not None
+
+
 def engage_home_mode(state, x, y, compact=True, local_receiver=None):
     """Commit a tapped Home mode before opening its options drawer."""
     if state.receiver_type_snapshot() == "fmdx" and local_receiver is None:
         return None
     for label, box in lcd_home_mode_boxes(compact):
         if contains(box, x, y):
+            if not home_mode_enabled(label, local_receiver is not None):
+                return None
             mode = "NBFM" if label == "FM" else label
             if local_receiver is not None:
+                if label == "FM":
+                    mode = "WFM" if local_receiver.demod_snapshot()[0] == "wbfm" else "NFM"
                 if not local_receiver.set_home_mode(mode):
                     return None
                 state.set_radio_mode(local_receiver.shared_radio_mode(mode))
@@ -15857,6 +15876,13 @@ def smeter_supports_top_instrument_strip(style_id=None):
     identifier = style_id or theme_system.runtime_theme["smeter_style"]
     style = METER_STYLES[identifier]
     return identifier == "led" or style.kind in ("led", "linear", "led_skin", "eye_linear")
+
+
+def instrument_layout_after_theme_save(instrument_layout, style_id=None):
+    """Make a newly saved large meter visible instead of leaving it hidden."""
+    if LCD_800_MODE and not smeter_supports_top_instrument_strip(style_id):
+        return visible_frequency_position("right")
+    return instrument_layout
 
 
 def large_frequency_placement(instrument_layout):
@@ -16333,6 +16359,17 @@ def lcd_home_volume_track_box(show_compact_readouts=True):
     return x0 + 56, y1 - 32, x1 - 12, y1 - 8
 
 
+def home_volume_action_at(x, y, show_compact_readouts=True):
+    """Keep the speaker touch area separate from the slider's zero end."""
+    panel = lcd_home_volume_box(show_compact_readouts)
+    track = lcd_home_volume_track_box(show_compact_readouts)
+    if contains((panel[0], panel[3] - 44, track[0] - 4, panel[3]), x, y):
+        return "home_volume_mute"
+    if contains((track[0] - 4, panel[3] - 44, panel[2], panel[3]), x, y):
+        return "home_volume"
+    return None
+
+
 def home_volume_at_x(x, show_compact_readouts=True):
     return volume_at_x(x, lcd_home_volume_track_box(show_compact_readouts))
 
@@ -16380,27 +16417,54 @@ def left_smeter_box(text_cache, freq_khz, font_family=None, mirrored=None):
     return mirror_rf_box(box) if (mirror_top_instruments() if mirrored is None else mirrored) else box
 
 
+def decoder_rail_groups():
+    """Keep 8 px between tiles and fit the groups above the fixed BACK button."""
+    gap = 8
+    heading_gap = 6
+    spectrum_top = LCD_DRAWER_HEADER_H + 16
+    hf_heading = spectrum_top + 64 + heading_gap
+    hf_top = hf_heading + 16 + gap
+    hf_bottom = hf_top + ((len(HF_DECODER_ITEMS) + 1) // 2 - 1) * 64 + 56
+    vhf_heading = hf_bottom + heading_gap
+    vhf_top = vhf_heading + 16 + gap
+    vhf_bottom = vhf_top + ((len(VHF_UHF_DECODER_ITEMS) + 1) // 2 - 1) * 64 + 56
+    web_heading = vhf_bottom + heading_gap
+    return spectrum_top, hf_top, vhf_top, web_heading + 14 + gap, (hf_heading + 8, vhf_heading + 8, web_heading + 7)
+
+
 def lcd_nav_box(index, item_count=None, has_back=False):
     """Return the logical box for the permanent LCD navigation rail."""
+    if has_back and item_count == len(SETTINGS_MENU_ITEMS):
+        if index == item_count - 1:
+            return lcd_drawer_back_box()
+        rows = 1 + math.ceil((item_count - 2) / 2)
+        top = lcd_drawer_back_box()[1] - rows * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+        if index == 0:
+            return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
+        col, row = (index - 1) % 2, (index - 1) // 2 + 1
+        x0 = LCD_NAV_X0 + 10 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
+        y0 = top + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+        return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
     if has_back and item_count == len(DIGITAL_MENU_ITEMS):
+        spectrum_top, hf_top, vhf_top, web_top, _headings = decoder_rail_groups()
         if index == item_count - 1:
             return lcd_drawer_back_box()
         if index < len(SPECTRUM_MENU_ITEMS):
-            return LCD_NAV_X0 + 10, 108, LOGICAL_W - 10, 172
+            return LCD_NAV_X0 + 10, spectrum_top, LOGICAL_W - 10, spectrum_top + 64
         index -= len(SPECTRUM_MENU_ITEMS)
         if index < len(HF_DECODER_ITEMS):
             col, row = index % 2, index // 2
             x0 = LCD_NAV_X0 + 10 + col * 122
-            return x0, 200 + row * 58, x0 + 114, 256 + row * 58
+            return x0, hf_top + row * 64, x0 + 114, hf_top + 56 + row * 64
         vhf_index = index - len(HF_DECODER_ITEMS)
         if vhf_index >= len(VHF_UHF_DECODER_ITEMS):
             col=vhf_index-len(VHF_UHF_DECODER_ITEMS)
             x0=LCD_NAV_X0 + 10 + col * 122
-            return x0, 668, x0 + 114, 724
+            return x0, web_top, x0 + 114, web_top + 56
         col, row = vhf_index % 2, vhf_index // 2
         x0 = LCD_NAV_X0 + 10 + col * 122
         x1 = LOGICAL_W - 10 if len(VHF_UHF_DECODER_ITEMS) == 1 else x0 + 114
-        return x0, 408 + row * 58, x1, 464 + row * 58
+        return x0, vhf_top + row * 64, x1, vhf_top + 56 + row * 64
     if has_back and index == item_count - 1:
         return lcd_drawer_back_box()
     col = index % 2
@@ -16822,9 +16886,10 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
-        draw_text(text_cache, LCD_NAV_X0 + 12, 184, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 392, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, LCD_NAV_X0 + 12, 652, "SATELLITE WEB APPS", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
+        hf_heading, vhf_heading, web_heading = decoder_rail_groups()[4]
+        draw_text(text_cache, LCD_NAV_X0 + 12, hf_heading, "HF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, vhf_heading, "VHF/UHF DECODERS", APP_UI_STYLE.palette.secondary_text, 16, True, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, LCD_NAV_X0 + 12, web_heading, "SATELLITE WEB APPS", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
     items = lcd_nav_items(settings_open, digital_open)
     home_items = not settings_open and not digital_open
     # The passband and volume are registered here but painted by draw_ui after
@@ -16863,24 +16928,26 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm, peak_dbm=None):
     draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
 
 
-def draw_home_mode_buttons(text_cache, buttons, mode, digital):
+def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=False):
     """Keep HOME and each Dual VFO's mode buttons visually identical."""
     exact_mode = str(mode).upper()
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     for label, box in buttons:
-        active = mode_annunciator_active(label, active_mode, digital)
-        pressed = ui_button_pressed(box)
+        enabled = home_mode_enabled(label, usb_receiver)
+        active = enabled and mode_annunciator_active(label, active_mode, digital)
+        pressed = enabled and ui_button_pressed(box)
         visual = draw_styled_button_frame(box, active=active, pressed=pressed)
         bx0, by0, bx1, by1 = box
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, label,
-                  visual.text, 13, True, False, "cm",
+        display_label = "NFM" if usb_receiver and label == "FM" else label
+        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2, display_label,
+                  visual.text if enabled else APP_UI_STYLE.button.palette.untested_text, 13, True, False, "cm",
                   family=APP_UI_STYLE.button.font_family)
 
 
 def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=None,
                                show_compact_readouts=True,
                                compact_frequency_font_family=COMPACT_FREQUENCY_FONT_FAMILY,
-                               peak_dbm=None, show_compact_frequency=None):
+                               peak_dbm=None, show_compact_frequency=None, usb_receiver=False):
     """Lay out the rail meter independently of the frequency readout."""
     if show_compact_frequency is None:
         show_compact_frequency = show_compact_readouts
@@ -16916,7 +16983,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # instrument rather than touching either the band tag or mode grid.
         draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm, peak_dbm)
 
-    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital)
+    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital, usb_receiver)
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -16929,174 +16996,51 @@ def draw_picker_two_line_button(text_cache, box, first_line, second_line, size=1
 
 
 def deepgram_keyboard_rows(mode):
-    if mode == "digits":
-        return DEEPGRAM_KEY_DIGIT_ROWS
-    if mode == "lower":
-        return tuple((keys.lower(), x0, y0, key_w) for keys, x0, y0, key_w in DEEPGRAM_KEY_ROWS)
-    return DEEPGRAM_KEY_ROWS
+    return network_keyboard_rows("symbols" if mode == "digits" else mode)
 
 
 def deepgram_sidebar_boxes(mode):
-    """Fit the existing key-entry modes entirely inside the 236 px VOSC rail."""
-    left = LCD_NAV_X0 + 10
-    action_names = ("MODE", "CLEAR", "BACK", "SAVE")
-    actions = {
-        name: (left + index * 60, 176, left + index * 60 + 55, 207)
-        for index, name in enumerate(action_names)
-    }
-    keys = "".join(row for row, _x, _y, _width in deepgram_keyboard_rows(mode))
-    # Two useful key characters fill the last alphabet row so every row spans
-    # the same four-column width as the frequency keypad.
-    if len(keys) % 4:
-        keys += "@/"[:4 - len(keys) % 4]
-    key_boxes = tuple(
-        (
-            "BACK" if key == "<" else key,
-            (left + index % 4 * 60, 223 + index // 4 * 39,
-             left + index % 4 * 60 + 55, 254 + index // 4 * 39),
-        )
-        for index, key in enumerate(keys)
-    )
-    return {
-        "panel": (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H),
-        "field": (left, 112, LOGICAL_W - 10, 160),
-        "actions": actions,
-        "keys": key_boxes,
-        "close": lcd_drawer_back_box(),
-    }
+    """Compatibility accessor for the shared full-size typing surface."""
+    boxes = network_password_boxes()
+    return dict(panel=boxes["panel"], field=boxes["field"],
+                actions={"MODE": boxes["mode"], "CAPS": boxes["caps"],
+                         "CLEAR": boxes["clear"], "SAVE": boxes["join"]},
+                keys=touch_keyboard_key_boxes(mode), close=keyboard_modal_back_box())
 
 
 def deepgram_setup_surface_box():
-    return (LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H) if LCD_800_MODE else DEEPGRAM_SETUP_BOX
+    return (0, 0, LOGICAL_W, LOGICAL_H)
 
 
 def keyboard_modal_back_box():
-    """The persistent escape target shared by every touch keyboard."""
-    return lcd_drawer_back_box()
+    """Compatibility alias for the visible Cancel button, never a hidden rail."""
+    return network_password_boxes()["cancel"]
 
 
 def station_search_back_box():
-    """Use the common rail Back control on the 1280x800 interface."""
-    return keyboard_modal_back_box() if LCD_800_MODE else SEARCH_EXIT_BOX
+    """Search exits through the same visible Cancel control as every keyboard."""
+    return keyboard_modal_back_box()
 
 
 def network_password_back_requested(x, y):
-    """Keep Wi-Fi secret entry escapable even while its modal owns input."""
-    return LCD_800_MODE and contains(keyboard_modal_back_box(), x, y)
-
-
-def draw_keyboard_modal_sidebar(text_cache, title, detail):
-    """Draw a visible, touch-safe escape rail beside a modal keyboard."""
-    if LCD_800_MODE:
-        draw_settings_leaf_sidebar(text_cache, title, detail)
+    """Keep Wi-Fi secret entry escapable through its visible Cancel control."""
+    return contains(keyboard_modal_back_box(), x, y)
 
 
 def deepgram_key_at(x, y, mode):
-    if LCD_800_MODE:
-        for action, box in deepgram_sidebar_boxes(mode)["keys"]:
-            if contains(box, x, y):
-                return action
-        return None
-    for keys, x0, y0, key_w in deepgram_keyboard_rows(mode):
-        if y0 <= y < y0 + 52 and x0 <= x < x0 + len(keys) * key_w:
-            key = keys[min(len(keys) - 1, int((x - x0) // key_w))]
-            return "BACK" if key == "<" else key
-    return None
+    return network_password_key_at(x, y, mode)
 
 
 def deepgram_setup_action_at(x, y, mode):
-    if LCD_800_MODE:
-        boxes = deepgram_sidebar_boxes(mode)
-        if contains(boxes["close"], x, y):
-            return "CANCEL"
-        if DESKTOP_MODE and contains(boxes["field"], x, y):
-            return "PASTE"
-        for action, box in boxes["actions"].items():
-            if contains(box, x, y):
-                return action
-        return deepgram_key_at(x, y, mode)
-    if DESKTOP_MODE and contains(DEEPGRAM_KEY_FIELD_BOX, x, y):
+    if DESKTOP_MODE and contains(network_password_boxes()["field"], x, y):
         return "PASTE"
-    if contains(DEEPGRAM_KEY_MODE_BOX, x, y):
-        return "MODE"
-    if contains(DEEPGRAM_KEY_CLEAR_BOX, x, y):
-        return "CLEAR"
-    if contains(DEEPGRAM_KEY_CANCEL_BOX, x, y):
-        return "CANCEL"
-    if contains(DEEPGRAM_KEY_SAVE_BOX, x, y):
-        return "SAVE"
-    return deepgram_key_at(x, y, mode)
+    return touch_keyboard_action_at(x, y, mode)
 
 
 def draw_deepgram_setup(text_cache, value, mode, error=""):
-    """Draw key entry in the VOSC rail on the 1280x800 screen."""
-    if LCD_800_MODE:
-        boxes = deepgram_sidebar_boxes(mode)
-        draw_logical_rect(*boxes["panel"], APP_UI_STYLE.palette.sidebar)
-        draw_sidebar_header(text_cache, "VOSC")
-        draw_lcd_drawer_heading(text_cache, boxes["field"][0] + 4, 88, "DEEPGRAM API KEY")
-        field = boxes["field"]
-        draw_logical_rect(*field, themed_instrument_color("section_surface", (11, 20, 27, 255)) if not error else themed_instrument_color("danger", (72, 36, 32, 255)))
-        draw_logical_line(field[0], field[1], field[2], field[1], themed_instrument_color("section_border", (112, 136, 146, 255)), 1)
-        masked = "*" * min(len(value), 22) + ("..." if len(value) > 22 else "")
-        field_text = masked or ("TAP TO PASTE OR TYPE" if DESKTOP_MODE else "ENTER KEY BELOW")
-        draw_text(text_cache, field[0] + 8, (field[1] + field[3]) / 2,
-                  field_text, themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174)),
-                  13, bool(value), False, "lm", family=APP_UI_STYLE.button.font_family)
-        mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
-        for action, box in boxes["actions"].items():
-            label = {"MODE": mode_label, "CLEAR": "CLR", "BACK": "DEL", "SAVE": "OK"}[action]
-            draw_styled_text_button(text_cache, box, label, active=action == "MODE" and mode != "lower")
-        for key, box in boxes["keys"]:
-            draw_styled_text_button(text_cache, box, "DEL" if key == "BACK" else key)
-        if error:
-            draw_text(text_cache, field[0] + 4, 562, "ERROR",
-                      themed_instrument_color("notice", (72, 255, 122)), 13, True, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-            draw_text(text_cache, field[0] + 4, 586,
-                      fit_station_text(text_cache, error.upper(), 228, 13, False, False,
-                                       family=APP_UI_STYLE.button.font_family),
-                      themed_instrument_color("notice", (72, 255, 122)), 13, False, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-        else:
-            draw_text(text_cache, field[0] + 4, 562, "SAVED LOCALLY ON THIS DEVICE",
-                      themed_instrument_color("secondary_text", (174, 203, 208)), 13, False, False, "lm",
-                      family=APP_UI_STYLE.button.font_family)
-        draw_radio_close_button(text_cache, boxes["close"])
-        return
-    x0, y0, x1, y1 = DEEPGRAM_SETUP_BOX
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (2, 7, 11, 136))
-    draw_logical_rect(x0, y0, x1, y1, (8, 18, 24, 244))
-    draw_logical_line(x0, y0, x1, y0, (103, 215, 210, 188), 1)
-    draw_text(text_cache, x0 + 30, y0 + 23, "DEEPGRAM API KEY", themed_instrument_color("section_heading", (224, 241, 243)), 20, True, False, "lm", family="Cantarell")
-    draw_text(text_cache, x1 - 28, y0 + 23, "LOCAL ONLY", themed_instrument_color("secondary_text", (116, 184, 183)), 13, False, False, "rm", family="Cantarell")
-    field_color = (48, 75, 80, 246) if not error else (90, 47, 42, 246)
-    draw_logical_rect(*DEEPGRAM_KEY_FIELD_BOX, field_color)
-    draw_logical_line(DEEPGRAM_KEY_FIELD_BOX[0], DEEPGRAM_KEY_FIELD_BOX[1], DEEPGRAM_KEY_FIELD_BOX[2], DEEPGRAM_KEY_FIELD_BOX[1], (132, 190, 190, 184), 1)
-    masked = "*" * len(value)
-    field_text = masked or (
-        "Click here or Cmd+V to paste your key"
-        if DESKTOP_MODE
-        else "Touch keys to enter your key"
-    )
-    field_color = themed_instrument_color("text", (229, 241, 243)) if value else themed_instrument_color("secondary_text", (145, 171, 174))
-    draw_text(text_cache, DEEPGRAM_KEY_FIELD_BOX[0] + 14, (DEEPGRAM_KEY_FIELD_BOX[1] + DEEPGRAM_KEY_FIELD_BOX[3]) / 2, field_text, field_color, 19, False, False, "lm", family="Cantarell")
-    mode_label = "aA" if mode == "lower" else ("AA" if mode == "upper" else "123")
-    draw_picker_button(text_cache, DEEPGRAM_KEY_MODE_BOX, mode_label, 15, mode != "lower")
-    draw_picker_button(text_cache, DEEPGRAM_KEY_CLEAR_BOX, "CLR", 15)
-    draw_picker_button(text_cache, DEEPGRAM_KEY_CANCEL_BOX, "X", 22)
-    draw_picker_button(text_cache, DEEPGRAM_KEY_SAVE_BOX, "OK", 15, bool(value))
-    for keys, row_x0, row_y0, key_w in deepgram_keyboard_rows(mode):
-        for index, key in enumerate(keys):
-            box = (row_x0 + index * key_w, row_y0, row_x0 + (index + 1) * key_w - 5, row_y0 + 52)
-            draw_picker_button(text_cache, box, "BACK" if key == "<" else key, 16 if key == "<" else 22)
-    message = error or (
-        "Cmd+V pastes from the Mac clipboard. The key is never shown again."
-        if DESKTOP_MODE
-        else "Saved only on this device. The key is never shown again."
-    )
-    draw_text(text_cache, x0 + 30, y1 - 18, message, themed_instrument_color("waiting", (246, 163, 116)) if error else themed_instrument_color("secondary_text", (124, 184, 187)), 14, False, False, "lm", family="Cantarell")
-    draw_keyboard_modal_sidebar(text_cache, "ASR", "DEEPGRAM API KEY")
+    draw_touch_keyboard(text_cache, "DEEPGRAM API KEY", "Saved only on this device",
+                        value, mode, submit="Save", secret=True, error=error,
+                        rail_title="VOSC", rail_detail="DEEPGRAM API KEY", placeholder="Enter API key")
 
 
 NETWORK_PAGE_SIZE = 6
@@ -17149,7 +17093,7 @@ def draw_network_actions(text_cache, network):
     x0, y0, x1, y1 = network_panel_boxes()["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO NETWORK")
+    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNET", "BACK TO Wi-Fi / ETHERNET")
     confirm = network.get("confirm_forget")
     title = "Forget this network?" if confirm else "Wi-Fi network"
     draw_text(text_cache, x0 + 30, y0 + 38, title, color("text"), 30, True, False, "lm")
@@ -17170,8 +17114,8 @@ def draw_network_actions(text_cache, network):
 
 
 def network_password_boxes():
-    # Stay to the left of the shared Back rail; nothing is hidden underneath it.
-    panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
+    # Text entry owns the whole canvas; Cancel is its only dismissal control.
+    panel = (28, 32, LOGICAL_W - 28, LOGICAL_H - 28)
     x0, y0, x1, y1 = panel
     return {
         "panel": panel,
@@ -17272,8 +17216,8 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "NETWORK", "BACK TO SETTINGS")
-    draw_text(text_cache, x0 + 20, y0 + 30, "Network", color("text"), 30, True, False, "lm")
+    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNET", "BACK TO SETTINGS")
+    draw_text(text_cache, x0 + 20, y0 + 30, "Wi-Fi / ETHERNET", color("text"), 30, True, False, "lm")
     draw_network_status_card(text_cache, boxes["ethernet"], "Ethernet", devices.get("eth0"))
     draw_network_status_card(text_cache, boxes["wifi"], "Wi-Fi", devices.get("wlan0"), wifi=True)
     draw_text(text_cache, x0 + 20, y0 + 225, "Wi-Fi networks · tap to connect", color("text"), 22, False, False, "lm")
@@ -17321,32 +17265,39 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
                   color("secondary_text"), 20, False, False, "lm")
 
 
-def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
+def draw_touch_keyboard(text_cache, title, detail, value, mode="lower", submit="Save",
+                        secret=False, error="", rail_title="KEYBOARD", rail_detail="",
+                        caps=False, revealed=False, show_reveal=False, busy=False, placeholder=None):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
     boxes = network_password_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(*boxes["panel"], color("section_surface"))
-    draw_text(text_cache, x0 + 24, y0 + 30, "Connect to Wi-Fi", color("text"), 28, True, False, "lm")
+    heading = title if rail_title.upper() == "KEYBOARD" or rail_title.casefold() in title.casefold() else f"{rail_title} · {title}"
+    draw_text(text_cache, x0 + 24, y0 + 30,
+              fit_station_text(text_cache, heading, x1 - x0 - 48, 28, True, False),
+              color("text"), 28, True, False, "lm")
     draw_text(text_cache, x0 + 24, y0 + 72,
-              fit_station_text(text_cache, ssid, x1 - x0 - 48, 24, True, False),
+              fit_station_text(text_cache, detail, x1 - x0 - 48, 24, True, False),
               color("ready"), 24, True, False, "lm")
     fx0, fy0, fx1, fy1 = boxes["field"]
     draw_logical_rect(*boxes["field"], color("background"))
     draw_logical_line(fx0, fy1, fx1, fy1, color("focus"), 2)
-    caption = (value if revealed else "•" * len(value)) or "Enter password"
+    caption = (value if not secret or revealed else "•" * len(value)) or placeholder or ("Enter password" if secret else "Enter text")
     # Show the end while typing so long secrets remain editable.
-    width = boxes["reveal"][0] - fx0 - 24
+    width = (boxes["reveal"][0] if show_reveal else fx1) - fx0 - 24
     if text_cache is not None:
         while len(caption) > 1 and text_cache.font(28, family=APP_UI_STYLE.button.font_family).size(caption)[0] > width:
             caption = caption[1:]
     draw_text(text_cache, fx0 + 12, (fy0 + fy1) / 2, caption,
               color("text") if value else color("secondary_text"), 28, False, False, "lm",
               family=APP_UI_STYLE.button.font_family)
-    draw_network_button(text_cache, boxes["reveal"], "Hide" if revealed else "Show", 20, revealed)
+    if show_reveal:
+        draw_network_button(text_cache, boxes["reveal"], "Hide" if revealed else "Show", 20, revealed)
     symbols = mode.startswith("symbols")
     draw_network_button(text_cache, boxes["mode"], "ABC" if symbols else "123 / #", 22)
-    draw_network_button(text_cache, boxes["caps"], "#+=" if symbols else "Shift", 22, caps and not symbols)
+    draw_network_button(text_cache, boxes["caps"], "#+=" if symbols else "Shift", 22, (caps or mode == "upper") and not symbols)
     draw_network_button(text_cache, boxes["clear"], "Clear", 22)
     for keys, row_x0, row_y0, key_w in network_keyboard_rows(mode, caps):
         for i, key in enumerate(keys):
@@ -17355,31 +17306,56 @@ def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, e
             draw_network_button(text_cache, box, "DEL" if back else key, 22 if back else 32)
     draw_network_button(text_cache, boxes["space"], "Space", 24)
     draw_network_button(text_cache, boxes["cancel"], "Cancel", 24)
-    draw_network_button(text_cache, boxes["join"], "Connecting…" if busy else "Connect", 26, True)
+    draw_network_button(text_cache, boxes["join"], "Connecting…" if busy else submit, 26, True)
     if error:
         draw_text(text_cache, x0 + 24, y0 + 634,
                   fit_station_text(text_cache, error, x1 - x0 - 48, 18, False, False),
                   color("waiting"), 18, False, False, "lm")
-    draw_keyboard_modal_sidebar(text_cache, "NETWORK", "WI-FI KEY")
+
+
+
+def draw_network_password(text_cache, ssid, value, mode, caps, revealed, busy, error="", placeholder_visible=True):
+    draw_touch_keyboard(text_cache, "Connect to Wi-Fi", ssid, value, mode,
+                        submit="Connect", secret=True, error=error,
+                        rail_title="Wi-Fi / ETHERNET", rail_detail="WI-FI KEY",
+                        caps=caps, revealed=revealed, show_reveal=True, busy=busy)
+
+
+def touch_keyboard_next_mode(mode, action):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
+    if action == "MODE":
+        return "lower" if mode.startswith("symbols") else "symbols"
+    if action == "CAPS":
+        if mode.startswith("symbols"):
+            return "symbols2" if mode == "symbols" else "symbols"
+        return "lower" if mode == "upper" else "upper"
+    return mode
+
+
+def touch_keyboard_key_boxes(mode="lower", caps=False):
+    mode = {"numeric": "symbols", "digits": "symbols"}.get(mode, mode)
+    return tuple(("BACK" if key == "<" and mode != "symbols2" else key,
+                  (x + i * width, y, x + (i + 1) * width - 6, y + 72))
+                 for keys, x, y, width in network_keyboard_rows(mode, caps)
+                 for i, key in enumerate(keys))
+
+
+def touch_keyboard_action_at(x, y, mode="lower"):
+    boxes = network_password_boxes()
+    for name, action in (("mode", "MODE"), ("caps", "CAPS"), ("clear", "CLEAR"),
+                         ("space", "SPACE"), ("cancel", "CANCEL"), ("join", "SAVE")):
+        if contains(boxes[name], x, y):
+            return action
+    for action, box in touch_keyboard_key_boxes(mode):
+        if contains(box, x, y):
+            return action
+    return None
 
 
 def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mode):
-    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (5, 6, 8, 255))
-    draw_logical_rect(18, 8, 596, 64, (36, 40, 44, 255))
-    draw_logical_line(18, 8, 596, 8, (166, 171, 175, 210), 1)
-    draw_logical_line(18, 64, 596, 64, (166, 171, 175, 210), 1)
-    draw_text(text_cache, 34, 36, query or "Country, city, call sign, or station name", (240, 242, 244) if query else (166, 171, 175), 23, False, False, "lm")
-    draw_picker_button(text_cache, SEARCH_CASE_BOX, "aA", 16, keyboard_mode != "numeric")
-    draw_picker_button(text_cache, SEARCH_MODE_BOX, "123" if keyboard_mode != "numeric" else "ABC", 14, keyboard_mode == "numeric")
-    if not LCD_800_MODE:
-        draw_picker_button(text_cache, SEARCH_EXIT_BOX, "EXIT", 19)
-        draw_picker_button(text_cache, SEARCH_LEFT_EXIT_BOX, "EXIT", 19)
-    for keys, x0, y0, key_w in keyboard_rows(keyboard_mode):
-        for index, key in enumerate(keys):
-            box = (x0 + index * key_w, y0, x0 + (index + 1) * key_w - 5, y0 + 70)
-            label = "BACK" if key == "<" else ("ENTER" if key == ">" else ("SPACE" if key == "~" else key))
-            draw_picker_button(text_cache, box, label, 19 if key in "<>~" else 26)
-    draw_keyboard_modal_sidebar(text_cache, "SEARCH", "RECEIVERS")
+    draw_touch_keyboard(text_cache, "Search receivers", "Country, city, call sign, or station name",
+                        query, keyboard_mode, submit="Search", rail_title="SEARCH",
+                        rail_detail="RECEIVERS")
 
 
 def draw_frequency_keypad(text_cache, value, invalid=False):
@@ -17586,7 +17562,7 @@ def wrap_caption_lines(text_cache, text, max_width, size, max_rows=2, max_charac
             current = word
         else:
             current = candidate
-    if current and len(rows) < max_rows:
+    if current:
         rows.append(current)
     # Captions are live information: preserve the newest complete rows when
     # the source is longer than the available subtitle history.
@@ -17808,6 +17784,8 @@ def receiver_source_badge(receiver_type, local_receiver=False, theme=RECEIVER_LI
     if local_receiver:
         return ReceiverBadge("LAN", theme.lan, (18, 18, 18))
     key = str(receiver_type).casefold()
+    if key == "usb":
+        return ReceiverBadge("USB", theme.lan, (18, 18, 18))
     if key == "openwebrx":
         return ReceiverBadge("OPENWEBRX", theme.openwebrx, theme.primary_text)
     if key == "fmdx":
@@ -17877,6 +17855,21 @@ def draw_receiver_globe_icon(text_cache, box, color):
                        cx + width / 2, cy + height / 2, 0, 0, 1, 1)
 
 
+def draw_favorite_star(cx, cy, radius, color, filled=False):
+    """Shared star geometry for HOME and saved receiver rows."""
+    points = regular_star_points(cx, cy, radius)
+    if filled:
+        GL.glDisable(GL.GL_TEXTURE_2D)
+        GL.glColor4f(*rgba(color))
+        GL.glBegin(GL.GL_TRIANGLE_FAN)
+        GL.glVertex2f(*logical_to_native(cx, cy))
+        for point in points:
+            GL.glVertex2f(*logical_to_native(*point))
+        GL.glEnd()
+        GL.glEnable(GL.GL_TEXTURE_2D)
+    draw_logical_polyline(points, color, 2)
+
+
 def regular_star_points(cx, cy, outer_radius):
     """Return a closed, mathematically regular five-point star."""
     inner_radius = float(outer_radius) * 0.38196601125
@@ -17943,7 +17936,8 @@ def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
 def draw_station_picker(
     text_cache, stations, scroll, selected_server, query, sort_mode, station_health,
     pending_server=None, connection_status=None, route_filter="all", home_profile=None,
-    show_fmdx_notice=False, notice="", notice_alpha=220,
+    show_fmdx_notice=False, notice="", notice_alpha=220, usb_present=True,
+    active_usb_source=None, favorite_servers=(),
 ):
     theme = RECEIVER_LIST_THEME
     x0, y0, x1, y1 = PICKER_BOX
@@ -17960,7 +17954,7 @@ def draw_station_picker(
             text_cache, PICKER_ROUTE_FAVORITES_BOX, "FAVORITES", "favorite",
             route_filter == "favorites",
         )
-        for source, box in PICKER_SOURCE_SEGMENT_BOXES:
+        for source, box in receiver_source_segments(usb_present):
             draw_receiver_filter_button(
                 text_cache, box, receiver_source_label(source), route_filter == source, theme,
             )
@@ -17982,14 +17976,20 @@ def draw_station_picker(
         draw_fmdx_disclaimer(text_cache, scroll)
 
     for idx, station in enumerate(stations):
-        name, location, server, listener_used, listener_total = station_fields(station)
+        usb_receiver = route_filter == "usb"
+        if usb_receiver:
+            server, name, _detail = station
+            location, listener_used, listener_total = "", None, None
+        else:
+            name, location, server, listener_used, listener_total = station_fields(station)
         box = station_tile(idx + leading_rows, scroll)
         if not box:
             continue
         local_receiver = server.rstrip("/") == LOCAL_KIWI_SERVER.rstrip("/")
-        selected = receiver_servers_match(server, selected_server)
-        pending = receiver_servers_match(server, pending_server)
-        receiver_type = station_receiver_type(station)
+        selected = (server == active_usb_source if usb_receiver else
+                    not active_usb_source and receiver_servers_match(server, selected_server))
+        pending = not usb_receiver and receiver_servers_match(server, pending_server)
+        receiver_type = "usb" if usb_receiver else station_receiver_type(station)
         pressed = ui_button_pressed(box)
         focused = selected or pending
         fill = APP_UI_STYLE.palette.active_surface if pressed else (theme.selected_background if focused else theme.row_background)
@@ -18004,6 +18004,8 @@ def draw_station_picker(
             f"FREE {max(0, listener_total - listener_used)}/{listener_total}"
             if listener_used is not None and listener_total is not None else "FREE ?"
         )
+        if usb_receiver:
+            capacity = "ACTIVE" if selected else "CONNECTED"
         left = box[0] + 16
         right = box[2] - 16
         station_label = " · ".join(part for part in (str(name).strip(), str(location).strip()) if part)
@@ -18011,9 +18013,14 @@ def draw_station_picker(
             capacity, theme.label_size, (255, 255, 255), bold=False,
             family=theme.font_family,
         )[1]
+        favorited = not usb_receiver and server in favorite_servers
+        favorite_width = 32 if favorited else 0
         station_label = fit_receiver_name(
-            text_cache, station_label, max(60, right - left - capacity_width - 28), theme,
+            text_cache, station_label, max(60, right - left - capacity_width - 28 - favorite_width), theme,
         )
+        if favorited:
+            draw_favorite_star(right - capacity_width - 22, box[1] + 28, 11,
+                               APP_UI_STYLE.button.resolve(active=True).text, filled=True)
         draw_text(
             text_cache, left, box[1] + 28, station_label, text_color,
             theme.server_name_size, True, False, "lm", family=theme.font_family,
@@ -18022,12 +18029,12 @@ def draw_station_picker(
             text_cache, right, box[1] + 28, capacity, secondary_color,
             theme.label_size, False, False, "rm", family=theme.font_family,
         )
-        distance_label = format_station_distance(station, home_profile)
+        distance_label = "LOCAL USB" if usb_receiver else format_station_distance(station, home_profile)
         badge_y = box[1] + 52
         badge_x = left
         badges = (
             receiver_source_badge(receiver_type, local_receiver, theme),
-        ) + receiver_directory_badges(station, theme)
+        ) + (() if usb_receiver else receiver_directory_badges(station, theme))
         for badge in badges:
             badge_x += draw_receiver_badge(
                 text_cache, badge_x, badge_y, badge, theme, background=fill,
@@ -18467,7 +18474,7 @@ def draw_vosc_live_popup_error(text_cache, box, message):
 
 
 def draw_vosk_captions(text_cache, lines, translations, partial, status, caption_mode="original", box=None,
-                       engine="off"):
+                       engine="off", reveal=None):
     """Draw original, English, or paired local-translation captions."""
     x0, y0, x1, y1 = box or VOSK_CAPTION_BOX
     family = caption_font_family()
@@ -18501,6 +18508,9 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     if caption_mode == "both":
         source = partial or (lines[-1] if lines else "")
         english = translations[-1] if translations else ""
+        if reveal is not None:
+            source = reveal.reveal(source, "original")
+            english = reveal.reveal(english, "english")
         if not source and not english:
             draw_text(text_cache, x0 + 20, (y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
             return
@@ -18522,6 +18532,8 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     # Selecting only lines[-1] made a four-row panel appear to be one row.
     selected_lines = translations if caption_mode == "english" and any(translations) else lines
     source = " ".join((*selected_lines, partial)).strip()
+    if reveal is not None:
+        source = reveal.reveal(source)
     # Four larger rows make finished radio speech readable at arm's length.
     display = wrap_caption_lines(
         text_cache, source, content_x1 - x0 - 20, 26, max_rows=4, max_characters=62, family=family
@@ -18529,10 +18541,14 @@ def draw_vosk_captions(text_cache, lines, translations, partial, status, caption
     if not display:
         draw_text(text_cache, x0 + 20, (content_y0 + y1) / 2, "LISTENING..." if status == "LISTENING" else status, themed_instrument_color("secondary_text", (133, 180, 190)), 24, False, False, "lm", family=family)
         return
-    color = themed_instrument_color("text", (157, 218, 198)) if phoneme_mode else (themed_instrument_color("secondary_text", (166, 204, 213)) if partial else themed_instrument_color("text", (230, 241, 244)))
+    # Keep the reading position bright, including while ASR is still revising
+    # a partial hypothesis. Earlier rows recede using the live theme palette.
+    current_color = themed_instrument_color("text", (230, 241, 244))
+    history_color = themed_instrument_color("secondary_text", (166, 204, 213))
     line_spacing = 30
     first_y = (content_y0 + y1) / 2 - (len(display) - 1) * line_spacing / 2
     for index, caption in enumerate(display):
+        color = current_color if index == len(display) - 1 else history_color
         draw_text(text_cache, x0 + 20, first_y + index * line_spacing, caption, color, 26, True, False, "lm", family=family)
 
 
@@ -19046,6 +19062,7 @@ def draw_ui(
     ruler_center_khz=None,
     sidebar_open=False,
     zoom_pressed=None,
+    usb_receiver=False,
 ):
     # Keep the large frequency's translucent strip aligned with the active
     # theme; RIGHT has no such strip over the RF canvas.
@@ -19180,6 +19197,7 @@ def draw_ui(
             show_compact_frequency=instrument_layout == "right",
             compact_frequency_font_family=compact_frequency_font_family,
             peak_dbm=smeter_peak_dbm,
+            usb_receiver=usb_receiver,
         )
         # Home instruments are painted last so the short mode surface can never
         # cover the passband and volume sitting directly under the mode buttons.
@@ -19251,8 +19269,15 @@ def waterfall_stream_key(server_generation, view_generation, receiver_type, exte
     return server_generation, view_generation, receiver_type, bool(external)
 
 
-def waterfall_presentation_fps(receiver_type, speed, row_pixels=1):
+def local_waterfall_fps(speed):
+    """Match local IQ production and presentation to the selected speed."""
+    return {1: 1.0, 2: 5.0, 3: 13.0, 4: 30.0}.get(clamp(int(speed), 1, WATERFALL_MAX_SPEED), 30.0)
+
+
+def waterfall_presentation_fps(receiver_type, speed, row_pixels=1, external=False):
     """Return the real row cadence for Kiwi and decoded FM-DX sources."""
+    if external:
+        return local_waterfall_fps(speed)
     multiplier = max(1, int(row_pixels))
     if str(receiver_type).lower() == "fmdx":
         return (fmdx.AUDIO_SAMPLE_RATE / 2048.0) * multiplier
@@ -19638,7 +19663,6 @@ RTL_LAB_PRESETS = (
 # local source on the same packet cadence as the Kiwi audio transport.
 RTL_IQ_SAMPLE_RATE = 1_024_000
 RTL_IQ_BLOCK_BYTES = 32_768
-RTL_WATERFALL_INTERVAL_SECONDS = 0.10
 AIRSPY_HF_SAMPLE_RATE = 768_000
 AIRSPY_HF_AUDIO_RATE = 32_000
 AIRSPY_HF_AUDIO_PACKET_BYTES = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2
@@ -19656,8 +19680,7 @@ AIRSPY_HF_MIN_ZOOM = kiwi.span_to_zoom(AIRSPY_HF_SAMPLE_RATE / 1000.0)
 # never claims a setting that cannot affect the audio path.
 RTL_MODE_FAMILIES = (
     ("AM", ("AM",)),
-    ("NFM", ("NFM",)),
-    ("WFM", ("WFM",)),
+    ("NFM", ("NFM", "WFM")),
 )
 RTL_HOME_MODE_CAPABILITIES = frozenset(mode for _family, modes in RTL_MODE_FAMILIES for mode in modes)
 
@@ -19728,8 +19751,7 @@ AIRSPY_HF_CAPABILITIES = ReceiverCapabilities(
     source_span_khz=AIRSPY_HF_SAMPLE_RATE / 1000.0,
     mode_families=(
         ("AM", ("AM",)),
-        ("NFM", ("NFM",)),
-        ("WFM", ("WFM",)),
+        ("NFM", ("NFM", "WFM")),
     ),
     controls=frozenset(("frequency", "zoom", "volume", "mode", "squelch", "gain", "waterfall")),
     required_driver="libairspyhf",
@@ -19765,6 +19787,7 @@ class RTLSDRLab:
         self.args = args
         self.state = state
         self.line_queue = line_queue
+        self.navigation_parent = "apps"
         self.source_id = RTL_SDR_CAPABILITIES.source_id
         self.capabilities = RTL_SDR_CAPABILITIES
         self.lock = threading.RLock()
@@ -19782,12 +19805,19 @@ class RTLSDRLab:
         self._rtl_library = None
         self._airspy_library = None
         self._restore_view = None
+        self._remembered_usb_receiver = None
         self.waterfall_queue = queue.Queue(maxsize=2)
         self.waterfall_thread = None
         self.demod_mode = "wbfm"
         self.demod_generation = 0
         self.control_notice = ""
         self.local_squelch_closed = False
+        self._usb_topology = None
+        self._usb_check_at = 0.0
+        self.probe()
+
+    def show(self, parent="apps"):
+        self.navigation_parent = parent
         self.probe()
 
     def _presets(self):
@@ -19848,7 +19878,7 @@ class RTLSDRLab:
         radio_mode = str(radio_mode).upper()
         if radio_mode == "AM":
             return "am"
-        if radio_mode == "NFM":
+        if radio_mode in ("NFM", "NBFM", "FM"):
             return "fm"
         if radio_mode == "WFM":
             return "wbfm"
@@ -19856,10 +19886,8 @@ class RTLSDRLab:
 
     @staticmethod
     def preferred_home_mode(preset):
-        _name, _frequency_hz, demod_mode, _rate = preset
-        if demod_mode == "am":
-            return "AM"
-        return "WFM" if demod_mode == "wbfm" else "NFM"
+        """Start every USB session in AM, independent of its frequency preset."""
+        return "AM"
 
     @staticmethod
     def shared_radio_mode(radio_mode):
@@ -19871,6 +19899,59 @@ class RTLSDRLab:
 
     def supports_home_mode(self, radio_mode):
         return any(str(radio_mode).upper() in modes for _family, modes in self.capabilities.mode_families)
+
+    def remembered_receiver(self):
+        # Receiver choice is durable intent, not the worker's transient health.
+        with self.lock:
+            if self._remembered_usb_receiver is None:
+                return None
+            if self._restore_view is not None and self.is_running():
+                _server, frequency, zoom, *_rest = self.state.snapshot()
+                self._remembered_usb_receiver = dict(
+                    source_id=self.source_id, freq_khz=frequency, zoom=zoom,
+                    preset_index=self.preset_indices[self.source_id])
+            return dict(self._remembered_usb_receiver)
+
+    @staticmethod
+    def validate_remembered_receiver(value):
+        if not isinstance(value, dict):return None
+        source = value.get('source_id')
+        if source not in LOCAL_RECEIVER_CAPABILITIES:return None
+        try:
+            frequency = float(value['freq_khz'])
+            zoom = int(value['zoom'])
+            preset = int(value.get('preset_index', 0))
+        except (KeyError, TypeError, ValueError, OverflowError):return None
+        if not math.isfinite(frequency) or not LOCAL_RECEIVER_CAPABILITIES[source].supports_frequency(frequency):return None
+        return dict(source_id=source, freq_khz=frequency,
+                    zoom=int(clamp(zoom, 0, kiwi.DISPLAY_MAX_ZOOM)), preset_index=max(0, preset))
+
+    def restore_receiver(self, saved):
+        with self.lock:
+            if self.probing or not self.source_inventory.get(saved['source_id'], {}).get('present'):
+                return False
+            if not self.select_source(saved['source_id']):return False
+            self.preset_indices[self.source_id] = saved['preset_index'] % len(self._presets())
+        return self.start(saved['freq_khz'], saved['zoom'])
+
+    def receiver_rows(self):
+        """Detected USB devices are browser rows, independent of playback."""
+        with self.lock:
+            return [
+                (source, inventory.get("device") or LOCAL_RECEIVER_CAPABILITIES[source].label,
+                 "USB · OPEN RECEIVER CONTROLS")
+                for source, inventory in self.source_inventory.items()
+                if inventory.get("present")
+            ]
+
+    def select_source(self, source):
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                return source == self.source_id
+            self.source_id = source
+            self.capabilities = LOCAL_RECEIVER_CAPABILITIES[source]
+            self._apply_source_inventory()
+            return True
 
     def cycle_source(self):
         with self.lock:
@@ -19928,6 +20009,26 @@ class RTLSDRLab:
             return bytes(len(pcm))
         return pcm
 
+    def refresh_usb_devices(self, now=None, usb_root=Path("/sys/bus/usb/devices")):
+        """Rescan on Linux USB hotplug without opening an active receiver."""
+        now = time.monotonic() if now is None else now
+        if now < self._usb_check_at or not usb_root.is_dir():
+            return
+        self._usb_check_at = now + 1.0
+        topology = []
+        for vendor in usb_root.glob("*/idVendor"):
+            device = vendor.parent
+            try:
+                topology.append((device.name, vendor.read_text().strip(),
+                                 (device / "idProduct").read_text().strip(),
+                                 (device / "devnum").read_text().strip()))
+            except OSError:
+                # A device can disappear between directory and attribute reads.
+                continue
+        topology = tuple(sorted(topology))
+        if topology != self._usb_topology and self.probe():
+            self._usb_topology = topology
+
     def probe(self):
         with self.lock:
             if self.probing or (self.thread and self.thread.is_alive()):
@@ -19938,19 +20039,18 @@ class RTLSDRLab:
 
         def worker():
             try:
-                rtl_result = subprocess.run(
-                    ["rtl_test", "-t"], capture_output=True, text=True,
-                    timeout=14, check=False,
-                )
-                output = (rtl_result.stdout or "") + "\n" + (rtl_result.stderr or "")
+                def probe_output(command, timeout):
+                    try:
+                        result = subprocess.run(command, capture_output=True, text=True,
+                                                timeout=timeout, check=False)
+                        return (result.stdout or "") + "\n" + (result.stderr or ""), ""
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        return "", str(exc)
+                output, rtl_error = probe_output(["rtl_test", "-t"], 14)
                 device_match = re.search(r"^\s*0:\s*(.+)$", output, re.MULTILINE)
                 tuner_match = re.search(r"Found\s+(.+?)\s+tuner", output, re.IGNORECASE)
                 rtl_present = "Found 1 device(s)" in output or device_match is not None
-                airspy_result = subprocess.run(
-                    ["airspyhf_info"], capture_output=True, text=True,
-                    timeout=12, check=False,
-                )
-                airspy_output = (airspy_result.stdout or "") + "\n" + (airspy_result.stderr or "")
+                airspy_output, airspy_error = probe_output(["airspyhf_info"], 12)
                 serial_match = re.search(r"S/N:\s*(0x[0-9A-F]+)", airspy_output, re.IGNORECASE)
                 firmware_match = re.search(r"Firmware Version:\s*([^\r\n]+)", airspy_output, re.IGNORECASE)
                 airspy_present = serial_match is not None
@@ -19960,13 +20060,13 @@ class RTLSDRLab:
                             "present": rtl_present,
                             "device": device_match.group(1).strip() if device_match else "NO RTL-SDR DETECTED",
                             "tuner": tuner_match.group(1).strip() if tuner_match else "",
-                            "detail": "Connect an RTL-SDR and tap SOURCE.",
+                            "detail": rtl_error or "Connect an RTL-SDR and reopen USB to rescan.",
                         },
                         AIRSPY_HF_CAPABILITIES.source_id: {
                             "present": airspy_present,
                             "device": f"AIRSPY HF+ {serial_match.group(1)}" if serial_match else "NO AIRSPY HF+ DETECTED",
                             "tuner": firmware_match.group(1).strip() if firmware_match else "",
-                            "detail": "Install libairspyhf or reconnect the Airspy HF+.",
+                            "detail": airspy_error or "Connect an Airspy HF+ and reopen USB to rescan.",
                         },
                     }
                     self._apply_source_inventory()
@@ -20038,6 +20138,9 @@ class RTLSDRLab:
             self.detail = f"{name} {frequency_hz / 1e6:.3f} MHz · local I/Q"
             worker = self._airspyhf_worker if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else self._iq_worker
             worker_name = "airspy-hf-lab-iq" if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else "rtl-sdr-lab-iq"
+            self._remembered_usb_receiver = dict(
+                source_id=self.source_id, freq_khz=target_frequency, zoom=target_zoom,
+                preset_index=self.preset_indices[self.source_id])
             self.thread = threading.Thread(target=worker, args=(name, rate), name=worker_name, daemon=True)
             self.thread.start()
         return True
@@ -20141,7 +20244,11 @@ class RTLSDRLab:
             except queue.Full:
                 pass
         if self.state.spectrum_enabled_snapshot():
-            self.state.update_spectrum_values(normalized)
+            tuned_khz = self.state.snapshot()[1]
+            view_center = local_waterfall_center(tuned_khz, self.state.waterfall_view_center_snapshot())
+            self.state.update_spectrum_values(local_spectrum_in_view(
+                normalized, center_khz, view_center, self.source_span_khz(),
+            ))
         # It is a useful relative S-meter estimate, not an RF calibrated dBm
         # measurement. The UI retains its usual smooth attack/release.
         self.state.set_smeter(-117.0 + (noise - levels[0]) * 1.8, source="snd")
@@ -20321,6 +20428,10 @@ class RTLSDRLab:
                         del pcm_pending[:AIRSPY_HF_AUDIO_PACKET_BYTES]
                 _server, requested_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
                 now = time.monotonic()
+                if now >= next_waterfall_at:
+                    self._queue_waterfall(samples, tuned_khz)
+                    interval = 1.0 / local_waterfall_fps(self.state.waterfall_snapshot()[2])
+                    next_waterfall_at = max(next_waterfall_at + interval, now)
                 supported_khz = self._airspy_frequency_khz(requested_khz)
                 if abs(supported_khz - requested_khz) > 0.0005:
                     self.state.set_view(freq_khz=supported_khz)
@@ -20330,6 +20441,7 @@ class RTLSDRLab:
                     if library.airspyhf_set_freq(device, int(round(requested_khz * 1000.0))) < 0:
                         raise RuntimeError("Airspy HF+ retune failed")
                     tuned_khz = requested_khz
+                    drain_queue(iq_queue)
                     seen_generation = next_generation
                     last_tune_at = now
                     previous_sample = None
@@ -20337,9 +20449,6 @@ class RTLSDRLab:
                     drain_queue(self.line_queue)
                 elif next_generation != seen_generation:
                     seen_generation = next_generation
-                if now >= next_waterfall_at:
-                    self._queue_waterfall(samples, tuned_khz)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
         except Exception as exc:
             with self.lock:
                 if not self.stop_event.is_set():
@@ -20367,6 +20476,7 @@ class RTLSDRLab:
                 except Exception:
                     pass
             with self.lock:
+                self.remembered_receiver()
                 restore_view, self._restore_view = self._restore_view, None
             if restore_view is not None:
                 self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
@@ -20464,6 +20574,10 @@ class RTLSDRLab:
                     player.submit(self._apply_local_squelch(pcm))
                 _server, next_freq_khz, _zoom, _smeter, next_generation, _server_generation = self.state.snapshot()
                 now = time.monotonic()
+                if now >= next_waterfall_at:
+                    self._queue_waterfall(samples, tuned_hz / 1000.0)
+                    interval = 1.0 / local_waterfall_fps(self.state.waterfall_snapshot()[2])
+                    next_waterfall_at = max(next_waterfall_at + interval, now)
                 desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
                 if desired_hz != tuned_hz and next_generation != seen_generation and now - last_tune_at >= 0.025:
                     if library.rtlsdr_set_center_freq(device, desired_hz) < 0:
@@ -20476,9 +20590,6 @@ class RTLSDRLab:
                     drain_queue(self.line_queue)
                 elif next_generation != seen_generation:
                     seen_generation = next_generation
-                if now >= next_waterfall_at:
-                    self._queue_waterfall(samples, tuned_hz / 1000.0)
-                    next_waterfall_at = now + RTL_WATERFALL_INTERVAL_SECONDS
         except Exception as exc:
             with self.lock:
                 if not self.stop_event.is_set():
@@ -20508,6 +20619,7 @@ class RTLSDRLab:
                 except Exception:
                     pass
             with self.lock:
+                self.remembered_receiver()
                 restore_view, self._restore_view = self._restore_view, None
             if restore_view is not None:
                 # Return Kiwi to its last genuine radio state before waking
@@ -20523,6 +20635,8 @@ class RTLSDRLab:
             release_realtime_audio_thread()
 
     def stop(self):
+        with self.lock:
+            self._remembered_usb_receiver = None
         self.stop_event.set()
         with self.lock:
             thread = self.thread
@@ -23095,9 +23209,7 @@ def snd_meter_worker(
             if state.stream_paused_snapshot():
                 continue
             if state.connection_access_denied_snapshot(server_generation):
-                while not stop_event.wait(0.25):
-                    if state.snapshot()[5] != server_generation:
-                        break
+                wait_for_audio_retry(stop_event, state, server_generation)
                 continue
             # The retry delay is a known transport outage. Tell the clock
             # before waiting so an exhausted queue re-primes quietly instead
@@ -23114,9 +23226,7 @@ def snd_meter_worker(
                 state.connection_access_denied(server_generation)
                 persist_live_station_health(server, "audio", False)
                 print("gl SND stopped: choose a receiver that permits external app connections", flush=True)
-                while not stop_event.wait(0.25):
-                    if state.snapshot()[5] != server_generation:
-                        break
+                wait_for_audio_retry(stop_event, state, server_generation)
                 continue
             if state.connection_failed(server_generation, "audio"):
                 persist_live_station_health(server, "audio", False)
@@ -23125,7 +23235,7 @@ def snd_meter_worker(
             retry_seconds = main_receiver_retry_delay(retry_failures)
             state.connection_retry_scheduled(server_generation, "audio", retry_seconds)
             print(f"gl SND retry in {retry_seconds:.0f}s (failure {retry_failures})", flush=True)
-            if stop_event.wait(retry_seconds):
+            if wait_for_audio_retry(stop_event, state, server_generation, retry_seconds):
                 break
         finally:
             if ws:
@@ -23667,6 +23777,12 @@ def main():
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
+    pending_usb_restore = rtl_lab.validate_remembered_receiver(remembered_preferences.get("usb_receiver"))
+    if pending_usb_restore:
+        # Reserve HOME for the saved USB source while the asynchronous probe runs.
+        rtl_lab.select_source(pending_usb_restore['source_id'])
+        state.set_external_audio(True)
+        state.set_external_waterfall(True)
     rc28_input = RC28Input()
     seek_view = SmartSeekView(sys.modules[__name__], state)
     # VFO B is intentionally dormant until Dual opens. It has a complete
@@ -23753,6 +23869,7 @@ def main():
     vosc_error_osd_until = 0.0
     vosc_error_osd_message = ""
     last_vosc_error_key = ()
+    caption_reveal = CaptionReveal()
     rc28_mode_osd_until = 0.0
     frequency_identity_result_queue = queue.Queue(maxsize=1)
     frequency_identity_pending_key = None
@@ -23920,18 +24037,27 @@ def main():
     if audio_volume is not None and audio_volume <= MAIN_VOLUME_MUTE_THRESHOLD:
         state.set_audio_controls(audio_mute=True)
 
+    main_volume_control = MainVolumeControl(
+        audio_volume, lambda value: set_audio_output_volume(args, value),
+        lambda muted: state.set_audio_controls(audio_mute=muted),
+        MAIN_VOLUME_MUTE_THRESHOLD,
+    )
+
     def apply_main_volume(requested_volume):
-        """Apply one master-level gesture and keep mute state in lockstep."""
+        """Apply a slider/knob gesture and remember its audible level."""
         nonlocal audio_volume, audio_volume_last_apply
-        applied_volume = set_audio_output_volume(args, requested_volume)
+        applied_volume = main_volume_control.apply(requested_volume)
         if applied_volume is not None:
-            audio_volume = applied_volume
-            args.output_volume = applied_volume
+            audio_volume = args.output_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
-            state.set_audio_controls(
-                audio_mute=applied_volume <= MAIN_VOLUME_MUTE_THRESHOLD
-            )
         return applied_volume
+
+    def set_main_mute(muted):
+        nonlocal audio_volume, audio_volume_last_apply
+        applied_volume = main_volume_control.mute(muted)
+        if applied_volume is not None:
+            audio_volume = args.output_volume = applied_volume
+            audio_volume_last_apply = time.monotonic()
 
     tests_panel_open = False
     tests_parent = "home"
@@ -24313,12 +24439,6 @@ def main():
     if args.spectrum_preview:
         vhf_workspace.show('spectrum')
         vhf_workspace.spectrum.screen=args.spectrum_preview_view
-    elif vhf_hub.sessions['meteor'].enabled:
-        vhf_workspace.show('meteor')
-        vhf_workspace.view = 'products'
-    elif vhf_hub.sessions['ism'].enabled:
-        vhf_workspace.show('ism')
-        vhf_workspace.view = 'data'
     from station_workspace import StationWorkspace
     station_workspace=StationWorkspace(sys.modules[__name__],radio_profile)
     sys.modules[__name__].station_settings=station_workspace
@@ -24327,8 +24447,10 @@ def main():
     usb_radios_parent="settings"
     if args.radio_info_preview:station_workspace.show()
     adsb_workspace = ADSBWorkspace(sys.modules[__name__], adsb_manager)
-    # Resume the active decoder workspace, matching Meteor startup behavior.
-    adsb_workspace.open = args.adsb_preview or args.adsb_coverage_preview or (adsb_manager.enabled and not vhf_workspace.open)
+    # Decoder services may resume in the background, but normal startup always
+    # lands on HOME with the remembered receiver. Only explicit preview flags
+    # may open a decoder screen during development.
+    adsb_workspace.open = args.adsb_preview or args.adsb_coverage_preview
     if args.adsb_coverage_preview:
         vhf_workspace.open=False
         vhf_workspace.spectrum.open=False
@@ -24363,6 +24485,7 @@ def main():
     wspr_history = deque(maxlen=max(256, int(WSPR_HISTORY_SECONDS / 1.5)))
     wspr_next_sample = 0.0
     wspr_next_log_at = 0.0
+    wspr_navigation_parent = "home"
     wspr_panel_open = args.wspr_preview
     wspr_identity_preferences = remembered_preferences.get("wspr_identity", {})
     if not isinstance(wspr_identity_preferences, dict):
@@ -24393,6 +24516,7 @@ def main():
     threading.Thread(target=refresh_local_wspr_grid, name="wspr-local-grid", daemon=True).start()
     wspr_identity_open = False
     wspr_identity_field = "reporter"
+    wspr_identity_keyboard_mode = "upper"
     wspr_identity_error = ""
     globe_receivers = merge_receiver_map_stations(load_globe_receivers(), catalog_stations)
     if globe_receivers:
@@ -24534,6 +24658,7 @@ def main():
         spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
         audio_controls, _audio_generation = state.audio_controls_snapshot()
         return {
+            "usb_receiver": pending_usb_restore or rtl_lab.remembered_receiver(),
             "audio": {
                 "squelch_level": audio_controls["squelch_level"],
                 "squelch_tail": audio_controls["squelch_tail"],
@@ -24656,8 +24781,8 @@ def main():
         save_remembered_view(
             args.receiver_state_file,
             server,
-            persisted_frequency_khz,
-            zoom,
+            (rtl_lab._restore_view or (args.freq_khz, args.zoom))[0] if preferences.get("usb_receiver") else persisted_frequency_khz,
+            (rtl_lab._restore_view or (args.freq_khz, args.zoom))[1] if preferences.get("usb_receiver") else zoom,
             radio_mode,
             manual_radio_mode,
             preferences,
@@ -24924,7 +25049,7 @@ def main():
 
     def active_waterfall_center(tuned_khz, span_khz):
         if state.external_waterfall_snapshot() or rtl_lab.is_running():
-            return float(tuned_khz)
+            return local_waterfall_center(tuned_khz, state.waterfall_view_center_snapshot())
         return receiver_waterfall_center(
             tuned_khz, span_khz, state.receiver_type_snapshot(),
             state.waterfall_view_center_snapshot(),
@@ -25181,7 +25306,9 @@ def main():
     def connect_to_station(station):
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
-        nonlocal picker_map_selected_server
+        nonlocal picker_map_selected_server, pending_usb_restore
+        pending_usb_restore = None
+        rtl_lab.stop()
         if dual_vfo_receiver_list_target in ("A", "B"):
             target_vfo = dual_vfo_receiver_list_target
             if target_vfo == "A":
@@ -25343,6 +25470,7 @@ def main():
         station_query = ""
         station_route_filter = (
             "all" if dual_vfo_receiver_list_target else
+            "usb" if station_route_filter == "usb" or rtl_lab.is_running() else
             active_receiver_source(all_stations, active_server, receiver_type)
         )
         fmdx_disclaimer_open, fmdx_disclaimer_shown = fmdx_disclaimer_transition(
@@ -25423,6 +25551,8 @@ def main():
 
     def current_receiver_rows():
         """Return the complete directory in the same focused order for draw and taps."""
+        if station_route_filter == "usb":
+            return rtl_lab.receiver_rows()
         active_state = receiver_list_active_state()
         active_server, _frequency, _zoom, _smeter, _view, generation = active_state.snapshot()
         receiver_type = active_state.receiver_type_snapshot(generation) or "kiwi"
@@ -25460,7 +25590,7 @@ def main():
     def activate_navigation_item(index, items=MENU_ITEMS):
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
-        nonlocal usb_radios_parent
+        nonlocal usb_radios_parent, wspr_navigation_parent
         nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
@@ -25670,6 +25800,9 @@ def main():
             if current_output_volume is not None:
                 audio_volume = current_output_volume
                 args.output_volume = current_output_volume
+                main_volume_control.volume = current_output_volume
+                if current_output_volume > MAIN_VOLUME_MUTE_THRESHOLD:
+                    main_volume_control.last_audible = current_output_volume
             audio_panel_open = True
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -25749,10 +25882,13 @@ def main():
             settings_menu_open = digital_menu_open = False
             active_server, active_freq, *_ = state.snapshot()
             active_mode, *_ = state.radio_snapshot()
-            ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[kind]).show(active_server, active_freq, active_mode)
+            workspace = {"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[kind]
+            workspace.navigation_parent = parent
+            workspace.show(active_server, active_freq, active_mode)
             picker_open = radio_setup_open = display_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
         elif kind == "wspr":
+            wspr_navigation_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             wspr_panel_open = True
@@ -25991,15 +26127,46 @@ def main():
     desktop_map_velocity = (0.0, 0.0)
     desktop_map_motion_at = 0.0
 
+    def shared_keyboard_open():
+        # Text keyboards fill the canvas and bypass rail composition/hit mapping.
+        if theme_editor.open and theme_editor.overlay == "name":
+            return True
+        if deepgram_setup_open or network_password_open or (picker_open and search_open) or wspr_identity_open:
+            return True
+        if (station_workspace.open and station_workspace.field is not None
+                or usb_radios_workspace.open and usb_radios_workspace.field is not None):
+            return True
+        if vhf_workspace.open and (vhf_workspace.mode == "spectrum" and vhf_workspace.spectrum.overlay == "label"
+                or vhf_workspace.dongles.open and vhf_workspace.dongles.field is not None):
+            return True
+        if adsb_workspace.open and adsb_workspace.dongles is not None and adsb_workspace.dongles.open and adsb_workspace.dongles.field is not None:
+            return True
+        if hell_workspace.open and hell_workspace.reporting is not None and getattr(hell_workspace, "report_keyboard", False):
+            return True
+        if wspr_panel_open and wspr_expanded_log_open and wspr_history_view.settings is not None and getattr(wspr_history_view, "field_keyboard", False):
+            return True
+        for workspace in (cw_workspace, qrss_workspace, hell_workspace, sstv_workspace, wspr_history_view):
+            view = getattr(workspace, "log_search_view", None)
+            if view is not None and view.open and view.keyboard:
+                return True
+        return False
+
     def rail_relocation_active():
+        if theme_system.runtime_theme["sidebar"] != "left":
+            return False
+        if shared_keyboard_open():
+            return False
+        if any(getattr(getattr(workspace, "log_search_view", None), "open", False)
+               for workspace in (cw_workspace, qrss_workspace, hell_workspace, sstv_workspace, wspr_history_view)):
+            return False
         return (
-            theme_system.runtime_theme["sidebar"] == "left"
-            and not theme_editor.open
+            not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
             and not (audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+                     or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
-            and not (wspr_panel_open or font_lab_open or rtl_lab_open
+            and not ((wspr_panel_open and not (wspr_expanded_waterfall_open or wspr_expanded_graph_open)) or font_lab_open or rtl_lab_open
                      or (picker_open and picker_map_open))
         )
 
@@ -26210,6 +26377,28 @@ def main():
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            rtl_lab.refresh_usb_devices()
+            if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
+                pending_usb_restore = None
+                radio_mode = "AM"
+                manual_radio_mode = True
+                station_route_filter = "usb"
+                _server, display_freq, restored_zoom, *_rest = state.snapshot()
+                display_span = kiwi.zoom_to_span_khz(restored_zoom)
+                candidate_freq = display_freq
+                anim_start = 0.0
+                drain_queue(line_queue)
+                wf_texture.clear()
+                write_remembered_view(save_current_frequency=True, force=True)
+            usb_present = bool(rtl_lab.receiver_rows())
+            if station_route_filter == "usb" and not usb_present and not rtl_lab.snapshot()["probing"]:
+                station_route_filter = "local"
+                station_scroll = 0
+                station_query = ""
+                stations = filtered_stations(
+                    all_stations, station_query, station_sort, station_route_filter,
+                    favorite_servers, station_health, receiver_home_profile,
+                )
             if audio_test_workspace.open and not tests_panel_open:
                 audio_test_workspace.close()
             if web_apps.return_to_decoders:
@@ -26712,8 +26901,8 @@ def main():
                                 gesture = "picker_search"
                             elif picker_open and contains(PICKER_SORT_BOX, x, y):
                                 gesture = "picker_sort"
-                            elif picker_open and LCD_800_MODE and picker_source_segment_at(x, y):
-                                gesture = f"picker_source_{picker_source_segment_at(x, y)}"
+                            elif picker_open and LCD_800_MODE and picker_source_segment_at(x, y, usb_present):
+                                gesture = f"picker_source_{picker_source_segment_at(x, y, usb_present)}"
                             elif picker_open and LCD_800_MODE and contains(PICKER_ROUTE_FAVORITES_BOX, x, y):
                                 gesture = "picker_route_favorites"
                             elif picker_open and contains(PICKER_EXIT_BOX, x, y):
@@ -26977,14 +27166,10 @@ def main():
                                 lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
                                 gesture = "home_passband"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_mute_box(home_rail_has_meter(instrument_layout)), x, y
+                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and (
+                                volume_action := home_volume_action_at(x, y, home_rail_has_meter(instrument_layout))
                             ):
-                                gesture = "home_volume_mute"
-                            elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
-                                lcd_home_volume_box(home_rail_has_meter(instrument_layout)), x, y
-                            ):
-                                gesture = "home_volume"
+                                gesture = volume_action
                             # Settings and MODES are full right-rail pages whose
                             # title sits exactly over the Home annunciator
                             # placeholders. While either is open, that region
@@ -27021,10 +27206,8 @@ def main():
                                 gesture = "wspr_add"
                             elif wspr_add_open:
                                 gesture = "wspr_add_outside"
-                            elif wspr_identity_open and contains(WSPR_IDENTITY_BOX, x, y):
-                                gesture = "wspr_identity"
                             elif wspr_identity_open:
-                                gesture = "wspr_identity_outside"
+                                gesture = "wspr_identity"
                             elif wspr_panel_open and contains(WSPR_WORKSPACE_BOX, x, y):
                                 gesture = "wspr_workspace"
                             elif wspr_panel_open:
@@ -27749,8 +27932,9 @@ def main():
                                 # grid. Its empty space is not a control, so a
                                 # blank tap must not open the MODES drawer.
                                 on_mode_button = any(
-                                    contains(box, x, y)
-                                    for _label, box in lcd_home_mode_boxes(compact_layout)
+                                    contains(box, x, y) and home_mode_enabled(
+                                        label, state.external_waterfall_snapshot() or rtl_lab.is_running())
+                                    for label, box in lcd_home_mode_boxes(compact_layout)
                                 )
                                 if on_mode_button:
                                     selected_mode = engage_home_mode(
@@ -27785,7 +27969,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 controls, _audio_generation = state.audio_controls_snapshot()
-                                state.set_audio_controls(audio_mute=not controls["mute"])
+                                set_main_mute(not controls["mute"])
                             wake_controls()
                         elif touch_started and gesture == "audio_squelch_level":
                             current_radio_mode, _low_cut, _high_cut, _radio_generation = state.radio_snapshot()
@@ -27824,7 +28008,7 @@ def main():
                                 if choice in (None, "close"):
                                     audio_panel_open = False
                                 elif choice == "mute":
-                                    state.set_audio_controls(audio_mute=not controls["mute"])
+                                    set_main_mute(not controls["mute"])
                                 elif choice == "voice_clean":
                                     next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
                                     state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
@@ -27917,11 +28101,16 @@ def main():
                         elif touch_started and gesture == "wspr_identity":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_identity_action_at(x, y)
+                                choice = wspr_identity_action_at(x, y, wspr_identity_keyboard_mode)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "field":
                                         wspr_identity_field = value
+                                        wspr_identity_error = ""
+                                    elif kind == "mode":
+                                        wspr_identity_keyboard_mode = touch_keyboard_next_mode(wspr_identity_keyboard_mode, value)
+                                    elif kind == "clear":
+                                        wspr_identity_values[wspr_identity_field] = ""
                                         wspr_identity_error = ""
                                     elif kind == "key":
                                         field = wspr_identity_field
@@ -28014,7 +28203,13 @@ def main():
                         elif touch_started and gesture == "station_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
                                 station_workspace.tap(x,y)
-                                if not station_workspace.open:restore_navigation_parent('settings')
+                                if not station_workspace.open:
+                                    if station_workspace.navigation_parent == 'adsb':
+                                        adsb_workspace.open=True
+                                    elif station_workspace.navigation_parent == 'vhf':
+                                        vhf_workspace.open=True
+                                    else:
+                                        restore_navigation_parent(station_workspace.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "vhf_workspace":
                             if not vhf_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
@@ -28025,7 +28220,7 @@ def main():
                         elif touch_started and gesture == "adsb_workspace":
                             if not adsb_workspace.swipe(start_x, start_y, x, y) and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 adsb_workspace.tap(x, y)
-                                if not adsb_workspace.open:
+                                if not adsb_workspace.open and not station_workspace.open:
                                     restore_navigation_parent('digi')
                             wake_controls()
                         elif touch_started and gesture == "cw_workspace":
@@ -28033,24 +28228,44 @@ def main():
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 cw_workspace.tap(x, y, wspr_receiver_choices())
+                                if not cw_workspace.open:
+                                    parent = getattr(cw_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "qrss_workspace":
                             if qrss_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 qrss_workspace.tap(x, y, wspr_receiver_choices())
+                                if not qrss_workspace.open:
+                                    parent = getattr(qrss_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "hell_workspace":
                             if hell_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 hell_workspace.tap(x, y, wspr_receiver_choices())
+                                if not hell_workspace.open:
+                                    parent = getattr(hell_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "sstv_workspace":
                             if sstv_workspace.swipe(start_x, start_y, x, y):
                                 pass
                             elif max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 sstv_workspace.tap(x, y, wspr_receiver_choices())
+                                if not sstv_workspace.open:
+                                    parent = getattr(sstv_workspace, "navigation_parent", "digi")
+                                    restore_navigation_parent(parent)
+                                    if parent == "modes":
+                                        radio_family_open = "digital"
                             wake_controls()
                         elif touch_started and gesture == "wspr_add":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28308,7 +28523,7 @@ def main():
                                 choice = wspr_workspace_action_at(x, y, wspr_tiles, wspr_workspace_scroll)
                                 if choice is not None:
                                     kind, _value = choice
-                                    if kind == "home":
+                                    if kind == "back":
                                         wspr_panel_open = False
                                         wspr_expanded_log_open = False
                                         wspr_expanded_log_id = ""
@@ -28327,7 +28542,10 @@ def main():
                                         wspr_tile_delete_armed = False
                                         wspr_cpu_detail_open = False
                                         cpu_utilization_graph_open = False
-                                        # Home is merely a view transition:
+                                        restore_navigation_parent(wspr_navigation_parent)
+                                        if wspr_navigation_parent == "modes":
+                                            radio_family_open = "digital"
+                                        # Back is merely a view transition:
                                         # configured WSPR monitor streams keep
                                         # their remote W/F slots and continue.
                                     elif kind == "add":
@@ -28430,6 +28648,7 @@ def main():
                                 elif choice == "rtl":
                                     tests_panel_open = False
                                     rtl_lab_open = True
+                                    rtl_lab.show("apps")
                                 elif choice == "font_lab":
                                     tests_panel_open = False
                                     font_lab_open = True
@@ -28469,6 +28688,7 @@ def main():
                                 choice = rtl_lab_option_at(x, y)
                                 if choice == "source":
                                     rtl_lab.cycle_source()
+                                    rtl_lab.probe()
                                 elif choice == "preset":
                                     rtl_lab.cycle_preset()
                                 elif choice == "run":
@@ -28499,17 +28719,19 @@ def main():
                                             drain_queue(line_queue)
                                             wf_texture.clear()
                                             rtl_lab_open = False
+                                            pending_usb_restore = None
+                                            write_remembered_view(save_current_frequency=True, force=True)
                                 elif choice == "back":
                                     rtl_lab.stop()
                                     rtl_lab_open = False
-                                    tests_panel_open = True
+                                    restore_navigation_parent(rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "rtl_lab_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 rtl_lab.stop()
                                 rtl_lab_open = False
-                                tests_panel_open = True
+                                restore_navigation_parent(rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28578,9 +28800,12 @@ def main():
                                         active_server, active_freq, *_ = state.snapshot()
                                         active_mode, *_ = state.radio_snapshot()
                                         sstv_workspace.open = hell_workspace.open = qrss_workspace.open = cw_workspace.open = False
-                                        ({"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[value]).show(active_server, active_freq, active_mode)
+                                        workspace = {"hell": hell_workspace, "sstv": sstv_workspace, "qrss": qrss_workspace, "cw": cw_workspace}[value]
+                                        workspace.navigation_parent = "modes"
+                                        workspace.show(active_server, active_freq, active_mode)
                                         tests_panel_open = dj_tune_open = filter_panel_open = False
                                     elif kind == "workspace" and value == "wspr":
+                                        wspr_navigation_parent = "modes"
                                         radio_setup_open = False
                                         radio_family_open = None
                                         wspr_panel_open = True
@@ -28821,13 +29046,37 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 previous_sidebar = theme_system.runtime_theme["sidebar"]
+                                theme_action = next(
+                                    (name for name, box in theme_screen_boxes(theme_editor).items()
+                                     if contains(box, x, y)),
+                                    None,
+                                )
                                 theme_editor.tap(x, y)
+                                layout_changed = False
                                 if theme_system.runtime_theme["sidebar"] != previous_sidebar:
                                     # Preserve the operator's visible LEFT/RIGHT choice
                                     # while the rail itself moves to the opposite edge.
                                     instrument_layout = visible_frequency_position(
                                         instrument_layout, "left"
                                     )
+                                    layout_changed = True
+                                if (
+                                    theme_action == "save"
+                                    and not theme_editor.open
+                                    and not theme_editor.error
+                                ):
+                                    reconciled_layout = instrument_layout_after_theme_save(
+                                        instrument_layout,
+                                        theme_system.runtime_theme["smeter_style"],
+                                    )
+                                    if reconciled_layout != instrument_layout:
+                                        instrument_layout = reconciled_layout
+                                        layout_changed = True
+                                        print(
+                                            f"gl instruments {instrument_layout} for large S-meter",
+                                            flush=True,
+                                        )
+                                if layout_changed:
                                     preferences_dirty = True
                                     write_remembered_view(force=True)
                                 refresh_receiver_list_theme()
@@ -28861,7 +29110,7 @@ def main():
                         elif touch_started and gesture == "waterfall_mute":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                state.set_audio_controls(audio_mute=False)
+                                set_main_mute(False)
                             wake_controls()
                         elif touch_started and gesture == "stream_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -28946,12 +29195,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action = deepgram_setup_action_at(x, y, deepgram_key_mode)
-                                if action == "MODE":
-                                    deepgram_key_mode = {
-                                        "lower": "upper",
-                                        "upper": "digits",
-                                        "digits": "lower",
-                                    }[deepgram_key_mode]
+                                if action in ("MODE", "CAPS"):
+                                    deepgram_key_mode = touch_keyboard_next_mode(deepgram_key_mode, action)
+                                elif action == "SPACE" and len(deepgram_key_value) < 512:
+                                    deepgram_key_value += " "
                                 elif action == "CLEAR":
                                     deepgram_key_value = ""
                                     deepgram_key_error = ""
@@ -29280,26 +29527,21 @@ def main():
                         elif touch_started and gesture == "search":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                if (
-                                    contains(station_search_back_box(), x, y)
-                                    or (
-                                        not LCD_800_MODE
-                                        and contains(SEARCH_LEFT_EXIT_BOX, x, y)
-                                    )
-                                ):
+                                if contains(station_search_back_box(), x, y):
                                     search_open = False
                                     station_scroll = 0
-                                elif contains(SEARCH_CASE_BOX, x, y):
-                                    if keyboard_mode != "numeric":
-                                        keyboard_mode = "lower" if keyboard_mode == "upper" else "upper"
-                                elif contains(SEARCH_MODE_BOX, x, y):
-                                    keyboard_mode = "upper" if keyboard_mode == "numeric" else "numeric"
                                 else:
                                     key = search_key_at(x, y, keyboard_mode)
-                                    if key == "BACK":
+                                    if key in ("MODE", "CAPS"):
+                                        keyboard_mode = touch_keyboard_next_mode(keyboard_mode, key)
+                                    elif key == "CLEAR":
+                                        station_query = ""
+                                    elif key == "BACK":
                                         station_query = station_query[:-1]
-                                    elif key == "ENTER":
+                                    elif key in ("SAVE", "CANCEL"):
                                         search_open = False
+                                    elif key == "SPACE" and len(station_query) < 48:
+                                        station_query += " "
                                     elif key and len(station_query) < 48:
                                         station_query += key
                                     stations = filtered_stations(
@@ -29436,6 +29678,8 @@ def main():
                                     "favorites" if gesture == "picker_route_favorites"
                                     else gesture.removeprefix("picker_source_")
                                 )
+                                if station_route_filter == "usb":
+                                    rtl_lab.probe()
                                 if gesture.startswith("picker_source_"):
                                     # A category tap is an explicit return to
                                     # that complete list, not a continuation
@@ -29487,7 +29731,13 @@ def main():
                                 )
                                 if idx is not None:
                                     wake_controls()
-                                    connect_to_station(visible_stations[idx])
+                                    if station_route_filter == "usb":
+                                        if rtl_lab.select_source(visible_stations[idx][0]):
+                                            picker_open = False
+                                            rtl_lab_open = True
+                                            rtl_lab.show("receivers")
+                                    else:
+                                        connect_to_station(visible_stations[idx])
                         elif touch_started and gesture == "waterfall":
                             wake_controls()
                             server, _freq, zoom, _smeter, _gen, _server_gen = state.snapshot()
@@ -29993,6 +30243,7 @@ def main():
             )
             presentation_fps = waterfall_presentation_fps(
                 receiver_type, presentation_speed, args.wf_row_pixels,
+                external=state.external_waterfall_snapshot(),
             )
             for item in wf_presenter.take(line_queue, now, presentation_fps, presentation_key):
                 if isinstance(item, tuple):
@@ -30110,9 +30361,11 @@ def main():
                         visible_span_khz=display_span,
                     ),
                 )
-            if not local_iq_active:
-                overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
-            passband_stream_ready = not local_iq_active and state.rf_stream_ready_snapshot()
+            overlay_low_cut, overlay_high_cut = filter_view_offsets(low_cut, high_cut)
+            passband_stream_ready = (
+                rtl_lab.snapshot()["status"] == "LIVE" if local_iq_active
+                else state.rf_stream_ready_snapshot()
+            )
             if waterfall_visible and passband_stream_ready:
                 draw_filter_overlay(
                     text_cache,
@@ -30144,7 +30397,7 @@ def main():
             # tappable behind them. Full-canvas tools still own the view.
             control_alpha = 0.0 if menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE) or network_panel_open or tests_panel_open or font_lab_open or rtl_lab_open or wspr_panel_open or wspr_identity_open or dj_tune_open or filter_panel_open or frequency_entry_open else 1.0
             selected_station_name = (
-                f"LOCAL {rtl_lab.snapshot()['capabilities'].label} · {rtl_lab.snapshot()['preset'][0]}"
+                usb_receiver_footer(rtl_lab.snapshot())
                 if local_iq_active else "OPENWEBRX TEST · ON0LLV"
                 if owrx.is_openwebrx_endpoint(server) else next(
                     (
@@ -30191,7 +30444,7 @@ def main():
                 wspr_tiles, sstv_manager.configs, hell_manager.configs,
                 qrss_manager.configs, cw_manager.configs,
             )
-            decoder_counts['adsb'] = int(adsb_manager.snapshot()['status'] == 'RECEIVING')
+            decoder_counts['adsb'] = int(adsb_manager.snapshot()['enabled'])
             with vhf_hub.spectrum.lock:
                 decoder_counts['spectrum'] = int(vhf_hub.spectrum.run_state()['phase'] == 'RUNNING')
             decoder_counts.update({mode: int(session.status in ('RECEIVING', 'LISTENING')) for mode, session in vhf_hub.sessions.items()})
@@ -30249,6 +30502,7 @@ def main():
                     running_decoder_count=sum(decoder_counts.values()),
                     decoder_counts=decoder_counts,
                     receiver_playing=(local_iq_active or state.rf_stream_ready_snapshot()),
+                    usb_receiver=local_iq_active,
                     instrument_layout=instrument_layout,
                     # Font Review is a live specimen: arrowing through candidates
                     # must visibly update the Home frequency readout. ``USE`` is
@@ -30296,6 +30550,7 @@ def main():
                 )
             if scope_adjust_active and not LCD_800_MODE:
                 draw_scope_height_grip(text_cache, spectrum_y1, scope_height)
+            caption_reveal.reset_for((transcription_enabled, asr_engine, caption_mode, _transcription_generation))
             if transcription_enabled and waterfall_visible:
                 draw_vosk_captions(
                     text_cache,
@@ -30306,6 +30561,7 @@ def main():
                     caption_mode,
                     caption_box,
                     asr_engine,
+                    reveal=caption_reveal,
                 )
             if waterfall_visible:
                 draw_callsign_captions(
@@ -30422,6 +30678,9 @@ def main():
                             picker_list_notice_until - time.monotonic(),
                             args.zoom_osd_seconds,
                         ),
+                        usb_present=usb_present,
+                        active_usb_source=rtl_lab.source_id if rtl_lab.is_running() else None,
+                        favorite_servers=favorite_servers,
                     )
             if radio_setup_open or radio_drawer_visible:
                 draw_radio_setup_panel(
@@ -30602,6 +30861,7 @@ def main():
                     wspr_identity_values,
                     wspr_identity_field,
                     wspr_identity_error,
+                    wspr_identity_keyboard_mode,
                 )
             if dj_tune_open:
                 draw_dj_tune_panel(
@@ -30755,14 +31015,8 @@ def main():
                 sidebar_composer.compose_left()
             web_notice = web_apps.notice
             if web_notice:
-                cx, cy = LOGICAL_W / 2, LOGICAL_H / 2
-                draw_logical_rounded_rect(cx - 280, cy - 66, cx + 280, cy + 66,
-                                          12, (16, 29, 41, 255), (85, 123, 143, 255))
-                draw_text(text_cache, cx, cy - 22, web_notice[0],
-                          (228, 237, 245), 26, bold=True, anchor="cm")
-                detail = fit_station_text(text_cache, web_notice[1], 520, 20, False, False)
-                draw_text(text_cache, cx, cy + 25, detail,
-                          (163, 186, 203), 20, anchor="cm")
+                draw_web_app_notice_osd(text_cache, web_notice, 220 if web_apps.active else
+                                        green_osd_alpha(web_apps.error_until - time.monotonic(), 8))
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

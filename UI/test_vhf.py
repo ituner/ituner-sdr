@@ -64,6 +64,30 @@ class ManagerTests(unittest.TestCase):
 
     def tearDown(self):self.hub.close();self.temp.cleanup()
 
+    def test_all_mode_rails_share_theme_header_spacing_and_clear_back(self):
+        from vhf_workspace import VHFWorkspace
+        from theme_system import BUILTIN_THEMES, preview_theme
+        from ui_style import APP_UI_STYLE
+        ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:str(text)
+        workspace=VHFWorkspace(ui,self.hub)
+        for theme in BUILTIN_THEMES.values():
+            with preview_theme(theme):
+                for mode in ('ais','aprs','ism','meteor','cubesat','sonde'):
+                    workspace.show(mode);workspace.view='data'
+                    for overlay in (None,'profiles','usb','location'):
+                        workspace.overlay=overlay;workspace.station_edit=dict(lat=44.4,lon=26.1)
+                        workspace.draw(Mock())
+                        rail=[(box,action) for box,action in workspace.actions if box[0]>=1024]
+                        self.assertEqual(rail[0][0],(1034,80,1270,144))
+                        self.assertEqual(rail[-1],((1034,728,1270,792),('back',None)))
+                        self.assertEqual(workspace.BG,APP_UI_STYLE.palette.background)
+                        for i,(box,action) in enumerate(rail):
+                            self.assertEqual(box[3]-box[1],64,action)
+                            for other,_ in rail[i+1:]:
+                                self.assertFalse(min(box[2],other[2])>max(box[0],other[0]) and
+                                                 min(box[3],other[3])>max(box[1],other[1]),(mode,action))
+        workspace.spectrum.close()
+
     def test_settings_validate_and_never_execute_arbitrary_commands(self):
         session=self.hub.sessions['ism']
         for value in (float('nan'),29e6,1701e6):
@@ -294,6 +318,27 @@ class TouchTests(unittest.TestCase):
                     self.assertEqual(session.enabled,enabled)
                     session.control.assert_not_called()
                     self.assertEqual(self.hub.broker.snapshot(),{})
+
+    def test_back_retraces_views_and_nested_editor_without_leaving_decoder(self):
+        from vhf_workspace import VHFWorkspace
+        ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        ui.station_settings=None
+        w=VHFWorkspace(ui,self.hub);w.show('ais')
+        def press(action,value=None):
+            w.actions=[((0,0,100,100),(action,value))];w.tap(10,10)
+        press('view','data');press('overlay','location');press('number','lat')
+        press('back');self.assertEqual(w.overlay,'location');self.assertTrue(w.open)
+        press('back');self.assertIsNone(w.overlay);self.assertEqual(w.view,'data');self.assertTrue(w.open)
+        press('back');self.assertEqual(w.view,'map');self.assertTrue(w.open)
+        press('back');self.assertFalse(w.open)
+
+    def test_shared_station_settings_records_decoder_parent(self):
+        from vhf_workspace import VHFWorkspace
+        ui=Mock();ui.contains.return_value=True
+        w=VHFWorkspace(ui,self.hub);w.show('ais')
+        w.actions=[((0,0,100,100),('overlay','location'))];w.tap(10,10)
+        ui.station_settings.show.assert_called_once_with(parent='vhf')
+        self.assertFalse(w.open)
 
     def test_sensor_band_buttons_tune_directly_and_all_bands_are_reachable(self):
         from vhf_workspace import VHFWorkspace

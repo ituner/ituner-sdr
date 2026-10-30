@@ -5,6 +5,7 @@ import socket
 from sstv_monitor import PRESETS
 from sstv_modes import MODE_COUNT
 from ui_style import APP_UI_STYLE
+from decoder_style import full_width_back_box
 
 
 GALLERY_COLUMNS = 5
@@ -30,6 +31,16 @@ class SSTVWorkspace:
         self.message = ''
         self.actions = []
         self.textures = OrderedDict()
+
+    def footer_offset(self):
+        return 256 if full_width_back_box()[0] == 10 else 0
+
+    def footer_button(self, cache, box, *args, **kwargs):
+        offset = self.footer_offset()
+        self.button(cache, (box[0]+offset, box[1], box[2]+offset, box[3]), *args, **kwargs)
+
+    def footer_text(self, cache, x, y, *args, **kwargs):
+        self.text(cache, x+self.footer_offset(), y, *args, **kwargs)
 
     def show(self, server, frequency, mode):
         self.open = True
@@ -63,12 +74,12 @@ class SSTVWorkspace:
         return 1 if dy < 0 else -1
 
     def theme_color(self, role, original):
-        themed = getattr(self.ui, 'themed_instrument_color', None)
-        return themed(role, original) if callable(themed) else original
+        # Resolve on each frame so existing workspaces follow theme switches.
+        return getattr(APP_UI_STYLE.palette, role, original)
 
     def text(self, cache, x, y, value, size=18, color=None, width=None):
-        if width:
-            value = self.ui.fit_station_text(cache, str(value), width, size, False, False, 'Liberation Sans')
+        width = max(1, min(width if width is not None else 1256-x, 1256-x))
+        value = self.ui.fit_station_text(cache, str(value), width, size, False, False, APP_UI_STYLE.button.font_family)
         if color is None or color == (217, 233, 238):
             color = self.theme_color('text', (217, 233, 238))
         elif color in ((104, 234, 194), (126, 255, 212)):
@@ -77,7 +88,7 @@ class SSTVWorkspace:
             color = self.theme_color('waiting', color)
         elif color == (7, 18, 25):
             color = self.theme_color('focus_text', color)
-        self.ui.draw_text(cache, x, y, str(value), color, size, False, False, 'lm', family='Liberation Sans')
+        self.ui.draw_text(cache, x, y, str(value), color, size, False, False, 'lm', family=APP_UI_STYLE.button.font_family)
 
     def button(self, cache, box, title, action, subtitle='', active=False):
         title, subtitle = str(title).upper(), str(subtitle).upper()
@@ -155,20 +166,20 @@ class SSTVWorkspace:
         if item.get('has_image', True):
             self.image(item['id'], box)
         else:
-            self.ui.draw_logical_rect(*box, (10, 25, 32, 255))
+            self.ui.draw_logical_rect(*box, self.theme_color('section_surface', (10, 25, 32, 255)))
             self.text(cache, x0+8, (y0+y1)/2-10, item['mode'], 17, width=x1-x0-16)
             self.text(cache, x0+8, (y0+y1)/2+13, 'Waiting for first lines…', 14, width=x1-x0-16)
         if live:
             label = 'Processing…' if item['kind'] == 'processing' else f"Receiving · {item['progress_pct']}%"
-            self.ui.draw_logical_rect(x0, y0, x1, y0+25, (15, 67, 55, 255))
+            self.ui.draw_logical_rect(x0, y0, x1, y0+25, self.theme_color('section_surface', (15, 67, 55, 255)))
             self.text(cache, x0+6, y0+13, label, 15, (126, 255, 212), width=x1-x0-12)
-            self.ui.draw_logical_rect(x0, y1-5, x1, y1, (31, 69, 72, 255))
-            self.ui.draw_logical_rect(x0, y1-5, x0+(x1-x0)*item['progress_pct']/100, y1, (104, 234, 194, 255))
+            self.ui.draw_logical_rect(x0, y1-5, x1, y1, self.theme_color('slider_track', (31, 69, 72, 255)))
+            self.ui.draw_logical_rect(x0, y1-5, x0+(x1-x0)*max(0,min(100,item['progress_pct']))/100, y1, self.theme_color('ready', (104, 234, 194, 255)))
 
     def draw(self, cache, receivers):
         self.actions = []
         ui = self.ui
-        ui.draw_logical_rect(0, 0, 1280, 800, (7, 18, 25, 255))
+        ui.draw_logical_rect(0, 0, 1280, 800, self.theme_color('background', (7, 18, 25, 255)))
         if self.add_open:
             self.draw_add(cache, receivers)
             return
@@ -177,16 +188,16 @@ class SSTVWorkspace:
             if item:
                 self.text(cache, 24, 34, f"{item['mode']} · {item['band']} · {item['freq_khz']/1000:.3f} MHz", 25)
                 self.text(cache, 24, 66, f"{item['receiver']} · {item['capture_utc']} · {item['kind']}", 17, width=990)
-                self.preview(cache, item, (20, 90, 1020, 778))
-                self.button(cache, (1034, 728, 1270, 792), 'BACK', ('back_image', None))
+                offset = self.footer_offset()
+                self.preview(cache, item, (20+offset, 90, 1020+offset, 778))
+                self.button(cache, full_width_back_box(), 'BACK', ('back_image', None))
                 return
             self.enlarged = None
         self.text(cache, 20, 37, 'SSTV', 30, (104, 234, 194))
-        self.text(cache, 138, 37, 'Decoders' if self.decoders_open else 'Image gallery', 24)
+        self.text(cache, 138, 37, 'Decoders' if self.decoders_open else 'Image gallery', 24, width=156)
         self.button(cache, (546, 8, 782, 72), 'GALLERY' if self.decoders_open else 'DECODERS',
                     ('gallery' if self.decoders_open else 'decoders', None))
         self.button(cache, (790, 8, 1026, 72), 'ADD DECODER', ('add', None))
-        self.button(cache, (1034, 8, 1270, 72), 'HOME', ('home', None))
         if self.decoders_open:
             self.draw_decoders(cache)
             return
@@ -203,20 +214,20 @@ class SSTVWorkspace:
             x = 16 + (index % GALLERY_COLUMNS) * 250
             y = 88 + (index // GALLERY_COLUMNS) * 210
             box = (x, y, x+242, y+202)
-            ui.draw_logical_rect(*box, (17, 34, 42, 255))
+            ui.draw_logical_rect(*box, self.theme_color('section_surface', (17, 34, 42, 255)))
             self.preview(cache, item, (x+4, y+4, x+238, y+164))
             self.text(cache, x+8, y+178, f"{item['mode']} · {item['band']} · {item['progress_pct']}%", 15, width=226)
             self.text(cache, x+8, y+194, item['capture_utc'].replace('T', ' ').replace('Z', ' UTC'), 13, width=226)
             self.actions.append((box, ('image', item['id'])))
-        self.button(cache, (16, 728, 130, 792), 'PREVIOUS', ('page', -1))
-        self.button(cache, (138, 728, 252, 792), 'NEXT', ('page', 1))
-        self.button(cache, (260, 728, 496, 792), 'ALL IMAGES', ('filter', None), active=self.filter_id is None)
+        self.footer_button(cache, (16, 728, 130, 792), 'PREVIOUS', ('page', -1))
+        self.footer_button(cache, (138, 728, 252, 792), 'NEXT', ('page', 1))
+        self.footer_button(cache, (260, 728, 496, 792), 'ALL IMAGES', ('filter', None), active=self.filter_id is None)
         notice = self.message or self.manager.web_error
         if notice:
-            self.text(cache, 512, 758, notice, 16, width=506)
+            self.footer_text(cache, 512, 758, notice, 16, width=506)
         else:
-            self.text(cache, 512, 744, 'Tap an image to enlarge' if not self.filter_id else 'Showing selected decoder · tap All images to clear', 15, width=506)
-            self.text(cache, 512, 772, f"Browser: {socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 15, width=506)
+            self.footer_text(cache, 512, 744, 'Tap an image to enlarge' if not self.filter_id else 'Showing selected decoder · tap All images to clear', 15, width=506)
+            self.footer_text(cache, 512, 772, f"Browser: {socket.gethostname().split('.')[0]}.local:{self.manager.web_port}/sstv", 15, width=506)
 
     def draw_decoders(self, cache):
         """Keep receiver operation on its own page, leaving gallery space for images."""
@@ -251,12 +262,12 @@ class SSTVWorkspace:
                 left=x+16+offset*122
                 self.button(cache, (left, y+120, left+114, y+184), label, action)
         if self.delete_armed:
-            ui.draw_logical_rect(16, 714, 1258, 792, self.theme_color('danger', (49, 30, 28, 255)))
-            self.text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
-            self.button(cache, (782, 728, 896, 792), 'DELETE', ('confirm_delete', self.delete_armed))
-            self.button(cache, (904, 728, 1018, 792), 'CANCEL', ('cancel_delete', None))
+            ui.draw_logical_rect(16+self.footer_offset(), 714, 1018+self.footer_offset(), 792, self.theme_color('danger', (49, 30, 28, 255)))
+            self.footer_text(cache, 32, 754, 'Delete decoder? Saved images are kept.', 20, width=690)
+            self.footer_button(cache, (782, 728, 896, 792), 'DELETE', ('confirm_delete', self.delete_armed))
+            self.footer_button(cache, (904, 728, 1018, 792), 'CANCEL', ('cancel_delete', None))
         else:
-            self.text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=990)
+            self.footer_text(cache, 24, 756, self.message or 'Decoders keep listening while you browse the gallery or return Home.', 18, width=990)
 
     def draw_add(self, cache, receivers):
         self.text(cache, 30, 38, 'EDIT SSTV DECODER' if self.edit_id else 'ADD SSTV DECODER', 29, (104, 234, 194))
@@ -280,9 +291,9 @@ class SSTVWorkspace:
                         f'{self.current[1]/1000:.3f} MHz {self.current[2].upper()}', self.preset == self.current)
         self.text(cache, 282, 554, 'Regional activity varies; presets are receive-only.', 18)
         self.text(cache, 282, 584, f'{MODE_COUNT} analog modes · automatic detection · Kiwi: 0–30 MHz.', 17)
-        self.button(cache, (30, 728, 266, 792), 'CANCEL', ('cancel_add', None))
-        self.text(cache, 282, 750, self.message, 17, width=488)
-        self.button(cache, (782, 728, 1018, 792), 'SAVE CHANGES' if self.edit_id else 'START DECODER', ('create', None), active=True)
+        self.footer_button(cache, (30, 728, 266, 792), 'CANCEL', ('cancel_add', None))
+        self.footer_text(cache, 282, 750, self.message, 17, width=488)
+        self.footer_button(cache, (782, 728, 1018, 792), 'SAVE CHANGES' if self.edit_id else 'START DECODER', ('create', None), active=True)
 
     def tap(self, x, y, receivers):
         action = next((a for box, a in reversed(self.actions) if self.ui.contains(box, x, y)), None)

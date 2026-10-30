@@ -510,7 +510,13 @@ class VHFHub:
         self.server=None
         if port>=0:
             try:
-                self.server=ThreadingHTTPServer(('0.0.0.0',port),VHFHandler);self.server.manager=self;self.port=self.server.server_port
+                try:
+                    self.server=ThreadingHTTPServer(('0.0.0.0',port),VHFHandler)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EADDRINUSE:raise
+                    self.server=ThreadingHTTPServer(('0.0.0.0',0),VHFHandler)
+                self.server.manager=self;self.port=self.server.server_port
                 self.web_apps.port=self.port
                 threading.Thread(target=self.server.serve_forever,name='vhf-web',daemon=True).start()
             except OSError as exc:

@@ -24,6 +24,17 @@ def row(stamp=None,**fields):
 
 
 class CoverageTests(unittest.TestCase):
+    def test_empty_dome_message_clears_height_controls_without_moving_them(self):
+        w=ADSBWorkspace(Mock(),Mock());w.ink=Mock();w.manager.coverage_error=''
+        view=w.coverage_view;view.mode='space';view.data=dict(status='NO SITE',meta={})
+        view.draw(Mock(),dict(aircraft=[]))
+        message=next(c for c in w.ink.call_args_list if c.args[3]=='Tap Site to enter antenna latitude / longitude.')
+        center=message.args[1];width=message.kwargs['width']
+        height=next(b for b,a in w.actions if a==('coverage_height',None))
+        self.assertEqual(height,(24,468,152,550))
+        self.assertGreater(center-width/2,height[2])
+        self.assertLess(center+width/2,1128)  # right-side dome instruments
+
     def test_aircraft_card_buttons_consume_taps_above_underlying_dome_controls(self):
         ui=Mock();ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
         w=ADSBWorkspace(ui,Mock());w.coverage_open=True;view=w.coverage_view
