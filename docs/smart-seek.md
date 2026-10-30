@@ -97,6 +97,18 @@ scroll indicator shows position. The dial still moves the selection, and its
 press listens. **BACK** closes Smart Seek and restores the listening screen.
 Full-screen touch and rendering do not inherit the Home rail relocation.
 
+**WATERFALL** is off by default and is available while a listed station is
+playing. Turn it on to show a continuous 50 kHz RF waterfall in the right half
+of the playing row. A gold marker shows the actual tuned frequency and nearby
+5 kHz frequency labels provide context. This temporarily gives the existing
+W/F connection exclusively to the preview: all band scans and uncertain-signal
+checks pause, with their observation deadlines preserved. Turn it off to resume
+scanning. Tuning another row moves the preview to that station; closing Smart
+Seek, Refresh, band selection and Research return the stream to scanning.
+Home's zoom and RF tuning are not changed. The preview follows the current
+waterfall palette and level settings, buffers at most 32 source rows and keeps
+a small GPU history. It opens no additional receiver connection.
+
 The survey uses raw, uncompressed 1024-bin W/F rows independently of display
 zoom. One two-second wide overview of the selected band prioritizes promising
 areas without publishing coarse peaks as stations. For a 30 MHz Kiwi, the 41 m

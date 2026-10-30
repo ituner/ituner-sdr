@@ -115,6 +115,10 @@ class SmartSeekView:
         self.research_rows = None
         self.research_error = False
         self.research_offset = 0
+        self.waterfall_texture = None
+        self.waterfall_generation = None
+        self.waterfall_style = None
+        self.waterfall_leveler = None
 
     @property
     def open(self):
@@ -148,6 +152,8 @@ class SmartSeekView:
 
     def shutdown(self):
         self.close()
+        if self.waterfall_texture is not None:
+            self.waterfall_texture.close()
         for future in self.pending.values():
             future.cancel()
         self.executor.shutdown(wait=False, cancel_futures=True)
@@ -242,13 +248,19 @@ class SmartSeekView:
         elif kind == 'refresh':
             self.state.start_smart_seek(refresh=True)
         elif kind == 'bands':
+            if self.state.smart_seek_snapshot().get('waterfall'):
+                self.state.toggle_seek_waterfall()
             self.band_menu = not self.band_menu
         elif kind == 'band':
             self.state.start_smart_seek(band_label=value)
             self.first_visible = 0
             self.band_menu = False
         elif kind == 'research':
+            if self.state.smart_seek_snapshot().get('waterfall'):
+                self.state.toggle_seek_waterfall()
             self.research(value)
+        elif kind == 'waterfall':
+            self.state.toggle_seek_waterfall()
         elif kind == 'research_back':
             self.close_research()
         elif kind == 'research_retry':
@@ -329,6 +341,40 @@ class SmartSeekView:
         self.first_visible = first
         return candidates[first:end]
 
+    def draw_waterfall(self, cache, box, ink):
+        ui = self.ui
+        generation, rows, center, span, updated = self.state.take_seek_waterfall()
+        if generation != self.waterfall_generation:
+            if self.waterfall_texture is not None:
+                self.waterfall_texture.close()
+            self.waterfall_texture = ui.MiniWaterfallTexture(width=512, height=96)
+            self.waterfall_generation = generation
+            self.waterfall_style = None
+        floor, ceiling, _speed, auto, palette, _revision = self.state.waterfall_snapshot()
+        style = floor, ceiling, auto, palette
+        if style != self.waterfall_style:
+            self.waterfall_leveler = ui.kiwi.WaterfallLeveler(floor, ceiling, auto=auto)
+            self.waterfall_mapper = ui.waterfall_mapper(palette)
+            self.waterfall_style = style
+        for samples in rows:
+            low, high = self.waterfall_leveler.levels_for(samples)
+            image = ui.kiwi.waterfall_line(samples, self.waterfall_mapper, low, high, width=512)
+            self.waterfall_texture.push_rgba(image.convert('RGBA').tobytes())
+        x0, y0, x1, y1 = box
+        ui.draw_logical_rect(x0, y0, x1, y1, (4, 12, 18, 255))
+        self.waterfall_texture.draw(x0, y0+18, x1, y1-18, visible_fraction=1)
+        fresh = updated is not None and time.monotonic()-updated < 2
+        label = 'LIVE · scanning paused' if fresh else 'Waiting for waterfall…'
+        ink(x0+6, y0+9, label, 14, (101, 223, 194), max_width=x1-x0-12)
+        marker = (x0+x1)/2
+        ui.draw_logical_line(marker, y0+18, marker, y1-18, (255, 209, 94), 1)
+        # The marker is the received tuning frequency, not a rounded schedule channel.
+        for frequency in range(int((center-span/2)//5)*5, int(center+span/2)+1, 5):
+            px = x0+(frequency-center+span/2)/span*(x1-x0)
+            if x0+23 < px < x1-23 and abs(px-marker) > 43:
+                ink(px-18, y1-8, str(frequency), 12, (146, 166, 179))
+        ink(marker-37, y1-8, f'{center:.1f} kHz', 12, (255, 209, 94))
+
     def draw(self, cache):
         ui = self.ui
         snapshot = self.state.smart_seek_snapshot()
@@ -364,6 +410,9 @@ class SmartSeekView:
             self.draw_research(cache, ink, button)
             return
         ink(20, 31, 'SMART SEEK', 26, (101, 223, 194))
+        waterfall = snapshot.get('waterfall', False)
+        if any(candidate_playing(c, snapshot['playing_khz']) for c in snapshot['candidates']):
+            button((width-570, 16, width-342, 74), 'WATERFALL', ('waterfall', None), waterfall)
         button((width-330, 16, width-150, 74), 'BAND: '+snapshot['label'], ('bands', None), self.band_menu)
         back = ui_chrome.RAIL_BACK_BOX
         button(back, 'BACK', ('close', None))
@@ -372,7 +421,8 @@ class SmartSeekView:
         status = f"{snapshot['label']} · {confirmed} signals"
         if confirmed < count:
             status += f' · {count-confirmed} rechecking'
-        status += (' · surveying other bands…' if snapshot['phase']=='spectrum' else
+        status += (' · live waterfall · scanning paused' if waterfall else
+                   ' · surveying other bands…' if snapshot['phase']=='spectrum' else
                    ' · checking '+str(snapshot['scanning_band'])+'…' if snapshot['phase']=='background' else
                    ' · surveying band…' if snapshot['phase']=='overview' else
                    ' · checking uncertain signal…' if snapshot['phase']=='review' else
@@ -380,12 +430,8 @@ class SmartSeekView:
                    ' · watching this band…' if snapshot['continuous'] else ' · ready to listen')
         if snapshot['skipped']:
             status += ' · some areas could not be checked'
-        ink(20, 59, status, 18, max_width=width-350)
+        ink(20, 59, status, 18, max_width=width-600)
         old_schedule = any(match.old_schedule for matches in self.matches.values() for match in matches)
-        help_text = 'Tap to listen · swipe to scroll · names are schedule matches'
-        if old_schedule:
-            help_text += ' · * old schedule'
-        ink(20, 80, help_text, 18, (146, 166, 179))
         ui.draw_logical_rect(20, 92, width-20, 96, (35, 48, 56, 255))
         progress = (snapshot['completed']+snapshot['window_progress'])/max(1, snapshot['total'])
         ui.draw_logical_rect(20, 92, 20+(width-40)*progress, 96, (68, 202, 168, 255))
@@ -403,6 +449,7 @@ class SmartSeekView:
             x = 20
             y = row_y
             playing = candidate_playing(candidate,snapshot['playing_khz'])
+            preview = playing and waterfall
             row_height = card_height*(2 if playing else 1)
             box = (x, y, x+card_width, y+row_height)
             row_y += row_height+gap
@@ -420,22 +467,28 @@ class SmartSeekView:
                 ink(x+76,y+44,'Rechecking…' if dim_row else snapshot['signal_status'].get(candidate.frequency_khz,''),14,(146,166,179),max_width=120)
             displayed_matches = (matches or ())[:2 if playing else 4]
             for match_index, match in enumerate(displayed_matches):
-                column, row = match_index % 2, match_index // 2
-                column_width = (card_width-208)/(2 if len(matches) > 1 else 1)
+                column, row = (0, match_index) if preview else (match_index % 2, match_index // 2)
+                column_width = (card_width*.54-208 if preview else
+                                (card_width-208)/(2 if len(matches) > 1 else 1))
                 match_x = x+200+column*column_width
                 crowded = not playing and len(matches) > 2
-                match_y = y+(20 if playing else 15+row*26 if crowded else card_height/2)
-                flag_width, flag_height = (36, 24) if crowded else (42, 28)
+                match_y = y+(20+row*54 if preview else 20 if playing else 15+row*26 if crowded else card_height/2)
+                flag_width, flag_height = (52, 30) if crowded else (60, 40)
+                if preview and len(matches) > 1:
+                    flag_width, flag_height = 52, 32
                 if match.old_schedule:
                     ink(match_x-14, match_y, '*', 18, (210, 181, 119))
                 ui.draw_country_flag(match.country, match_x, match_y-flag_height/2,
                                      flag_width, flag_height, alpha=.4 if dim_row else 1)
                 name = match.name if len(matches) == 1 else short_station_name(match.name)
-                ink(match_x+flag_width+10, match_y, name, 24 if crowded else 28,
-                    max_width=column_width-flag_width-20)
+                ink(match_x+flag_width+16, match_y, name, 24 if crowded else 28,
+                    max_width=column_width-flag_width-26)
                 if playing:
-                    for line, text in enumerate(station_detail_lines(match)):
-                        ink(match_x, y+49+line*26, text, 18, (166, 190, 202),
+                    details = station_detail_lines(match)
+                    if preview and len(matches) > 1:
+                        details = (' · '.join(filter(None, (match.country, match.language, match.schedule))),)
+                    for line, text in enumerate(details):
+                        ink(match_x, y+(45+row*54 if preview and len(matches) > 1 else 49+line*26), text, 18, (166, 190, 202),
                             max_width=column_width-12)
             if playing and matches and len(matches) > 2:
                 ink(x+12, y+81, f'+{len(matches)-2} matches', 16, (146, 166, 179), max_width=175)
@@ -447,12 +500,15 @@ class SmartSeekView:
                 label = classification if classification in ('Carrier only','Unconfirmed') else 'Unknown'
                 ink(x+200, y+card_height/2, 'Checking…' if matches is None else label, 28,
                     (146, 166, 179))
-                if playing:
+                if playing and not preview:
                     ink(x+200, y+76, 'Schedule and transmitter details unavailable.', 18,
-                        (146, 166, 179), max_width=card_width-220)
+                        (146, 166, 179), max_width=card_width*.54-220 if preview else card_width-220)
                 if matches is not None:
-                    button((width-192, y, width-20, y+card_height), 'RESEARCH',
+                    button((x+200, y+40, x+365, y+row_height-4) if preview else
+                           (width-192, y, width-20, y+card_height), 'RESEARCH',
                            ('research',candidate.frequency_khz))
+            if preview:
+                self.draw_waterfall(cache, (x+card_width*.55, y+4, x+card_width-8, y+row_height-4), ink)
             strength = max(1, min(5, round(candidate.prominence/8)))
             for bar in range(5):
                 height = 6+bar*3
@@ -481,6 +537,8 @@ class SmartSeekView:
         database_label = ('Updating station names…' if 'updating' in database_status else
                           'Station names unavailable' if 'unavailable' in database_status else
                           'Offline station names')
+        if old_schedule:
+            database_label += ' · * old schedule'
         ink(344, 789, database_label, 16, (146,166,179), max_width=670)
         if count > len(visible):
             track = bottom-104-100

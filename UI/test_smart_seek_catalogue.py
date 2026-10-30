@@ -192,6 +192,51 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(catalogue._current_label,'41 m')
         self.assertEqual(catalogue.skipped,0)
 
+    def test_preview_pause_preserves_scan_and_worker_deadlines(self):
+        catalogue = self.start()
+        catalogue.request(('rx',), 100)
+        worker = catalogue._engine.worker
+        deadline = worker.deadline
+        catalogue.set_capture_paused(True, 101)
+        catalogue.poll(('rx',), 301)
+        self.assertIsNone(catalogue.request(('rx',), 301))
+        self.assertEqual(catalogue.skipped, 0)
+        self.assertEqual(worker.deadline, deadline)
+        catalogue.set_capture_paused(False, 301)
+        self.assertIsNotNone(catalogue.request(('rx',), 301))
+        self.assertEqual(worker.deadline, deadline+200)
+        self.assertEqual(catalogue.skipped, 0)
+
+    def test_receiver_change_still_closes_paused_scan(self):
+        catalogue = self.start()
+        catalogue.set_capture_paused(True, 100)
+        catalogue.poll(('other rx',), 200)
+        self.assertFalse(catalogue.open)
+        self.assertFalse(catalogue._capture_paused)
+
+    def test_waterfall_is_opt_in_and_does_not_change_tuning_or_home_zoom(self):
+        with patch.object(ui.time, 'monotonic', return_value=100):
+            state = ui.SharedState('http://example.test:8073', 9435, 3, -95, 142, 245, 4, 'am', False)
+            state.connection_streams = {'audio': True, 'waterfall': True}
+            state.start_smart_seek()
+            state.smart_seek._merge([SeekCandidate(9435, 30), SeekCandidate(9455, 25)])
+            before = state.snapshot(), state.radio_snapshot(), state.waterfall_snapshot()
+            self.assertFalse(state.smart_seek_snapshot()['waterfall'])
+            state.toggle_seek_waterfall()
+            self.assertEqual(state.smart_seek_capture_request(), (9435, 9))
+            self.assertEqual(state.smart_seek_snapshot()['phase'], 'preview')
+            self.assertEqual((state.snapshot(), state.radio_snapshot(), state.waterfall_snapshot()), before)
+            state.tune_smart_seek_candidate(9455)
+            self.assertEqual(state.smart_seek_capture_request(), (9455, 9))
+            state.toggle_seek_waterfall()
+            self.assertIsNotNone(state.smart_seek_capture_request())
+            self.assertFalse(state.smart_seek_snapshot()['waterfall'])
+            state.toggle_seek_waterfall()
+            state.close_smart_seek()
+            self.assertFalse(state.seek_waterfall.enabled)
+            state.start_smart_seek()
+            self.assertFalse(state.smart_seek_snapshot()['waterfall'])
+
     def test_background_does_not_change_audio_and_switch_uses_previously_found_rows(self):
         with patch.object(ui.time,'monotonic') as clock:
             clock.return_value = 100

@@ -260,6 +260,7 @@ from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SK
                           BAKELITE_CALIBRATION, bakelite_image_box, bakelite_point, bakelite_needle_segment)
 from am_carrier import CarrierSearch, carrier_available, rf_view_center_hz
 from smart_seek_catalogue import SmartSeekCatalogue
+from smart_seek_waterfall import SeekWaterfall
 import offline_schedules
 from smart_seek_view import SmartSeekView
 from meter_artwork import linear_strip_image
@@ -5034,6 +5035,7 @@ class SharedState:
         self.lock = threading.Lock()
         self.carrier_search = CarrierSearch()
         self.smart_seek = SmartSeekCatalogue(SW_BROADCAST_BANDS)
+        self.seek_waterfall = SeekWaterfall()
         self.carrier_idle_context = None
         self.carrier_idle_since = time.monotonic()
         self.carrier_attempted_context = None
@@ -5378,6 +5380,7 @@ class SharedState:
 
     def start_smart_seek(self, refresh=False, band_label=None):
         with self.lock:
+            self._set_seek_waterfall(False)
             if not self._carrier_eligible():
                 return False
             if band_label is None and refresh and self.smart_seek.open:
@@ -5396,6 +5399,7 @@ class SharedState:
 
     def close_smart_seek(self, selected=None):
         with self.lock:
+            self._set_seek_waterfall(False)
             if selected is not None and any(item.frequency_khz == selected for item in self.smart_seek.candidates):
                 self.smart_seek.selection = selected
             self.smart_seek.close()
@@ -5424,7 +5428,25 @@ class SharedState:
             # Only this explicit menu selection carries the survey across a
             # VFO move. Other tuning/receiver changes still cancel capture.
             self.smart_seek.context = self._carrier_context()
+            if self.seek_waterfall.enabled:
+                self.seek_waterfall.set(True, self.freq_khz, self._carrier_context())
             return True
+
+    def _set_seek_waterfall(self, enabled):
+        if enabled:
+            enabled = self.smart_seek.open and any(
+                min(abs(c.frequency_khz-self.freq_khz), abs(c.tuning_khz-self.freq_khz)) < .5
+                for c in self.smart_seek.candidates if c.frequency_khz not in self.smart_seek.suppressed)
+        self.seek_waterfall.set(enabled, self.freq_khz, self._carrier_context())
+        self.smart_seek.set_capture_paused(enabled, time.monotonic())
+
+    def toggle_seek_waterfall(self):
+        with self.lock:
+            self._set_seek_waterfall(not self.seek_waterfall.enabled)
+
+    def take_seek_waterfall(self):
+        with self.lock:
+            return self.seek_waterfall.take()
 
     def smart_seek_snapshot(self):
         with self.lock:
@@ -5432,7 +5454,12 @@ class SharedState:
             self.smart_seek.poll(self._carrier_context(), time.monotonic())
             if not self._carrier_eligible():
                 self.smart_seek.close()
+            if not self.smart_seek.open:
+                self._set_seek_waterfall(False)
             snapshot = self.smart_seek.snapshot()
+            snapshot['waterfall'] = self.seek_waterfall.enabled
+            if self.seek_waterfall.enabled:
+                snapshot['phase'] = 'preview'
             snapshot['playing_khz'] = self.freq_khz
             snapshot['bands'] = tuple(b[2] for b in SW_BROADCAST_BANDS
                                       if b[0] < self.smart_seek.bandwidth_hz/1000)
@@ -5443,6 +5470,10 @@ class SharedState:
             if not self._carrier_eligible():
                 self.smart_seek.close()
                 return None
+            if self.seek_waterfall.enabled and self.seek_waterfall.context != self._carrier_context():
+                self._set_seek_waterfall(False)
+            if self.seek_waterfall.enabled:
+                return self.seek_waterfall.request(bandwidth_hz, zoom_cap)
             return self.smart_seek.request(self._carrier_context(), time.monotonic(), bandwidth_hz, zoom_cap)
 
     def feed_smart_seek_frame(self, message, bandwidth_hz, zoom_max, zoom_cap):
@@ -5452,7 +5483,10 @@ class SharedState:
             if not self._carrier_eligible():
                 self.smart_seek.close()
                 return
-            self.smart_seek.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
+            if self.seek_waterfall.enabled:
+                self.seek_waterfall.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
+            else:
+                self.smart_seek.feed(message, bandwidth_hz, zoom_max, zoom_cap, time.monotonic())
 
     def move_smart_seek(self, delta):
         with self.lock:
@@ -7258,10 +7292,10 @@ class MiniWaterfallTexture:
             GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, row,
         )
 
-    def draw(self, x0, y0, x1, y1):
+    def draw(self, x0, y0, x1, y1, visible_fraction=None):
         # Kiwi ends at zoom 14. The card locally magnifies the narrow USB
         # WSPR activity window, wide enough to show 1200--1800 Hz in one view.
-        half = WSPR_MINI_WF_VISIBLE_FRACTION / 2.0
+        half = (WSPR_MINI_WF_VISIBLE_FRACTION if visible_fraction is None else visible_fraction) / 2.0
         u0, u1 = 0.5 - half, 0.5 + half
         first = self.height - self.row
         draw_textured_quad(self.tex, x0, y0, x1, y0 + (y1 - y0) * first / self.height,

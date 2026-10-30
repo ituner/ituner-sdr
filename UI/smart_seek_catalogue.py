@@ -69,6 +69,7 @@ class SmartSeekCatalogue:
         self._count_receiver = None
         self._count_completed = {}
         self._count_skips = {}
+        self._capture_paused = False
 
     def __getattr__(self, name):
         return getattr(self._engine,name)
@@ -131,6 +132,18 @@ class SmartSeekCatalogue:
             self._survey.close()
         self._current = None
         self._token = None
+        self._capture_paused = False
+
+    def set_capture_paused(self, paused, now):
+        """Lend the W/F stream to the listener without expiring scan budgets."""
+        paused = bool(paused)
+        if paused and not self._capture_paused:
+            self._suspend(now)
+            for label in self._models:
+                self._paused.setdefault(label, now)
+            if self._survey is not None:
+                self._paused.setdefault('spectrum', now)
+        self._capture_paused = paused
 
     @staticmethod
     def _position(engine):
@@ -159,6 +172,8 @@ class SmartSeekCatalogue:
             return
         if context != self.context:
             self.close()
+            return
+        if self._capture_paused:
             return
         if self._current:
             self._current.poll(context,now)
@@ -267,7 +282,7 @@ class SmartSeekCatalogue:
 
     def request(self, context, now, bandwidth_hz=30000000, zoom_cap=14):
         self.poll(context,now)
-        if not self.open:
+        if not self.open or self._capture_paused:
             return None
         if self._current is None:
             engine,label = self._choose(context,now,bandwidth_hz,zoom_cap)
