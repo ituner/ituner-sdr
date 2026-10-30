@@ -30,7 +30,7 @@ class PreviewLeveler:
 
 class SeekWaterfall:
     WIDTH = 512
-    SPAN_KHZ = 50
+    SPAN_KHZ = 100
 
     def __init__(self):
         self.enabled = False
@@ -42,7 +42,7 @@ class SeekWaterfall:
         self.sequence = None
         self.geometry = None
         self.span = self.SPAN_KHZ
-        self.zoom = 9
+        self.zoom = 8
 
     def set(self, enabled, center=None, context=None):
         key = bool(enabled), center if enabled else None, context if enabled else None

@@ -370,7 +370,8 @@ class SmartSeekView:
         marker = (x0+x1)/2
         ui.draw_logical_line(marker, y0+18, marker, y1-18, (255, 209, 94), 1)
         # The marker is the received tuning frequency, not a rounded schedule channel.
-        for frequency in range(int((center-span/2)//5)*5, int(center+span/2)+1, 5):
+        tick = 10 if span > 60 else 5
+        for frequency in range(int((center-span/2)//tick)*tick, int(center+span/2)+1, tick):
             px = x0+(frequency-center+span/2)/span*(x1-x0)
             if x0+23 < px < x1-23 and abs(px-marker) > 43:
                 ink(px-18, y1-8, str(frequency), 12, (146, 166, 179))

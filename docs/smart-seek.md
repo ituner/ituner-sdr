@@ -98,7 +98,7 @@ press listens. **BACK** closes Smart Seek and restores the listening screen.
 Full-screen touch and rendering do not inherit the Home rail relocation.
 
 **WATERFALL** is off by default and is available while a listed station is
-playing. Turn it on to show a continuous 50 kHz RF waterfall in the right half
+playing. Turn it on to show a continuous 100 kHz RF waterfall in the right half
 of the playing row. A gold marker shows the actual tuned frequency and nearby
 5 kHz frequency labels provide context. This temporarily gives the existing
 W/F connection exclusively to the preview: all band scans and uncertain-signal
