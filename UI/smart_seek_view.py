@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, replace
 import offline_schedules
 import ui_chrome
+from smart_seek_waterfall import PreviewLeveler
 
 
 @dataclass(frozen=True)
@@ -350,10 +351,10 @@ class SmartSeekView:
             self.waterfall_texture = ui.MiniWaterfallTexture(width=512, height=96)
             self.waterfall_generation = generation
             self.waterfall_style = None
-        floor, ceiling, _speed, auto, palette, _revision = self.state.waterfall_snapshot()
-        style = floor, ceiling, auto, palette
+        _floor, _ceiling, _speed, _auto, palette, _revision = self.state.waterfall_snapshot()
+        style = palette
         if style != self.waterfall_style:
-            self.waterfall_leveler = ui.kiwi.WaterfallLeveler(floor, ceiling, auto=auto)
+            self.waterfall_leveler = PreviewLeveler()
             self.waterfall_mapper = ui.waterfall_mapper(palette)
             self.waterfall_style = style
         for samples in rows:

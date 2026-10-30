@@ -2,7 +2,7 @@ import struct
 import unittest
 
 from am_carrier import rf_view_center_hz
-from smart_seek_waterfall import SeekWaterfall
+from smart_seek_waterfall import SeekWaterfall, PreviewLeveler
 
 
 def frame(center=9455, zoom=9, sequence=1, bandwidth=30000000, zoom_max=14):
@@ -15,6 +15,26 @@ def frame(center=9455, zoom=9, sequence=1, bandwidth=30000000, zoom_max=14):
 
 
 class WaterfallTests(unittest.TestCase):
+    def test_weak_sidebands_get_visible_contrast_in_the_first_row(self):
+        samples = bytes([100]*400+[110]*100+[145]*12)
+        floor, ceiling = PreviewLeveler().levels_for(samples)
+        def brightness(value):
+            return max(0, min(255, (value-floor)*255/(ceiling-floor)))
+        self.assertGreater(brightness(110), 70)
+        self.assertGreater(brightness(145), brightness(110))
+        self.assertLess(brightness(100), brightness(110))
+
+    def test_preview_levels_stay_bounded_and_follow_rf_changes_smoothly(self):
+        leveler = PreviewLeveler()
+        low, high = leveler.levels_for(bytes([100]*512))
+        next_low, next_high = leveler.levels_for(bytes([140]*512))
+        self.assertTrue(low < next_low < 135)
+        self.assertTrue(high < next_high < 163)
+        for value in (0, 255):
+            floor, ceiling = PreviewLeveler().levels_for(bytes([value]*512))
+            self.assertTrue(0 <= floor < ceiling <= 255)
+            self.assertGreaterEqual(ceiling-floor, 28)
+
     def preview(self):
         preview = SeekWaterfall()
         preview.set(True, 9455, ('receiver',))

@@ -106,7 +106,7 @@ checks pause, with their observation deadlines preserved. Turn it off to resume
 scanning. Tuning another row moves the preview to that station; closing Smart
 Seek, Refresh, band selection and Research return the stream to scanning.
 Home's zoom and RF tuning are not changed. The preview follows the current
-waterfall palette and level settings, buffers at most 32 source rows and keeps
+waterfall palette with its own automatic local contrast, buffers at most 32 source rows and keeps
 a small GPU history. It opens no additional receiver connection.
 
 The survey uses raw, uncompressed 1024-bin W/F rows independently of display
