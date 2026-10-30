@@ -20,8 +20,8 @@ sudo ./scripts/install.sh --cm5-existing-display
 
 This installs the application while preserving the existing display/touch
 drivers and boot settings. Fresh UI preferences use compact instruments,
-Oxanium, Classic waterfall colours, fixed range 142–245, speed 4 and automatic
-levelling off. Existing preferences are preserved. LCD and CM5 retain their
+Oxanium, Kiwi waterfall colours, speed 4 and automatic contrast. Display settings
+provides a saved Auto/Manual choice; existing explicit choices are preserved. LCD and CM5 retain their
 own orientation, touch mapping and audio backend.
 
 For a plain black appliance screen without the desktop wallpaper or taskbar,
@@ -34,8 +34,8 @@ addresses, setup and receiver ownership notes, see
 
 ### Software version
 
-The [0.2.0 release notes](docs/release-0.2.0.md) describe Smart Seek and the
-receiver, audio-test and coverage updates synchronized from the CM5.
+The [0.3.0 release notes](docs/release-0.3.0.md) describe the combined Smart Seek
+development, live waterfall preview, adaptive display settings and coverage updates.
 
 [`VERSION`](VERSION) is the source of the `major.minor.patch` release number,
 starting at 0.1.0. Increase patch for fixes, minor for new features, and major

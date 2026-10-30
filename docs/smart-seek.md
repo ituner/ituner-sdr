@@ -1,7 +1,7 @@
 # Smart Seek prototype
 
-On Home, connect a Kiwi receiver in AM, AMN or AMW and tap **SMART SEEK**
-below Auto Tune. Smart Seek takes the full screen with a black station picker and a shared Back control. Audio keeps
+On Home, connect a Kiwi receiver in AM, AMN or AMW and tap **SEEK**
+in the square group with Favorite, Play/Pause and **TUNE**. Smart Seek takes the full screen with a black station picker and a shared Back control. Audio keeps
 playing on the current station while the existing waterfall connection
 starts in the broadcast band containing, or nearest to, the listening
 frequency. It only publishes candidates inside the defined LW, MW and

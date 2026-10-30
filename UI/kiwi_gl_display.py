@@ -4622,24 +4622,25 @@ def mute_waterfall_box():
 
 
 def stream_waterfall_box():
-    """Home-size icon at the RF corner, above the useful signal area."""
+    """Top-right square in the shared two-by-two listening controls."""
     x1 = (LCD_NAV_X0 if LCD_800_MODE else BASE_LOGICAL_W) - 6
     width = HOME_BOX[2] - HOME_BOX[0]
-    height = HOME_BOX[3] - HOME_BOX[1]
+    height = width
     x0 = x1 - width
     y0 = WATERFALL_ACTIONS_TOP
     return x0, y0, x1, y0 + height
 
 
 def carrier_waterfall_box():
-    """AM tuning tile below Favorite/Pause, clear of frequency and status."""
-    x0, _y0, _x1, y1 = favorite_waterfall_box()
-    return x0, y1 + 4, stream_waterfall_box()[2], y1 + 62
+    """TUNE occupies the square immediately below Favorite."""
+    x0, y0, x1, y1 = favorite_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
 
 
 def smart_seek_waterfall_box():
-    x0, _y0, x1, y1 = carrier_waterfall_box()
-    return x0, y1 + 4, x1, y1 + 62
+    """SEEK occupies the square immediately below Play/Pause."""
+    x0, y0, x1, y1 = stream_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
 
 
 def carrier_button_visible(state):
@@ -8994,8 +8995,8 @@ def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
         return
     # Visibility already means a correction is available. This is an action,
     # not an announcement that the receiver has tuned automatically.
-    draw_styled_text_button(text_cache, carrier_waterfall_box(), "AUTO TUNE",
-                            style=replace(APP_UI_STYLE.button, label_size=20))
+    draw_styled_text_button(text_cache, carrier_waterfall_box(), "TUNE",
+                            style=replace(APP_UI_STYLE.button, label_size=18))
 
 
 def draw_favorite_waterfall_button(favorited):
@@ -30700,8 +30701,8 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SMART SEEK",
-                                            style=replace(APP_UI_STYLE.button, label_size=20))
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SEEK",
+                                            style=replace(APP_UI_STYLE.button, label_size=18))
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
