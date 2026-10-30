@@ -97,8 +97,8 @@ class StoreTests(unittest.TestCase):
         self.downloader = Mock(side_effect=OSError('offline'))
         self.store = db.ScheduleStore(self.temp.name,self.downloader)
 
-    def seed(self, provider, rows, fetched_at=0):
-        payload = dict(version=1,source=provider,season='B26',rows=rows,fetched_at=fetched_at,url='source')
+    def seed(self, provider, rows, fetched_at=0, season='B26'):
+        payload = dict(version=1,source=provider,season=season,rows=rows,fetched_at=fetched_at,url='source')
         (Path(self.temp.name)/(provider+'.json')).write_text(json.dumps(payload))
 
     def test_restart_lookups_work_offline_and_filter_frequency_and_utc(self):
@@ -107,6 +107,41 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([r['station'] for r in result],['BBC'])
         self.assertEqual(self.store.lookup(7300,timestamp('2027-04-01T12:00'))[1],[])
         self.downloader.assert_not_called()
+
+    def test_old_season_name_is_an_explicit_fallback_without_changing_saved_data(self):
+        row = schedule(frequency_khz=9435,station='Voice of Korea',source='EiBi A26',
+                       time='1600-1700',valid_from='2026-03-29',valid_until='2026-10-25')
+        self.seed('eibi',[row],season='A26')
+        before = (Path(self.temp.name)/'eibi.json').read_bytes()
+        moment = timestamp('2026-10-30T16:30')
+        self.assertEqual(self.store.lookup(9434.901,moment)[1],[])
+        rows = self.store.lookup(9434.901,moment,allow_old_season=True)[1]
+        self.assertEqual([r['station'] for r in rows],['Voice of Korea'])
+        self.assertTrue(rows[0]['schedule_stale'])
+        self.assertEqual(rows[0]['schedule_season'],'A26')
+        self.assertEqual(rows[0]['valid_until'],'2026-10-25')
+        self.assertEqual((Path(self.temp.name)/'eibi.json').read_bytes(),before)
+        self.downloader.assert_not_called()
+
+    def test_current_channel_match_takes_priority_over_old_exact_match(self):
+        self.seed('eibi',[schedule(station='Old broadcaster',source='EiBi A26',
+                                  frequency_khz=7298.8,valid_until='2026-10-25')],season='A26')
+        self.seed('hfcc',[schedule(station='Current broadcaster',source='HFCC B26')])
+        rows = self.store.lookup(7298.8,timestamp('2026-10-30T12:00'),allow_old_season=True)[1]
+        self.assertEqual([r['station'] for r in rows],['Current broadcaster'])
+        self.assertFalse(rows[0].get('schedule_stale',False))
+
+    def test_old_season_fallback_still_respects_utc_and_weekdays(self):
+        self.seed('eibi',[schedule(source='EiBi A26',time='1600-1700',days='Fr',
+                                  valid_until='2026-10-25')],season='A26')
+        self.assertTrue(self.store.lookup(7300,timestamp('2026-10-30T16:30'),allow_old_season=True)[1])
+        for moment in ('2026-10-30T17:00','2026-10-31T16:30'):
+            self.assertEqual(self.store.lookup(7300,timestamp(moment),allow_old_season=True)[1],[])
+
+    def test_future_or_individually_ended_current_season_entries_are_not_old_fallbacks(self):
+        self.seed('eibi',[schedule(valid_until='2026-10-29'),
+                          schedule(station='Future',valid_from='2026-11-01')])
+        self.assertEqual(self.store.lookup(7300,timestamp('2026-10-30T12:00'),allow_old_season=True)[1],[])
 
     def test_fractional_carrier_and_larger_offset_match_the_scheduled_channel(self):
         self.seed('hfcc',[schedule(frequency_khz=5880)])

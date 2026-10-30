@@ -16,6 +16,7 @@ class BroadcastMatch:
     language: str = ''
     schedule: str = ''
     frequency_khz: float = None
+    old_schedule: bool = False
 
 
 def schedule_matches(rows, is_active):
@@ -39,7 +40,8 @@ def schedule_matches(rows, is_active):
                 transmitter=str(row.get('transmitter') or '').strip(),
                 power_kw=str(row.get('power_kw') or '').strip(),
                 language=str(row.get('language') or '').strip(),
-                schedule=str(row.get('time') or '').strip(), frequency_khz=listed_frequency))
+                schedule=str(row.get('time') or '').strip(), frequency_khz=listed_frequency,
+                old_schedule=bool(row.get('schedule_stale'))))
             seen.add(key)
     return tuple(matches)
 
@@ -296,7 +298,7 @@ class SmartSeekView:
             if time.monotonic()-self.names_at.get(frequency, time.monotonic()) >= 300:
                 self.matches.pop(frequency, None)
             if frequency not in self.matches and frequency not in self.pending and len(self.pending) < 2:
-                self.pending[frequency] = self.executor.submit(self.ui.lookup_shortwave_frequency, candidate.tuning_khz)
+                self.pending[frequency] = self.executor.submit(self.ui.lookup_smart_seek_frequency, candidate.tuning_khz)
             if frequency in self.matches:
                 matches = self.matches[frequency]
                 self.state.note_smart_seek_identity(frequency,bool(matches),
@@ -379,7 +381,11 @@ class SmartSeekView:
         if snapshot['skipped']:
             status += ' · some areas could not be checked'
         ink(20, 59, status, 18, max_width=width-350)
-        ink(20, 80, 'Tap to listen · swipe to scroll · names are schedule matches', 18, (146, 166, 179))
+        old_schedule = any(match.old_schedule for matches in self.matches.values() for match in matches)
+        help_text = 'Tap to listen · swipe to scroll · names are schedule matches'
+        if old_schedule:
+            help_text += ' · * old schedule'
+        ink(20, 80, help_text, 18, (146, 166, 179))
         ui.draw_logical_rect(20, 92, width-20, 96, (35, 48, 56, 255))
         progress = (snapshot['completed']+snapshot['window_progress'])/max(1, snapshot['total'])
         ui.draw_logical_rect(20, 92, 20+(width-40)*progress, 96, (68, 202, 168, 255))
@@ -420,6 +426,8 @@ class SmartSeekView:
                 crowded = not playing and len(matches) > 2
                 match_y = y+(20 if playing else 15+row*26 if crowded else card_height/2)
                 flag_width, flag_height = (36, 24) if crowded else (42, 28)
+                if match.old_schedule:
+                    ink(match_x-14, match_y, '*', 18, (210, 181, 119))
                 ui.draw_country_flag(match.country, match_x, match_y-flag_height/2,
                                      flag_width, flag_height, alpha=.4 if dim_row else 1)
                 name = match.name if len(matches) == 1 else short_station_name(match.name)

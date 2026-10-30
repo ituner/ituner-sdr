@@ -80,7 +80,12 @@ bands retains dimmed earlier rows until new observations qualify them again.
 Station names use a downloaded EiBi and HFCC index. There are no per-frequency
 website queries, including the regular tuned-frequency identity display.
 UTC times, operating weekdays and validity dates are evaluated locally;
-expired seasons are excluded. The footer shows a simple offline-name or updating status. Source seasons remain in the downloaded database metadata.
+current-season matches take priority. If there is no current match, an older-season
+schedule can supply a name at the matching UTC time and weekday. A small asterisk
+beside its flag is explained by **\* old schedule** in the header. The saved source
+dates are retained; individually ended programmes in the current season do not
+become fallback matches. The footer shows a simple offline-name or updating status.
+Source seasons remain in the downloaded database metadata.
 Bulk refresh is attempted at most daily after successful downloads, with a
 one-hour retry interval after failures. Failed updates preserve the last good
 source files. These are possible schedule matches, not decoded identities.

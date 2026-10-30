@@ -473,7 +473,7 @@ class IntegrationTests(unittest.TestCase):
         view.executor.submit = Mock(return_value=Future())
         view._names_for_page([candidate])
         self.assertNotIn(7302.8,view.matches)
-        view.executor.submit.assert_called_once_with(ui.lookup_shortwave_frequency,7300)
+        view.executor.submit.assert_called_once_with(ui.lookup_smart_seek_frequency,7300)
 
     def test_unknown_channel_is_marked_approximate_and_ambiguous_matches_keep_rf_value(self):
         self.assertEqual(station_frequency(5879.891,()),(5880,True))
@@ -666,6 +666,25 @@ class IntegrationTests(unittest.TestCase):
         matches = schedule_matches(rows, ui._frequency_identity_schedule_active)
         self.assertEqual(matches, (BroadcastMatch('Radio Example', 'China', schedule='0000-2400'),
                                    BroadcastMatch('Radio Example', 'Romania', schedule='0000-2400')))
+
+    def test_old_schedule_marker_is_preserved_with_the_station_name(self):
+        rows = [dict(time='0000-2400',station='Voice of Korea',country='North Korea',
+                     frequency_khz=9435,schedule_stale=True)]
+        match = schedule_matches(rows,ui._frequency_identity_schedule_active)[0]
+        self.assertEqual(match.name,'Voice of Korea')
+        self.assertTrue(match.old_schedule)
+        self.assertEqual(match.frequency_khz,9435)
+        rows[0].pop('schedule_stale')
+        self.assertFalse(schedule_matches(rows,ui._frequency_identity_schedule_active)[0].old_schedule)
+
+    def test_old_schedule_fallback_is_requested_only_for_smart_seek(self):
+        with patch.object(ui.offline_schedules,'lookup',return_value=(9435,[],None)) as lookup:
+            ui.lookup_shortwave_frequency(9435)
+            lookup.assert_called_once_with(9435.0,tolerance=ui.FREQUENCY_ID_TOLERANCE_KHZ)
+            lookup.reset_mock()
+            ui.lookup_smart_seek_frequency(9435)
+            lookup.assert_called_once_with(9435.0,tolerance=ui.FREQUENCY_ID_TOLERANCE_KHZ,
+                                          allow_old_season=True)
 
     def test_schedule_metadata_is_retained_for_the_playing_row(self):
         rows = [dict(station='Radio Example', country='Romania', transmitter='Galbeni',

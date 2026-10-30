@@ -175,7 +175,7 @@ def parse_hfcc(data, season):
     return result
 
 
-def active(row, moment):
+def active(row, moment, *, ignore_dates=False):
     """Respect UTC dates, weekday conventions and broadcasts across midnight."""
     try:
         start, stop = (int(value[:2])*60+int(value[2:]) for value in row['time'].split('-'))
@@ -186,7 +186,7 @@ def active(row, moment):
         if start != stop and not (minute >= start or minute < stop if overnight else start <= minute < stop):
             return False
         day = moment.date()-timedelta(days=1) if overnight and minute < stop else moment.date()
-        if not row['valid_from'] <= day.isoformat() < row['valid_until']:
+        if not ignore_dates and not row['valid_from'] <= day.isoformat() < row['valid_until']:
             return False
         days = row.get('days','').strip()
         if not days or days in ('daily','irr','tent','test'):
@@ -229,7 +229,8 @@ class ScheduleStore:
         self.errors = {}
 
     def _index(self):
-        self.rows = sorted((row for p in self.providers.values() for row in p['rows']),
+        self.rows = sorted((dict(row, schedule_season=p.get('season',''))
+                            for p in self.providers.values() for row in p['rows']),
                            key=lambda row:row['frequency_khz'])
         self.frequencies = [row['frequency_khz'] for row in self.rows]
         self.generation += 1
@@ -318,27 +319,44 @@ class ScheduleStore:
             with self.lock:
                 self.refreshing = False
 
-    def lookup(self, frequency, timestamp=None, tolerance=1):
+    def lookup(self, frequency, timestamp=None, tolerance=1, *, allow_old_season=False):
         self.load()
         moment = datetime.fromtimestamp(time.time() if timestamp is None else timestamp,timezone.utc)
-        def nearby(center, radius):
+        current_season = season_for(moment.date())[0].upper()
+        def nearby(center, radius, old_season):
             low = bisect.bisect_left(self.frequencies,center-radius)
             high = bisect.bisect_right(self.frequencies,center+radius)
-            return [dict(row) for row in self.rows[low:high] if active(row,moment)]
-        with self.lock:
-            rows = nearby(frequency,tolerance)
+            matches = []
+            for row in self.rows[low:high]:
+                if old_season and (not re.fullmatch(r'[AB]\d{2}',row.get('schedule_season','').upper())
+                                   or row.get('schedule_season','').upper() == current_season
+                                   or row['valid_until'] > moment.date().isoformat()):
+                    continue
+                if active(row,moment,ignore_dates=old_season):
+                    match = dict(row)
+                    if old_season:
+                        match['schedule_stale'] = True
+                    matches.append(match)
+            return matches
+        def find(old_season):
+            rows = nearby(frequency,tolerance,old_season)
             kind = 'direct'
             if not rows:
                 if 2300 <= frequency <= 30000:
                     channel = shortwave_channel(frequency)
-                    rows = nearby(channel,.25) if channel is not None else []
+                    rows = nearby(channel,.25,old_season) if channel is not None else []
                 elif 150 <= frequency <= 1710:
                     # Use actual schedules for LW/MW; do not assume whether
                     # this receiver's region uses 9 or 10 kHz channels.
-                    rows = nearby(frequency,CHANNEL_MATCH_LIMIT_KHZ)
+                    rows = nearby(frequency,CHANNEL_MATCH_LIMIT_KHZ,old_season)
                 rows = [row for row in rows
                         if abs(row['frequency_khz']-frequency) <= CHANNEL_MATCH_LIMIT_KHZ]
                 kind = 'channel'
+            return rows,kind
+        with self.lock:
+            rows,kind = find(False)
+            if not rows and allow_old_season:
+                rows,kind = find(True)
         if rows:
             closest = min(abs(row['frequency_khz']-frequency) for row in rows)
             rows = [row for row in rows if abs(row['frequency_khz']-frequency)
@@ -382,6 +400,6 @@ class ScheduleStore:
 store = ScheduleStore()
 
 
-def lookup(frequency, timestamp=None, tolerance=1):
+def lookup(frequency, timestamp=None, tolerance=1, *, allow_old_season=False):
     store.refresh_if_due()
-    return store.lookup(float(frequency),timestamp,tolerance)
+    return store.lookup(float(frequency),timestamp,tolerance,allow_old_season=allow_old_season)

@@ -3521,6 +3521,12 @@ def lookup_shortwave_frequency(frequency_khz):
     return offline_schedules.lookup(float(frequency_khz), tolerance=FREQUENCY_ID_TOLERANCE_KHZ)
 
 
+def lookup_smart_seek_frequency(frequency_khz):
+    """Keep explicitly marked older-season names useful while browsing."""
+    return offline_schedules.lookup(float(frequency_khz), tolerance=FREQUENCY_ID_TOLERANCE_KHZ,
+                                    allow_old_season=True)
+
+
 def research_shortwave_frequency(frequency_khz):
     """Explicit online research only; never called by automatic identification."""
     frequency = float(frequency_khz)
