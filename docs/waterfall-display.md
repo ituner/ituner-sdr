@@ -9,7 +9,7 @@ Auto measures the visible window's noise and upper signal levels, seeds the
 range from the first row and smooths subsequent adjustments. Panning, tuning,
 zooming or changing receiver starts a fresh measurement. Local magnification
 estimates contrast from the visible slice of the source FFT, excluding signals
-outside the view. Main Kiwi, OpenWebRX, FM-DX audio FFT, USB and Smart Seek use
+outside the view. Main Kiwi, OpenWebRX, FM-DX audio FFT, USB and Smart Scan use
 the same contrast rule with independent ranges for their current views.
 
 Manual starts from the live range and holds fixed floor and ceiling settings.

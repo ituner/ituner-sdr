@@ -17,17 +17,20 @@ class CatalogueTests(unittest.TestCase):
         catalogue.start(7200,7450,'41 m',('rx',),100)
         return catalogue
 
-    def drive(self, catalogue, end, now=100):
+    def drive(self, catalogue, end, now=100, samples=None):
         sequence = 0
         visits = []
         while now < end:
+            starting_turn = catalogue._current is None
             request = catalogue.request(('rx',),now)
             if request is None:
                 break
             label = catalogue._current_label
-            if not visits or visits[-1][0] != label:
+            if starting_turn or not visits or visits[-1][0] != label:
                 visits.append((label,now))
             center,zoom = request
+            if samples is not None:
+                samples.append((label,center,zoom,catalogue._current.worker_kind))
             now += .25
             sequence += 1
             carrier = {'49 m':6000000,'31 m':9700000}.get(label,7300000)
@@ -50,10 +53,124 @@ class CatalogueTests(unittest.TestCase):
         self.assertGreaterEqual(result['band_counts']['31 m'],1)
         self.assertEqual(result['band_counts']['25 m'],0)
         self.assertTrue(all(7200 <= c.tuning_khz <= 7450 for c in result['candidates']))
-        # A background band never gets two consecutive observation turns.
-        for (label,start),(_,end) in zip(visits,visits[1:]):
-            if label not in ('41 m','spectrum'):
-                self.assertLessEqual(end-start,5)
+    def test_first_complete_sweep_then_one_selected_sweep_per_four_others(self):
+        catalogue = self.start()
+        visits = self.drive(catalogue,600)
+        labels = [label for label,_ in visits if label!='spectrum']
+        self.assertEqual(labels[0],'41 m')
+        following = labels[1:]
+        self.assertGreater(len(following),15)
+        for index in range(0,len(following)-4,5):
+            group = following[index:index+5]
+            self.assertNotIn('41 m',group[:4])
+            self.assertEqual(group[4],'41 m')
+        # Switching band grants one complete first sweep before rotating away.
+        catalogue.start(9400,9900,'31 m',('rx',),600)
+        switched = [label for label,_ in self.drive(catalogue,660,now=600) if label!='spectrum']
+        self.assertEqual(switched[0],'31 m')
+        self.assertNotEqual(switched[1],'31 m')
+
+    def test_first_visit_covers_every_detailed_window_before_leaving_each_band(self):
+        catalogue = self.start()
+        samples = []
+        self.drive(catalogue,300,samples=samples)
+        for label,engine in catalogue._models.items():
+            first = next(i for i,sample in enumerate(samples) if sample[0]==label)
+            end = next((i for i in range(first+1,len(samples)) if samples[i][0]!=label),len(samples))
+            detailed = sorted({center for _,center,zoom,kind in samples[first:end] if not kind and zoom==8})
+            span = 30000/2**8
+            self.assertTrue(detailed,label)
+            self.assertLessEqual(detailed[0]-span/2+8,engine.low,label)
+            self.assertGreaterEqual(detailed[-1]+span/2-8,engine.high,label)
+            self.assertTrue(all(b-a <= span-16 for a,b in zip(detailed,detailed[1:])),label)
+            self.assertEqual(engine.skipped,0,label)
+        self.assertGreater(len({center for label,center,zoom,kind in samples if label=='41 m' and zoom==8 and not kind}),2)
+
+    def test_uncertain_signal_review_does_not_count_as_another_band_sweep(self):
+        catalogue = self.start()
+        from smart_seek import SmartSeek
+        background = SmartSeek()
+        background.start(9400,9900,'31 m',('rx',),100,refresh=True,adaptive=True)
+        background.index = len(background.windows)
+        background.active = False
+        catalogue._models['31 m'] = background
+        catalogue._queue = ['31 m']
+        catalogue._background_passes = 3
+        catalogue._scan_completed['31 m'] = id(background),background.pass_count
+        catalogue._current,catalogue._current_label = background,'31 m'
+        catalogue._token = None
+        catalogue._finish_turn(101)
+        self.assertEqual(catalogue._background_passes,3)
+        self.assertEqual(catalogue._queue,['31 m'])
+        background.pass_count += 1
+        catalogue._current,catalogue._current_label = background,'31 m'
+        catalogue._finish_turn(102)
+        self.assertEqual(catalogue._background_passes,4)
+        self.assertEqual(catalogue._queue,[])
+
+    def test_empty_background_queue_restarts_other_bands_without_extra_selected_turns(self):
+        catalogue = self.start()
+        catalogue._initial_done = True
+        catalogue._survey_at = 100
+        self.assertEqual(catalogue._queue,[])
+        catalogue.request(('rx',),100)
+        self.assertNotEqual(catalogue._current_label,'41 m')
+        self.assertIn(catalogue._current_label,('49 m','31 m','25 m'))
+
+    def test_band_menu_scans_other_bands_without_repeating_selected_then_resumes_list(self):
+        catalogue = self.start()
+        catalogue.request(('rx',),100)
+        self.assertEqual(catalogue._current_label,'41 m')
+        catalogue.set_band_menu(True,100.1)
+        now,sequence = 100.1,0
+        visits = []
+        while now < 220:
+            request = catalogue.request(('rx',),now)
+            if request is None:
+                break
+            label = catalogue._current_label
+            visits.append(label)
+            center,zoom = request
+            now += .25
+            sequence += 1
+            carrier = {'49 m':6000000,'31 m':9700000}.get(label,7300000)
+            catalogue.feed(rf_frame(center,zoom,carrier,sequence,noise=label=='25 m'),
+                           30000000,14,14,now)
+        self.assertEqual(visits[0],'spectrum')
+        self.assertNotIn('41 m',visits)
+        self.assertTrue({'49 m','31 m','25 m'}.issubset(visits))
+        self.assertIsNone(catalogue.request(('rx',),now+.5))
+        self.assertEqual(catalogue.snapshot(now+.5)['phase'],'catalogue_wait')
+        self.assertIsNone(catalogue.snapshot(now+.5)['scanning_band'])
+        catalogue.set_band_menu(False,now+1)
+        self.assertIsNotNone(catalogue.request(('rx',),now+1))
+        self.assertEqual(catalogue._current_label,'41 m')
+        self.assertEqual(catalogue.skipped,0)
+
+    def test_touchable_band_graph_switches_band_without_changing_playback(self):
+        from types import SimpleNamespace
+        from smart_seek_view import SmartSeekView
+        with patch.object(ui.time,'monotonic',return_value=100):
+            state = ui.SharedState('http://example.test:8073',7325,14,-95,142,245,4,'am',False)
+            state.connection_streams = {'audio':True,'waterfall':True}
+            state.start_smart_seek()
+            view = SmartSeekView(ui,state)
+            self.addCleanup(view.shutdown)
+            before = state.freq_khz,state.radio_snapshot()
+            with patch.object(ui,'draw_styled_button_frame',return_value=SimpleNamespace(text=(205,221,229))), \
+                 patch.object(ui,'draw_text'),patch.object(ui,'draw_logical_rect'):
+                view.draw_band_activity(None,state.smart_seek_snapshot())
+            self.assertEqual([action[1] for _,action in view.actions],
+                             list(state.smart_seek_snapshot()['bands']))
+            self.assertTrue(all(box[2]-box[0]>=56 and box[3]-box[1]==90 for box,_ in view.actions))
+            box = next(box for box,action in view.actions if action==('band','31 m'))
+            x,y = (box[0]+box[2])/2,(box[1]+box[3])/2
+            view.press(x,y);view.release(x,y)
+            self.assertEqual(state.smart_seek.label,'31 m')
+            self.assertEqual((state.freq_khz,state.radio_snapshot()),before)
+            # Crossing into an adjacent band during a press does not select it.
+            view.press(x,y);view.release(x+80,y)
+            self.assertEqual(state.smart_seek.label,'31 m')
 
     def test_activity_then_proximity_orders_bands_and_quiet_bands_go_last(self):
         catalogue = self.start()
@@ -101,7 +218,7 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(catalogue.candidates,[])
         self.assertIsNone(catalogue.snapshot(102)['band_counts']['31 m'])
 
-    def test_scanned_count_survives_reopen_refresh_and_dimmed_requalification_for_one_hour(self):
+    def test_scanned_count_survives_reopen_refresh_and_dimmed_requalification_for_two_hours(self):
         catalogue = self.start()
         catalogue._merge([SeekCandidate(7300,30),SeekCandidate(7350,28)],accumulate=True)
         catalogue.measured_at = 101
@@ -111,13 +228,13 @@ class CatalogueTests(unittest.TestCase):
         self.assertTrue(catalogue.stale)
         self.assertEqual(catalogue.snapshot(103)['band_counts']['41 m'],2)
         catalogue.close()
-        catalogue.start(7200,7450,'41 m',('rx',),3500)
+        catalogue.start(7200,7450,'41 m',('rx',),7100)
         self.assertEqual(catalogue.candidates,[])
-        self.assertEqual(catalogue.snapshot(3500)['band_counts']['41 m'],2)
-        catalogue.start(7200,7450,'41 m',('rx',),3600,refresh=True)
-        self.assertEqual(catalogue.snapshot(3600)['band_counts']['41 m'],2)
+        self.assertEqual(catalogue.snapshot(7100)['band_counts']['41 m'],2)
+        catalogue.start(7200,7450,'41 m',('rx',),7200,refresh=True)
+        self.assertEqual(catalogue.snapshot(7200)['band_counts']['41 m'],2)
         # Reading, reopening and refresh do not renew the measurement age.
-        self.assertIsNone(catalogue.snapshot(3701)['band_counts']['41 m'])
+        self.assertIsNone(catalogue.snapshot(7301)['band_counts']['41 m'])
 
     def test_counts_expire_independently_for_each_band(self):
         catalogue = self.start()
@@ -127,11 +244,11 @@ class CatalogueTests(unittest.TestCase):
         catalogue._merge([SeekCandidate(9700,30)],accumulate=True)
         catalogue.measured_at = 201
         catalogue.close()
-        catalogue.start(7200,7450,'41 m',('rx',),3701)
-        counts = catalogue.snapshot(3701)['band_counts']
+        catalogue.start(7200,7450,'41 m',('rx',),7301)
+        counts = catalogue.snapshot(7301)['band_counts']
         self.assertIsNone(counts['41 m'])
         self.assertEqual(counts['31 m'],1)
-        self.assertIsNone(catalogue.snapshot(3801)['band_counts']['31 m'])
+        self.assertIsNone(catalogue.snapshot(7401)['band_counts']['31 m'])
 
     def test_cache_is_isolated_by_receiver_but_survives_tuning_context_changes(self):
         catalogue = self.start()
@@ -139,6 +256,7 @@ class CatalogueTests(unittest.TestCase):
         catalogue.measured_at = 101
         catalogue.start(7200,7450,'41 m',('other receiver',),102)
         self.assertIsNone(catalogue.snapshot(102)['band_counts']['41 m'])
+        self.assertEqual(catalogue.snapshot(102)['catalogue'],())
         catalogue.start(7200,7450,'41 m',('rx','new tuning'),103)
         self.assertEqual(catalogue.snapshot(103)['band_counts']['41 m'],1)
 
@@ -157,16 +275,30 @@ class CatalogueTests(unittest.TestCase):
         catalogue._remember_count('41 m',catalogue._engine,105,complete=True)
         self.assertEqual(catalogue.snapshot(105)['band_counts']['41 m'],0)
 
-    def test_cached_candidates_still_follow_minimum_signal_filter(self):
+    def test_cached_weak_candidates_remain_in_counts_and_activity(self):
         catalogue = self.start()
-        catalogue.sensitivity = 100
         catalogue._merge([SeekCandidate(7300,9),SeekCandidate(7350,30)],accumulate=True)
         catalogue.measured_at = 101
         self.assertEqual(catalogue.snapshot(101)['band_counts']['41 m'],2)
         catalogue.close()
         catalogue.start(7200,7450,'41 m',('rx',),102)
-        catalogue.sensitivity = 0
-        self.assertEqual(catalogue.snapshot(102)['band_counts']['41 m'],1)
+        self.assertEqual(catalogue.snapshot(102)['band_counts']['41 m'],2)
+
+    def test_activity_banner_keeps_measured_strengths_in_sync_with_counts_and_expiry(self):
+        catalogue = self.start()
+        catalogue._merge([SeekCandidate(7350,30),SeekCandidate(7300,9)],accumulate=True)
+        catalogue.measured_at = 101
+        catalogue.start(9400,9900,'31 m',('rx',),102)
+        result = catalogue.snapshot(102)
+        self.assertEqual([(c.frequency_khz,c.prominence) for c in result['band_signals']['41 m']],
+                         [(7300,9),(7350,30)])
+        self.assertEqual(len(result['band_signals']['41 m']),result['band_counts']['41 m'])
+        self.assertIsNone(result['band_signals']['31 m'])  # Unmeasured differs from empty.
+        catalogue.start(7200,7450,'41 m',('rx',),103)
+        self.assertTrue(catalogue.stale)
+        self.assertEqual([c.frequency_khz for c in catalogue.snapshot(103)['band_signals']['41 m']],
+                         [7300,7350])
+        self.assertIsNone(catalogue.snapshot(7301)['band_signals']['41 m'])
 
     def test_context_change_cancels_background_and_tuning_propagates_to_paused_models(self):
         catalogue = self.start()
@@ -183,13 +315,13 @@ class CatalogueTests(unittest.TestCase):
         catalogue._initial_done = True
         catalogue._survey_at = 100
         catalogue._queue = ['31 m']
-        catalogue._foreground_turns = 2
+        catalogue._background_passes = 3
         catalogue._paused['41 m'] = 100
-        catalogue.request(('rx',),100)
-        self.assertEqual(catalogue._current_label,'31 m')
-        catalogue.poll(('rx',),110)
-        self.assertIsNotNone(catalogue.request(('rx',),111))
-        self.assertEqual(catalogue._current_label,'41 m')
+        deadline = catalogue._engine.deadline
+        visits = self.drive(catalogue,125)
+        self.assertEqual(visits[0][0],'31 m')
+        self.assertIn('41 m',[label for label,_ in visits])
+        self.assertGreater(catalogue._engine.deadline,deadline)
         self.assertEqual(catalogue.skipped,0)
 
     def test_preview_pause_preserves_scan_and_worker_deadlines(self):

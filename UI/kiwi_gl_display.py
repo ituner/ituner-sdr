@@ -264,6 +264,7 @@ from smart_seek_waterfall import SeekWaterfall
 from waterfall_levels import AutoWaterfallLevels
 import offline_schedules
 from smart_seek_view import SmartSeekView
+from long_scan import LongScan
 from meter_artwork import linear_strip_image
 
 
@@ -4638,9 +4639,15 @@ def carrier_waterfall_box():
 
 
 def smart_seek_waterfall_box():
-    """SEEK occupies the square immediately below Play/Pause."""
+    """SCAN occupies the square immediately below Play/Pause."""
     x0, y0, x1, y1 = stream_waterfall_box()
     return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+
+
+def waterfall_scan_touch(x, y, drawn, modal_open=False):
+    """A painted SCAN owns its tap, including the small margin between tiles."""
+    return bool(drawn and not modal_open and
+                contains_with_guard(smart_seek_waterfall_box(),x,y,guard=4))
 
 
 def carrier_button_visible(state):
@@ -4690,7 +4697,9 @@ def waterfall_touch_bounds():
     ), y1
 
 
-def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None):
+def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None, scan_drawn=False):
+    if waterfall_scan_touch(x,y,scan_drawn):
+        return False
     if LCD_800_MODE and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
         return False
     if DESKTOP_1280_MODE:
@@ -5427,11 +5436,24 @@ class SharedState:
         with self.lock:
             now = time.monotonic()
             self.smart_seek.poll(self._carrier_context(), now)
-            candidates = self.smart_seek.snapshot(now)['candidates']
+            snapshot = self.smart_seek.snapshot(now)
+            candidates = snapshot['candidates']
+            entry = next((item for item in snapshot.get('catalogue',())
+                          if item['candidate'].frequency_khz == frequency),None)
             if (not self.smart_seek.open or not self._carrier_eligible()
-                    or not any(item.frequency_khz == frequency for item in candidates)):
+                    or not (entry or any(item.frequency_khz == frequency for item in candidates))):
                 return False
-            selected = next(item for item in candidates if item.frequency_khz == frequency)
+            selected = next((item for item in candidates if item.frequency_khz == frequency),
+                            entry['candidate'] if entry else None)
+            if entry and entry['band'] != self.smart_seek.label:
+                band = next(b for b in SW_BROADCAST_BANDS if b[2] == entry['band'])
+                self._set_seek_waterfall(False)
+                self.smart_seek.start(*band,self._carrier_context(),now,
+                                      cache_key=(self.server,band[0],band[1]),adaptive=True)
+                if not any(c.frequency_khz == frequency for c in self.smart_seek.candidates):
+                    self.smart_seek.candidates = [item['candidate'] for item in snapshot['catalogue']
+                                                 if item['band'] == entry['band']]
+                    self.smart_seek.stale = {c.frequency_khz for c in self.smart_seek.candidates}
             self.freq_khz = selected.tuning_khz
             self.wf_view_center_khz = None
             self.view_generation += 1
@@ -5462,6 +5484,10 @@ class SharedState:
     def take_seek_waterfall(self):
         with self.lock:
             return self.seek_waterfall.take()
+
+    def set_smart_seek_band_menu(self, opened):
+        with self.lock:
+            self.smart_seek.set_band_menu(opened, time.monotonic())
 
     def smart_seek_snapshot(self):
         with self.lock:
@@ -5506,10 +5532,6 @@ class SharedState:
     def move_smart_seek(self, delta):
         with self.lock:
             self.smart_seek.move(delta)
-
-    def set_smart_seek_sensitivity(self, value):
-        with self.lock:
-            self.smart_seek.sensitivity = int(clamp(value, 0, 100))
 
     def note_smart_seek_identity(self, frequency, known, nominal=()):
         with self.lock:
@@ -23454,8 +23476,8 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     previous_speed = wf_speed
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
                     mapper = waterfall_mapper(wf_palette)
-                    if wf_speed != previous_speed:
-                        ws.send_text(f"SET wf_speed={wf_speed}")
+                    if wf_speed != previous_speed and carrier_view is None:
+                        kiwi.send_wf_speed(ws, wf_speed)
                     print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
 
                 capture = state.smart_seek_capture_request(wf_bandwidth_hz, wf_zoom_cap)
@@ -23876,7 +23898,8 @@ def main():
         state.set_external_audio(True)
         state.set_external_waterfall(True)
     rc28_input = RC28Input()
-    seek_view = SmartSeekView(sys.modules[__name__], state)
+    long_scan = LongScan(SW_BROADCAST_BANDS,session_stamp=next_kiwi_session_timestamp)
+    seek_view = SmartSeekView(sys.modules[__name__],state,long_scan)
     # VFO B is intentionally dormant until Dual opens. It has a complete
     # independent state/transport pair so it never reuses or retunes VFO A.
     dual_audio_mixer = DualVFOAudioMixer(args)
@@ -23913,6 +23936,7 @@ def main():
     # Sound is the primary listening path, so establish SND before the
     # reconnecting waterfall worker claims a slot.
     wf_thread.start()
+    long_scan.resume()
     caption_thread.start()
     callsign_thread.start()
     play_startup_chime(args)
@@ -23986,6 +24010,7 @@ def main():
     cpu_core_history = deque(maxlen=122)
     temp_c = None
     controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
+    scan_button_drawn = False
     catalog_stations = STATIONS
     all_stations = catalog_stations
     main_receiver_capacity = MainReceiverCapacityMonitor()
@@ -25177,7 +25202,7 @@ def main():
         if frequency is None:
             return
         snapshot = state.smart_seek_snapshot()
-        if not snapshot['open'] or not any(item.frequency_khz == frequency for item in snapshot['candidates']):
+        if not snapshot['open']:
             return
         if not state.tune_smart_seek_candidate(frequency):
             return
@@ -26224,6 +26249,8 @@ def main():
 
     def shared_keyboard_open():
         # Text keyboards fill the canvas and bypass rail composition/hit mapping.
+        if seek_view.open and seek_view.keyboard_open:
+            return True
         if theme_editor.open and theme_editor.overlay == "name":
             return True
         if deepgram_setup_open or network_password_open or (picker_open and search_open) or wspr_identity_open:
@@ -26531,6 +26558,10 @@ def main():
                 if web_apps.blocks_touch:
                     continue
                 if event.type == pygame.KEYDOWN and seek_view.open:
+                    if seek_view.keyboard_open:
+                        seek_view.keyboard_event(event)
+                        wake_controls()
+                        continue
                     if event.key == pygame.K_ESCAPE:
                         seek_view.back()
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
@@ -26930,9 +26961,16 @@ def main():
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
                                 sstv_workspace.drag_begin(x, y)
-                            elif (not home_sidebar_open and not picker_open and not dual_vfo_open
-                                  and state.smart_seek_available() and contains(smart_seek_waterfall_box(), x, y)):
+                            elif waterfall_scan_touch(x,y,scan_button_drawn,modal_open=(
+                                menu_open or picker_open or dual_vfo_open or network_panel_open
+                                or network_password_open or tests_panel_open or rtl_lab_open
+                                or font_lab_open or band_navigation_open or wspr_panel_open
+                                or wspr_add_open or wspr_identity_open or dj_tune_open
+                                or filter_panel_open or frequency_entry_open or deepgram_setup_open
+                                or (asr_panel_open and not LCD_800_MODE)
+                            )):
                                 gesture = "smart_seek_start"
+                                scope_drag_eligible = False
                             elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
 
@@ -27396,6 +27434,7 @@ def main():
                                 x, y, instrument_layout,
                                 left_smeter_box(text_cache, display_freq, compact_frequency_font_family)
                                 if LCD_800_MODE and instrument_layout == "left" and smeter_is_slim() else None,
+                                scan_drawn=scan_button_drawn,
                             ):
                                 gesture = "waterfall"
                             else:
@@ -28282,7 +28321,7 @@ def main():
                                     seek_view.press_action = None
                             wake_controls()
                         elif touch_started and gesture == "smart_seek_start":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if waterfall_scan_touch(x,y,drawn=True):
                                 inertia_velocity_khz_s = 0.0
                                 inertia_active = False
                                 anim_start = 0.0
@@ -30693,6 +30732,7 @@ def main():
             # the covered buttons until a tap moves the popup away.
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
+            scan_button_drawn = False
             if not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -30701,8 +30741,9 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SEEK",
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SCAN",
                                             style=replace(APP_UI_STYLE.button, label_size=18))
+                    scan_button_drawn = True
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
@@ -31181,6 +31222,7 @@ def main():
         write_wspr_local_log("renderer_stopped")
         write_remembered_view(save_current_frequency=True)
         seek_view.shutdown()
+        long_scan.close()
         audio_test_workspace.close()
         if audio_test_workspace.test.thread:
             audio_test_workspace.test.thread.join(timeout=2.0)

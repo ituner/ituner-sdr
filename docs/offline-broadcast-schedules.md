@@ -1,6 +1,6 @@
 # Offline broadcast schedules
 
-Smart Seek and the tuned-frequency identity display match names from a local
+Smart Scan and the tuned-frequency identity display match names from a local
 frequency index. Automatic lookups never request a per-frequency web page. The explicit Research button on an Unknown row is an opt-in online exception; it does not update the offline cache or change audio.
 `UI/offline_schedules.py` imports two public schedule providers:
 

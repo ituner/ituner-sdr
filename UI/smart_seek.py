@@ -11,6 +11,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from am_carrier import rf_view_center_hz
+from scan_policy import coverage_windows
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class SeekCandidate:
         return self.frequency_khz if self.carrier_khz is None else self.carrier_khz
 
 
-def am_modulation_present(rows, values, index, bin_hz):
+def am_modulation_present(rows, values, index, bin_hz, hint=False):
     """Require broad, varying sidebands on both sides of a carrier.
 
     This is RF evidence of AM modulation, not a speech/music classifier.
@@ -41,9 +42,19 @@ def am_modulation_present(rows, values, index, bin_hz):
     if min(len(left), len(right)) < 3 or len(reference) < 8:
         return False
     noise = sorted(values[i] for i in reference)[len(reference)//4]
+    # A strong wide AM station can fill the usual noise ring with its own
+    # programme. Subtracting that ring would cancel the modulation we need
+    # to recognise, leaving its narrow music lobes looking more convincing.
+    far_inner,far_outer = math.ceil(10000/bin_hz),math.ceil(14000/bin_hz)
+    farther = (list(range(max(0,index-far_outer),max(0,index-far_inner)))
+               + list(range(min(1024,index+far_inner),min(1024,index+far_outer))))
+    if len(farther)>=8:
+        far_noise = sorted(values[i] for i in farther)[len(farther)//4]
+        if noise-far_noise>=6:
+            reference,noise = farther,far_noise
     for side in (left, right):
         # A single tone or the carrier's FFT skirt does not fill a sideband.
-        if sum(values[i] >= noise+3 for i in side) < math.ceil(len(side)*.4):
+        if sum(values[i] >= noise+(1 if hint else 3) for i in side) < math.ceil(len(side)*(.2 if hint else .4)):
             return False
     envelopes = []
     for row in rows:
@@ -51,7 +62,7 @@ def am_modulation_present(rows, values, index, bin_hz):
         power = statistics.median([row[i] for i in left+right])
         envelopes.append(power-row_noise)
     envelopes.sort()
-    return envelopes[-2]-envelopes[1] >= 2
+    return envelopes[-2]-envelopes[1] >= (1 if hint else 2)
 
 
 def narrow_carriers(rows, values, bin_hz):
@@ -88,16 +99,69 @@ def narrow_carriers(rows, values, bin_hz):
     return peaks
 
 
-def detect_stations(rows, first_hz, bin_hz, low_khz, high_khz):
+def mirrored_sideband_image(rows, peak, owner, peaks, bin_hz):
+    """A shallow mirrored line following the parent's modulation, not fading.
+
+    Geometry, relative power, a matching mirror line and temporal correlation
+    must agree. Subtracting the owner's carrier level cancels shared receiver
+    gain/fading. Correlation alone must never suppress another broadcaster.
+    """
+    distance = abs(peak['center']-owner['center'])*bin_hz
+    if (len(rows)<8 or bin_hz>250 or not 4500<=distance<=8000
+            or owner['power']-peak['power']<10):
+        return False
+    reflected = 2*owner['center']-peak['center']
+    mirror = next((p for p in peaks if abs(p['center']-reflected)<=.75
+                   and abs(p['power']-peak['power'])<=6 and p['prominence']>=8),None)
+    if mirror is None:
+        return False
+    def level(row,p):
+        return max(row[max(0,p['index']-1):min(1024,p['index']+2)])
+    left = [level(row,peak)-level(row,owner) for row in rows]
+    right = [level(row,mirror)-level(row,owner) for row in rows]
+    a,b = statistics.mean(left),statistics.mean(right)
+    aa = sum((value-a)**2 for value in left)
+    bb = sum((value-b)**2 for value in right)
+    if min(aa,bb)<len(rows)*4 or min(max(left)-min(left),max(right)-min(right))<6:
+        return False
+    if sum((x-a)*(y-b) for x,y in zip(left,right))/math.sqrt(aa*bb)<.95:
+        return False
+    # A fading parent alone can correlate two unrelated lines after the
+    # shared carrier subtraction. Require agreement with its programme
+    # sideband/carrier ratio as well; that ratio removes common fading.
+    inner,outer = max(2,math.ceil(350/bin_hz)),max(2,math.floor(2200/bin_hz))
+    bins = list(range(max(0,owner['index']-outer),max(0,owner['index']-inner+1)))
+    bins += list(range(min(1024,owner['index']+inner),min(1024,owner['index']+outer+1)))
+    if len(bins)<6:
+        return False
+    programme = [statistics.median(row[i] for i in bins)-level(row,owner) for row in rows]
+    mean = statistics.mean(programme)
+    variance = sum((value-mean)**2 for value in programme)
+    if variance<len(rows)*2.25:
+        return False
+    return (sum((x-a)*(p-mean) for x,p in zip(left,programme))/math.sqrt(aa*variance)>=.8
+            and sum((y-b)*(p-mean) for y,p in zip(right,programme))/math.sqrt(bb*variance)>=.8)
+
+
+def detect_stations(rows, first_hz, bin_hz, low_khz, high_khz, unresolved=None, images_out=None):
     """Confirm AM centers, not independent peaks in a strong station's wings."""
     if len(rows) < 6 or bin_hz <= 0 or any(len(row) != 1024 for row in rows):
         return []
     values = [sum(column)/len(rows) for column in zip(*rows)]
     peaks = narrow_carriers(rows,values,bin_hz)
     anchors = [p for p in peaks if am_modulation_present(rows,values,p['index'],bin_hz)]
+    images = {}
+    for peak in peaks:
+        owners = [owner for owner in anchors
+                  if (0<abs(owner['center']-peak['center'])*bin_hz<4500 and owner['power']>=peak['power']+8)
+                  or mirrored_sideband_image(rows,peak,owner,peaks,bin_hz)]
+        if owners:
+            images[peak['center']] = max(owners,key=lambda owner:owner['power'])
     context_bins = max(5,math.ceil(6500/bin_hz))
     found = []
     for peak in anchors:
+        if peak['center'] in images:
+            continue
         if not context_bins <= peak['center'] < 1024-context_bins:
             continue
         # DSB modulation can have persistent narrow music lobes. A much
@@ -116,6 +180,22 @@ def detect_stations(rows, first_hz, bin_hz, low_khz, high_khz):
     for candidate in sorted(found,key=lambda p:-p.prominence):
         if all(abs(candidate.frequency_khz-p.frequency_khz) >= 2 for p in result):
             result.append(candidate)
+    if images_out is not None:
+        images_out.extend(((first_hz+center*bin_hz)/1000,
+                           (first_hz+owner['center']*bin_hz)/1000) for center,owner in images.items())
+    if unresolved is not None:
+        for peak in peaks:
+            frequency = (first_hz+peak['center']*bin_hz)/1000
+            if not low_khz <= frequency <= high_khz:
+                continue
+            owned = peak['center'] in images or any(abs(other['center']-peak['center'])*bin_hz < 4500
+                        and (abs(other['center']-peak['center'])*bin_hz < 750
+                             or other['power'] >= peak['power']+8) for other in anchors)
+            # A bare carrier is not, by itself, a reason to repeat a whole RF
+            # region. Keep weak bilateral AM evidence as an uncertainty hint;
+            # known stations missing from a wider view are checked regardless.
+            if not owned and am_modulation_present(rows,values,peak['index'],bin_hz,hint=True):
+                unresolved.append(frequency)
     return sorted(result,key=lambda p:p.frequency_khz)
 
 
@@ -124,13 +204,27 @@ class SmartSeek:
     MAX_ROWS = 64
     OBSERVE_SECONDS = 1.5
     WINDOW_TIMEOUT = 3.0
+    RESPONSE_MARGIN = .5
+    MAX_ROW_INTERVAL = .5
     CACHE_SECONDS = 300
     CACHE_LIMIT = 24
 
-    def __init__(self):
+    def __init__(self, policy=None):
+        self.policy = policy
+        self.policy_zoom = None
+        self.policy_key = None
+        self.policy_context = None
+        self.pass_candidates = []
+        self.pass_uncertain = []
+        self.pass_skipped = 0
+        self.refining = False
+        self.refined_last_pass = False
+        self.refinement_expected = []
+        self.baseline_fallback = False
+        self.fallback_targets = []
+        self.frequency_resolution = {}
         self.open = False
         self.active = False
-        self.sensitivity = 65
         self.candidates = []
         self.context = None
         self.windows = []
@@ -141,6 +235,8 @@ class SmartSeek:
         self.last_sequence = None
         self.geometry = None
         self.started_rows_at = None
+        self.last_rows_at = None
+        self.observed_seconds = 0.0
         self.published_at = 0
         self.deadline = 0
         self.bandwidth_hz = 30000000
@@ -165,13 +261,17 @@ class SmartSeek:
         self.playing_khz = None
         self.zoom_cap = 14
         self.window_measured = False
+        self.window_retries = 0
+        self.retries = 0
         self.stale = set()
 
-    def start(self, low, high, label, context, now, cache_key=None, refresh=False, adaptive=False):
+    def start(self, low, high, label, context, now, cache_key=None, refresh=False, adaptive=False, policy_context=None):
         self._remember()
-        sensitivity, cache = self.sensitivity, self.cache
+        cache = self.cache
+        policy = self.policy
         self.__init__()
-        self.sensitivity, self.cache = sensitivity, cache
+        self.policy = policy
+        self.cache = cache
         self.cache_key = cache_key if cache_key is not None else (context, low, high)
         for key in list(cache):
             if now-cache[key]['measured_at'] >= self.CACHE_SECONDS:
@@ -180,6 +280,7 @@ class SmartSeek:
         self.adaptive = adaptive
         self.low, self.high, self.label = float(low), float(high), label
         self.context = context
+        self.policy_context = context if policy_context is None else policy_context
         if refresh:
             cache.pop(self.cache_key, None)
         elif self.cache_key in cache:
@@ -203,7 +304,7 @@ class SmartSeek:
         if self.cache_key is None or self.measured_at is None:
             return
         self.cache[self.cache_key] = dict(
-            candidates=tuple(self.candidates), selection=self.selection,
+            candidates=tuple(c for c in self.candidates if c.frequency_khz not in self.suppressed), selection=self.selection,
             windows=tuple(self.windows), index=self.index, skipped=self.skipped,
             measured_at=self.measured_at, bandwidth_hz=self.bandwidth_hz, zoom=self.zoom)
         self.cache.move_to_end(self.cache_key)
@@ -211,9 +312,28 @@ class SmartSeek:
             self.cache.popitem(last=False)
 
     def configure(self, bandwidth_hz, zoom_cap, now):
-        zoom = min(self.TARGET_ZOOM, int(zoom_cap))
-        if self.windows and self.bandwidth_hz == bandwidth_hz and self.zoom == zoom:
+        self.zoom_cap = zoom_cap
+        if self.policy is not None:
+            key = (self.policy_context,self.low,self.high,bandwidth_hz,int(zoom_cap))
+            if key != self.policy_key:
+                self.policy_zoom = None
+                self.policy_key = key
+            if self.policy_zoom is None:
+                self.policy_zoom = self.policy.plan(key,bandwidth_hz,zoom_cap,self.low,self.high)
+            zoom = self.policy_zoom
+        else:
+            zoom = min(self.TARGET_ZOOM, int(zoom_cap))
+        if self.windows and self.bandwidth_hz == bandwidth_hz and self.zoom == zoom and not self.refined_last_pass:
             return
+        self.refining = False
+        self.refined_last_pass = False
+        self.refinement_expected = []
+        self.baseline_fallback = False
+        self.fallback_targets = []
+        changed_receiver_geometry = self.bandwidth_hz != bandwidth_hz
+        self.pass_candidates = []
+        self.pass_uncertain = []
+        self.pass_skipped = self.skipped
         self.bandwidth_hz, self.zoom = bandwidth_hz, zoom
         span = bandwidth_hz / (2**zoom * 1000)
         # Include RF context outside the band for sideband/noise checks, but
@@ -223,21 +343,28 @@ class SmartSeek:
             self.close()
             return
         # Overlap avoids losing carriers at the five-bin detection margins.
-        count = max(1, math.ceil(max(0, high-low-span) / (span-16)) + 1)
-        first = low + min(high-low, span)/2
-        last = high - min(high-low, span)/2
-        self.windows = [first + (last-first)*i/max(1, count-1) for i in range(count)]
+        previous_center = self.windows[-1] if self.windows else None
+        self.windows = coverage_windows(bandwidth_hz,zoom,self.low,self.high)
+        if self.policy is not None:
+            self.windows = self.policy.order_windows(self.policy_key,self.windows,span,previous_center)
         self.index = 0
-        self.candidates = []
+        if changed_receiver_geometry:
+            self.candidates = []
         self._reset_window(now)
 
     def _reset_window(self, now):
         self.window_measured = False
+        self.window_retries = 0
         self.rows = []
         self.geometry = None
         self.started_rows_at = None
+        self.last_rows_at = None
+        self.observed_seconds = 0.0
         self.published_at = 0
-        self.deadline = now + max(self.WINDOW_TIMEOUT,self.dwell_seconds()+1.5)
+        self.deadline = now + self.response_budget()
+
+    def response_budget(self):
+        return max(self.WINDOW_TIMEOUT,self.dwell_seconds()+1.5)+self.RESPONSE_MARGIN
 
     def dwell_seconds(self):
         return (2 if self.pass_count == 0 else 3) if self.adaptive else self.OBSERVE_SECONDS
@@ -259,12 +386,66 @@ class SmartSeek:
             if not self.worker.active:
                 self._finish_worker(now)
         elif self.active and now >= self.deadline:
-            self.skipped += 1
-            self._advance(now)
+            if self.policy is not None and self.window_retries<1:
+                retry = self.window_retries+1
+                self._reset_window(now)
+                self.window_retries = retry
+                self.retries += 1
+            else:
+                self.skipped += 1
+                self._advance(now)
 
     def _advance(self, now):
         self.index += 1
+        if self.baseline_fallback and all(any(abs(freq-c.tuning_khz)<.75 for c in self.pass_candidates)
+                                          for freq in self.fallback_targets):
+            # Wider coverage is already complete. Extra reference contexts
+            # can stop once every specific uncertainty is positively resolved.
+            self.index = len(self.windows)
         if self.index >= len(self.windows):
+            if self.policy is not None:
+                complete = self.skipped==self.pass_skipped and self.window_measured
+                uncertain = tuple(freq for freq in self.pass_uncertain
+                                  if not any(abs(freq-c.tuning_khz)<.75 for c in self.pass_candidates))
+                if self.refining:
+                    missing = [freq for freq in self.refinement_expected
+                               if not any(abs(freq-c.tuning_khz)<.75 for c in self.pass_candidates)]
+                    if complete and self.zoom>min(8,int(self.zoom_cap)) and missing:
+                        zoom = min(8,int(self.zoom_cap))
+                        span = self.bandwidth_hz/(2**zoom*1000)
+                        grid = coverage_windows(self.bandwidth_hz,zoom,self.low,self.high)
+                        windows = [center for center in grid
+                                   if any(abs(center-freq)<=span/2-8+1e-8 for freq in missing)]
+                        previous_center = self.windows[-1]
+                        self.windows = sorted(windows or grid,key=lambda center:abs(center-previous_center))
+                        self.index,self.zoom,self.policy_zoom = 0,zoom,zoom
+                        self.baseline_fallback,self.fallback_targets = True,missing
+                        self._reset_window(now)
+                        return
+                    self.policy.finish_refinement(self.policy_key,self.pass_candidates,complete,uncertain,now=now)
+                    self.refining = False
+                    self.refined_last_pass = True
+                    retry = False
+                else:
+                    retry = self.policy.finish(self.policy_key,self.zoom,self.zoom_cap,
+                                              self.pass_candidates,complete,uncertain,now=now)
+                self.policy_zoom = None
+                if retry:
+                    windows,refinement_zoom = self.policy.refinement_plan(self.policy_key,self.pass_candidates,
+                        self.pass_uncertain,self.bandwidth_hz,self.zoom_cap)
+                    if windows:
+                        self.refinement_expected = self.policy.refinement_targets(self.policy_key,
+                            self.pass_candidates,self.pass_uncertain)
+                        self.refining = True
+                        self.policy_zoom = self.zoom = refinement_zoom
+                        self.windows,self.index = windows,0
+                        self.pass_uncertain = []
+                        self._reset_window(now)
+                    else:
+                        # An unrecognised reference cannot justify a targeted
+                        # absence claim; retain a complete narrow fallback.
+                        self.configure(self.bandwidth_hz,self.zoom_cap,now)
+                    return
             self.active = False
             self.rows = []
             self.next_pass_at = now if self.adaptive else now+2
@@ -287,6 +468,9 @@ class SmartSeek:
                 if now >= self.next_pass_at:
                     self.pass_count += 1
                     self.reviews_this_pass = 0
+                    self.pass_candidates = []
+                    self.pass_uncertain = []
+                    self.pass_skipped = self.skipped
                     self.index = 0
                     self.active = True
                     self._reset_window(now)
@@ -319,40 +503,98 @@ class SmartSeek:
             self.rows = []
             self.geometry = start, zoom
             self.started_rows_at = now
+            self.last_rows_at = None
+            self.observed_seconds = 0.0
+            # Start a full observation budget only after the requested view arrives.
+            self.deadline = now+self.response_budget()
+        if self.last_rows_at is not None:
+            self.observed_seconds += max(0,min(self.MAX_ROW_INTERVAL,now-self.last_rows_at))
+        self.last_rows_at = now
+        self.deadline = max(self.deadline,now+max(0,self.dwell_seconds()-self.observed_seconds)+self.RESPONSE_MARGIN)
         self.last_sequence = sequence
         self.rows.append(message[16:])
         self.rows = self.rows[-self.MAX_ROWS:]
-        observed = now - self.started_rows_at
+        observed = self.observed_seconds
         if len(self.rows) >= 8 and observed >= .6 and now-self.published_at >= .3:
-            self._merge(self.detect(self.rows, first_hz, bin_hz, self.low, self.high))
+            self._merge(self._detect_capture(first_hz,bin_hz))
             self.measured_at = now
             self.published_at = now
         if len(self.rows) >= 6 and observed >= self.dwell_seconds():
-            self._merge(self.detect(self.rows, first_hz, bin_hz, self.low, self.high),accumulate=True)
+            self._merge(self._detect_capture(first_hz,bin_hz,final=True),accumulate=True)
             self.measured_at = now
             self.window_measured = True
             self._advance(now)
 
     detect = staticmethod(detect_stations)
 
-    def _merge(self, candidates, accumulate=False):
+    def _detect_capture(self,first_hz,bin_hz,final=False):
+        images = []
+        options = {'images_out':images} if self.detect is detect_stations else {}
+        if final and self.policy is not None:
+            options['unresolved'] = self.pass_uncertain
+        found = self.detect(self.rows,first_hz,bin_hz,self.low,self.high,**options)
+        for ghost,carrier in images:
+            self.pass_candidates = [c for c in self.pass_candidates
+                                    if abs(c.tuning_khz-ghost)>=.75 or abs(c.tuning_khz-carrier)<.75]
+            for index,old in enumerate(self.candidates):
+                if (abs(old.tuning_khz-ghost)>=.75 or abs(old.tuning_khz-carrier)<.75
+                        or old.frequency_khz in self.suppressed):
+                    continue
+                if self.playing_khz is not None and abs(old.tuning_khz-self.playing_khz)<.5:
+                    # Keep the playing row and offer its existing Tap to Center
+                    # action. Signal evidence must never retune listening.
+                    self.candidates[index] = SeekCandidate(old.frequency_khz,old.prominence,carrier)
+                    self.evidence.setdefault(old.frequency_khz,dict(hits=0,failures=0))['status'] = 'AM signal'
+                    self.suppressed.update(c.frequency_khz for c in self.candidates
+                        if c.frequency_khz!=old.frequency_khz and abs(c.tuning_khz-carrier)<2)
+                else:
+                    self.suppressed.add(old.frequency_khz)
+        return found
+
+    def _merge(self, candidates, accumulate=False, bin_hz=None):
+        bin_hz = self.bandwidth_hz/(1024*2**self.zoom) if bin_hz is None else bin_hz
+        if self.policy is not None:
+            for candidate in candidates:
+                previous = next((i for i,old in enumerate(self.pass_candidates)
+                                 if abs(candidate.tuning_khz-old.tuning_khz)<2),None)
+                if previous is None:
+                    self.pass_candidates.append(candidate)
+                elif self.refining and accumulate:
+                    self.pass_candidates[previous] = candidate
         if self.adaptive:
             candidates = sorted(candidates,key=lambda candidate:-candidate.prominence)
         for candidate in candidates:
             duplicate = next((i for i, old in enumerate(self.candidates)
                               if old.frequency_khz not in self.suppressed
                               and abs(old.tuning_khz-candidate.tuning_khz) < 2), None)
+            if duplicate is None and accumulate:
+                # Suppression is evidence about an earlier observation, not
+                # a permanent ban on a channel where a real station may start.
+                duplicate = next((i for i,old in enumerate(self.candidates)
+                    if old.frequency_khz in self.suppressed
+                    and abs(old.frequency_khz-candidate.tuning_khz)<.75),None)
+                if duplicate is not None:
+                    old = self.candidates[duplicate]
+                    self.candidates[duplicate] = SeekCandidate(old.frequency_khz,old.prominence,candidate.tuning_khz)
+                    self.frequency_resolution[old.frequency_khz] = bin_hz
             if duplicate is None:
                 if any(old.frequency_khz in self.suppressed and
                        abs(old.frequency_khz-candidate.frequency_khz)<.1 for old in self.candidates):
                     continue
-                # Append rather than reorder: incoming discoveries cannot
-                # move an existing touch target or encoder selection.
+                # Keep stable candidate keys; snapshots order the list by frequency.
                 self.candidates.append(candidate)
+                self.frequency_resolution[candidate.frequency_khz] = bin_hz
             elif accumulate or (not self.adaptive and candidate.prominence > self.candidates[duplicate].prominence):
                 old = self.candidates[duplicate]
                 strength = old.prominence*.65+candidate.prominence*.35 if accumulate else candidate.prominence
-                self.candidates[duplicate] = SeekCandidate(old.frequency_khz,round(strength,1),old.carrier_khz)
+                resolution = self.frequency_resolution.get(old.frequency_khz,bin_hz)
+                tuned = old.carrier_khz
+                if bin_hz<resolution*.9:
+                    tuned = candidate.tuning_khz
+                    self.frequency_resolution[old.frequency_khz] = bin_hz
+                elif accumulate and bin_hz<=resolution*1.1 and abs(candidate.tuning_khz-old.tuning_khz)*1000<2*bin_hz:
+                    tuned = round(.65*old.tuning_khz+.35*candidate.tuning_khz,4)
+                self.candidates[duplicate] = SeekCandidate(old.frequency_khz,round(strength,1),tuned)
             key = candidate.frequency_khz if duplicate is None else self.candidates[duplicate].frequency_khz
             if accumulate:
                 evidence = self.evidence.setdefault(key,dict(hits=0,status='Checking',failures=0))
@@ -420,7 +662,8 @@ class SmartSeek:
         target = next((c for c in self.candidates if c.frequency_khz==self.review_target),None)
         if target is None:
             return
-        nearby = [c for c in worker.candidates if abs(c.tuning_khz-target.tuning_khz)<.75
+        worker_candidates = worker.snapshot()['candidates']
+        nearby = [c for c in worker_candidates if abs(c.tuning_khz-target.tuning_khz)<.75
                   or (abs(c.tuning_khz-target.tuning_khz)<4.5 and c.prominence>=target.prominence+8)]
         evidence = self.evidence.setdefault(target.frequency_khz,dict(hits=0,status='Checking',failures=0))
         if nearby:
@@ -441,22 +684,22 @@ class SmartSeek:
         else:
             evidence['failures'] += 1
             evidence['status'] = 'Carrier only' if worker.stable_line(target.tuning_khz) else 'Unconfirmed'
-        self._merge(worker.candidates,accumulate=True)
+        self._merge(worker_candidates,accumulate=True,bin_hz=worker.bandwidth_hz/(1024*2**worker.zoom))
 
     def snapshot(self, now=None):
-        threshold = 24 - .18*self.sensitivity
-        visible = tuple(item for item in self.candidates if item.prominence >= threshold
-                        and item.frequency_khz not in self.suppressed)
+        visible = tuple(sorted((item for item in self.candidates
+                                if item.frequency_khz not in self.suppressed),
+                               key=lambda item:(item.tuning_khz,item.frequency_khz)))
         if visible and self.selection not in [item.frequency_khz for item in visible]:
             self.selection = visible[0].frequency_khz
         elif not visible:
             self.selection = None
         measured = self.worker if self.worker else self
         return dict(open=self.open, active=self.active, candidates=visible,
-                    selected=self.selection, sensitivity=self.sensitivity, label=self.label,
+                    selected=self.selection, label=self.label,
                     completed=min(measured.index,len(measured.windows)), total=len(measured.windows),
                     skipped=self.skipped, cached=self.cached,
-                    window_progress=(min(.95,max(0,(time.monotonic() if now is None else now)-measured.started_rows_at)/measured.dwell_seconds())
+                    window_progress=(min(.95,measured.observed_seconds/measured.dwell_seconds())
                                      if measured.active and measured.started_rows_at is not None else 0),
                     scanning_khz=(measured.windows[measured.index] if measured.active and measured.windows else None),
                     phase=('overview' if self.worker_kind == 'overview' else 'review' if self.worker else 'survey'),
