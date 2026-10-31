@@ -319,9 +319,11 @@ class SmartSeekView:
             return ('search_key',key) if key else None
         return next((action for box, action in reversed(self.actions) if self.ui.contains(box, x, y)), None)
 
-    def press(self, x, y):
+    def press(self, x, y, points=None):
         if self.long_view and self.long_view.open:
             self.long_view.press(x,y)
+            if points and len(points)>=2:
+                self.long_view.drag(x,y,points)
             return
         self.press_action = self.action_at(x,y)
         in_list = (self.research_frequency is None and self.tool_preview is None and not self.search_keyboard
@@ -332,9 +334,9 @@ class SmartSeekView:
     def back_box(self):
         return (self.ui.LOGICAL_W-246, 8, self.ui.LOGICAL_W-10, 66)
 
-    def drag(self, x, y):
+    def drag(self, x, y, points=None):
         if self.long_view and self.long_view.open:
-            return False
+            return self.long_view.drag(x,y,points)
         if self.drag_origin:
             start_x,start_y,offset = self.drag_origin
             dx,dy = x-start_x,y-start_y
@@ -344,6 +346,13 @@ class SmartSeekView:
                 self._set_scroll_y(offset-dy)
                 return True
         return False
+
+    def wheel(self, delta, x, y):
+        if self.long_view and self.long_view.open and self.long_view.page == 'history' and not self.long_view.keyboard:
+            if self.ui.contains(self.long_view.plot_box(),x,y):
+                self.long_view.zoom_at(1.25**delta,x)
+                return
+        self.move(1 if delta < 0 else -1)
 
     def release(self, x, y):
         if self.long_view and self.long_view.open:

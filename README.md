@@ -34,8 +34,10 @@ addresses, setup and receiver ownership notes, see
 
 ### Software version
 
-The [0.3.0 release notes](docs/release-0.3.0.md) describe the combined Smart Scan
-development, live waterfall preview, adaptive display settings and coverage updates.
+The [0.3.1 release notes](docs/release-0.3.1.md) cover ADS-B responsiveness and
+storage limits, together with the deployed Long Scan history improvements.
+The [0.3.0 release](docs/release-0.3.0.md) introduced the combined Smart Scan,
+live waterfall preview and adaptive display settings.
 
 Tap the Smart Scan title for the experimental [Long Scan setup and saved
 activity viewer](docs/long-scan.md), with an independent receiver session and

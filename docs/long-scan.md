@@ -55,3 +55,21 @@ For this first prototype, both scanners reuse the detector and offline
 schedule lookup. They do not exchange live RF observations or station counts.
 This keeps the dedicated experiment independent of normal listening and
 avoids silently mixing measurements from different receiver locations.
+
+## History navigation and search
+
+The deployed viewer supports horizontal pinch zoom up to 64×, panning, an
+overview navigator and a viewport-aware frequency ruler. Tap a visible trace
+for its frequency, broadcast band, UTC time and possible station/country at
+that historical instant. Gaps without observations are not selectable traces.
+
+History search matches station and country through the downloaded offline
+schedule index. Results highlight matching traces without retuning the listening
+receiver. Search is asynchronous and cancelled when superseded. Cached GPU
+transforms keep camera changes separate from rebuilding saved history.
+Confirmed activity can bridge a short reconnect only while the measured-miss
+and outage guards allow it; a disconnect alone is not evidence of absence.
+
+Waterfall requests track actual changes in commanded views and matching first
+rows. The HOME footer reports total system RAM used/installed from MemAvailable,
+sampled every two seconds.

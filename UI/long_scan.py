@@ -6,6 +6,7 @@ from pathlib import Path
 import select
 import socket
 import sqlite3
+import struct
 import threading
 import time
 from urllib.parse import urlsplit
@@ -14,6 +15,8 @@ import kiwi_live_display_fb as kiwi
 from smart_seek import SmartSeek
 from scan_policy import ScanPolicy
 from smart_seek_catalogue import SpectrumSurvey
+from am_carrier import rf_view_center_hz
+from waterfall_metrics import WaterfallMetrics
 
 
 HOURS = (1, 6, 12, 24)
@@ -98,8 +101,9 @@ class ActivityHistory:
             if not sweep['measured']:
                 if stamp >= start:
                     gaps.append((stamp,sweep['band']))
-                for key in keys:
-                    states.pop(key,None)
+                # A network interruption is not a measured station absence.
+                # Preserve the last positive and measured-miss count; the
+                # existing age limit still prevents bridging long outages.
                 continue
             for key in keys:
                 frequency = tracks[key]
@@ -143,6 +147,7 @@ class KiwiScanSession:
         self.waterfall_paused = False
         self.last_keepalive = 0
         self.last_frame = time.monotonic()
+        self.metrics = WaterfallMetrics()
 
     def _socket(self, name):
         ws = self.connect(self.server,name,timeout=3,session_timestamp=self.stamp)
@@ -174,11 +179,15 @@ class KiwiScanSession:
         if target != self.target or self.waterfall_paused:
             self.target = target
             if self.wf_authenticated:
-                kiwi.send_wf_setup(self.wf,center,zoom,4)
+                self._send_view(self.wf,center,zoom)
                 if self.waterfall_paused:
                     self.frames.clear()
                     self.last_frame = time.monotonic()
                 self.waterfall_paused = False
+
+    def _send_view(self, ws, center, zoom):
+        if kiwi.send_wf_setup(ws,center,zoom,4):
+            self.metrics.sent()
 
     def pause_waterfall(self):
         """Stop unused FFT rows between cycles without reopening the session."""
@@ -186,6 +195,7 @@ class KiwiScanSession:
             kiwi.send_wf_speed(self.wf,0)
             self.waterfall_paused = True
             self.frames.clear()
+            self.metrics.cancel_wait()
 
     def _message(self, ws, message):
         if message[:3] == b'MSG':
@@ -210,12 +220,22 @@ class KiwiScanSession:
                 if params.get('badp') == '0':
                     self.wf_authenticated = True
                     if self.target:
-                        kiwi.send_wf_setup(ws,*self.target,4)
+                        self._send_view(ws,*self.target)
         elif ws is self.snd and message[:3] == b'SND' and len(message) >= 10:
             self.audio_ready = True
         elif message[:3] == b'W/F' and len(message) == 1040:
             self.last_frame = time.monotonic()
             if not self.waterfall_paused:
+                if self.target and self.metrics.waiting:
+                    start,flags,_sequence = struct.unpack_from('<III',message,4)
+                    zoom = flags&65535
+                    expected_zoom = min(kiwi.kiwi_zoom_level(self.target[1]),self.zoom_cap,self.zoom_max)
+                    if not flags>>16&3 and zoom==expected_zoom:
+                        first = start*self.bandwidth/(1024*2**self.zoom_max)
+                        bin_hz = self.bandwidth/(1024*2**zoom)
+                        expected = rf_view_center_hz(round(self.target[0],3)*1000,self.bandwidth,expected_zoom)
+                        if abs(first+512*bin_hz-expected)<=max(3,2*bin_hz):
+                            self.metrics.first_row()
                 self.frames.append(message)
 
     def _read_ready(self, sockets, timeout):
@@ -298,9 +318,11 @@ class LongScan:
 
     def snapshot(self):
         with self.lock:
+            metrics = getattr(self.session,'metrics',None)
             return dict(self.config,status=self.status,detail=self.detail,band=self.band,
                         running=bool(self.thread and self.thread.is_alive()),next_cycle=self.next_cycle,
-                        revision=self.history.revision if self.history else 0)
+                        revision=self.history.revision if self.history else 0,
+                        timing=metrics.snapshot() if isinstance(metrics,WaterfallMetrics) else None)
 
     def start(self, startup_delay=0):
         with self.lock:

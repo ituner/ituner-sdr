@@ -265,6 +265,7 @@ from waterfall_levels import AutoWaterfallLevels
 import offline_schedules
 from smart_seek_view import SmartSeekView
 from long_scan import LongScan
+from system_memory import system_ram_label
 from meter_artwork import linear_strip_image
 
 
@@ -18435,6 +18436,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         size = 18
         first_y = y0 + 27
         second_y = y0 + 59
+        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
+        system_label = f"{cpu_label}   {system_ram_label()}"
         used, total = station_capacity or (None, None)
         capacity_label = (
             f"{used}/{total} USERS"
@@ -18444,7 +18447,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         footer_font = text_cache.font(size, bold=True, family="Liberation Sans")
         capacity_width = footer_font.size(capacity_label)[0] + 16 if capacity_label else 0
         server = fit_station_text(
-            text_cache, station_name or "NO RECEIVER", status_x1 - 300 - capacity_width,
+            text_cache, station_name or "NO RECEIVER", status_x1 - max(300, footer_font.size(system_label)[0] + 36) - capacity_width,
             size, True, False, family="Liberation Sans",
         )
         draw_text(text_cache, 18, first_y, server, APP_UI_STYLE.palette.footer_primary, size,
@@ -18460,11 +18463,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
                   APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
                   family="Liberation Sans")
-        ram_mb = read_process_ram_mb()
-        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
-        ram_label = f"RAM {ram_mb:.0f} MB" if ram_mb is not None else "RAM --"
         temp_label = f"TEMP {theme_system.display_temperature(temp_c)}" if temp_c is not None else "TEMP --"
-        draw_text(text_cache, status_x1 - 18, first_y, f"{cpu_label}   {ram_label}",
+        draw_text(text_cache, status_x1 - 18, first_y, system_label,
                   APP_UI_STYLE.palette.footer_primary, size, True, False, "rm", alpha,
                   family="Liberation Sans")
         draw_text(text_cache, status_x1 - 18, second_y, temp_label,
@@ -26721,7 +26721,7 @@ def main():
                         desktop_pointer_down = False
                 elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
                     if seek_view.open:
-                        seek_view.move(1 if event.y < 0 else -1)
+                        seek_view.wheel(event.y,*desktop_logical_point(pygame.mouse.get_pos()))
                     elif picker_open and picker_map_open:
                         picker_map_zoom_target = None
                         picker_map_scale = clamp(
@@ -26932,7 +26932,7 @@ def main():
                             # underlying waterfall controls settle.
                             if seek_view.open:
                                 gesture = "smart_seek"
-                                seek_view.press(x, y)
+                                seek_view.press(x, y, points=points)
                             elif audio_test_workspace.open:
                                 gesture = "audio_test"
                             elif application_update.open:
@@ -27461,7 +27461,7 @@ def main():
                             {"vhf_workspace": vhf_workspace, "adsb_workspace": adsb_workspace, "sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
                         elif gesture == "smart_seek":
-                            seek_view.drag(x, y)
+                            seek_view.drag(x, y, points=points)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
                                 wspr_workspace_dragged = True

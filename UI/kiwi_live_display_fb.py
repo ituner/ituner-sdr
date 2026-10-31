@@ -579,11 +579,13 @@ def send_wf_speed(ws, wf_speed):
 
 def send_wf_setup(ws, freq_khz, zoom, wf_speed):
     # Compare actual wire values, including zoom clamping and kHz rounding.
+    previous = vars(ws).get('_ituner_wf_settings',{}).get('view')
     _send_wf_setting(ws, 'view', f"SET zoom={kiwi_zoom_level(zoom)} cf={freq_khz:.3f}")
     _send_wf_setting(ws, 'levels', "SET maxdb=-10 mindb=-110")
     send_wf_speed(ws, wf_speed)
     _send_wf_setting(ws, 'compression', "SET wf_comp=0")
     _send_wf_setting(ws, 'interpolation', "SET interp=13")
+    return previous != vars(ws)['_ituner_wf_settings']['view']
 
 
 def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):

@@ -64,10 +64,10 @@ approximation until the antenna itself is surveyed. Height updates are shared
 with touch through the station profile, independently of receiver tuning.
 
 `coverage.sqlite3` in the ADS-B data directory stores direct ADS-B positions
-independently of the 24-hour traffic trails. Every reception is preserved for at least seven days. Older records may remain up to 90 days within a 250,000-position target; this target never deletes records younger than seven days. Startup imports retained
+independently of the 24-hour traffic trails. The retention target is seven complete days, with older records up to 90 days within a 250,000-position target. The aggregate 250 MiB storage cap takes precedence: oldest records, including those younger than seven days, may be removed when necessary. Startup imports retained
 `flights.jsonl*` logs idempotently. New entries follow the normal five-second
 flight logging cadence. SQLite reuses pages as older positions expire. Sky-cell
-statistics and extrema use the full retained history. The selected window supplies up to 250,000 representative positions to both interfaces, so the current approximately 172,000-point week is loaded completely. Larger seven-day archives remain complete on disk while display sampling bounds the RAM and graphics workload. The previous 100,000-dot cap is removed. Received coordinates, altitudes, signal values and IDs are held in cached RAM snapshots and prepared geometry, while the source observations remain persistent in SQLite. Rotation uses those arrays without a disk read or network request.
+statistics and extrema use the full retained history. The selected window supplies up to 250,000 representative positions to both interfaces, so the current approximately 172,000-point week is loaded completely. Larger archives remain on disk within the aggregate storage budget while display sampling bounds the RAM and graphics workload. The previous 100,000-dot cap is removed. Received coordinates, altitudes, signal values and IDs are held in cached RAM snapshots and prepared geometry, while the source observations remain persistent in SQLite. Rotation uses those arrays without a disk read or network request.
 Links between retained dots are built before thinning: a longer displayed segment
 is only confirmed when all intervening original links pass the time, movement
 and receiver-lifecycle checks. It does not invent continuity across a gap.
@@ -194,3 +194,38 @@ After the first web history download, a reference-keyed delta request sends only
 Five-second reception samples are ingested into an in-memory SQLite working database. The on-card database is loaded once at startup. New/changed rows, footprint bookkeeping and pruning are committed incrementally every five minutes; the full database is not recopied for each save. Flight JSONL records are RAM-buffered on the same cadence, and traffic-trail persistence also uses five minutes. Live short windows, statistics, log tails and log downloads include the unsaved RAM data. A normal shutdown flushes pending data; abrupt power loss may discard the last five minutes. Receiver lifecycle/configuration logs can still write when settings or hardware change.
 
 The native app suppresses covered Home instruments and waterfall FFT work while ADS-B is full screen, and requests 60 FPS during dome touch/zoom interaction. Preview begins at pointer-down, not after crossing a movement threshold. Picking stays in numeric arrays and is vectorized on demand; it does not rebuild hundreds of thousands of Python hit tuples each frame. Inactive history windows stop rebuilding after 12 seconds without a reader, and bulk WGS84 projection uses NumPy.
+
+### Incremental coverage updates
+
+Coverage keeps a worker-owned RAM accumulator per active viewing window. New
+SQLite rowids add only new positions to the WGS84 projection, sky-cell counts,
+range extrema, signal statistics and footprint. Rolling windows reuse their
+projected positions and expire old evidence; site/height changes and retention
+pruning invalidate the relevant cache. Published native/web snapshots stay
+immutable, including when late packets arrive before an earlier snapshot base.
+The five-minute disk flush interval is unchanged; the aggregate storage cap can shorten the seven-day history under pressure.
+
+### Aggregate storage cap
+
+All retained files in the ADS-B data directory share a 250 MiB (262,144,000 byte)
+budget. This includes the coverage database, packet and receiver logs, trails,
+comparison history, weather and aircraft metadata/photos; installed decoder
+software and volatile receiver output outside this directory are separate.
+The storage manager reserves 16 MiB of headroom for normal writes, reclaims
+old rotated logs and cached aircraft details before reducing position history,
+and limits SQLite growth to the remaining allocation. Under pressure it removes
+the oldest positions and compacts the database to reclaim actual storage.
+A persisted cutoff prevents replaying those positions from old packet logs on
+restart. Retention pruning invalidates incremental coverage cursors and leaves
+received lifetime bearing maxima intact. The data-directory total is rechecked
+every 30 seconds and at database saves. `/api/state` exposes storage accounting.
+
+### Quiet reception updates
+
+The native renderer keeps its last completed detailed projection while an
+updated history projection is calculated. Reception alone no longer replaces
+the full cloud with the 8,000-dot refinement stage. Published picking data,
+ground geometry and highlights stay paired with the displayed projection;
+pulses are suppressed for a held old frame so a new report cannot reflash
+previous highlights. Gestures retain their fast preview, while explicit view,
+filter and reset changes bypass old-scene continuity.

@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from concurrent.futures import Future
 from unittest.mock import Mock, patch
 
 import kiwi_gl_display as ui
@@ -38,7 +39,7 @@ class HistoryTests(unittest.TestCase):
         returned = self.store.read('rx',hours=1,now=5680)
         self.assertFalse(any(segment[0] <= 4600 and segment[1] >= 5680 for segment in returned['segments']))
 
-    def test_one_measured_miss_can_recover_but_unmeasured_outage_does_not_bridge(self):
+    def test_one_measured_miss_and_short_unmeasured_outage_can_recover(self):
         self.record(1000)
         self.record(1360,hits=False)
         self.record(1720)
@@ -47,7 +48,7 @@ class HistoryTests(unittest.TestCase):
         self.record(2080,hits=False,measured=False)
         self.record(2440)
         view = self.store.read('rx',now=2440)
-        self.assertEqual(len(view['segments']),1)
+        self.assertEqual(len(view['segments']),2)
         self.assertEqual(view['gaps'],[(2080,'41 m')])
 
     def test_unvisited_time_and_receiver_changes_never_generate_false_absence(self):
@@ -68,13 +69,24 @@ class HistoryTests(unittest.TestCase):
         finally:
             other.close()
 
-    def test_connection_gap_breaks_all_bands_and_old_data_is_pruned(self):
+    def test_short_connection_gap_preserves_confirmed_carrier_and_old_data_is_pruned(self):
         self.record(1000)
         self.store.record('rx','*',0,30000,(),False,1200)
         self.record(1360)
-        self.assertEqual(self.store.read('rx',now=1360)['segments'],[])
+        self.assertEqual(len(self.store.read('rx',now=1360)['segments']),1)
         self.record(200000)
         self.assertEqual(self.store.read('rx',hours=24,now=200000)['points'],[(200000,'41 m',7300.04,30)])
+
+    def test_reconnect_does_not_erase_two_measured_misses_or_bridge_a_long_outage(self):
+        self.record(1000)
+        self.record(1360,hits=False)
+        self.record(1720,hits=False)
+        self.store.record('rx','*',0,30000,(),False,1800)
+        self.record(2080)
+        self.assertEqual(self.store.read('rx',now=2080)['segments'],[])
+        self.store.record('rx','*',0,30000,(),False,2200)
+        self.record(4000)
+        self.assertEqual(self.store.read('rx',now=4000)['segments'],[])
 
 
 class SessionTests(unittest.TestCase):
@@ -259,6 +271,153 @@ class ControllerViewTests(unittest.TestCase):
         view.future.result(1)
         result = view._history(self.controller.snapshot())
         self.assertEqual([point[2] for point in result['points']],[6000])
+
+
+class HistoryGestureTests(unittest.TestCase):
+    def setUp(self):
+        self.controller=Mock(bands=((5730,6200,'49 m'),(7200,7450,'41 m')))
+        self.controller.snapshot.return_value={'running':True}
+        self.view=LongScanView(ui,self.controller,lambda:'http://example.test')
+        self.addCleanup(self.view.shutdown)
+        self.view.open=True;self.view.page='history'
+        self.view.actions=[(self.view.plot_box(),('inspect',None))]
+
+    def test_pinch_holds_the_frequency_under_the_finger_midpoint(self):
+        v=self.view
+        v.info_card={'band':'49 m'}
+        left,top,right,bottom=v.plot_box();middle=(left+right)/2;y=(top+bottom)/2
+        v.press(middle-100,y)
+        v.drag(middle,y,((middle-100,y),(middle+100,y)))
+        anchor=v.world_at(middle)
+        v.drag(middle+30,y,((middle-170,y),(middle+230,y)))
+        self.assertEqual(v.zoom,2)
+        self.assertAlmostEqual(v.world_at(middle+30),anchor)
+        self.assertIsNone(v.info_card)
+        self.controller.configure.assert_not_called()
+
+    def test_lifting_one_finger_cannot_pan_or_select(self):
+        v=self.view;v.press(500,300)
+        v.drag(600,300,((500,300),(700,300)))
+        v.drag(600,300,((400,300),(800,300)))
+        window=v.zoom,v.offset
+        v.drag(900,300,((900,300),))
+        self.assertEqual((v.zoom,v.offset),window)
+        with patch.object(v,'inspect') as inspect:
+            v.release(900,300)
+            inspect.assert_not_called()
+
+    def test_drag_cancels_inspection_and_pans_only_inside_the_bounds(self):
+        v=self.view;v.set_window(4,.25);v.press(600,300)
+        v.drag(700,300,((700,300),))
+        self.assertLess(v.offset,.25)
+        with patch.object(v,'inspect') as inspect:
+            v.release(700,300);inspect.assert_not_called()
+        v.set_window(32,5);self.assertEqual(v.offset,1-1/32)
+        v.action('fit',None);self.assertEqual((v.zoom,v.offset),(1,0))
+
+    def test_inspection_uses_the_zoomed_frequency_and_actual_measured_carrier(self):
+        v=self.view;v.set_window(4,.1)
+        v.history=dict(start=0,end=100,tracks={('49 m',6000):6000.04},segments=[(40,60,'49 m',6000.04,20)])
+        world=(6000.04-5730)/(6200-5730)/2
+        left,top,right,bottom=v.plot_box()
+        with patch('long_scan_view.offline_schedules.lookup',return_value=(None,[],None)) as lookup:
+            v.inspect(v.screen_at(world),(top+bottom)/2)
+        self.assertAlmostEqual(lookup.call_args.args[0],6000.04)
+        self.assertAlmostEqual(lookup.call_args.args[1],50)
+        self.assertIn('6,000.0 kHz',v.selection)
+        self.assertTrue(v.selection.startswith('49 m · '))
+        self.assertIn('UTC',v.selection)
+        self.assertEqual(v.info_card['frequency'],6000.04)
+        self.assertEqual(v.info_card['band'],'49 m')
+
+    def test_tapping_a_time_gap_does_not_identify_a_station_seen_at_other_times(self):
+        v=self.view;v.set_window(4,.1)
+        v.history=dict(start=0,end=100,tracks={('49 m',6000):6000.04},
+                       points=[(0,'49 m',6000.04,20),(100,'49 m',6000.04,20)])
+        world=(6000.04-5730)/(6200-5730)/2
+        left,top,right,bottom=v.plot_box()
+        with patch('long_scan_view.offline_schedules.lookup') as lookup:
+            v.inspect(v.screen_at(world),(top+bottom)/2)
+            lookup.assert_not_called()
+        self.assertIn('49 m',v.selection)
+        self.assertIn('5,730–6,200 kHz',v.selection)
+        self.assertIn('No measured trace here',v.selection)
+        self.assertIsNone(v.info_card['frequency'])
+
+    def test_tap_near_a_point_reports_that_measurements_time_and_possible_broadcaster(self):
+        v=self.view;v.set_window(4,.1)
+        v.history=dict(start=0,end=100,tracks={('49 m',6000):6000.04},points=[(50,'49 m',6000.04,20)])
+        world=(6000.04-5730)/(6200-5730)/2
+        left,top,right,bottom=v.plot_box()
+        with patch('long_scan_view.offline_schedules.lookup',return_value=(None,[dict(station='Example Radio',country='Romania')],None)) as lookup:
+            v.inspect(v.screen_at(world)+4,(top+bottom)/2+4)
+        self.assertEqual(lookup.call_args.args[1],50)
+        self.assertIn('49 m · 6,000.0 kHz',v.selection)
+        self.assertIn('Possible: Example Radio · Romania',v.selection)
+        self.controller.configure.assert_not_called()
+
+    def test_frequency_ruler_follows_a_deeply_zoomed_band(self):
+        v=self.view;v.set_window(64,.28)
+        ticks=v.frequency_ticks()
+        self.assertGreater(len(ticks),2)
+        for x,frequency,step,band in ticks:
+            self.assertEqual(band,'49 m')
+            expected=(frequency-5730)/(6200-5730)/2
+            self.assertAlmostEqual(v.world_at(x),expected)
+        self.assertTrue(all(a[0]<b[0] and a[1]<b[1] for a,b in zip(ticks,ticks[1:])))
+
+    def test_extra_zoom_level_is_bounded_and_can_return_to_the_whole_band_view(self):
+        v=self.view
+        v.zoom_at(1e6,600)
+        self.assertEqual(v.zoom,64)
+        self.assertLessEqual(v.offset,1-1/64)
+        v.zoom_at(1e-6,600)
+        self.assertEqual((v.zoom,v.offset),(1,0))
+
+    def test_wheel_zoom_keeps_its_anchor_and_does_not_change_history_hours(self):
+        v=self.view;v.set_window(4,.2)
+        anchor=v.world_at(600);v.zoom_at(1.25,600)
+        self.assertAlmostEqual(v.world_at(600),anchor)
+        self.controller.configure.assert_not_called()
+
+    def test_initial_two_finger_press_is_consumed_through_scan_view(self):
+        state=Mock();view=SmartSeekView(ui,state)
+        view.long_view=self.view
+        view.press(600,300,points=((500,300),(700,300)))
+        with patch.object(self.view,'inspect') as inspect:
+            self.assertTrue(view.drag(600,300))
+            self.assertIsNone(view.release(600,300))
+            inspect.assert_not_called()
+
+    def test_history_search_reuses_shared_keyboard_without_changing_receiver(self):
+        v=self.view
+        v.action('search',None)
+        self.assertEqual(v.keyboard_target,'search')
+        with patch.object(ui,'draw_touch_keyboard') as keyboard:
+            v.draw(None)
+            self.assertEqual(keyboard.call_args.args[1],'Long Scan history search')
+            self.assertEqual(keyboard.call_args.kwargs['submit'],'Find')
+        v.entry='Romania';v.key('SAVE')
+        self.assertEqual(v.search_query,'Romania')
+        self.assertFalse(v.keyboard)
+        self.controller.configure.assert_not_called()
+        v.action('search',None);v.entry='France';v.key('CANCEL')
+        self.assertEqual(v.search_query,'Romania')
+        v.action('clear_search',None)
+        self.assertEqual(v.search_query,'')
+
+    def test_older_search_completion_cannot_replace_a_newer_query(self):
+        v=self.view;v.executor.shutdown(wait=False)
+        old,new=Future(),Future();old.set_running_or_notify_cancel()
+        v.executor=Mock();v.executor.submit.side_effect=[old,new]
+        history=dict(start=0,end=10,points=[])
+        v.set_query('Romania');v.poll_search(history)
+        v.set_query('France');v.poll_search(history)
+        new.set_result({'country':'France'})
+        v.poll_search(history)
+        old.set_result({'country':'Romania'})
+        v.poll_search(history)
+        self.assertEqual(v.search_result,{'country':'France'})
 
 
 if __name__ == '__main__':
