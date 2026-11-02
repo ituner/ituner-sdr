@@ -169,7 +169,7 @@ function toggleFootprint(){if(!globe)return;globe.footprintEnabled=!globe.footpr
 for(const button of document.querySelectorAll('[data-layer-rx]'))button.onclick=toggleFootprint;
 footprintLegend();refreshFootprint();setInterval(refreshFootprint,10000);
 const domeWindow=new CoverageWindow(),domeTimespan=$('dome-timespan');
-const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()),undefined,()=>view.live(state?.aircraft||[],viewNow()));
+const reloadCoverage=mountCoverage($('coverage-panel'),()=>domeWindow.since(viewNow()),undefined,()=>state?.aircraft||[]);
 function renderDomeWindow(){
   document.querySelector('[data-dome-window-label]').textContent=(domeWindow.seconds?'LAST '+domeWindow.label.toUpperCase():'ALL RECORDED')+(domeWindow.startedAt!==null?' · SINCE RESET':'')+' · LIVE UPDATES';
   domeTimespan.textContent='Time · '+domeWindow.label;

@@ -24,6 +24,7 @@ import render_sdr_frontend_mockup as sdr_ui
 from client_identity import CLIENT_NAME
 from local_receivers import create_connection as local_connection
 from kiwi_occupancy import occupancy
+from waterfall_levels import AutoWaterfallLevels
 
 
 FB = Path("/dev/fb0")
@@ -547,6 +548,9 @@ def recv_exact(sock, count):
 
 
 def send_kiwi_setup(ws, client_type, user):
+    # Authentication starts a new receiver-side configuration lifetime, even
+    # when a test transport (or future reconnect wrapper) reuses its object.
+    vars(ws).pop('_ituner_wf_settings', None)
     # ``#`` is the Kiwi web client's explicit marker for an empty public
     # listener password.
     ws.send_text(f"SET auth t={client_type} p=#")
@@ -556,13 +560,32 @@ def send_kiwi_setup(ws, client_type, user):
     ws.send_text("SET geo=Ituner receiver")
 
 
+def _send_wf_setting(ws, key, command):
+    """Send a changed setting once per authenticated waterfall connection.
+
+    TCP preserves order; zoom/centre commands do not reset Kiwi's other W/F
+    settings. Remember only successful writes, so a failed write is retried.
+    The W/F worker owns configuration of its socket, including rate changes.
+    """
+    settings = vars(ws).setdefault('_ituner_wf_settings', {})
+    if settings.get(key) != command:
+        ws.send_text(command)
+        settings[key] = command
+
+
+def send_wf_speed(ws, wf_speed):
+    _send_wf_setting(ws, 'speed', f"SET wf_speed={wf_speed}")
+
+
 def send_wf_setup(ws, freq_khz, zoom, wf_speed):
-    # Zooms 15/16 are deliberately local-only: Kiwi's W/F protocol ends at 14.
-    ws.send_text(f"SET zoom={kiwi_zoom_level(zoom)} cf={freq_khz:.3f}")
-    ws.send_text("SET maxdb=-10 mindb=-110")
-    ws.send_text(f"SET wf_speed={wf_speed}")
-    ws.send_text("SET wf_comp=0")
-    ws.send_text("SET interp=13")
+    # Compare actual wire values, including zoom clamping and kHz rounding.
+    previous = vars(ws).get('_ituner_wf_settings',{}).get('view')
+    _send_wf_setting(ws, 'view', f"SET zoom={kiwi_zoom_level(zoom)} cf={freq_khz:.3f}")
+    _send_wf_setting(ws, 'levels', "SET maxdb=-10 mindb=-110")
+    send_wf_speed(ws, wf_speed)
+    _send_wf_setting(ws, 'compression', "SET wf_comp=0")
+    _send_wf_setting(ws, 'interpolation', "SET interp=13")
+    return previous != vars(ws)['_ituner_wf_settings']['view']
 
 
 def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
@@ -672,18 +695,17 @@ class WaterfallLeveler:
         self.floor = floor
         self.ceiling = ceiling
         self.auto = auto
+        self.levels = AutoWaterfallLevels()
+        self.was_auto = False
 
     def levels_for(self, samples):
         if not self.auto or not samples:
+            self.was_auto = False
             return self.floor, self.ceiling
-
-        ordered = sorted(samples)
-        median = ordered[len(ordered) // 2]
-        p98 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.98))]
-        target_floor = clamp(median - 8, 40, 230)
-        target_ceiling = clamp(max(p98 + 72, target_floor + 95), target_floor + 55, 255)
-        self.floor = 0.92 * self.floor + 0.08 * target_floor
-        self.ceiling = 0.92 * self.ceiling + 0.08 * target_ceiling
+        if not self.was_auto:
+            self.levels = AutoWaterfallLevels()
+        self.was_auto = True
+        self.floor, self.ceiling = self.levels.levels_for(samples)
         return self.floor, self.ceiling
 
 

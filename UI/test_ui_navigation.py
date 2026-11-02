@@ -235,7 +235,7 @@ class MenuIconTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
             draws = {}
-            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+            for name in ('draw_logical_rect', 'draw_logical_rounded_rect', 'draw_receiver_action_button',
                          'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
                          'draw_receiver_back_button', 'draw_picker_two_line_button',
                          'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):
@@ -440,7 +440,7 @@ class DrawerGeometryTests(unittest.TestCase):
         cache.font.return_value.size.return_value = (90, 13)
         with mock.patch.object(ui, "draw_logical_rect"), \
              mock.patch.object(ui, "fit_station_text", return_value="TEST RECEIVER"), \
-             mock.patch.object(ui, "read_process_ram_mb", return_value=120), \
+             mock.patch.object(ui, "system_ram_label", return_value="RAM 1.5/4.0 GB"), \
              mock.patch.object(ui, "draw_text") as draw_text:
             ui.draw_lower_status(cache, 15, 50, 712, 800,
                                  station_name="TEST RECEIVER", audio_jitter_depth=7)
@@ -449,7 +449,7 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(rendered[1][0:2], (18, 771))
         self.assertIn("UTC", rendered[1][2])
         self.assertEqual(rendered[2], (124, 771, "BUFFER Q7/T6"))
-        self.assertEqual(rendered[3], (1006, 739, "CPU 15%   RAM 120 MB"))
+        self.assertEqual(rendered[3], (1006, 739, "CPU 15%   RAM 1.5/4.0 GB"))
         self.assertEqual(rendered[4], (1006, 771, "TEMP 50 C"))
         self.assertTrue(all(call.args[5] == 18 for call in draw_text.call_args_list))
 
