@@ -264,6 +264,8 @@ from smart_seek_waterfall import SeekWaterfall
 from waterfall_levels import AutoWaterfallLevels
 import offline_schedules
 from smart_seek_view import SmartSeekView
+from long_scan import LongScan
+from system_memory import system_ram_label
 from meter_artwork import linear_strip_image
 
 
@@ -1957,7 +1959,8 @@ def configure_popup_layout():
         left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 124
         right_x0, right_x1 = LCD_NAV_X0 + 132, LOGICAL_W - 10
         row_h, row_gap = 64, 8
-        rows = tuple(440 + index * (row_h + row_gap) for index in range(4))
+        first_row = lcd_drawer_back_box()[1] - 4 * (row_h + row_gap)
+        rows = tuple(first_row + index * (row_h + row_gap) for index in range(4))
         TEST_DJ_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
         TEST_RTL_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
         TEST_PATTERN_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
@@ -2088,8 +2091,6 @@ MENU_ROWS = 4
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("dual", "DUAL RX"),
-    ("audio", "AUDIO"),
-    ("display", "DISPLAY"),
     ("digital", "DIGITAL"),
     ("vosc", "CAPTIONS"),
     ("tests", "APPS"),
@@ -2097,10 +2098,8 @@ MENU_ITEMS = (
 )
 HOME_MENU_SUBTITLES = {
     "rx": "FIND & TUNE",
-    "audio": "VOL & DSP",
     "digital": "",  # Computed from the available decoder categories below.
     "vosc": "TRANSCRIBE",
-    "display": "LOOK & FEEL",
     "dual": "RX1, RX2",
     "settings": "SETUP",
     "tests": "TOOLS, ETC",
@@ -2530,6 +2529,8 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
+    ("display", "DISPLAY"),
+    ("audio", "AUDIO"),
     ("network", "Wi-Fi / ETHERNET"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
@@ -2561,6 +2562,8 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 
 SETTINGS_MENU_SUBTITLES = {
+    "display": "LOOK & FEEL",
+    "audio": "VOL & DSP",
     "radio_info": "IDENTITY, SITE & GPS",
     "usb_radios": "RADIOS & DECODERS",
     "network": "NETWORK",
@@ -4638,9 +4641,15 @@ def carrier_waterfall_box():
 
 
 def smart_seek_waterfall_box():
-    """SEEK occupies the square immediately below Play/Pause."""
+    """SCAN occupies the square immediately below Play/Pause."""
     x0, y0, x1, y1 = stream_waterfall_box()
     return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+
+
+def waterfall_scan_touch(x, y, drawn, modal_open=False):
+    """A painted SCAN owns its tap, including the small margin between tiles."""
+    return bool(drawn and not modal_open and
+                contains_with_guard(smart_seek_waterfall_box(),x,y,guard=4))
 
 
 def carrier_button_visible(state):
@@ -4690,7 +4699,9 @@ def waterfall_touch_bounds():
     ), y1
 
 
-def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None):
+def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None, scan_drawn=False):
+    if waterfall_scan_touch(x,y,scan_drawn):
+        return False
     if LCD_800_MODE and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
         return False
     if DESKTOP_1280_MODE:
@@ -5427,11 +5438,24 @@ class SharedState:
         with self.lock:
             now = time.monotonic()
             self.smart_seek.poll(self._carrier_context(), now)
-            candidates = self.smart_seek.snapshot(now)['candidates']
+            snapshot = self.smart_seek.snapshot(now)
+            candidates = snapshot['candidates']
+            entry = next((item for item in snapshot.get('catalogue',())
+                          if item['candidate'].frequency_khz == frequency),None)
             if (not self.smart_seek.open or not self._carrier_eligible()
-                    or not any(item.frequency_khz == frequency for item in candidates)):
+                    or not (entry or any(item.frequency_khz == frequency for item in candidates))):
                 return False
-            selected = next(item for item in candidates if item.frequency_khz == frequency)
+            selected = next((item for item in candidates if item.frequency_khz == frequency),
+                            entry['candidate'] if entry else None)
+            if entry and entry['band'] != self.smart_seek.label:
+                band = next(b for b in SW_BROADCAST_BANDS if b[2] == entry['band'])
+                self._set_seek_waterfall(False)
+                self.smart_seek.start(*band,self._carrier_context(),now,
+                                      cache_key=(self.server,band[0],band[1]),adaptive=True)
+                if not any(c.frequency_khz == frequency for c in self.smart_seek.candidates):
+                    self.smart_seek.candidates = [item['candidate'] for item in snapshot['catalogue']
+                                                 if item['band'] == entry['band']]
+                    self.smart_seek.stale = {c.frequency_khz for c in self.smart_seek.candidates}
             self.freq_khz = selected.tuning_khz
             self.wf_view_center_khz = None
             self.view_generation += 1
@@ -5462,6 +5486,10 @@ class SharedState:
     def take_seek_waterfall(self):
         with self.lock:
             return self.seek_waterfall.take()
+
+    def set_smart_seek_band_menu(self, opened):
+        with self.lock:
+            self.smart_seek.set_band_menu(opened, time.monotonic())
 
     def smart_seek_snapshot(self):
         with self.lock:
@@ -5506,10 +5534,6 @@ class SharedState:
     def move_smart_seek(self, delta):
         with self.lock:
             self.smart_seek.move(delta)
-
-    def set_smart_seek_sensitivity(self, value):
-        with self.lock:
-            self.smart_seek.sensitivity = int(clamp(value, 0, 100))
 
     def note_smart_seek_identity(self, frequency, known, nominal=()):
         with self.lock:
@@ -11852,7 +11876,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
     _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
     if LCD_800_MODE:
-        draw_settings_leaf_sidebar(text_cache, "APPS", "TOOLS & DIAGNOSTICS")
+        draw_settings_leaf_sidebar(text_cache, "APPS", "")
         for box, title, detail, active in (
             (TEST_SINE_BOX, "AUDIO TEST", "SINE WAVE", False),
             (TEST_DJ_BOX, "DJ TUNE", "LIVE DIAL", False),
@@ -14053,9 +14077,8 @@ def receiver_map_zoom_boxes():
     return RADIOGARDEN_ZOOM_IN_BOX, RADIOGARDEN_ZOOM_OUT_BOX
 
 
-# The Globe legend is a colour key for the receiver source groups. Each chip
-# is a toggle: switching a group off removes its dots from the globe (and from
-# the tap surface) without touching the saved favorites or health records.
+# The Globe legend selects exactly one receiver source for drawing and taps.
+# Selection never changes saved favorites, health records, or the live receiver.
 RECEIVER_MAP_GROUP_ORDER = ("kiwi", "openwebrx", "local", "fmdx")
 RECEIVER_MAP_GROUP_LABELS = {
     "kiwi": "KIWI",
@@ -14071,10 +14094,10 @@ RECEIVER_MAP_GROUP_COLORS = {
     "local": (255, 208, 92, 235),
     "fmdx": (255, 154, 61, 245),
 }
-# Session-only visibility; groups the operator has switched off in the legend.
-RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters match the Receivers category rows. Their full-width line
-# carries the dot colour when visible and turns gray when hidden.
+# Session-only single choice; KIWI is the default when the application starts.
+RECEIVER_MAP_SELECTED_GROUP = "kiwi"
+# Legend choices match the Receivers category rows. The selected source
+# carries its dot colour; other source swatches use the theme secondary text.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + 16
 RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
@@ -14097,20 +14120,20 @@ def receiver_map_group(receiver):
 
 
 def receiver_map_group_visible(group):
-    return group not in RECEIVER_MAP_HIDDEN_GROUPS
+    return group == RECEIVER_MAP_SELECTED_GROUP
 
 
-def receiver_map_toggle_group(group):
-    """Flip a legend group and report whether it is visible afterwards."""
-    if group in RECEIVER_MAP_HIDDEN_GROUPS:
-        RECEIVER_MAP_HIDDEN_GROUPS.discard(group)
-        return True
-    RECEIVER_MAP_HIDDEN_GROUPS.add(group)
-    return False
+def receiver_map_select_group(group):
+    """Select one source; tapping it again leaves it selected."""
+    global RECEIVER_MAP_SELECTED_GROUP
+    if group not in RECEIVER_MAP_GROUP_ORDER:
+        return False
+    RECEIVER_MAP_SELECTED_GROUP = group
+    return True
 
 
 def receiver_map_reset_groups():
-    RECEIVER_MAP_HIDDEN_GROUPS.clear()
+    receiver_map_select_group("kiwi")
 
 
 def receiver_map_legend_entries(receivers):
@@ -14134,12 +14157,12 @@ def receiver_map_legend_swatch_color(group, active):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Compact Globe-only filters, aligned to the rail's right edge."""
+    """Source choices share BACK's full width and horizontal alignment."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    width = 148
-    x0 = LOGICAL_W - RECEIVER_PICKER_MARGIN - width
+    x0, _y0, x1, _y1 = RECEIVER_PICKER_BACK_BOX
+    width = x1 - x0
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
@@ -14150,8 +14173,8 @@ def receiver_map_legend_boxes(receivers, box=None):
 
 
 def receiver_map_legend_label(group, active):
-    """Name the action, not the state: HIDE a visible group, SHOW a hidden one."""
-    return f"{'HIDE' if active else 'SHOW'} {RECEIVER_MAP_GROUP_LABELS[group]}"
+    """Keep single-choice labels stable in selected and unselected states."""
+    return RECEIVER_MAP_GROUP_LABELS[group]
 
 
 def receiver_map_legend_at(x, y, receivers, box=None):
@@ -14610,8 +14633,8 @@ def draw_receiver_map(
         family=APP_UI_STYLE.button.font_family,
     )
 
-    # Compact visibility filters pair each source name with its dot colour.
-    # A hidden source keeps a gray square in the same position.
+    # Full-width single-choice controls retain each source name and colour key.
+    # Unselected sources use the theme secondary text colour.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -15642,10 +15665,11 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, title)
-    draw_text(
-        text_cache, LCD_NAV_X0 + 18, 96, detail,
-        themed_instrument_color("secondary_text", (139, 174, 183)), 13, False, False, "lm", family="Liberation Sans",
-    )
+    if detail:
+        draw_text(
+            text_cache, LCD_NAV_X0 + 18, 96, detail,
+            themed_instrument_color("secondary_text", (139, 174, 183)), 13, False, False, "lm", family="Liberation Sans",
+        )
     draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
@@ -16539,11 +16563,13 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     if has_back and item_count == len(SETTINGS_MENU_ITEMS):
         if index == item_count - 1:
             return lcd_drawer_back_box()
-        rows = 1 + math.ceil((item_count - 2) / 2)
+        full_width_rows = 3  # DISPLAY, AUDIO, Wi-Fi / ETHERNET
+        rows = full_width_rows + math.ceil((item_count - full_width_rows - 1) / 2)
         top = lcd_drawer_back_box()[1] - rows * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-        if index == 0:
-            return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
-        col, row = (index - 1) % 2, (index - 1) // 2 + 1
+        if index < full_width_rows:
+            y0 = top + index * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+            return LCD_NAV_X0 + 10, y0, LOGICAL_W - 10, y0 + LCD_NAV_TILE_H
+        col, row = (index - full_width_rows) % 2, (index - full_width_rows) // 2 + full_width_rows
         x0 = LCD_NAV_X0 + 10 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
         y0 = top + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
         return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
@@ -18413,6 +18439,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         size = 18
         first_y = y0 + 27
         second_y = y0 + 59
+        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
+        system_label = f"{cpu_label}   {system_ram_label()}"
         used, total = station_capacity or (None, None)
         capacity_label = (
             f"{used}/{total} USERS"
@@ -18422,7 +18450,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         footer_font = text_cache.font(size, bold=True, family="Liberation Sans")
         capacity_width = footer_font.size(capacity_label)[0] + 16 if capacity_label else 0
         server = fit_station_text(
-            text_cache, station_name or "NO RECEIVER", status_x1 - 300 - capacity_width,
+            text_cache, station_name or "NO RECEIVER", status_x1 - max(300, footer_font.size(system_label)[0] + 36) - capacity_width,
             size, True, False, family="Liberation Sans",
         )
         draw_text(text_cache, 18, first_y, server, APP_UI_STYLE.palette.footer_primary, size,
@@ -18438,11 +18466,8 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
                   APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
                   family="Liberation Sans")
-        ram_mb = read_process_ram_mb()
-        cpu_label = f"CPU {cpu_percent:.0f}%" if cpu_percent is not None else "CPU --"
-        ram_label = f"RAM {ram_mb:.0f} MB" if ram_mb is not None else "RAM --"
         temp_label = f"TEMP {theme_system.display_temperature(temp_c)}" if temp_c is not None else "TEMP --"
-        draw_text(text_cache, status_x1 - 18, first_y, f"{cpu_label}   {ram_label}",
+        draw_text(text_cache, status_x1 - 18, first_y, system_label,
                   APP_UI_STYLE.palette.footer_primary, size, True, False, "rm", alpha,
                   family="Liberation Sans")
         draw_text(text_cache, status_x1 - 18, second_y, temp_label,
@@ -23454,8 +23479,8 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     previous_speed = wf_speed
                     wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette = next_floor, next_ceil, next_speed, next_auto, next_palette
                     mapper = waterfall_mapper(wf_palette)
-                    if wf_speed != previous_speed:
-                        ws.send_text(f"SET wf_speed={wf_speed}")
+                    if wf_speed != previous_speed and carrier_view is None:
+                        kiwi.send_wf_speed(ws, wf_speed)
                     print(f"gl waterfall floor={wf_floor:.0f} ceil={wf_ceil:.0f} auto={int(wf_auto)} rate={wf_speed} palette={wf_palette}", flush=True)
 
                 capture = state.smart_seek_capture_request(wf_bandwidth_hz, wf_zoom_cap)
@@ -23876,7 +23901,8 @@ def main():
         state.set_external_audio(True)
         state.set_external_waterfall(True)
     rc28_input = RC28Input()
-    seek_view = SmartSeekView(sys.modules[__name__], state)
+    long_scan = LongScan(SW_BROADCAST_BANDS,session_stamp=next_kiwi_session_timestamp)
+    seek_view = SmartSeekView(sys.modules[__name__],state,long_scan)
     # VFO B is intentionally dormant until Dual opens. It has a complete
     # independent state/transport pair so it never reuses or retunes VFO A.
     dual_audio_mixer = DualVFOAudioMixer(args)
@@ -23913,6 +23939,7 @@ def main():
     # Sound is the primary listening path, so establish SND before the
     # reconnecting waterfall worker claims a slot.
     wf_thread.start()
+    long_scan.resume()
     caption_thread.start()
     callsign_thread.start()
     play_startup_chime(args)
@@ -23986,6 +24013,7 @@ def main():
     cpu_core_history = deque(maxlen=122)
     temp_c = None
     controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
+    scan_button_drawn = False
     catalog_stations = STATIONS
     all_stations = catalog_stations
     main_receiver_capacity = MainReceiverCapacityMonitor()
@@ -24088,6 +24116,7 @@ def main():
     application_update = UpdateController()
     update_poll_at = 0.0
     audio_panel_open = False
+    audio_parent = "home"
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
     cpu_utilization_parent = "home"
@@ -25177,7 +25206,7 @@ def main():
         if frequency is None:
             return
         snapshot = state.smart_seek_snapshot()
-        if not snapshot['open'] or not any(item.frequency_khz == frequency for item in snapshot['candidates']):
+        if not snapshot['open']:
             return
         if not state.tune_smart_seek_candidate(frequency):
             return
@@ -25686,7 +25715,7 @@ def main():
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
         nonlocal usb_radios_parent, wspr_navigation_parent
-        nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
+        nonlocal audio_parent, picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
@@ -25889,6 +25918,7 @@ def main():
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "audio":
+            audio_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             current_output_volume = audio_output_volume(args)
@@ -26224,6 +26254,8 @@ def main():
 
     def shared_keyboard_open():
         # Text keyboards fill the canvas and bypass rail composition/hit mapping.
+        if seek_view.open and seek_view.keyboard_open:
+            return True
         if theme_editor.open and theme_editor.overlay == "name":
             return True
         if deepgram_setup_open or network_password_open or (picker_open and search_open) or wspr_identity_open:
@@ -26454,9 +26486,9 @@ def main():
             ),
             None,
         )
-        if receiver is not None:
-            RECEIVER_MAP_HIDDEN_GROUPS.discard(receiver_map_group(receiver))
-        return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
+        if receiver is not None and receiver_map_group_visible(receiver_map_group(receiver)):
+            return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
+        return focus_receiver_map_on_home()
 
 
     def submit_network_password():
@@ -26531,6 +26563,10 @@ def main():
                 if web_apps.blocks_touch:
                     continue
                 if event.type == pygame.KEYDOWN and seek_view.open:
+                    if seek_view.keyboard_open:
+                        seek_view.keyboard_event(event)
+                        wake_controls()
+                        continue
                     if event.key == pygame.K_ESCAPE:
                         seek_view.back()
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
@@ -26616,10 +26652,10 @@ def main():
                             if picker_open and picker_map_open else None
                         )
                         if legend_group:
-                            legend_visible = receiver_map_toggle_group(legend_group)
+                            receiver_map_select_group(legend_group)
                             picker_map_notice = (
                                 f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                "SELECTED"
                             )
                             picker_map_notice_until = time.monotonic() + 1.6
                         elif (
@@ -26690,7 +26726,7 @@ def main():
                         desktop_pointer_down = False
                 elif args.desktop and event.type == pygame.MOUSEWHEEL and event.y:
                     if seek_view.open:
-                        seek_view.move(1 if event.y < 0 else -1)
+                        seek_view.wheel(event.y,*desktop_logical_point(pygame.mouse.get_pos()))
                     elif picker_open and picker_map_open:
                         picker_map_zoom_target = None
                         picker_map_scale = clamp(
@@ -26901,7 +26937,7 @@ def main():
                             # underlying waterfall controls settle.
                             if seek_view.open:
                                 gesture = "smart_seek"
-                                seek_view.press(x, y)
+                                seek_view.press(x, y, points=points)
                             elif audio_test_workspace.open:
                                 gesture = "audio_test"
                             elif application_update.open:
@@ -26930,9 +26966,16 @@ def main():
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
                                 sstv_workspace.drag_begin(x, y)
-                            elif (not home_sidebar_open and not picker_open and not dual_vfo_open
-                                  and state.smart_seek_available() and contains(smart_seek_waterfall_box(), x, y)):
+                            elif waterfall_scan_touch(x,y,scan_button_drawn,modal_open=(
+                                menu_open or picker_open or dual_vfo_open or network_panel_open
+                                or network_password_open or tests_panel_open or rtl_lab_open
+                                or font_lab_open or band_navigation_open or wspr_panel_open
+                                or wspr_add_open or wspr_identity_open or dj_tune_open
+                                or filter_panel_open or frequency_entry_open or deepgram_setup_open
+                                or (asr_panel_open and not LCD_800_MODE)
+                            )):
                                 gesture = "smart_seek_start"
+                                scope_drag_eligible = False
                             elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
 
@@ -27396,6 +27439,7 @@ def main():
                                 x, y, instrument_layout,
                                 left_smeter_box(text_cache, display_freq, compact_frequency_font_family)
                                 if LCD_800_MODE and instrument_layout == "left" and smeter_is_slim() else None,
+                                scan_drawn=scan_button_drawn,
                             ):
                                 gesture = "waterfall"
                             else:
@@ -27422,7 +27466,7 @@ def main():
                             {"vhf_workspace": vhf_workspace, "adsb_workspace": adsb_workspace, "sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
                         elif gesture == "smart_seek":
-                            seek_view.drag(x, y)
+                            seek_view.drag(x, y, points=points)
                         elif gesture == "wspr_workspace":
                             if abs(y - start_y) >= max(12, args.tap_px):
                                 wspr_workspace_dragged = True
@@ -28104,7 +28148,7 @@ def main():
                                 choice = audio_option_at(x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 if choice in (None, "close"):
-                                    audio_panel_open = False
+                                    restore_navigation_parent(audio_parent)
                                 elif choice == "mute":
                                     set_main_mute(not controls["mute"])
                                 elif choice == "voice_clean":
@@ -28164,7 +28208,7 @@ def main():
                         elif touch_started and gesture == "audio_panel_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                audio_panel_open = False
+                                restore_navigation_parent(audio_parent)
                             wake_controls()
                         elif touch_started and gesture == "dj_tune":
                             wake_controls()
@@ -28282,7 +28326,7 @@ def main():
                                     seek_view.press_action = None
                             wake_controls()
                         elif touch_started and gesture == "smart_seek_start":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if waterfall_scan_touch(x,y,drawn=True):
                                 inertia_velocity_khz_s = 0.0
                                 inertia_active = False
                                 anim_start = 0.0
@@ -29688,10 +29732,10 @@ def main():
                             if moved <= args.tap_px:
                                 legend_group = receiver_map_legend_at(x, y, globe_receivers)
                                 if legend_group:
-                                    legend_visible = receiver_map_toggle_group(legend_group)
+                                    receiver_map_select_group(legend_group)
                                     picker_map_notice = (
                                         f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                        f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                        "SELECTED"
                                     )
                                     picker_map_notice_until = time.monotonic() + 1.6
                             wake_controls()
@@ -30693,6 +30737,7 @@ def main():
             # the covered buttons until a tap moves the popup away.
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
+            scan_button_drawn = False
             if not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -30701,8 +30746,9 @@ def main():
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SEEK",
+                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SCAN",
                                             style=replace(APP_UI_STYLE.button, label_size=18))
+                    scan_button_drawn = True
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
                     draw_carrier_waterfall_button(
@@ -31181,6 +31227,7 @@ def main():
         write_wspr_local_log("renderer_stopped")
         write_remembered_view(save_current_frequency=True)
         seek_view.shutdown()
+        long_scan.close()
         audio_test_workspace.close()
         if audio_test_workspace.test.thread:
             audio_test_workspace.test.thread.join(timeout=2.0)

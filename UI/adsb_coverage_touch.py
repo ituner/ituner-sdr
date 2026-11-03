@@ -54,6 +54,7 @@ class CoverageTouch:
         self.interaction_until=time.monotonic();self.zoom=1;self.pointer_active=False;self.connections=False
         self.tap_frame=None;self.tap_data=None
         self.projection_pool=None;self.projection_future=None;self.projection_requested=None
+        self.projected_scene=None;self.projected_context=None;self.projection_requested_scene=None
 
     def activate(self):
         self.interaction_until=time.monotonic()
@@ -81,6 +82,9 @@ class CoverageTouch:
         if key==self.last_key:return False
         added=dome_gl.new_point_keys(self.data,data)
         frame=dome_gl.prepare(data,*settings,new_points=added,expanded=self.expanded)
+        frame['snapshot']=data
+        frame['touch_context']=(settings,self.expanded,self.window.revision,
+                                repr(data.get('meta',{}).get('reference')),data.get('meta',{}).get('reference_height_m'))
         # Publish a complete scene in one swap. Never expose an empty loading scene.
         with self.lock:
             if revision is not None and revision!=self.window.revision:return False
@@ -163,34 +167,47 @@ class CoverageTouch:
     def button(self,cache,box,title,kind,value=None,active=False):
         self.w.button(cache,box,title,(kind,value),active=active)
 
+    def _publish_projection(self, projected, key, scene, context):
+        self.projected=projected;self.project_key=key
+        self.projected_scene=scene;self.projected_context=context
+        return projected
+
     def projection(self,frame,identity,asynchronous=False):
         idle=time.monotonic()-self.interaction_until;moving=bool(self.pointer_active) or idle<0
         budget=dome_gl.detail_budget(len(frame.get('dots',())),idle,moving)
         fine=False
+        context=frame.get('touch_context',(frame['mode'],self.signal,self.aircraft,self.expanded,self.window.revision,
+                                         repr(frame.get('meta',{}).get('reference')),frame.get('meta',{}).get('reference_height_m')))
         key=(identity,self.yaw,self.tilt,self.zoom,(budget,fine),self.connections,moving)
         if key==self.project_key:return self.projected
         if asynchronous and not moving and (budget>8000 or fine):
             if self.projection_future is not None and self.projection_future.done():
                 result=self.projection_future.result();self.projection_future=None
                 if self.projection_requested==key:
-                    self.projected=result;self.project_key=key;return result
+                    return self._publish_projection(result,key,self.projection_requested_scene,context)
             if self.projection_future is None:
                 if self.projection_pool is None:self.projection_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='dome-detail')
-                self.projection_requested=key
+                self.projection_requested=key;self.projection_requested_scene=frame
                 self.projection_future=self.projection_pool.submit(dome_gl.project,frame,self.yaw,self.tilt,GL_WIDTH,GL_HEIGHT,zoom=self.zoom,point_limit=budget,connections=self.connections,fine_cells=fine)
-            # Keep the completed lower-detail image visible while refining it.
-            if self.project_key is not None and self.project_key[:4]==key[:4] and self.project_key[-2:]==key[-2:]:return self.projected
+            # A reception is not a gesture. Keep the completed cloud on screen
+            # while preparing its replacement, even when the history ID changes.
+            # View/filter/reset and camera changes still update immediately.
+            if (self.project_key is not None and self.projected_context==context
+                    and self.project_key[1:4]==key[1:4] and self.project_key[-2:]==key[-2:]):
+                return self.projected
             budget=8000;fine=False;key=(identity,self.yaw,self.tilt,self.zoom,(budget,fine),self.connections,False)
         if key!=self.project_key:
-            self.projected=dome_gl.project(frame,self.yaw,self.tilt,GL_WIDTH,GL_HEIGHT,interactive=moving,zoom=self.zoom,point_limit=budget,connections=self.connections,fine_cells=fine)
-            self.project_key=key
+            projected=dome_gl.project(frame,self.yaw,self.tilt,GL_WIDTH,GL_HEIGHT,interactive=moving,zoom=self.zoom,point_limit=budget,connections=self.connections,fine_cells=fine)
+            self._publish_projection(projected,key,frame,context)
         return self.projected
 
     def draw_scene(self,cache,data,frame,identity):
         if frame is None:return
         w=self.w;ui=w.ui;gl=ui.GL
         self.projection(frame,identity,asynchronous=True)
-        with self.lock:self.hits=self.projected['hits'];self.pick_data=data
+        displayed=self.projected_scene or frame
+        displayed_data=displayed.get('snapshot',data)
+        with self.lock:self.hits=self.projected['hits'];self.pick_data=displayed_data
         def clip(box):
             corners=[ui.logical_to_native(x,y) for x,y in ((box[0],box[1]),(box[2],box[1]),(box[2],box[3]),(box[0],box[3]))]
             left=int(min(p[0] for p in corners));right=int(max(p[0] for p in corners))
@@ -201,8 +218,9 @@ class CoverageTouch:
             if self.zoom>1:
                 clip((12,80,1268,BOX[3]));dome_gl.draw(ui,self.projected,BOX,opacity=.14)
                 ui.draw_logical_rect(*BOX,w.BG)
-            clip(BOX);self.draw_ground(frame,data.get('meta',{}))
-            dome_gl.draw(ui,self.projected,BOX,max(0,min(1,(self.pulse_until-time.monotonic())/.8)))
+            clip(BOX);self.draw_ground(displayed,displayed_data.get('meta',{}))
+            pulse=max(0,min(1,(self.pulse_until-time.monotonic())/.8)) if self.project_key[0]==identity else 0
+            dome_gl.draw(ui,self.projected,BOX,pulse)
             for x,y,text,size,color in self.projected['labels']:
                 if 12<=x<=GL_WIDTH-12 and 12<=y<=GL_HEIGHT-12:w.ink(cache,BOX[0]+x,BOX[1]+y,text,size,color,anchor='cm')
         finally:gl.glDisable(gl.GL_SCISSOR_TEST)
@@ -223,7 +241,7 @@ class CoverageTouch:
             for index,(seconds,label) in enumerate(COVERAGE_WINDOWS):
                 x=80+(index%3)*376;y=220+(index//3)*96
                 self.button(cache,(x,y,x+352,y+72),label,'coverage_span',seconds,seconds==self.window.seconds)
-            w.draw_status(cache,'Choose a timespan · Back cancels','All receptions kept for 7 days · older history bounded',full_width=True)
+            w.draw_status(cache,'Choose a timespan · Back cancels','ADS-B storage cap 250 MiB · oldest history reclaimed as needed',full_width=True)
             return
         self.draw_scene(cache,data,frame,identity)
         self.button(cache,(1002,10,1110,72),'Map ON' if self.ground_enabled else 'Map OFF','coverage_ground',active=self.ground_enabled)

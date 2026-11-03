@@ -129,6 +129,7 @@ class ADSBManager:
         if not isinstance(self.selection, str): self.selection = 'auto'
         self.coverage = ReceptionCoverage(self.root)
         self.coverage_error = ''
+        self.next_storage_check = 0
         self.station = station
         if station:station.subscribe(self._station_changed)
         self.flight_log = self._logger('flights', 10*1024*1024, 6)
@@ -289,7 +290,7 @@ class ADSBManager:
                         started_at=latest([self.started_at,self.uat.started_at]),last_message_at=latest([self.last_message_at,self.uat.last_packet_at]),
                         last_position_at=self.history.latest_position_time(time.time()),
                         receiver_position=dict(self.position) if self.position else None,
-                        bands=[band1090, uat],
+                        bands=[band1090, uat], storage=self.coverage.storage.snapshot(),
                         map_installed=(self.map_root/'index.html').is_file(), log=str(self.root/'flights.jsonl'))
 
     def track_snapshot(self):
@@ -310,6 +311,15 @@ class ADSBManager:
         with self.lock:
             data = self.log_cache[kind]
             return dict(data, entries=list(data['entries']), lines=list(data['lines']))
+
+    def _check_storage(self):
+        now=time.monotonic()
+        if now<self.next_storage_check:return
+        self.next_storage_check=now+30
+        budget=self.coverage.storage
+        if budget.usage()>budget.limit-budget.headroom:
+            self.coverage.flush(force=True)
+            budget.usage()
 
     def _refresh_logs(self):
         now = time.monotonic()
@@ -490,6 +500,7 @@ class ADSBManager:
                 self.coverage.tick(site)
                 for handler in self.flight_log.handlers:
                     if isinstance(handler,BufferedFlightHandler):handler.flush_if_due()
+                self._check_storage()
                 self.coverage_error = ''
             except Exception as exc:
                 if str(exc) != self.coverage_error: self._event('coverage_error', detail=str(exc))

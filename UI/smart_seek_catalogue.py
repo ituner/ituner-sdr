@@ -4,6 +4,7 @@ import statistics
 import time
 
 from smart_seek import SmartSeek
+from scan_policy import ScanPolicy
 
 
 class SpectrumSurvey(SmartSeek):
@@ -45,14 +46,17 @@ class SpectrumSurvey(SmartSeek):
 class SmartSeekCatalogue:
     """Keep band lists in this open menu; qualify each again on selection.
 
-    A turn is one complete RF observation. Two foreground turns alternate
-    with one background turn, so a wide quiet band cannot monopolize capture.
+    A scheduled scan is a complete detailed band sweep, preceded by its wide
+    overview on the first visit. Four background sweeps alternate with one
+    selected-band sweep; overlapping windows stay together until the band ends.
     The receiver still sees only a single waterfall request at any instant.
     """
-    COUNT_CACHE_SECONDS = 3600
+    COUNT_CACHE_SECONDS = 2*60*60
+    BACKGROUND_PASSES_PER_RETURN = 4
 
     def __init__(self, bands):
         self._bands = tuple(bands)
+        self._policy = ScanPolicy()
         self._engine = SmartSeek()
         self._models = {}
         self._current = None
@@ -64,12 +68,14 @@ class SmartSeekCatalogue:
         self._survey = None
         self._survey_at = None
         self._initial_done = False
-        self._foreground_turns = 0
+        self._background_passes = 0
         self._count_cache = {}
         self._count_receiver = None
         self._count_completed = {}
+        self._scan_completed = {}
         self._count_skips = {}
         self._capture_paused = False
+        self._band_menu = False
 
     def __getattr__(self, name):
         return getattr(self._engine,name)
@@ -77,7 +83,7 @@ class SmartSeekCatalogue:
     def __setattr__(self, name, value):
         if name.startswith('_'):
             object.__setattr__(self,name,value)
-        elif name in ('context','playing_khz','sensitivity'):
+        elif name in ('context','playing_khz'):
             for engine in self._models.values():
                 setattr(engine,name,value)
             setattr(self._engine,name,value)
@@ -92,12 +98,10 @@ class SmartSeekCatalogue:
         receiver = source[0] if isinstance(source,(tuple,list)) and source else source
         continuing = self.open and self.context == context
         if not continuing:
-            sensitivity = self.sensitivity
             counts = self._count_cache
             self.close()
             bands = self._bands
             self.__init__(bands)
-            self._engine.sensitivity = sensitivity
             self._count_cache = counts
         self._count_receiver = receiver
         self._expire_counts(now)
@@ -107,19 +111,21 @@ class SmartSeekCatalogue:
         candidates = ([c for c in previous.candidates if c.frequency_khz not in previous.suppressed]
                       if continuing and previous and not refresh else [])
         selection = previous.selection if previous else None
-        engine = SmartSeek()
-        engine.sensitivity = self.sensitivity
-        engine.start(low,high,label,context,now,cache_key=cache_key,refresh=True,adaptive=True)
+        engine = SmartSeek(self._policy)
+        engine.start(low,high,label,context,now,cache_key=cache_key,refresh=True,adaptive=True,
+                     policy_context=(receiver,))
         engine.candidates = candidates
+        engine.frequency_resolution = dict(previous.frequency_resolution) if previous and candidates else {}
         engine.selection = selection
         engine.stale = {candidate.frequency_khz for candidate in candidates}
         self._models[label] = engine
         self._count_completed.pop(label,None)
+        self._scan_completed.pop(label,None)
         self._count_skips.pop(label,None)
         self._engine = engine
         self._paused.pop(label,None)
         self._initial_done = False
-        self._foreground_turns = 0
+        self._background_passes = 0
         self._queue = [entry for entry in self._queue if entry != label]
         if continuing and old_label != label and old_label not in self._queue:
             self._queue.append(old_label)
@@ -133,6 +139,13 @@ class SmartSeekCatalogue:
         self._current = None
         self._token = None
         self._capture_paused = False
+        self._band_menu = False
+
+    def set_band_menu(self, opened, now):
+        opened = bool(opened) and self.open
+        if opened != self._band_menu:
+            self._suspend(now)
+            self._band_menu = opened
 
     def set_capture_paused(self, paused, now):
         """Lend the W/F stream to the listener without expiring scan budgets."""
@@ -165,6 +178,8 @@ class SmartSeekCatalogue:
                     capture.deadline += max(0,now-paused)
                     if capture.started_rows_at is not None:
                         capture.started_rows_at += max(0,now-paused)
+                    if capture.last_rows_at is not None:
+                        capture.last_rows_at += max(0,now-paused)
         self._current,self._current_label = engine,label
 
     def poll(self, context, now):
@@ -185,22 +200,30 @@ class SmartSeekCatalogue:
             return
         label = self._current_label
         if engine is self._survey:
-            if not engine.active:
-                self._scores = dict(engine.scores)
-                self._survey_at = now
-                self._rank_bands()
-                self._foreground_turns = 0
-        elif engine is self._engine:
-            self._foreground_turns += 1
-            if not engine.active and engine.index >= len(engine.windows):
-                self._initial_done = True
+            if engine.active:
+                self._token = self._position(engine)
+                return
+            self._scores = dict(engine.scores)
+            self._survey_at = now
+            self._rank_bands()
         else:
-            self._foreground_turns = 0
-            if not engine.active and engine.index >= len(engine.windows):
-                self._queue = [entry for entry in self._queue if entry != label]
-        if engine is not self._survey:
             complete = not engine.active and engine.index >= len(engine.windows)
-            self._remember_count(label,engine,now,complete=complete)
+            if not complete:
+                self._remember_count(label,engine,now)
+                self._token = self._position(engine)
+                return
+            completed = id(engine),engine.pass_count
+            # Reviews after a sweep are useful evidence, but do not count as
+            # another band sweep or consume its place in the 1:4 rotation.
+            if self._scan_completed.get(label) != completed:
+                self._scan_completed[label] = completed
+                if engine is self._engine:
+                    self._background_passes = 0
+                    self._initial_done = True
+                else:
+                    self._background_passes += 1
+                    self._queue = [entry for entry in self._queue if entry != label]
+            self._remember_count(label,engine,now,complete=True)
         self._suspend(now)
 
     def _expire_counts(self, now):
@@ -245,16 +268,14 @@ class SmartSeekCatalogue:
 
     def _rank_bands(self):
         available = self._available(self._engine.bandwidth_hz)
-        labels = [band[2] for band in available]
-        origin = labels.index(self.label)
-        def priority(label):
-            distance = abs(labels.index(label)-origin)
-            score = self._scores.get(label,0)
-            return score < 6,-score/(1+.2*distance),distance
-        self._queue = sorted((label for label in labels if label != self.label),key=priority)
+        ranked = self._policy.rank_bands((self._count_receiver,),available,self._engine.bandwidth_hz,
+                                       self._engine.zoom_cap,self._scores,self.label)
+        self._queue = [label for _,_,label in ranked if label != self.label]
 
     def _choose(self, context, now, bandwidth_hz, zoom_cap):
-        if not self._initial_done:
+        if not self._initial_done and not self._band_menu:
+            return self._engine,self.label
+        if not self._band_menu and self._background_passes >= self.BACKGROUND_PASSES_PER_RETURN:
             return self._engine,self.label
         if self._survey is not None and self._survey.active:
             return self._survey,'spectrum'
@@ -265,15 +286,20 @@ class SmartSeekCatalogue:
             survey.bands = self._available(bandwidth_hz)
             self._survey = survey
             return survey,'spectrum'
-        if self._foreground_turns < 2 or not self._queue:
-            return self._engine,self.label
+        if not self._band_menu:
+            if not self._queue:
+                self._rank_bands()
+                if not self._queue:
+                    return self._engine,self.label
+        if not self._queue:
+            return None,None
         label = self._queue[0]
         engine = self._models.get(label)
         if engine is None:
             low,high,_ = next(band for band in self._bands if band[2] == label)
-            engine = SmartSeek()
-            engine.sensitivity = self.sensitivity
-            engine.start(low,high,label,context,now,refresh=True,adaptive=True)
+            engine = SmartSeek(self._policy)
+            engine.start(low,high,label,context,now,refresh=True,adaptive=True,
+                         policy_context=(self._count_receiver,))
             engine.configure(bandwidth_hz,zoom_cap,now)
             self._models[label] = engine
         elif not engine.active and engine.index >= len(engine.windows):
@@ -286,6 +312,8 @@ class SmartSeekCatalogue:
             return None
         if self._current is None:
             engine,label = self._choose(context,now,bandwidth_hz,zoom_cap)
+            if engine is None:
+                return None
             self._activate(engine,label,now)
         request = self._current.request(context,now,bandwidth_hz,zoom_cap)
         self._token = self._position(self._current)
@@ -309,13 +337,35 @@ class SmartSeekCatalogue:
                 result['phase'] = 'spectrum'
             elif current is not self._engine:
                 result['phase'] = 'background'
-        result['scanning_band'] = self._current_label
+        result['scanning_band'] = self._current_label if current is not None else None
         counts = {}
+        signals = {}
+        catalogue = []
         for low,high,label in self._available(self._engine.bandwidth_hz):
             record = self._count_cache.get((self._count_receiver,float(low),float(high)))
-            threshold = 24-.18*self.sensitivity
-            counts[label] = (None if record is None else
-                             sum(candidate.prominence >= threshold for candidate in record['candidates']))
+            qualified = (None if record is None else
+                         tuple(sorted(record['candidates'],key=lambda candidate: candidate.frequency_khz)))
+            counts[label] = None if qualified is None else len(qualified)
+            signals[label] = qualified
+            engine = self._models.get(label)
+            for candidate in qualified or ():
+                key = candidate.frequency_khz
+                if engine is not None and key in engine.suppressed:
+                    continue
+                catalogue.append(dict(candidate=candidate,band=label,
+                    stale=engine is None or key in engine.stale,
+                    status=engine.evidence.get(key,{}).get('status','') if engine else ''))
         result['band_counts'] = counts
+        result['band_signals'] = signals
+        result['catalogue'] = tuple(sorted(catalogue,key=lambda item:item['candidate'].tuning_khz))
         result['active'] = self.open
+        if self._band_menu and self._survey_at is not None and not self._queue and current is None:
+            result['phase'] = 'catalogue_wait'
+            result['active'] = False
         return result
+
+    def note_identity(self, frequency, known, nominal=()):
+        self._engine.note_identity(frequency,known,nominal)
+        for engine in self._models.values():
+            if engine is not self._engine and any(candidate.frequency_khz == frequency for candidate in engine.candidates):
+                engine.note_identity(frequency,known,nominal)

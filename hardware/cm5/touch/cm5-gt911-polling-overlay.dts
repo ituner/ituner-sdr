@@ -1,0 +1,14 @@
+/dts-v1/;
+/plugin/;
+
+/* Opt-in for the verified iTuner CM5 GT911. Requires polling-capable Goodix. */
+/ {
+    compatible = "brcm,bcm2712";
+    fragment@0 {
+        target-path = "/axi/pcie@1000120000/rp1/i2c@70000/touchscreen@5d";
+        __overlay__ {
+            /* Keep reset/address-select GPIOs, but do not request an IRQ. */
+            interrupts = <>;
+        };
+    };
+};

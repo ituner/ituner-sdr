@@ -3,12 +3,12 @@
 This release synchronizes the application updates already running on the CM5
 with the shared main branch.
 
-- **Smart Seek:** survey the selected AM broadcast band while audio continues;
+- **Smart Scan:** survey the selected AM broadcast band while audio continues;
   screen candidates for persistent carriers and varying AM sidebands. Browse
   a stable station list with country flags, schedule matches, a Weak-to-Strong
   minimum-signal slider and a double-height listening row showing transmitter
   details. Tapping tunes without closing the list. Results are cached for five
-  minutes per receiver and band. See [Smart Seek](smart-seek.md).
+  minutes per receiver and band. See [Smart Scan](smart-seek.md).
 - **Prepared Auto Tune:** prepare and refine an AM carrier correction after
   tuning settles; apply it only when the operator selects the ready button.
   See [AM Auto Tune](am-auto-tune.md).

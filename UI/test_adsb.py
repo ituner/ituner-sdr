@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from adsb_monitor import ADSBManager, aircraft_rows
+from adsb_persistence import BufferedFlightHandler
 
 
 DEVICE = dict(id='serial:123', index=0, serial='123', label='Test RTL', persistent=True)
@@ -163,6 +164,8 @@ class ReceiverTests(unittest.TestCase):
         (self.manager.data/'aircraft.json').write_text(json.dumps(dict(now=time.time(),messages=10,aircraft=[plane])))
         self.manager._step()
         self.assertEqual(self.manager.status,'RECEIVING')
+        buffered=next(h for h in self.manager.flight_log.handlers if isinstance(h,BufferedFlightHandler))
+        self.assertEqual(json.loads(buffered.read_log())['aircraft'],plane)
         for handler in self.manager.flight_log.handlers:
             handler.flush()
         logged=json.loads((self.manager.root/'flights.jsonl').read_text())

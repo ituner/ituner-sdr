@@ -1,9 +1,9 @@
 # iTuner SDR 0.3.0
 
 This release combines the preserved CM5 development with the merged main
-interface, retaining Smart Seek, offline station schedules and coverage work.
+interface, retaining Smart Scan, offline station schedules and coverage work.
 
-- Smart Seek continuously revisits broadcast bands, retains one-hour band
+- Smart Scan continuously revisits broadcast bands, retains one-hour band
   counts and matches station names from downloaded EiBi and HFCC schedules.
   Older-season names remain useful with an explicit asterisk when no current
   match exists, while UTC time and weekday checks still apply.
@@ -15,7 +15,7 @@ interface, retaining Smart Seek, offline station schedules and coverage work.
 - Display settings offers saved Waterfall Auto and Manual choices. Auto uses
   the visible frequency window and adapts after pan/zoom; Manual holds a fixed
   range. Palette changes preserve this choice, with Auto as the default.
-- TUNE and SEEK join Favorite and Play/Pause in a square two-by-two control
+- TUNE and SCAN join Favorite and Play/Pause in a square two-by-two control
   group using the shared theme styling.
 - Receiver list and globe views offer manual directory refresh with data-age
   and failure feedback. A fresh upstream directory remains the source of truth.
@@ -24,7 +24,7 @@ interface, retaining Smart Seek, offline station schedules and coverage work.
 
 The application update preserves receiver settings and display, touch, audio
 and boot hardware profiles. No language detector or speech/music classifier
-has been enabled. See [Smart Seek](smart-seek.md) and
+has been enabled. See [Smart Scan](smart-seek.md) and
 [Waterfall display settings](waterfall-display.md).
 
 Validation on the CM5: 1,058 UI tests passed for the combined implementation;

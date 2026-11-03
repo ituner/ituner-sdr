@@ -6,7 +6,7 @@ from unittest.mock import patch, Mock
 
 import kiwi_gl_display as ui
 from smart_seek import SmartSeek, SeekCandidate, detect_stations
-from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines, station_frequency, frequency_label, wrap_station_title
+from smart_seek_view import SmartSeekView, BroadcastMatch, schedule_matches, station_detail_lines, station_frequency, frequency_label, wrap_station_title, station_matches_query
 from test_am_carrier import rf_frame as carrier_frame
 
 
@@ -59,6 +59,112 @@ class DetectorTests(unittest.TestCase):
     def test_sideband_suppression_keeps_a_real_station_five_khz_away(self):
         found = detect_stations(self.wide_am_rows(adjacent=True),7200000,100,7200,7300)
         self.assertEqual([p.frequency_khz for p in found],[7250,7255])
+
+    def image_rows(self, independent=False, shared_gain=False):
+        rows = []
+        for sequence in range(24):
+            gain = round(5*math.sin(sequence*.23)) if shared_gain else 0
+            row = [110+gain]*1024
+            for center in (440,560):
+                for i in range(center-24,center+25):
+                    row[i] = round(120+8*math.sin(sequence*.7))+gain
+            for i in range(476,525):
+                row[i] = round(135+8*math.sin(sequence*.7))+gain
+            for center,power in ((500,220),(440,180),(560,180)):
+                envelope = 0 if center==500 or (independent and center==560) else round(5*math.sin(sequence*.7))
+                for i in range(center-2,center+3):
+                    row[i] = max(row[i],power+envelope-45*(i-center)**2+gain)
+            rows.append(bytes(row))
+        return rows
+
+    def test_correlated_mirrored_music_lines_are_not_two_more_stations(self):
+        for shared_gain in (False,True):
+            found = detect_stations(self.image_rows(shared_gain=shared_gain),7200000,100,7200,7300)
+            self.assertEqual([p.frequency_khz for p in found],[7250])
+
+    def test_independent_adjacent_carrier_survives_even_with_a_mirrored_music_line(self):
+        for shared_gain in (False,True):
+            found = detect_stations(self.image_rows(independent=True,shared_gain=shared_gain),7200000,100,7200,7300)
+            self.assertIn(7256,[p.frequency_khz for p in found])
+
+    def test_fading_parent_does_not_create_false_correlation_between_real_neighbors(self):
+        rows = []
+        for sequence in range(32):
+            row = [110]*1024
+            fading = round(8*math.sin(sequence*.7))
+            for center in (440,560):
+                for i in range(center-24,center+25):
+                    row[i] = round(120+6*math.sin(sequence*.9))
+            for i in range(476,525):
+                row[i] = round(135+6*math.sin(sequence*.31))+fading
+            for center,power in ((500,220+fading),(440,180),(560,180)):
+                for i in range(center-2,center+3):
+                    row[i] = max(row[i],power-45*(i-center)**2)
+            rows.append(bytes(row))
+        found = [c.frequency_khz for c in detect_stations(rows,7200000,100,7200,7300)]
+        self.assertIn(7244,found)
+        self.assertIn(7256,found)
+
+    def test_later_parent_evidence_removes_an_earlier_sideband_candidate(self):
+        search = SmartSeek()
+        search.start(7200,7300,'QA',('rx',),100)
+        search._merge([SeekCandidate(7244,18)])
+        search.rows = self.image_rows()
+        search._merge(search._detect_capture(7200000,100))
+        self.assertEqual([c.frequency_khz for c in search.snapshot()['candidates']],[7250])
+        self.assertIn(7244,search.suppressed)
+
+    def test_previously_suppressed_channel_can_requalify_as_an_independent_station(self):
+        search = SmartSeek()
+        search.start(7200,7300,'QA',('rx',),100)
+        search._merge([SeekCandidate(7244,18)])
+        search.suppressed.add(7244)
+        search._merge([SeekCandidate(7244.02,30)],accumulate=True)
+        visible = search.snapshot()['candidates']
+        self.assertEqual(len(visible),1)
+        self.assertNotIn(7244,search.suppressed)
+        self.assertAlmostEqual(visible[0].tuning_khz,7244.02,places=3)
+
+    def test_near_carrier_sideband_cannot_remove_the_parent_row_within_match_tolerance(self):
+        search = SmartSeek()
+        search.start(7200,7300,'QA',('rx',),100)
+        search._merge([SeekCandidate(7250,35)])
+        rows = []
+        for data in self.wide_am_rows():
+            row = bytearray(data)
+            row[506] = 180
+            rows.append(bytes(row))
+        search.rows = rows
+        search._merge(search._detect_capture(7200000,100))
+        self.assertIn(7250,[c.frequency_khz for c in search.snapshot()['candidates']])
+        self.assertNotIn(7250,search.suppressed)
+
+    def test_playing_sideband_is_corrected_without_tuning_or_losing_its_row(self):
+        search = SmartSeek()
+        search.start(7200,7300,'QA',('rx',),100)
+        search._merge([SeekCandidate(7244,18)])
+        search.playing_khz = 7244
+        search.rows = self.image_rows()
+        search._merge(search._detect_capture(7200000,100))
+        visible = search.snapshot()['candidates']
+        self.assertEqual(len(visible),1)
+        self.assertEqual((visible[0].frequency_khz,visible[0].tuning_khz),(7244,7250))
+        self.assertEqual(search.playing_khz,7244)
+
+    def test_bare_carrier_is_not_an_am_followup_but_faint_bilateral_modulation_is(self):
+        for modulated in (False,True):
+            rows = []
+            for sequence in range(24):
+                row = [110]*1024
+                for i in range(498,503):
+                    row[i] = 180-15*(i-500)**2
+                if modulated:
+                    for i in list(range(478,497))+list(range(504,523)):
+                        row[i] = round(112+math.sin(sequence*.7))
+                rows.append(bytes(row))
+            unresolved = []
+            self.assertEqual(detect_stations(rows,7200000,100,7200,7300,unresolved=unresolved),[])
+            self.assertEqual(bool(unresolved),modulated)
 
     def detect(self, **options):
         frames = [rf_frame(7325, 7, 7300000, seq, **options) for seq in range(1, 10)]
@@ -262,12 +368,33 @@ class SurveyTests(unittest.TestCase):
         self.assertIsNone(search.request(('different receiver',), 100.1))
         self.assertFalse(search.open)
 
-    def test_sensitivity_filters_without_new_measurement(self):
+    def test_half_second_grace_waits_for_delayed_reply_then_measures_full_window(self):
+        search = self.start()
+        center,zoom = search.request(('receiver',),100)
+        search.poll(('receiver',),103.25)
+        self.assertEqual(search.index,0)
+        self.assertEqual(search.skipped,0)
+        search.feed(rf_frame(center,zoom,7300000,1),30000000,14,14,103.25)
+        self.assertGreaterEqual(search.deadline,106.75)
+        self.assertEqual(search.observed_seconds,0)
+        for sequence in range(2,18):
+            now = 103.25+(sequence-1)*.1
+            search.poll(('receiver',),now)
+            search.feed(rf_frame(center,zoom,7300000,sequence),30000000,14,14,now)
+        self.assertEqual(search.index,1)
+        self.assertEqual(search.skipped,0)
+        self.assertTrue(search.candidates)
+
+    def test_dead_receiver_still_times_out_without_claiming_empty_measurement(self):
+        search = self.start()
+        search.poll(('receiver',),search.deadline+.01)
+        self.assertEqual(search.skipped,1)
+        self.assertIsNone(search.measured_at)
+        self.assertFalse(search.window_measured)
+
+    def test_weak_detected_candidates_are_always_visible(self):
         search = self.start()
         search._merge([SeekCandidate(7300, 8), SeekCandidate(7350, 30)])
-        search.sensitivity = 0
-        self.assertEqual(len(search.snapshot()['candidates']), 1)
-        search.sensitivity = 100
         self.assertEqual(len(search.snapshot()['candidates']), 2)
         search.move(1)
         self.assertEqual(search.selection, 7350)
@@ -281,6 +408,30 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(len(search.candidates), 3)
         self.assertEqual(search.selection, 7350)
         self.assertEqual(search.candidates[0].frequency_khz, 7300)
+
+    def test_frequency_order_and_encoder_neighbors_survive_late_lower_discoveries(self):
+        search = self.start()
+        search._merge([SeekCandidate(7350,35),SeekCandidate(7300,10)])
+        search.selection = 7350
+        search._merge([SeekCandidate(7250,8),SeekCandidate(7340,40)])
+        snapshot = search.snapshot()
+        self.assertEqual([c.frequency_khz for c in snapshot['candidates']],[7250,7300,7340,7350])
+        self.assertEqual(snapshot['selected'],7350)
+        search.move(-1)
+        self.assertEqual(search.selection,7340)
+        search.move(-1)
+        self.assertEqual(search.selection,7300)
+        search.move(1)
+        self.assertEqual(search.selection,7340)
+        search.suppressed.add(7300)
+        self.assertEqual([c.frequency_khz for c in search.snapshot()['candidates']],[7250,7340,7350])
+
+    def test_frequency_order_uses_corrected_carriers_without_changing_candidate_keys(self):
+        search = self.start()
+        search.candidates = [SeekCandidate(7313,30,7300),SeekCandidate(7305,20)]
+        search.selection = 7313
+        self.assertEqual([c.tuning_khz for c in search.snapshot()['candidates']],[7300,7305])
+        self.assertEqual(search.selection,7313)
 
 
 class AdaptiveSurveyTests(unittest.TestCase):
@@ -300,6 +451,25 @@ class AdaptiveSurveyTests(unittest.TestCase):
                 search.feed(rf_frame(center,zoom,carrier,sequence,
                                      unmodulated=unmodulated,noise=noise),30000000,14,14,now)
         return now
+
+    def test_hiccup_does_not_count_stalled_time_as_a_full_observation(self):
+        search = self.start()
+        search.overview_done = True
+        center,zoom = search.request(('rx',),100)
+        for sequence in range(1,6):
+            search.feed(rf_frame(center,zoom,7300000,sequence),30000000,14,14,100+(sequence-1)*.1)
+        search.poll(('rx',),102.5)
+        self.assertEqual(search.index,0)
+        self.assertAlmostEqual(search.observed_seconds,.4)
+        search.feed(rf_frame(center,zoom,7300000,6),30000000,14,14,102.5)
+        self.assertAlmostEqual(search.observed_seconds,.9)
+        self.assertEqual(search.index,0)
+        for sequence in range(7,19):
+            now = 102.5+(sequence-6)*.1
+            search.poll(('rx',),now)
+            search.feed(rf_frame(center,zoom,7300000,sequence),30000000,14,14,now)
+        self.assertEqual(search.index,1)
+        self.assertEqual(search.skipped,0)
 
     def test_one_overview_then_continuous_local_passes_preserve_rows(self):
         search = self.start()
@@ -424,6 +594,141 @@ class IntegrationTests(unittest.TestCase):
         state.connection_streams = {'audio': True, 'waterfall': True}
         return state
 
+    def test_visible_scan_owns_edges_and_margin_without_stealing_other_tiles(self):
+        ui.configure_output(True)
+        box = ui.smart_seek_waterfall_box()
+        cx,cy = (box[0]+box[2])/2,(box[1]+box[3])/2
+        with patch.object(ui,'DESKTOP_1280_MODE',True):
+            for px,py in ((cx,cy),(box[0],cy),(box[2],cy),(cx,box[1]),(cx,box[3]),
+                          (box[0]-3,cy),(box[2]+3,cy),(cx,box[3]+3)):
+                self.assertTrue(ui.waterfall_scan_touch(px,py,drawn=True))
+                self.assertFalse(ui.is_waterfall_tune_touch(px,py,scan_drawn=True))
+                self.assertTrue(ui.is_waterfall_tune_touch(px,py,scan_drawn=False))
+        for neighbor in (ui.carrier_waterfall_box(),ui.stream_waterfall_box(),ui.favorite_waterfall_box()):
+            self.assertFalse(ui.waterfall_scan_touch((neighbor[0]+neighbor[2])/2,
+                                                    (neighbor[1]+neighbor[3])/2,drawn=True))
+        self.assertFalse(ui.waterfall_scan_touch(cx,cy,drawn=False))
+        self.assertFalse(ui.waterfall_scan_touch(cx,cy,drawn=True,modal_open=True))
+
+    def test_painted_scan_still_consumes_touch_if_connection_changes_before_release(self):
+        state = self.state()
+        self.assertTrue(state.smart_seek_available())
+        box = ui.smart_seek_waterfall_box()
+        cx,cy = (box[0]+box[2])/2,(box[1]+box[3])/2
+        state.connection_streams['waterfall'] = False
+        self.assertFalse(state.smart_seek_available())
+        before = state.snapshot()
+        self.assertTrue(ui.waterfall_scan_touch(cx,cy,drawn=True))
+        self.assertFalse(ui.is_waterfall_tune_touch(cx,cy,scan_drawn=True))
+        self.assertFalse(state.start_smart_seek())
+        self.assertEqual(state.snapshot(),before)
+
+    def test_scan_target_matches_relocated_left_rail_theme(self):
+        from copy import deepcopy
+        ui.configure_output(True)
+        for side in ('left','right'):
+            theme = deepcopy(ui.theme_system.DEFAULT_THEME)
+            theme['sidebar'] = side
+            with ui.theme_system.preview_theme(theme):
+                box = ui.smart_seek_waterfall_box()
+                logical_x,cy = (box[0]+box[2])/2,(box[1]+box[3])/2
+                shown_x = logical_x+256 if side == 'left' else logical_x
+                hit_x = ui.theme_system.display_to_logical_x(shown_x) if side == 'left' else shown_x
+                self.assertTrue(ui.waterfall_scan_touch(hit_x,cy,drawn=True))
+
+    def test_search_matches_country_or_name_but_not_transmitter(self):
+        matches = (BroadcastMatch('Radio România International','Romania','Galbeni'),)
+        for query in ('romania','ROMÂNIA','radio romania','international romania'):
+            self.assertTrue(station_matches_query(matches,query),query)
+        self.assertFalse(station_matches_query(matches,'Galbeni'))
+        self.assertFalse(station_matches_query(matches,'China'))
+        self.assertFalse(station_matches_query((),'Romania'))
+
+    def test_global_search_and_tuning_across_bands_preserve_survey_and_query(self):
+        with patch.object(ui.time,'monotonic',return_value=100):
+            state = self.state()
+            state.start_smart_seek()
+            state.smart_seek._merge([SeekCandidate(7300,20)])
+            state.smart_seek.measured_at = 100
+            state.start_smart_seek(band_label='49 m')
+            state.smart_seek._merge([SeekCandidate(6000,15)])
+            state.smart_seek.measured_at = 100
+            self.assertTrue(state.tune_smart_seek_candidate(6000))
+            state.toggle_seek_waterfall()
+            self.assertTrue(state.smart_seek_snapshot()['waterfall'])
+            view = SmartSeekView(ui,state)
+            self.addCleanup(view.shutdown)
+            view.matches = {7300:(BroadcastMatch('Radio Romania International','Romania'),),
+                            6000:(BroadcastMatch('Example Radio','Romania'),)}
+            before = state.snapshot()
+            view.set_query('Romania')
+            result = view.display_snapshot(state.smart_seek_snapshot())
+            self.assertEqual([c.frequency_khz for c in result['candidates']],[6000,7300])
+            self.assertEqual(result['candidate_bands'],{6000:'49 m',7300:'41 m'})
+            self.assertEqual(state.snapshot(),before)
+            view.move(1)
+            self.assertEqual(view.selected(),7300)
+            self.assertTrue(state.tune_smart_seek_candidate(view.selected()))
+            self.assertEqual(state.freq_khz,7300)
+            self.assertEqual(state.smart_seek.label,'41 m')
+            self.assertTrue(view.open)
+            self.assertEqual(view.search_query,'Romania')
+            self.assertFalse(state.smart_seek_snapshot()['waterfall'])
+            self.assertIsNotNone(state.smart_seek_capture_request())
+            self.assertFalse(state.tune_smart_seek_candidate(12345))
+
+    def test_search_can_tune_a_retained_other_band_after_reopening(self):
+        with patch.object(ui.time,'monotonic',return_value=100):
+            state = self.state()
+            state.start_smart_seek()
+            state.smart_seek._merge([SeekCandidate(7300,20)])
+            state.smart_seek.measured_at = 100
+            state.start_smart_seek(band_label='49 m')
+            state.smart_seek._merge([SeekCandidate(6000,15)])
+            state.smart_seek.measured_at = 100
+            state.close_smart_seek()
+            state.start_smart_seek(band_label='49 m')
+            self.assertNotIn('41 m',state.smart_seek._models)
+            self.assertTrue(state.tune_smart_seek_candidate(7300))
+            self.assertEqual(state.freq_khz,7300)
+            self.assertEqual(state.smart_seek.label,'41 m')
+            self.assertIn(7300,state.smart_seek.stale)
+            self.assertIsNotNone(state.smart_seek_capture_request())
+
+    def test_search_keyboard_cancel_and_clear_do_not_tune_or_change_existing_query(self):
+        state = self.state()
+        state.start_smart_seek()
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        before = state.snapshot()
+        view.set_query('Romania')
+        view.search_keyboard = True
+        view.search_text = 'China'
+        self.assertIsNone(view.selected())
+        view.move(1)
+        view.back()
+        self.assertEqual(view.search_query,'Romania')
+        self.assertTrue(view.open)
+        view.search_keyboard = True
+        view.search_key('CLEAR')
+        for key in ('R','o','m','a','n','i','a','SPACE','X','BACK'):
+            view.search_key(key)
+        view.search_key('SAVE')
+        self.assertEqual(view.search_query,'Romania')
+        self.assertFalse(view.search_keyboard)
+        view.set_query('')
+        self.assertEqual(state.snapshot(),before)
+
+    def test_global_search_rejects_expired_catalogues(self):
+        with patch.object(ui.time,'monotonic',return_value=100) as clock:
+            state = self.state()
+            state.start_smart_seek()
+            state.smart_seek._merge([SeekCandidate(7300,20)])
+            state.smart_seek.measured_at = 100
+            self.assertEqual(len(state.smart_seek_snapshot()['catalogue']),1)
+            clock.return_value = 100+state.smart_seek.COUNT_CACHE_SECONDS
+            self.assertEqual(state.smart_seek_snapshot()['catalogue'],())
+
     def test_capture_does_not_change_audio_tuning_filters_or_display_zoom(self):
         state = self.state()
         before = state.snapshot(), state.radio_snapshot()
@@ -512,15 +817,17 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(view.first_visible,10)
         view.scroll_rows(-10)
         self.assertEqual(view.first_visible,0)
-        view.actions = [((0,100,1200,156),('tune',7205))]
-        view.press(20,120)
-        self.assertTrue(view.drag(20,0))
+        y = view.LIST_TOP+20
+        view.actions = [((20,view.LIST_TOP,1200,view.LIST_TOP+64),('tune',7205))]
+        view.press(40,y)
+        self.assertTrue(view.drag(40,y-120))
         self.assertGreater(view.first_visible,0)
-        self.assertIsNone(view.release(20,0))
+        self.assertIsNone(view.release(40,y-120))
         self.assertEqual(state.freq_khz,before)
-        view.actions = [(ui.RAIL_BACK_BOX,('close',None))]
-        view.press(1100,750)
-        self.assertIsNone(view.release(1100,750))
+        back = view.back_box()
+        view.actions = [(back,('close',None))]
+        view.press(back[0]+20,back[1]+20)
+        self.assertIsNone(view.release(back[0]+20,back[1]+20))
         self.assertFalse(view.open)
         self.assertEqual(state.freq_khz,before)
 
@@ -702,23 +1009,23 @@ class IntegrationTests(unittest.TestCase):
         self.addCleanup(view.shutdown)
         candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(12))
         initial = view.visible_rows(candidates, candidates[0].frequency_khz, 7325)
-        self.assertEqual(initial, candidates[:10])
+        self.assertEqual(initial, candidates[:9])
         playing = candidates[9].frequency_khz
         expanded = view.visible_rows(candidates, playing, playing)
-        self.assertEqual(view.first_visible, 1)
-        self.assertEqual(expanded, candidates[1:10])
+        self.assertEqual(view.first_visible, 2)
+        self.assertEqual(expanded, candidates[2:10])
         appended = candidates+(SeekCandidate(7400, 30),)
         self.assertEqual(view.visible_rows(appended, playing, playing), expanded)
-        self.assertEqual(view.first_visible, 1)
+        self.assertEqual(view.first_visible, 2)
 
     def test_compact_rows_return_when_the_playing_station_is_offscreen(self):
         view = SmartSeekView(ui, self.state())
         self.addCleanup(view.shutdown)
         candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(18))
         first = view.visible_rows(candidates, candidates[0].frequency_khz, candidates[0].frequency_khz)
-        self.assertEqual(len(first), 9)
+        self.assertEqual(len(first), 8)
         later = view.visible_rows(candidates, candidates[15].frequency_khz, candidates[0].frequency_khz)
-        self.assertEqual(len(later), 10)
+        self.assertEqual(len(later), 9)
         self.assertIn(candidates[15], later)
 
     def test_four_row_waterfall_at_bottom_remains_visible_without_covering_controls(self):
@@ -727,10 +1034,10 @@ class IntegrationTests(unittest.TestCase):
         candidates = tuple(SeekCandidate(7205+i*5, 20) for i in range(18))
         playing = candidates[9].frequency_khz
         rows = view.visible_rows(candidates, playing, playing, waterfall=True)
-        self.assertEqual(rows, candidates[3:10])
-        self.assertEqual(view.first_visible, 3)
+        self.assertEqual(rows, candidates[4:10])
+        self.assertEqual(view.first_visible, 4)
         self.assertEqual(view.visible_rows(candidates, playing, playing, waterfall=True), rows)
-        # Scrolling past the playing row restores ten compact rows.
+        # Scrolling past the playing row restores nine compact rows.
         rows = view.visible_rows(candidates, candidates[17].frequency_khz, playing, waterfall=True)
         self.assertEqual(rows, candidates[10:18])
         self.assertNotIn(candidates[9], rows)
@@ -747,26 +1054,108 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(lines[-1].endswith('…'))
         self.assertTrue(all(len(line) <= 12 for line in lines))
 
-    def test_minimum_signal_slider_filters_weak_to_strong_without_tuning_or_sorting(self):
+    def test_drag_tracks_pixels_without_changing_selection_or_tuning(self):
         state = self.state()
         state.start_smart_seek()
-        state.smart_seek._merge([SeekCandidate(7300, 9), SeekCandidate(7350, 30)])
-        view = SmartSeekView(ui, state)
+        state.smart_seek._merge([SeekCandidate(7205+i*5,30) for i in range(30)])
+        view = SmartSeekView(ui,state)
         self.addCleanup(view.shutdown)
-        box = view.signal_slider_box()
-        view.actions = [(box, ('signal', None))]
-        y = (box[1]+box[3])/2
-        view.press(32, y)
-        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350, 7300])
-        self.assertTrue(view.drag(320, y))
-        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350])
-        self.assertIsNone(view.release(320, y))
-        self.assertIsNone(view.press_action)
-        view.press(32, y)
-        view.release(32, y)
-        self.assertEqual([item.frequency_khz for item in state.smart_seek_snapshot()['candidates']], [7350, 7300])
-        self.assertEqual(state.snapshot()[1], 7325)
-        self.assertTrue(view.open)
+        before = state.freq_khz,state.smart_seek_snapshot()['selected']
+        y = view.LIST_TOP+40
+        view.actions = [((20,view.LIST_TOP,1200,view.LIST_TOP+70),('tune',7205))]
+        view.press(200,y)
+        for pixels in (19,37.5,82):
+            self.assertTrue(view.drag(200,y-pixels))
+            self.assertAlmostEqual(view.scroll_y,pixels)
+            self.assertEqual((state.freq_khz,state.smart_seek_snapshot()['selected']),before)
+            self.assertIsNone(view.press_action)
+        self.assertIsNone(view.release(200,y-82))
+        snapshot = state.smart_seek_snapshot()
+        rows = view.visible_rows(snapshot['candidates'],snapshot['selected'],snapshot['playing_khz'])
+        self.assertNotEqual(rows[0].frequency_khz,before[1])
+        self.assertEqual((state.freq_khz,snapshot['selected']),before)
+
+    def test_manual_scroll_preserves_encoder_focus_and_drag_cancels_tool_taps(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7205+i*5,30) for i in range(30)])
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        selected = state.smart_seek_snapshot()['selected']
+        view.scroll_rows(10)
+        self.assertEqual(state.smart_seek_snapshot()['selected'],selected)
+        view.move(1)
+        self.assertFalse(view.manual_scroll)
+        self.assertNotEqual(state.smart_seek_snapshot()['selected'],selected)
+        y = view.LIST_TOP+30
+        view.actions = [((20,view.LIST_TOP,300,view.LIST_TOP+64),('research',7300))]
+        view.press(100,y)
+        view.drag(100,y-30)
+        self.assertIsNone(view.release(100,y-30))
+        self.assertIsNone(view.research_frequency)
+        # A deliberate tap still produces exactly one tuning request.
+        view.actions = [((20,view.LIST_TOP,1200,view.LIST_TOP+64),('tune',7310))]
+        view.press(200,y)
+        self.assertEqual(view.release(200,y),7310)
+
+    def test_sorted_insertion_keeps_partly_scrolled_row_and_drag_anchor_fixed(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7205+i*5,30) for i in range(25)])
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        before = state.snapshot(),state.smart_seek_snapshot()['selected']
+        def rows():
+            snapshot = state.smart_seek_snapshot()
+            return view.visible_rows(snapshot['candidates'],snapshot['selected'],snapshot['playing_khz'])
+        rows()
+        view._set_scroll_y(310.5)
+        old_rows = rows()
+        view.press(200,500)
+        view.drag(200,480)
+        old_rows = rows()
+        old_y = view._row_positions[view.first_visible]-view.scroll_y
+        old_scroll = view.scroll_y
+        state.smart_seek._merge([SeekCandidate(7200,40)])
+        new_rows = rows()
+        self.assertEqual(new_rows,old_rows)
+        self.assertAlmostEqual(view._row_positions[view.first_visible]-view.scroll_y,old_y)
+        shifted = view.scroll_y
+        self.assertGreater(shifted,old_scroll)
+        view.drag(200,470)
+        self.assertAlmostEqual(view.scroll_y,shifted+10)
+        self.assertIsNone(view.release(200,470))
+        self.assertEqual((state.snapshot(),state.smart_seek_snapshot()['selected']),before)
+
+    def test_tool_popup_blocks_list_input_without_changing_playback(self):
+        state = self.state()
+        state.start_smart_seek()
+        state.smart_seek._merge([SeekCandidate(7300,20),SeekCandidate(7350,25)])
+        view = SmartSeekView(ui,state)
+        self.addCleanup(view.shutdown)
+        before = state.snapshot(),state.smart_seek_snapshot()['selected'],state.transcription_snapshot()[:2]
+        for tool in ('Transcribe','Record'):
+            view.actions = [((20,240,130,304),('tool_preview',tool))]
+            view.press(60,270)
+            self.assertIsNone(view.release(60,270))
+            self.assertEqual(view.tool_preview,tool)
+            self.assertEqual(view.actions,[])
+            self.assertIsNone(view.selected())
+            view.move(1)
+            view.swipe(500,300)
+            view.press(300,400)
+            self.assertFalse(view.drag(300,300))
+            self.assertIsNone(view.release(300,300))
+            self.assertEqual(view.scroll_y,0)
+            self.assertEqual((state.snapshot(),state.smart_seek_snapshot()['selected'],state.transcription_snapshot()[:2]),before)
+            if tool == 'Transcribe':
+                view.actions = [((700,400,814,464),('tool_close',None))]
+                view.press(750,430)
+                self.assertIsNone(view.release(750,430))
+            else:
+                view.back()
+            self.assertIsNone(view.tool_preview)
+            self.assertTrue(view.open)
 
     def test_repeated_quick_selection_keeps_list_and_active_survey_open(self):
         with patch.object(ui.time, 'monotonic', return_value=100):
@@ -827,6 +1216,8 @@ class IntegrationTests(unittest.TestCase):
             clock.return_value = 100.1
             state.feed_smart_seek_frame(rf_frame(center, zoom, 7300000, 1), 30000000, 14, 14)
             clock.return_value = 100.4
+            self.assertEqual(state.smart_seek_snapshot()['window_progress'],0)
+            state.feed_smart_seek_frame(rf_frame(center, zoom, 7300000, 2), 30000000, 14, 14)
             snapshot = state.smart_seek_snapshot()
             self.assertGreater(snapshot['window_progress'], 0)
             self.assertEqual(snapshot['scanning_khz'], center)
