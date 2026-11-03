@@ -235,7 +235,7 @@ class MenuIconTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
             draws = {}
-            for name in ('draw_logical_rect', 'draw_receiver_action_button',
+            for name in ('draw_logical_rect', 'draw_logical_rounded_rect', 'draw_receiver_action_button',
                          'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
                          'draw_receiver_back_button', 'draw_picker_two_line_button',
                          'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):
@@ -394,14 +394,14 @@ class DrawerGeometryTests(unittest.TestCase):
         kinds = [kind for kind, _label in ui.MENU_ITEMS]
         self.assertEqual(
             kinds,
-            ["rx", "dual", "audio", "display", "digital", "vosc", "tests", "settings"],
+            ["rx", "dual", "digital", "vosc", "tests", "settings"],
         )
-        self.assertNotIn("display", dict(ui.SETTINGS_MENU_ITEMS))
+        self.assertEqual(ui.SETTINGS_MENU_ITEMS[:3], (("display", "DISPLAY"), ("audio", "AUDIO"), ("network", "Wi-Fi / ETHERNET")))
         self.assertEqual(ui.LCD_NAV_TILE_W, 114)
         self.assertEqual(ui.LCD_NAV_TILE_H, 64)
         self.assertEqual(ui.LCD_NAV_GAP, 8)
         boxes = [ui.lcd_nav_box(i) for i in range(len(ui.MENU_ITEMS))]
-        self.assertEqual(boxes[0], (1034, 488, 1148, 558))
+        self.assertEqual(boxes[0], (1034, 566, 1148, 636))
         self.assertEqual(boxes[-1], (1156, 722, 1270, 792))
 
     def test_vosc_uses_right_rail_controls_and_shared_back(self):
@@ -658,8 +658,8 @@ class DrawerGeometryTests(unittest.TestCase):
 
     def test_home_and_settings_tiles_use_requested_copy_and_full_subtitles(self):
         self.assertEqual(dict(ui.MENU_ITEMS), {
-            "rx": "RECEIVERS", "audio": "AUDIO", "digital": "DIGITAL",
-            "vosc": "CAPTIONS", "display": "DISPLAY", "dual": "DUAL RX",
+            "rx": "RECEIVERS", "digital": "DIGITAL",
+            "vosc": "CAPTIONS", "dual": "DUAL RX",
             "settings": "SYSTEM", "tests": "APPS",
         })
         self.assertEqual(ui.menu_subtitle("digital"), "13 MODES")
