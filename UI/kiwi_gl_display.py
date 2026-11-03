@@ -251,6 +251,7 @@ import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
+from smeter_picker import SMeterPicker
 from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           draw_meter, draw_triple_meter, skin_image_box,
                           skin_needle_segment, skin_source_bounds, s_label, voltage_label,
@@ -4468,7 +4469,10 @@ def configure_output(desktop=False):
     # future logical-height change automatically instead of retaining a
     # 480-pixel prototype coordinate.
     content_bottom = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
-    zoom_bottom = content_bottom - LCD_CONTROL_GAP
+    control_bottom = content_bottom - LCD_CONTROL_GAP
+    # Leave a full finger's clearance above the status bar. Drawing and
+    # touch routing share these boxes, so the old lower position stays inert.
+    zoom_bottom = control_bottom - 80
     # The wide LCD keeps Zoom anchored to the canvas's left edge. Passband
     # editing lives in the Home drawer, outside the live RF surface.
     # Do not inherit the old 960 px coordinate positions here: the live radio
@@ -4498,9 +4502,10 @@ def configure_output(desktop=False):
     view_group_w = view_button_w + 2 * inner_margin
     view_x1 = LCD_NAV_X0 - edge_margin
     view_x0 = view_x1 - view_group_w
-    VIEW_GROUP_BOX = (view_x0, zoom_y0 - 3, view_x1, zoom_bottom + 3)
+    view_y0 = control_bottom - control_h
+    VIEW_GROUP_BOX = (view_x0, view_y0 - 3, view_x1, control_bottom + 3)
     FILTER_TOGGLE_BOX = (-1, -1, -1, -1)
-    SPECTRUM_TOGGLE_BOX = (view_x1 - inner_margin - view_button_w, zoom_y0, view_x1 - inner_margin, zoom_bottom)
+    SPECTRUM_TOGGLE_BOX = (view_x1 - inner_margin - view_button_w, view_y0, view_x1 - inner_margin, control_bottom)
     # macOS uses the same landscape coordinate space directly. The hardware
     # panel uses its native portrait framebuffer and the existing rotation.
     NATIVE_W, NATIVE_H = (LOGICAL_W, LOGICAL_H) if DESKTOP_MODE else (LCD_NATIVE_W, LCD_NATIVE_H)
@@ -16044,6 +16049,20 @@ def home_bandpass_visible():
     return smeter_is_slim()
 
 
+def home_smeter_touch(text_cache, x, y, freq_khz, instrument_layout, font_family=None):
+    """Match the visible Home meter before waterfall tuning claims the tap."""
+    if not LCD_800_MODE:
+        return False
+    if home_rail_has_meter(instrument_layout) or not smeter_supports_top_instrument_strip():
+        return contains(lcd_compact_smeter_box(), x, y)
+    if instrument_layout == "left":
+        return contains(left_smeter_box(text_cache, freq_khz, font_family), x, y)
+    # MIDDLE uses the existing horizontal meter's full printed scale.
+    trace_x = 675 + (50 if DESKTOP_1280_MODE else 0)
+    box = (trace_x - 105, 0, trace_x + SMETER_TRACE_WIDTH + 24, 80)
+    return contains(mirror_rf_box(box) if mirror_top_instruments() else box, x, y)
+
+
 def draw_selected_smeter(text_cache, box, dbm, peak_dbm=None, *, theme=None, style_id=None):
     theme = theme or theme_system.runtime_theme
     identifier = style_id or theme["smeter_style"]
@@ -23719,6 +23738,7 @@ def main():
     args = parser.parse_args()
     theme_editor = ThemeEditor(theme_system.ThemeLibrary(args.theme_file),
                                notice_duration=args.zoom_osd_seconds)
+    smeter_picker = SMeterPicker(theme_editor.library)
     refresh_receiver_list_theme()
     remembered_radio_mode = None
     remembered_receiver_type = None
@@ -26622,6 +26642,9 @@ def main():
                         elif event.unicode and event.unicode.isprintable() and len(network_password_value) < 63:
                             network_password_value += event.unicode
                     wake_controls()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and smeter_picker.open:
+                    smeter_picker.open = False
+                    wake_controls()
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     stop_event.set()
                 elif (
@@ -26858,6 +26881,7 @@ def main():
                                 and 0 <= x < rf_canvas_width()
                                 and len(points) == 1
                                 and not theme_editor.open
+                                and not smeter_picker.open
                                 and not (
                                     picker_open or font_lab_open or network_password_open
                                     or dual_vfo_open or dual_vfo_mode_open
@@ -26930,7 +26954,9 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if seek_view.open:
+                            if smeter_picker.open:
+                                gesture = "smeter_picker"
+                            elif seek_view.open:
                                 gesture = "smart_seek"
                                 seek_view.press(x, y, points=points)
                             elif audio_test_workspace.open:
@@ -27298,6 +27324,14 @@ def main():
                                     gesture = "lcd_filter_width"
                                 else:
                                     gesture = "lcd_filter_drawer"
+                            elif home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and not (
+                                frequency_entry_open or filter_panel_open or wspr_add_open
+                                or dual_vfo_open or dual_vfo_mode_open or dual_vfo_picker_open
+                            ) and home_smeter_touch(
+                                text_cache, x, y, display_freq, instrument_layout, compact_frequency_font_family
+                            ):
+                                gesture = "smeter_picker_open"
+                                scope_drag_eligible = False
                             elif LCD_800_MODE and home_bandpass_visible() and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
@@ -29182,6 +29216,14 @@ def main():
                                 if idx is not None:
                                     activate_navigation_item(idx)
                         elif touch_started and gesture == "network_launch":
+                            wake_controls()
+                        elif touch_started and gesture in ("smeter_picker", "smeter_picker_open"):
+                            moved = max(abs(x - start_x), abs(y - start_y))
+                            if moved <= args.tap_px:
+                                if gesture == "smeter_picker_open":
+                                    smeter_picker.show()
+                                else:
+                                    smeter_picker.tap(x, y, rf_canvas_width(), started_at=(start_x, start_y))
                             wake_controls()
                         elif touch_started and gesture == "theme":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -31169,6 +31211,8 @@ def main():
                     application_update.poll()
                     update_poll_at = now + 0.5
                 app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
+            if smeter_picker.open:
+                smeter_picker.draw(sys.modules[__name__], text_cache)
             if not web_apps.blocks_touch:usb_popup.draw(text_cache)
             if rail_relocation_active():
                 if sidebar_composer is None:
