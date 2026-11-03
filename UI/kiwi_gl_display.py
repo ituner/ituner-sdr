@@ -2091,6 +2091,8 @@ MENU_ROWS = 4
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("dual", "DUAL RX"),
+    ("audio", "AUDIO"),
+    ("display", "DISPLAY"),
     ("digital", "DIGITAL"),
     ("vosc", "CAPTIONS"),
     ("tests", "APPS"),
@@ -2098,8 +2100,10 @@ MENU_ITEMS = (
 )
 HOME_MENU_SUBTITLES = {
     "rx": "FIND & TUNE",
+    "audio": "VOL & DSP",
     "digital": "",  # Computed from the available decoder categories below.
     "vosc": "TRANSCRIBE",
+    "display": "LOOK & FEEL",
     "dual": "RX1, RX2",
     "settings": "SETUP",
     "tests": "TOOLS, ETC",
@@ -2529,8 +2533,6 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
-    ("display", "DISPLAY"),
-    ("audio", "AUDIO"),
     ("network", "Wi-Fi / ETHERNET"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
@@ -2562,8 +2564,6 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 
 SETTINGS_MENU_SUBTITLES = {
-    "display": "LOOK & FEEL",
-    "audio": "VOL & DSP",
     "radio_info": "IDENTITY, SITE & GPS",
     "usb_radios": "RADIOS & DECODERS",
     "network": "NETWORK",
@@ -16563,13 +16563,11 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     if has_back and item_count == len(SETTINGS_MENU_ITEMS):
         if index == item_count - 1:
             return lcd_drawer_back_box()
-        full_width_rows = 3  # DISPLAY, AUDIO, Wi-Fi / ETHERNET
-        rows = full_width_rows + math.ceil((item_count - full_width_rows - 1) / 2)
+        rows = 1 + math.ceil((item_count - 2) / 2)
         top = lcd_drawer_back_box()[1] - rows * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-        if index < full_width_rows:
-            y0 = top + index * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-            return LCD_NAV_X0 + 10, y0, LOGICAL_W - 10, y0 + LCD_NAV_TILE_H
-        col, row = (index - full_width_rows) % 2, (index - full_width_rows) // 2 + full_width_rows
+        if index == 0:
+            return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
+        col, row = (index - 1) % 2, (index - 1) // 2 + 1
         x0 = LCD_NAV_X0 + 10 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
         y0 = top + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
         return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
