@@ -1959,7 +1959,8 @@ def configure_popup_layout():
         left_x0, left_x1 = LCD_NAV_X0 + 10, LCD_NAV_X0 + 124
         right_x0, right_x1 = LCD_NAV_X0 + 132, LOGICAL_W - 10
         row_h, row_gap = 64, 8
-        rows = tuple(440 + index * (row_h + row_gap) for index in range(4))
+        first_row = lcd_drawer_back_box()[1] - 4 * (row_h + row_gap)
+        rows = tuple(first_row + index * (row_h + row_gap) for index in range(4))
         TEST_DJ_BOX = (left_x0, rows[0], left_x1, rows[0] + row_h)
         TEST_RTL_BOX = (right_x0, rows[0], right_x1, rows[0] + row_h)
         TEST_PATTERN_BOX = (left_x0, rows[1], left_x1, rows[1] + row_h)
@@ -2090,8 +2091,6 @@ MENU_ROWS = 4
 MENU_ITEMS = (
     ("rx", "RECEIVERS"),
     ("dual", "DUAL RX"),
-    ("audio", "AUDIO"),
-    ("display", "DISPLAY"),
     ("digital", "DIGITAL"),
     ("vosc", "CAPTIONS"),
     ("tests", "APPS"),
@@ -2099,10 +2098,8 @@ MENU_ITEMS = (
 )
 HOME_MENU_SUBTITLES = {
     "rx": "FIND & TUNE",
-    "audio": "VOL & DSP",
     "digital": "",  # Computed from the available decoder categories below.
     "vosc": "TRANSCRIBE",
-    "display": "LOOK & FEEL",
     "dual": "RX1, RX2",
     "settings": "SETUP",
     "tests": "TOOLS, ETC",
@@ -2532,6 +2529,8 @@ def dual_vfo_receiver_picker_action_at(x, y, station_count, page):
             return "station", station_index
     return None, None
 SETTINGS_MENU_ITEMS = (
+    ("display", "DISPLAY"),
+    ("audio", "AUDIO"),
     ("network", "Wi-Fi / ETHERNET"),
     ("radio_info", "RADIO / USER"),
     ("usb_radios", "USB-RADIOS"),
@@ -2563,6 +2562,8 @@ DIGITAL_MENU_ITEMS = SPECTRUM_MENU_ITEMS + HF_DECODER_ITEMS + VHF_UHF_DECODER_IT
 
 
 SETTINGS_MENU_SUBTITLES = {
+    "display": "LOOK & FEEL",
+    "audio": "VOL & DSP",
     "radio_info": "IDENTITY, SITE & GPS",
     "usb_radios": "RADIOS & DECODERS",
     "network": "NETWORK",
@@ -11875,7 +11876,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
     pattern_name, _shape, _steps, _step_hz, _cadence, _hold = RETUNE_TEST_PATTERNS[pattern_index]
     _name, offsets_khz, _delays = retune_test_schedule(pattern_index)
     if LCD_800_MODE:
-        draw_settings_leaf_sidebar(text_cache, "APPS", "TOOLS & DIAGNOSTICS")
+        draw_settings_leaf_sidebar(text_cache, "APPS", "")
         for box, title, detail, active in (
             (TEST_SINE_BOX, "AUDIO TEST", "SINE WAVE", False),
             (TEST_DJ_BOX, "DJ TUNE", "LIVE DIAL", False),
@@ -14076,9 +14077,8 @@ def receiver_map_zoom_boxes():
     return RADIOGARDEN_ZOOM_IN_BOX, RADIOGARDEN_ZOOM_OUT_BOX
 
 
-# The Globe legend is a colour key for the receiver source groups. Each chip
-# is a toggle: switching a group off removes its dots from the globe (and from
-# the tap surface) without touching the saved favorites or health records.
+# The Globe legend selects exactly one receiver source for drawing and taps.
+# Selection never changes saved favorites, health records, or the live receiver.
 RECEIVER_MAP_GROUP_ORDER = ("kiwi", "openwebrx", "local", "fmdx")
 RECEIVER_MAP_GROUP_LABELS = {
     "kiwi": "KIWI",
@@ -14094,10 +14094,10 @@ RECEIVER_MAP_GROUP_COLORS = {
     "local": (255, 208, 92, 235),
     "fmdx": (255, 154, 61, 245),
 }
-# Session-only visibility; groups the operator has switched off in the legend.
-RECEIVER_MAP_HIDDEN_GROUPS = set()
-# Legend filters match the Receivers category rows. Their full-width line
-# carries the dot colour when visible and turns gray when hidden.
+# Session-only single choice; KIWI is the default when the application starts.
+RECEIVER_MAP_SELECTED_GROUP = "kiwi"
+# Legend choices match the Receivers category rows. The selected source
+# carries its dot colour; other source swatches use the theme secondary text.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + 16
 RECEIVER_MAP_LEGEND_FONT_SIZE = 14
 RECEIVER_MAP_LEGEND_TEXT_LINES = {
@@ -14120,20 +14120,20 @@ def receiver_map_group(receiver):
 
 
 def receiver_map_group_visible(group):
-    return group not in RECEIVER_MAP_HIDDEN_GROUPS
+    return group == RECEIVER_MAP_SELECTED_GROUP
 
 
-def receiver_map_toggle_group(group):
-    """Flip a legend group and report whether it is visible afterwards."""
-    if group in RECEIVER_MAP_HIDDEN_GROUPS:
-        RECEIVER_MAP_HIDDEN_GROUPS.discard(group)
-        return True
-    RECEIVER_MAP_HIDDEN_GROUPS.add(group)
-    return False
+def receiver_map_select_group(group):
+    """Select one source; tapping it again leaves it selected."""
+    global RECEIVER_MAP_SELECTED_GROUP
+    if group not in RECEIVER_MAP_GROUP_ORDER:
+        return False
+    RECEIVER_MAP_SELECTED_GROUP = group
+    return True
 
 
 def receiver_map_reset_groups():
-    RECEIVER_MAP_HIDDEN_GROUPS.clear()
+    receiver_map_select_group("kiwi")
 
 
 def receiver_map_legend_entries(receivers):
@@ -14157,12 +14157,12 @@ def receiver_map_legend_swatch_color(group, active):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Compact Globe-only filters, aligned to the rail's right edge."""
+    """Source choices share BACK's full width and horizontal alignment."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    width = 148
-    x0 = LOGICAL_W - RECEIVER_PICKER_MARGIN - width
+    x0, _y0, x1, _y1 = RECEIVER_PICKER_BACK_BOX
+    width = x1 - x0
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
@@ -14173,8 +14173,8 @@ def receiver_map_legend_boxes(receivers, box=None):
 
 
 def receiver_map_legend_label(group, active):
-    """Name the action, not the state: HIDE a visible group, SHOW a hidden one."""
-    return f"{'HIDE' if active else 'SHOW'} {RECEIVER_MAP_GROUP_LABELS[group]}"
+    """Keep single-choice labels stable in selected and unselected states."""
+    return RECEIVER_MAP_GROUP_LABELS[group]
 
 
 def receiver_map_legend_at(x, y, receivers, box=None):
@@ -14633,8 +14633,8 @@ def draw_receiver_map(
         family=APP_UI_STYLE.button.font_family,
     )
 
-    # Compact visibility filters pair each source name with its dot colour.
-    # A hidden source keeps a gray square in the same position.
+    # Full-width single-choice controls retain each source name and colour key.
+    # Unselected sources use the theme secondary text colour.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -15665,10 +15665,11 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
     draw_sidebar_header(text_cache, title)
-    draw_text(
-        text_cache, LCD_NAV_X0 + 18, 96, detail,
-        themed_instrument_color("secondary_text", (139, 174, 183)), 13, False, False, "lm", family="Liberation Sans",
-    )
+    if detail:
+        draw_text(
+            text_cache, LCD_NAV_X0 + 18, 96, detail,
+            themed_instrument_color("secondary_text", (139, 174, 183)), 13, False, False, "lm", family="Liberation Sans",
+        )
     draw_radio_close_button(text_cache, lcd_drawer_back_box())
 
 
@@ -16562,11 +16563,13 @@ def lcd_nav_box(index, item_count=None, has_back=False):
     if has_back and item_count == len(SETTINGS_MENU_ITEMS):
         if index == item_count - 1:
             return lcd_drawer_back_box()
-        rows = 1 + math.ceil((item_count - 2) / 2)
+        full_width_rows = 3  # DISPLAY, AUDIO, Wi-Fi / ETHERNET
+        rows = full_width_rows + math.ceil((item_count - full_width_rows - 1) / 2)
         top = lcd_drawer_back_box()[1] - rows * (LCD_NAV_TILE_H + LCD_NAV_GAP)
-        if index == 0:
-            return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_NAV_TILE_H
-        col, row = (index - 1) % 2, (index - 1) // 2 + 1
+        if index < full_width_rows:
+            y0 = top + index * (LCD_NAV_TILE_H + LCD_NAV_GAP)
+            return LCD_NAV_X0 + 10, y0, LOGICAL_W - 10, y0 + LCD_NAV_TILE_H
+        col, row = (index - full_width_rows) % 2, (index - full_width_rows) // 2 + full_width_rows
         x0 = LCD_NAV_X0 + 10 + col * (LCD_NAV_TILE_W + LCD_NAV_GAP)
         y0 = top + row * (LCD_NAV_TILE_H + LCD_NAV_GAP)
         return x0, y0, x0 + LCD_NAV_TILE_W, y0 + LCD_NAV_TILE_H
@@ -24113,6 +24116,7 @@ def main():
     application_update = UpdateController()
     update_poll_at = 0.0
     audio_panel_open = False
+    audio_parent = "home"
     audio_transport_graph_open = False
     cpu_utilization_graph_open = False
     cpu_utilization_parent = "home"
@@ -25711,7 +25715,7 @@ def main():
         """Open a Home tool directly from the persistent 1280 desktop rail."""
         nonlocal menu_open, picker_open, picker_map_open, picker_map_garden_mode, radio_setup_open, display_setup_open, filter_drawer_open, frequency_drawer_open, frequency_entry_open, settings_menu_open, digital_menu_open, receiver_home_panel_open, fan_curve_panel_open, network_panel_open, network_password_open, network_selected_ssid, network_password_value, network_password_placeholder_visible, network_password_revealed, network_keyboard_caps, network_notice, network_next_refresh, network_page, network_country_open, network_connect_pending, network_action
         nonlocal usb_radios_parent, wspr_navigation_parent
-        nonlocal picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
+        nonlocal audio_parent, picker_parent, display_parent, receiver_home_parent, fan_curve_parent, tests_parent, cpu_utilization_parent
         nonlocal audio_panel_open, asr_panel_open, asr_moon_language_open, audio_volume, tests_panel_open, font_lab_open, font_lab_page, compact_font_review_open, rtl_lab_open, dual_vfo_open, dual_vfo_parent, dual_vfo_has_session, dual_vfo_active, dual_vfo_mix, dual_vfo_sources, dual_vfo_profiles, dual_vfo_picker_open, dual_vfo_picker_target, dual_vfo_picker_page, dual_vfo_receiver_list_target, dual_vfo_mode_open, dual_vfo_mode_target, wspr_panel_open, wspr_identity_open, wspr_add_open, wspr_decoder_settings_open, dj_tune_open, cpu_utilization_graph_open
         nonlocal wspr_expanded_log_open, wspr_expanded_log_id, wspr_expanded_log_scroll
         nonlocal wspr_expanded_waterfall_open, wspr_expanded_waterfall_id, wspr_expanded_waterfall_scroll
@@ -25914,6 +25918,7 @@ def main():
             station_pending_server = None
             station_connected_at = 0.0
         elif kind == "audio":
+            audio_parent = parent
             settings_menu_open = False
             digital_menu_open = False
             current_output_volume = audio_output_volume(args)
@@ -26481,9 +26486,9 @@ def main():
             ),
             None,
         )
-        if receiver is not None:
-            RECEIVER_MAP_HIDDEN_GROUPS.discard(receiver_map_group(receiver))
-        return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
+        if receiver is not None and receiver_map_group_visible(receiver_map_group(receiver)):
+            return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
+        return focus_receiver_map_on_home()
 
 
     def submit_network_password():
@@ -26647,10 +26652,10 @@ def main():
                             if picker_open and picker_map_open else None
                         )
                         if legend_group:
-                            legend_visible = receiver_map_toggle_group(legend_group)
+                            receiver_map_select_group(legend_group)
                             picker_map_notice = (
                                 f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                "SELECTED"
                             )
                             picker_map_notice_until = time.monotonic() + 1.6
                         elif (
@@ -28143,7 +28148,7 @@ def main():
                                 choice = audio_option_at(x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 if choice in (None, "close"):
-                                    audio_panel_open = False
+                                    restore_navigation_parent(audio_parent)
                                 elif choice == "mute":
                                     set_main_mute(not controls["mute"])
                                 elif choice == "voice_clean":
@@ -28203,7 +28208,7 @@ def main():
                         elif touch_started and gesture == "audio_panel_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                audio_panel_open = False
+                                restore_navigation_parent(audio_parent)
                             wake_controls()
                         elif touch_started and gesture == "dj_tune":
                             wake_controls()
@@ -29727,10 +29732,10 @@ def main():
                             if moved <= args.tap_px:
                                 legend_group = receiver_map_legend_at(x, y, globe_receivers)
                                 if legend_group:
-                                    legend_visible = receiver_map_toggle_group(legend_group)
+                                    receiver_map_select_group(legend_group)
                                     picker_map_notice = (
                                         f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                        f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                        "SELECTED"
                                     )
                                     picker_map_notice_until = time.monotonic() + 1.6
                             wake_controls()
