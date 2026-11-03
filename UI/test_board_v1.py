@@ -909,7 +909,7 @@ class BoardLayoutTests(unittest.TestCase):
                 if has_back and index == len(items) - 1:
                     continue  # Back is the shared full-width return target.
                 box = ui.lcd_nav_box(index, len(items), has_back)
-                self.assertEqual(box[2] - box[0], 236 if has_back and index < 3 else ui.LCD_NAV_TILE_W)
+                self.assertEqual(box[2] - box[0], 236 if has_back and index == 0 else ui.LCD_NAV_TILE_W)
                 self.assertEqual(box[3] - box[1], ui.LCD_NAV_TILE_H if has_back else ui.LCD_HOME_NAV_TILE_H)
         # The Globe retains its four compact rail commands and full-width Back.
         ui.configure_output(True)
@@ -1554,7 +1554,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
     def test_legend_draws_small_color_squares_before_labels(self):
         receivers = self.receivers()
-        ui.receiver_map_select_group('fmdx')
+        ui.receiver_map_toggle_group('fmdx')
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect') as rectangles, \
              patch.object(ui, 'draw_logical_line'), \
@@ -1571,8 +1571,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
                                  '', None, 'idle', {}, map_view='satellite_only')
         calls = [call.args for call in rectangles.call_args_list]
         for group, (x0, y0, x1, y1) in ui.receiver_map_legend_boxes(receivers):
-            color = (ui.RECEIVER_MAP_GROUP_COLORS[group] if group == 'fmdx'
-                     else ui.APP_UI_STYLE.palette.secondary_text)
+            color = (ui.APP_UI_STYLE.palette.secondary_text if group == 'fmdx'
+                     else ui.RECEIVER_MAP_GROUP_COLORS[group])
             self.assertIn((x0 + 12, (y0+y1)/2 - 6, x0 + 24, (y0+y1)/2 + 6, color), calls)
 
     def test_globe_zoom_reaches_1200x_and_uses_home_osd_panel(self):
@@ -1635,12 +1635,12 @@ class ReceiverMapLegendTests(unittest.TestCase):
             ))
             tiles.assert_not_called()
 
-    def test_legend_label_is_stable_for_single_choice(self):
-        # Selecting a source does not turn its label into a hide action.
-        self.assertEqual(ui.receiver_map_legend_label('kiwi', True), 'KIWI')
-        self.assertEqual(ui.receiver_map_legend_label('fmdx', True), 'FM-DX')
-        self.assertEqual(ui.receiver_map_legend_label('kiwi', False), 'KIWI')
-        self.assertEqual(ui.receiver_map_legend_label('fmdx', False), 'FM-DX')
+    def test_legend_label_names_the_action(self):
+        # A lit chip offers to hide its group; a hidden chip offers to show it.
+        self.assertEqual(ui.receiver_map_legend_label('kiwi', True), 'HIDE KIWI')
+        self.assertEqual(ui.receiver_map_legend_label('fmdx', True), 'HIDE FM-DX')
+        self.assertEqual(ui.receiver_map_legend_label('kiwi', False), 'SHOW KIWI')
+        self.assertEqual(ui.receiver_map_legend_label('fmdx', False), 'SHOW FM-DX')
 
     def _legend_texts(self):
         texts = []
@@ -1670,7 +1670,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         self.assertIn('OPENWEBRX', texts)
         self.assertIn('LAN', texts)
         self.assertIn('FM-DX', texts)
-        ui.receiver_map_select_group('kiwi')
+        ui.receiver_map_toggle_group('kiwi')
         texts = self._legend_texts()
         self.assertIn('KIWI', texts)
 
@@ -1770,15 +1770,16 @@ class ReceiverMapLegendTests(unittest.TestCase):
         )
         self.assertEqual(ui.receiver_map_dot_pixels(999999), ui.GLOBE_DOT_MAX_PIXELS)
 
-    def test_render_uses_only_selected_source_and_scale_derived_dot_size(self):
-        for group in ui.RECEIVER_MAP_GROUP_ORDER:
-            ui.receiver_map_select_group(group)
-            expected = [tuple(ui.RECEIVER_MAP_GROUP_COLORS[group])]
-            for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0, 20.5, 68.8):
-                drawn = self._draw_dots(scale)
-                self.assertEqual([color for color, _size in drawn], expected)
-                expected_size = ui.receiver_map_dot_pixels(scale)
-                self.assertTrue(all(actual == expected_size for _color, actual in drawn), scale)
+    def test_render_uses_scale_derived_dot_size(self):
+        expected = sorted(
+            tuple(ui.RECEIVER_MAP_GROUP_COLORS[group])
+            for group in ('kiwi', 'openwebrx', 'local', 'fmdx')
+        )
+        for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0, 20.5, 68.8):
+            drawn = self._draw_dots(scale)
+            self.assertEqual(sorted(color for color, _size in drawn), expected)
+            expected_size = ui.receiver_map_dot_pixels(scale)
+            self.assertTrue(all(actual == expected_size for _color, actual in drawn), scale)
 
     COASTLINE_COLOR = (94, 204, 188, 182)
 
@@ -1819,18 +1820,12 @@ class ReceiverMapLegendTests(unittest.TestCase):
             self.assertNotIn((160, 190, 180, 140),
                              self._polyline_colors('satellite_only', interactive=moving))
 
-    def test_legend_is_single_choice_with_kiwi_default(self):
-        self.assertEqual([g for g in ui.RECEIVER_MAP_GROUP_ORDER
-                          if ui.receiver_map_group_visible(g)], ['kiwi'])
-        for group in ui.RECEIVER_MAP_GROUP_ORDER:
-            for _ in range(2):
-                self.assertTrue(ui.receiver_map_select_group(group))
-                self.assertEqual([g for g in ui.RECEIVER_MAP_GROUP_ORDER
-                                  if ui.receiver_map_group_visible(g)], [group])
-        self.assertFalse(ui.receiver_map_select_group('unknown'))
+    def test_legend_toggle_hides_and_shows_a_group(self):
         self.assertTrue(ui.receiver_map_group_visible('fmdx'))
-        ui.receiver_map_reset_groups()
-        self.assertTrue(ui.receiver_map_group_visible('kiwi'))
+        self.assertFalse(ui.receiver_map_toggle_group('fmdx'))
+        self.assertFalse(ui.receiver_map_group_visible('fmdx'))
+        self.assertTrue(ui.receiver_map_toggle_group('fmdx'))
+        self.assertTrue(ui.receiver_map_group_visible('fmdx'))
 
     def test_legend_chips_are_hit_testable_and_do_not_overlap(self):
         receivers = self.receivers()
@@ -1841,8 +1836,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual((box[0], box[2]),
-                             (ui.RECEIVER_PICKER_BACK_BOX[0], ui.RECEIVER_PICKER_BACK_BOX[2]))
+            self.assertEqual(box[2] - box[0], 148)
             self.assertEqual(box[2], ui.LOGICAL_W - ui.RECEIVER_PICKER_MARGIN)
             self.assertEqual(box[3] - box[1], ui.RECEIVER_PICKER_CATEGORY_HEIGHT)
             self.assertEqual(box[1], ui.RECEIVER_MAP_LEGEND_RAIL_TOP +
@@ -1864,10 +1858,9 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
         with patch.object(ui, 'radiogarden_project', side_effect=project):
             fmdx_x = 100.0 + 3.0 * 1000.0
-            ui.receiver_map_select_group('fmdx')
             self.assertIsNotNone(ui.receiver_map_station_at(
                 fmdx_x, 120, receivers, 0.0, 0.0, ui.PICKER_MAP_BOX, 1.0))
-            ui.receiver_map_select_group('kiwi')
+            ui.receiver_map_toggle_group('fmdx')
             self.assertIsNone(ui.receiver_map_station_at(
                 fmdx_x, 120, receivers, 0.0, 0.0, ui.PICKER_MAP_BOX, 1.0))
             # The focus candidate also skips the hidden FM-DX receiver.
@@ -1900,15 +1893,17 @@ class ReceiverMapLegendTests(unittest.TestCase):
                 map_view='satellite_only',
             )
         # One point per receiver -- every marker shares the same current size.
-        self.assertEqual(sum(count for count, _size in drawn), 1)
+        self.assertEqual(sum(count for count, _size in drawn), len(receivers))
         expected_size = ui.receiver_map_dot_pixels(1.0)
         self.assertTrue(all(size == expected_size for _count, size in drawn))
-        # Only the selected KIWI source contributes a batch.
-        self.assertEqual(len(drawn), 1)
+        # Each legend group has its own colour, so they batch into four calls.
+        self.assertEqual(len(drawn), 4)
 
     def test_hidden_group_removes_its_dots_from_the_draw(self):
         receivers = self.receivers()
-        ui.receiver_map_select_group('fmdx')
+        ui.receiver_map_toggle_group('kiwi')
+        ui.receiver_map_toggle_group('openwebrx')
+        ui.receiver_map_toggle_group('local')
         drawn = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
@@ -2118,7 +2113,6 @@ class ReceiverBrowserEmptyStateTests(unittest.TestCase):
     def test_empty_source_renders_the_shared_empty_text(self):
         texts = []
         with patch.object(ui, "draw_logical_rect"), patch.object(ui, "draw_logical_line"), \
-             patch.object(ui, "draw_logical_rounded_rect"), \
              patch.object(ui, "draw_receiver_action_button"), \
              patch.object(ui, "draw_receiver_filter_button"), \
              patch.object(ui, "draw_receiver_sidebar_header"), \

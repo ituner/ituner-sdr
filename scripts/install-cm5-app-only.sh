@@ -70,7 +70,21 @@ exec /usr/bin/python3 /opt/ituner-sdr/UI/kiwi_gl_display.py \
 EOF
 chmod 0755 /usr/local/lib/ituner-sdr/start-cm5.sh
 
-install -m 0755 "$repo/scripts/cm5-touch-ready.sh" /usr/local/lib/ituner-sdr/touch-ready.sh
+cat > /usr/local/lib/ituner-sdr/touch-ready.sh <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for ((attempt=0; attempt<30; attempt++)); do
+    for name in /sys/class/input/event*/device/name; do
+        if [[ -r $name ]] && grep -Eq '^[0-9]+-005d Goodix Capacitive TouchScreen$' "$name"; then
+            exit 0
+        fi
+    done
+    sleep 1
+done
+echo 'Existing Goodix GT911 input device was not found.' >&2
+exit 1
+EOF
+chmod 0755 /usr/local/lib/ituner-sdr/touch-ready.sh
 
 cat > /etc/systemd/system/ituner-sdr-touch-ready.service <<'EOF'
 [Unit]
