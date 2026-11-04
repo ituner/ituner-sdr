@@ -76,14 +76,14 @@ class AudioPageTests(unittest.TestCase):
                 self.assertFalse(volume.called)
                 self.assertFalse(passband.called)
                 self.assertEqual({c.args[2] for c in tiles.call_args_list},
-                                 {'NOTCH', 'DE-EMPH', 'HF ENH', 'BLANKER', 'PASSBAND', 'OUTPUT', 'RESET'})
+                                 {'DE-EMPH', 'HF ENH', 'BLANKER', 'PASSBAND', 'OUTPUT', 'RESET'})
             else:
                 self.assertEqual({c.args[2] for c in sliders.call_args_list},
                                  {'DENOISE', 'VOICE (RNNOISE)', 'SQUELCH', 'WIDTH'})
                 self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
                 self.assertEqual(volume.call_args.kwargs['box'], ui.AUDIO_VOLUME_BOX)
                 self.assertEqual(passband.call_args.kwargs['box'], ui.AUDIO_PASSBAND_GRAPH_BOX)
-                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['AGC', 'TONE'])
+                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['AGC', 'TONE', 'NOTCH'])
                 self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
 
 

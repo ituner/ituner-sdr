@@ -11539,12 +11539,12 @@ def set_audio_page(advanced=False):
                 "RESET", "TONE", "BACKEND", "ADVANCED", "PASSBAND", "PASSBAND_GRAPH")
     boxes = {"AUDIO_" + name + "_BOX": (-1, -1, -1, -1) for name in controls}
     if advanced:
-        for row, pair in enumerate((("NOTCH", "DEEMP"), ("HF_ENHANCE", "BLANKER"))):
+        for row, pair in enumerate((("DEEMP", "BLANKER"),)):
             top = 64 + row * 88
             for col, name in enumerate(pair):
                 left = x0 + col * 122
                 boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 64)
-        for name, top in (("FILTER", 240), ("BACKEND", 328), ("RESET", 432)):
+        for name, top in (("HF_ENHANCE", 152), ("FILTER", 240), ("BACKEND", 328), ("RESET", 432)):
             boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
     else:
         for name, top in (("VOLUME", 48), ("SQUELCH", 140),
@@ -11552,8 +11552,8 @@ def set_audio_page(advanced=False):
             boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 76)
         boxes["AUDIO_PASSBAND_GRAPH_BOX"] = (x0, 416, x1, 505)
         boxes["AUDIO_PASSBAND_BOX"] = (x0, 505, x1, 569)
-        for col, name in enumerate(("AGC", "TONE")):
-            left = x0 + 36 + col * 100
+        for col, name in enumerate(("AGC", "TONE", "NOTCH")):
+            left = x0 + 6 + col * 80
             boxes["AUDIO_" + name + "_BOX"] = (left, 581, left + 64, 645)
         boxes["AUDIO_ADVANCED_BOX"] = (x0, 657, x1, 713)
     boxes["AUDIO_PANEL_BOX"] = (LCD_NAV_X0, AUDIO_HEADER_H, LOGICAL_W, lcd_rail_bottom())
@@ -11749,12 +11749,12 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
         for box, title, detail, active in (
             (AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"])),
             (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
+            (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
         ):
             draw_lcd_audio_tile(text_cache, box, title, detail, active)
         draw_styled_text_button(text_cache, AUDIO_ADVANCED_BOX, "ADVANCED")
     else:
         for box, title, detail, active in (
-            (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
             (AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0),
             (AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active),
             (AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0),

@@ -128,8 +128,8 @@ trained for speech, so leave it off for music and digital signals.
 The main Audio page reuses Home's combined Volume/speaker-mute instrument,
 followed by Squelch, Denoise and Voice (RNNoise). The standalone Mute tile is
 removed. The same Home passband graphic sits above a direct Width slider,
-then square AGC and Tone buttons, Advanced, and the fixed Back button.
-Blanker moves to Advanced alongside Notch, De-emphasis, HF Enhance, detailed
+then square AGC, Tone and Notch buttons, Advanced, and the fixed Back button.
+Blanker remains in Advanced alongside De-emphasis, HF Enhance, detailed
 Passband controls, Output and Reset. Audio slider sections use Home's themed
 background and uppercase labels; Voice reads VOICE (RNNOISE). Width uses the
 existing progressive mapping and preserves the filter center and tuned
