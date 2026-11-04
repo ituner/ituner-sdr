@@ -1338,6 +1338,7 @@ AUDIO_RESET_BOX = (718, 224, 918, 280)
 AUDIO_TONE_BOX = (42, 294, 256, 350)
 AUDIO_BACKEND_BOX = (268, 294, 482, 350)
 AUDIO_ADVANCED_BOX = (-1, -1, -1, -1)
+AUDIO_PASSBAND_BOX = (-1, -1, -1, -1)
 AUDIO_ADVANCED_OPEN = False
 AUDIO_HEADER_H = 32
 # Interpolate the legacy preset anchors across a continuous touch track.
@@ -9981,6 +9982,12 @@ def denoise_label(level):
 
 
 def apply_audio_slider(state, gesture, x):
+    if gesture == "audio_passband":
+        x0, _y0, x1, _y1 = AUDIO_PASSBAND_BOX
+        fraction = clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
+        width = filter_width_from_slider_fraction(fraction)
+        _mode, low, high, _generation = state.radio_snapshot()
+        return state.set_filter(*symmetric_filter_bounds(low, high, width))
     if gesture == "audio_denoise_level":
         return state.set_audio_controls(
             nr_algo=1, denoise_level=audio_denoise_level_at_x(x),
@@ -11528,7 +11535,7 @@ def set_audio_page(advanced=False):
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     controls = ("VOLUME", "MUTE", "VOICE_CLEAN", "HF_ENHANCE", "SQUELCH",
                 "AGC", "BLANKER", "DENOISE", "NOTCH", "DEEMP", "FILTER",
-                "RESET", "TONE", "BACKEND", "ADVANCED")
+                "RESET", "TONE", "BACKEND", "ADVANCED", "PASSBAND")
     boxes = {"AUDIO_" + name + "_BOX": (-1, -1, -1, -1) for name in controls}
     if advanced:
         for col, name in enumerate(("NOTCH", "DEEMP")):
@@ -11538,15 +11545,15 @@ def set_audio_page(advanced=False):
                           ("BACKEND", 328), ("RESET", 432)):
             boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
     else:
-        for name, top in (("VOLUME", 48), ("SQUELCH", 160),
-                          ("DENOISE", 272), ("VOICE_CLEAN", 384)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 88)
+        for name, top in (("VOLUME", 48), ("SQUELCH", 144),
+                          ("DENOISE", 240), ("VOICE_CLEAN", 336), ("PASSBAND", 432)):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 76)
         for row, pair in enumerate((("MUTE", "AGC"), ("TONE", "BLANKER"))):
-            top = 488 + row * 72
+            top = 524 + row * 64
             for col, name in enumerate(pair):
                 left = x0 + col * 122
-                boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 64)
-        boxes["AUDIO_ADVANCED_BOX"] = (x0, 648, x1, 712)
+                boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 56)
+        boxes["AUDIO_ADVANCED_BOX"] = (x0, 660, x1, 716)
     boxes["AUDIO_PANEL_BOX"] = (LCD_NAV_X0, AUDIO_HEADER_H, LOGICAL_W, lcd_rail_bottom())
     globals().update(boxes)
 
@@ -11680,9 +11687,10 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
                                full_width=False, roomy=False):
     """Large-label audio tile with a finger-addressable horizontal slider."""
     x0, y0, x1, y1 = box
-    # Sliders are instruments, not buttons: leave the drawer's calm black
-    # background visible, exactly as the Volume control does.
-    draw_text(text_cache, x0 + 10, y0 + 20, title, themed_instrument_color("footer_primary", (230, 246, 247)), 14 if roomy or len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
+    if roomy:
+        draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
+        draw_section_divider(x0, y0, x1)
+    draw_text(text_cache, x0 + 10, y0 + 20, title, APP_UI_STYLE.palette.section_heading if roomy else themed_instrument_color("footer_primary", (230, 246, 247)), 14 if roomy or len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, y0 + 20, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, 13, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = (x0, x1) if full_width else (x0 + 10, x1 - 10)
@@ -11721,6 +11729,8 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     if not AUDIO_ADVANCED_OPEN:
         vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
         level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
+        draw_logical_rect(vx0, vy0, vx1, vy1, APP_UI_STYLE.palette.section_surface)
+        draw_section_divider(vx0, vy0, vx1)
         draw_text(text_cache, vx0 + 10, vy0 + 20, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 14, True, False, "lm", family="Liberation Sans")
         draw_text(text_cache, vx1 - 10, vy0 + 20, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 18, True, False, "rm", family="Liberation Sans")
         track_y = vy1 - 28
@@ -11736,8 +11746,10 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
              "OFF" if sq <= 0 else (str(sq) if sq_maximum == 99 else f"{sq} dB"), sq > 0),
             (AUDIO_DENOISE_BOX, "DENOISE", denoise_level, kiwi.DENOISE_MAX,
              denoise_detail, denoise_level > 0 and not (voice_level or hf_active)),
-            (AUDIO_VOICE_CLEAN_BOX, "Voice (RNNoise)", voice_level, VOICE_CLEAN_MAX,
+            (AUDIO_VOICE_CLEAN_BOX, "VOICE (RNNOISE)", voice_level, VOICE_CLEAN_MAX,
              voice_clean_label(voice_level), voice_level > 0),
+            (AUDIO_PASSBAND_BOX, "PASSBAND", filter_width_slider_fraction(high_cut - low_cut), 1,
+             format_filter_width(high_cut - low_cut), True),
         ):
             draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum,
                                        detail, active, full_width=True, roomy=True)
@@ -21028,7 +21040,7 @@ _ui_confirmation_tone_last_at = 0.0
 _ui_confirmation_tone_payload = None
 VALUE_SLIDER_GESTURES = frozenset((
     "audio_volume", "home_volume", "audio_squelch_level", "audio_denoise_level",
-    "audio_voice_level", "display_floor_slider", "display_ceiling_slider",
+    "audio_voice_level", "audio_passband", "display_floor_slider", "display_ceiling_slider",
     "fan_start_slider", "fan_full_slider", "fan_minimum_slider",
     "lcd_filter_shift", "lcd_filter_width",
 ))
@@ -21040,6 +21052,7 @@ TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "audio_squelch_level",
     "audio_voice_level",
     "audio_denoise_level",
+    "audio_passband",
     "display_floor_slider",
     "display_ceiling_slider",
     "fan_start_slider",
@@ -27376,6 +27389,8 @@ def main():
                                     gesture = "audio_squelch_level"
                                 elif contains(AUDIO_VOICE_CLEAN_BOX, x, y):
                                     gesture = "audio_voice_level"
+                                elif contains(AUDIO_PASSBAND_BOX, x, y):
+                                    gesture = "audio_passband"
                                 elif contains(AUDIO_DENOISE_BOX, x, y):
                                     gesture = "audio_denoise_level"
                                 else:
@@ -27567,7 +27582,7 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
-                            if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level"):
+                            if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level", "audio_passband"):
                                 apply_audio_slider(state, gesture, x)
                         elif scope_drag_eligible and (
                             gesture == "scope_hold_drag"
@@ -27649,6 +27664,9 @@ def main():
                                 voice_clean_level=0,
                                 hf_enhance_level=0,
                             )
+                        elif gesture == "audio_passband":
+                            apply_audio_slider(state, gesture, x)
+                            filter_custom_width = True
                         elif gesture == "lcd_filter_shift":
                             set_lcd_filter_shift(x)
                         elif gesture == "lcd_filter_width":
@@ -28255,6 +28273,10 @@ def main():
                                 voice_clean_level=0,
                                 hf_enhance_level=0,
                             )
+                            wake_controls()
+                        elif touch_started and gesture == "audio_passband":
+                            apply_audio_slider(state, gesture, x)
+                            filter_custom_width = True
                             wake_controls()
                         elif touch_started and gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()

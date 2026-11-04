@@ -126,9 +126,12 @@ moving Voice selects local speech processing. They do not stack. Voice is
 trained for speech, so leave it off for music and digital signals.
 
 The main Audio page orders its sliders as Volume, Squelch, Denoise, and
-Voice (RNNoise). Its quiet 32 px title leaves room for 88 px slider targets
-separated by 24 px gaps. Below them, Mute/AGC and Tone/Blanker form two compact
-button rows. Advanced holds Notch, De-emphasis, HF Enhance, Passband, Output,
+Voice (RNNoise), followed by direct Passband width adjustment. All five use
+the Home theme section background and matching uppercase 14 px labels, with
+76 px slider targets separated by 20 px gaps. The Voice label reads
+VOICE (RNNOISE). Passband uses the existing progressive width mapping and
+keeps the filter center and tuned frequency fixed. Below them, Mute/AGC and
+Tone/Blanker form two compact button rows. Advanced holds Notch, De-emphasis, HF Enhance, Passband, Output,
 and Reset. Back returns from Advanced to Audio; Passband
 opened from Advanced returns there as well. Page navigation changes no audio
 settings, and the title and empty gaps have no button action or confirmation.

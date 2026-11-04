@@ -80,7 +80,7 @@ class VoiceSliderTests(unittest.TestCase):
              patch.object(ui, 'draw_lcd_audio_slider_tile') as sliders:
             ui.draw_lcd_audio_drawer(object(), 0.5, controls, -400, 400, True, 'am', 'pipewire')
         voice = next(call for call in sliders.call_args_list if call.args[1] == ui.AUDIO_VOICE_CLEAN_BOX)
-        self.assertEqual(voice.args[2:7], ('Voice (RNNoise)', 0.74, 2.0, '37%', True))
+        self.assertEqual(voice.args[2:7], ('VOICE (RNNOISE)', 0.74, 2.0, '37%', True))
         self.assertTrue(voice.kwargs['full_width'])
         self.assertEqual(ui.voice_clean_label(0), 'OFF')
         self.assertEqual(ui.voice_clean_label(2), 'STR')

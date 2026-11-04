@@ -343,7 +343,7 @@ class BoardLayoutTests(unittest.TestCase):
             full_edges = (back[0], back[2])
             boxes = [getattr(ui, name) for name in (
                 'AUDIO_VOLUME_BOX', 'AUDIO_DENOISE_BOX', 'AUDIO_VOICE_CLEAN_BOX',
-                'AUDIO_SQUELCH_BOX', 'AUDIO_MUTE_BOX', 'AUDIO_ADVANCED_BOX',
+                'AUDIO_SQUELCH_BOX', 'AUDIO_PASSBAND_BOX', 'AUDIO_MUTE_BOX', 'AUDIO_ADVANCED_BOX',
                 'AUDIO_AGC_BOX', 'AUDIO_BLANKER_BOX', 'AUDIO_NOTCH_BOX',
                 'AUDIO_DEEMP_BOX', 'AUDIO_TONE_BOX', 'AUDIO_FILTER_BOX',
                 'AUDIO_HF_ENHANCE_BOX', 'AUDIO_BACKEND_BOX', 'AUDIO_RESET_BOX')]
@@ -356,12 +356,12 @@ class BoardLayoutTests(unittest.TestCase):
                                      and box[1] < other[3] and other[1] < box[3])
             if not advanced:
                 sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
-                           ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX)
+                           ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_PASSBAND_BOX)
                 for box in sliders:
                     self.assertEqual((box[0], box[2]), full_edges)
-                    self.assertGreaterEqual(box[3] - box[1], 88)
+                    self.assertGreaterEqual(box[3] - box[1], 76)
                 for first, second in zip(sliders, sliders[1:]):
-                    self.assertGreaterEqual(second[1] - first[3], 24)
+                    self.assertGreaterEqual(second[1] - first[3], 20)
                 self.assertLess(ui.AUDIO_HF_ENHANCE_BOX[0], 0)
             else:
                 self.assertLess(ui.AUDIO_DENOISE_BOX[0], 0)

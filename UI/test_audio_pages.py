@@ -28,10 +28,23 @@ class AudioPageTests(unittest.TestCase):
         self.assertIsNone(ui.audio_option_at(ui.LCD_NAV_X0 + 128, 17))
         self.assertIn('audio_header', ui.TOOLBOX_CONTINUOUS_GESTURES)
         sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
-                   ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX)
+                   ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_PASSBAND_BOX)
         for a, b in zip(sliders, sliders[1:]):
-            self.assertGreaterEqual(b[1] - a[3], 24)
+            self.assertGreaterEqual(b[1] - a[3], 20)
             self.assertIsNone(ui.audio_option_at(a[0] + 20, (a[3]+b[1])/2))
+
+    def test_passband_slider_changes_width_without_tuning_or_moving_center(self):
+        self.state.set_filter(-1500, 3500)
+        frequency = self.state.snapshot()[1]
+        x0, _, x1, _ = ui.AUDIO_PASSBAND_BOX
+        for fraction in (0, .2, .5, .75, 1):
+            ui.apply_audio_slider(self.state, 'audio_passband', x0 + (x1-x0)*fraction)
+            _, low, high, _ = self.state.radio_snapshot()
+            self.assertAlmostEqual((low + high)/2, 1000, delta=25)
+            self.assertAlmostEqual(high-low, ui.filter_width_from_slider_fraction(fraction), delta=100)
+            self.assertEqual(self.state.snapshot()[1], frequency)
+        self.assertIn('audio_passband', ui.VALUE_SLIDER_GESTURES)
+        self.assertIn('audio_passband', ui.TOOLBOX_CONTINUOUS_GESTURES)
 
     def test_main_and_advanced_render_only_their_own_controls(self):
         controls, _ = self.state.audio_controls_snapshot()
@@ -50,7 +63,7 @@ class AudioPageTests(unittest.TestCase):
                                  {'NOTCH', 'DE-EMPH', 'HF ENH', 'PASSBAND', 'OUTPUT', 'RESET'})
             else:
                 self.assertEqual({c.args[2] for c in sliders.call_args_list},
-                                 {'DENOISE', 'Voice (RNNoise)', 'SQUELCH'})
+                                 {'DENOISE', 'VOICE (RNNOISE)', 'SQUELCH', 'PASSBAND'})
                 self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
                 self.assertEqual([c.args[2] for c in tiles.call_args_list], ['MUTE', 'AGC', 'TONE', 'BLANKER'])
                 self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
