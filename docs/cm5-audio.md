@@ -125,16 +125,17 @@ retain their processing amounts. Moving Denoise selects receiver processing;
 moving Voice selects local speech processing. They do not stack. Voice is
 trained for speech, so leave it off for music and digital signals.
 
-The main Audio page orders its sliders as Volume, Squelch, Denoise, and
-Voice (RNNoise), followed by direct Passband width adjustment. All five use
-the Home theme section background and matching uppercase 14 px labels, with
-76 px slider targets separated by 20 px gaps. The Voice label reads
-VOICE (RNNOISE). Passband uses the existing progressive width mapping and
-keeps the filter center and tuned frequency fixed. Below them, Mute/AGC and
-Tone/Blanker form two compact button rows. Advanced holds Notch, De-emphasis, HF Enhance, Passband, Output,
-and Reset. Back returns from Advanced to Audio; Passband
-opened from Advanced returns there as well. Page navigation changes no audio
-settings, and the title and empty gaps have no button action or confirmation.
+The main Audio page reuses Home's combined Volume/speaker-mute instrument,
+followed by Squelch, Denoise and Voice (RNNoise). The standalone Mute tile is
+removed. The same Home passband graphic sits above a direct Width slider,
+then square AGC and Tone buttons, Advanced, and the fixed Back button.
+Blanker moves to Advanced alongside Notch, De-emphasis, HF Enhance, detailed
+Passband controls, Output and Reset. Audio slider sections use Home's themed
+background and uppercase labels; Voice reads VOICE (RNNOISE). Width uses the
+existing progressive mapping and preserves the filter center and tuned
+frequency. Back retraces Advanced to Audio, including when returning from
+the detailed Passband drawer. Navigation, headings and blank gaps do not
+alter listening settings.
 
 Slider drags retain their last multitouch position on release, even when the
 touch controller's legacy absolute axes are stale. Denoise changes are coalesced

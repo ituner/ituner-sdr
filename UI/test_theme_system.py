@@ -455,6 +455,7 @@ class ThemeSystemTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect") as rectangles, \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_polyline"), \
+                patch.object(ui, "draw_lcd_home_bandwidth"), \
                 patch.object(ui, "draw_text"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \

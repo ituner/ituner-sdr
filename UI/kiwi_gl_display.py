@@ -1339,6 +1339,7 @@ AUDIO_TONE_BOX = (42, 294, 256, 350)
 AUDIO_BACKEND_BOX = (268, 294, 482, 350)
 AUDIO_ADVANCED_BOX = (-1, -1, -1, -1)
 AUDIO_PASSBAND_BOX = (-1, -1, -1, -1)
+AUDIO_PASSBAND_GRAPH_BOX = (-1, -1, -1, -1)
 AUDIO_ADVANCED_OPEN = False
 AUDIO_HEADER_H = 32
 # Interpolate the legacy preset anchors across a continuous touch track.
@@ -9941,7 +9942,7 @@ def main_volume_label(level):
 
 
 def audio_volume_at_x(x):
-    return volume_at_x(x, AUDIO_VOLUME_BOX)
+    return volume_at_x(x, volume_track_box(AUDIO_VOLUME_BOX) if LCD_800_MODE else AUDIO_VOLUME_BOX)
 
 
 def squelch_maximum(radio_mode):
@@ -11535,25 +11536,26 @@ def set_audio_page(advanced=False):
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     controls = ("VOLUME", "MUTE", "VOICE_CLEAN", "HF_ENHANCE", "SQUELCH",
                 "AGC", "BLANKER", "DENOISE", "NOTCH", "DEEMP", "FILTER",
-                "RESET", "TONE", "BACKEND", "ADVANCED", "PASSBAND")
+                "RESET", "TONE", "BACKEND", "ADVANCED", "PASSBAND", "PASSBAND_GRAPH")
     boxes = {"AUDIO_" + name + "_BOX": (-1, -1, -1, -1) for name in controls}
     if advanced:
-        for col, name in enumerate(("NOTCH", "DEEMP")):
-            left = x0 + col * 122
-            boxes["AUDIO_" + name + "_BOX"] = (left, 64, left + 114, 128)
-        for name, top in (("HF_ENHANCE", 152), ("FILTER", 240),
-                          ("BACKEND", 328), ("RESET", 432)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
-    else:
-        for name, top in (("VOLUME", 48), ("SQUELCH", 144),
-                          ("DENOISE", 240), ("VOICE_CLEAN", 336), ("PASSBAND", 432)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 76)
-        for row, pair in enumerate((("MUTE", "AGC"), ("TONE", "BLANKER"))):
-            top = 524 + row * 64
+        for row, pair in enumerate((("NOTCH", "DEEMP"), ("HF_ENHANCE", "BLANKER"))):
+            top = 64 + row * 88
             for col, name in enumerate(pair):
                 left = x0 + col * 122
-                boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 56)
-        boxes["AUDIO_ADVANCED_BOX"] = (x0, 660, x1, 716)
+                boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 64)
+        for name, top in (("FILTER", 240), ("BACKEND", 328), ("RESET", 432)):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
+    else:
+        for name, top in (("VOLUME", 48), ("SQUELCH", 140),
+                          ("DENOISE", 232), ("VOICE_CLEAN", 324)):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 76)
+        boxes["AUDIO_PASSBAND_GRAPH_BOX"] = (x0, 416, x1, 505)
+        boxes["AUDIO_PASSBAND_BOX"] = (x0, 505, x1, 569)
+        for col, name in enumerate(("AGC", "TONE")):
+            left = x0 + 36 + col * 100
+            boxes["AUDIO_" + name + "_BOX"] = (left, 581, left + 64, 645)
+        boxes["AUDIO_ADVANCED_BOX"] = (x0, 657, x1, 713)
     boxes["AUDIO_PANEL_BOX"] = (LCD_NAV_X0, AUDIO_HEADER_H, LOGICAL_W, lcd_rail_bottom())
     globals().update(boxes)
 
@@ -11571,6 +11573,8 @@ def audio_page_action(choice):
 def audio_option_at(x, y):
     if LCD_800_MODE and contains(lcd_audio_drawer_close_box(), x, y):
         return "close"
+    if LCD_800_MODE and not AUDIO_ADVANCED_OPEN and volume_action_at(x, y, AUDIO_VOLUME_BOX) == "home_volume_mute":
+        return "mute"
     for name, box in (
         ("advanced", AUDIO_ADVANCED_BOX),
         ("mute", AUDIO_MUTE_BOX), ("voice_clean", AUDIO_VOICE_CLEAN_BOX),
@@ -11727,19 +11731,8 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     denoise_detail = "BYPASS" if voice_level or hf_active else denoise_label(denoise_level)
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
     if not AUDIO_ADVANCED_OPEN:
-        vx0, vy0, vx1, vy1 = AUDIO_VOLUME_BOX
-        level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
-        draw_logical_rect(vx0, vy0, vx1, vy1, APP_UI_STYLE.palette.section_surface)
-        draw_section_divider(vx0, vy0, vx1)
-        draw_text(text_cache, vx0 + 10, vy0 + 20, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 14, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, vx1 - 10, vy0 + 20, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 18, True, False, "rm", family="Liberation Sans")
-        track_y = vy1 - 28
-        track_x0, track_x1 = vx0, vx1
-        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (20, 34, 42, 235)))
-        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * level, track_y + 3, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
-        knob_x = track_x0 + (track_x1 - track_x0) * level
-        knob_x = clamp(knob_x, vx0 + 6, vx1 - 6)
-        draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
+        draw_lcd_home_volume_slider(text_cache, volume, muted, box=AUDIO_VOLUME_BOX, label_size=14)
+        draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=AUDIO_PASSBAND_GRAPH_BOX)
 
         for box, title, value, maximum, detail, active in (
             (AUDIO_SQUELCH_BOX, "SQUELCH", sq, sq_maximum,
@@ -11748,16 +11741,14 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
              denoise_detail, denoise_level > 0 and not (voice_level or hf_active)),
             (AUDIO_VOICE_CLEAN_BOX, "VOICE (RNNOISE)", voice_level, VOICE_CLEAN_MAX,
              voice_clean_label(voice_level), voice_level > 0),
-            (AUDIO_PASSBAND_BOX, "PASSBAND", filter_width_slider_fraction(high_cut - low_cut), 1,
+            (AUDIO_PASSBAND_BOX, "WIDTH", filter_width_slider_fraction(high_cut - low_cut), 1,
              format_filter_width(high_cut - low_cut), True),
         ):
             draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum,
                                        detail, active, full_width=True, roomy=True)
         for box, title, detail, active in (
-            (AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted),
             (AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"])),
             (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
-            (AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0),
         ):
             draw_lcd_audio_tile(text_cache, box, title, detail, active)
         draw_styled_text_button(text_cache, AUDIO_ADVANCED_BOX, "ADVANCED")
@@ -11766,6 +11757,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
             (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
             (AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0),
             (AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active),
+            (AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0),
             (AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False),
             (AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if audio_backend == "alsa" else "PIPEWIRE", audio_backend == "alsa"),
             (AUDIO_RESET_BOX, "RESET", "DEFAULTS", False),
@@ -16561,27 +16553,38 @@ def lcd_home_volume_box(show_compact_readouts=True):
     return x0, y0, x1, max(y0 + 46, y1)
 
 
-def lcd_home_volume_mute_box(show_compact_readouts=True):
-    """Compact speaker toggle at the left of the Home slider line."""
-    x0, _y0, _x1, y1 = lcd_home_volume_box(show_compact_readouts)
+def volume_mute_box(panel):
+    """Shared speaker button geometry for Home and Audio Volume."""
+    x0, _y0, _x1, y1 = panel
     return x0 + 6, y1 - 39, x0 + 46, y1 - 5
 
 
-def lcd_home_volume_track_box(show_compact_readouts=True):
-    """The actual finger range excludes the separate speaker toggle."""
-    x0, _y0, x1, y1 = lcd_home_volume_box(show_compact_readouts)
+def volume_track_box(panel):
+    """Keep the Volume slider range clear of its speaker toggle."""
+    x0, _y0, x1, y1 = panel
     return x0 + 56, y1 - 32, x1 - 12, y1 - 8
 
 
-def home_volume_action_at(x, y, show_compact_readouts=True):
-    """Keep the speaker touch area separate from the slider's zero end."""
-    panel = lcd_home_volume_box(show_compact_readouts)
-    track = lcd_home_volume_track_box(show_compact_readouts)
+def lcd_home_volume_mute_box(show_compact_readouts=True):
+    return volume_mute_box(lcd_home_volume_box(show_compact_readouts))
+
+
+def lcd_home_volume_track_box(show_compact_readouts=True):
+    return volume_track_box(lcd_home_volume_box(show_compact_readouts))
+
+
+def volume_action_at(x, y, panel):
+    """Separate speaker taps from volume adjustments in either surface."""
+    track = volume_track_box(panel)
     if contains((panel[0], panel[3] - 44, track[0] - 4, panel[3]), x, y):
         return "home_volume_mute"
     if contains((track[0] - 4, panel[3] - 44, panel[2], panel[3]), x, y):
         return "home_volume"
     return None
+
+
+def home_volume_action_at(x, y, show_compact_readouts=True):
+    return volume_action_at(x, y, lcd_home_volume_box(show_compact_readouts))
 
 
 def home_volume_at_x(x, show_compact_readouts=True):
@@ -16768,16 +16771,18 @@ def lcd_nav_tile_background(text_cache):
     return text_cache.surface_texture(key, surface)
 
 
-def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_readouts=True):
+def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_readouts=True,
+                                *, box=None, label_size=13):
     """Draw the master slider and its compact, independent mute switch."""
-    x0, y0, x1, y1 = lcd_home_volume_box(show_compact_readouts)
+    panel = box if box is not None else lcd_home_volume_box(show_compact_readouts)
+    x0, y0, x1, y1 = panel
     level = clamp(volume if volume is not None else 0.0, 0.0, 1.0)
-    mute_x0, mute_y0, mute_x1, mute_y1 = lcd_home_volume_mute_box(show_compact_readouts)
+    mute_x0, mute_y0, mute_x1, mute_y1 = volume_mute_box(panel)
     status = "MUTE" if muted else main_volume_label(level)
     status_color = themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if muted or level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (239, 247, 248))
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
-    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", APP_UI_STYLE.palette.section_heading, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 4, y0 + 13, "VOLUME", APP_UI_STYLE.palette.section_heading, label_size, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 13, status, status_color, 13, True, False, "rm", family="Liberation Sans")
     mute_visual = draw_styled_button_frame(
         (mute_x0, mute_y0, mute_x1, mute_y1), active=muted,
@@ -16788,7 +16793,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
     draw_logical_polyline(((cx - 6, cy - 5), (cx + 5, cy - 13), (cx + 5, cy + 13), (cx - 6, cy + 5)), icon_color, 2.5)
     if muted:
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
-    track_x0, track_y0, track_x1, track_y1 = lcd_home_volume_track_box(show_compact_readouts)
+    track_x0, track_y0, track_x1, track_y1 = volume_track_box(panel)
     track_y = (track_y0 + track_y1) / 2
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
@@ -27384,7 +27389,10 @@ def main():
                                 if y < AUDIO_HEADER_H:
                                     gesture = "audio_header"
                                 elif contains(AUDIO_VOLUME_BOX, x, y):
-                                    gesture = "audio_volume"
+                                    action = volume_action_at(x, y, AUDIO_VOLUME_BOX)
+                                    gesture = "audio_control" if action == "home_volume_mute" else (
+                                        "audio_volume" if action == "home_volume" else "audio_header"
+                                    )
                                 elif contains(AUDIO_SQUELCH_BOX, x, y):
                                     gesture = "audio_squelch_level"
                                 elif contains(AUDIO_VOICE_CLEAN_BOX, x, y):
@@ -27643,7 +27651,7 @@ def main():
                         elif gesture in ("audio_volume", "home_volume"):
                             desired_volume = volume_at_x(
                                 x,
-                                AUDIO_VOLUME_BOX if gesture == "audio_volume" else lcd_home_volume_track_box(
+                                volume_track_box(AUDIO_VOLUME_BOX) if gesture == "audio_volume" else lcd_home_volume_track_box(
                                     home_rail_has_meter(instrument_layout)
                                 ),
                             )

@@ -77,6 +77,8 @@ class VoiceSliderTests(unittest.TestCase):
              patch.object(ui, 'draw_text'), patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_lcd_audio_tile'), patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'draw_styled_text_button'), \
+             patch.object(ui, 'draw_lcd_home_volume_slider'), \
+             patch.object(ui, 'draw_lcd_home_bandwidth'), \
              patch.object(ui, 'draw_lcd_audio_slider_tile') as sliders:
             ui.draw_lcd_audio_drawer(object(), 0.5, controls, -400, 400, True, 'am', 'pipewire')
         voice = next(call for call in sliders.call_args_list if call.args[1] == ui.AUDIO_VOICE_CLEAN_BOX)
