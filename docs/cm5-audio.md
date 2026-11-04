@@ -125,10 +125,11 @@ retain their processing amounts. Moving Denoise selects receiver processing;
 moving Voice selects local speech processing. They do not stack. Voice is
 trained for speech, so leave it off for music and digital signals.
 
-The main Audio page prioritizes Volume/Mute, Denoise, Voice (RNNoise), and
-Squelch. Its quiet 32 px title leaves room for 88 px slider targets separated
-by 24 px gaps. Advanced holds AGC, Blanker, Notch, De-emphasis, Tone, HF Enhance,
-Passband, Output, and Reset. Back returns from Advanced to Audio; Passband
+The main Audio page orders its sliders as Volume, Squelch, Denoise, and
+Voice (RNNoise). Its quiet 32 px title leaves room for 88 px slider targets
+separated by 24 px gaps. Below them, Mute/AGC and Tone/Blanker form two compact
+button rows. Advanced holds Notch, De-emphasis, HF Enhance, Passband, Output,
+and Reset. Back returns from Advanced to Audio; Passband
 opened from Advanced returns there as well. Page navigation changes no audio
 settings, and the title and empty gaps have no button action or confirmation.
 

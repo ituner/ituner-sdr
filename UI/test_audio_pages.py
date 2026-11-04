@@ -27,8 +27,8 @@ class AudioPageTests(unittest.TestCase):
         self.assertEqual(ui.AUDIO_HEADER_H, 32)
         self.assertIsNone(ui.audio_option_at(ui.LCD_NAV_X0 + 128, 17))
         self.assertIn('audio_header', ui.TOOLBOX_CONTINUOUS_GESTURES)
-        sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_DENOISE_BOX,
-                   ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_SQUELCH_BOX)
+        sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
+                   ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX)
         for a, b in zip(sliders, sliders[1:]):
             self.assertGreaterEqual(b[1] - a[3], 24)
             self.assertIsNone(ui.audio_option_at(a[0] + 20, (a[3]+b[1])/2))
@@ -47,13 +47,12 @@ class AudioPageTests(unittest.TestCase):
             if advanced:
                 self.assertFalse(sliders.called)
                 self.assertEqual({c.args[2] for c in tiles.call_args_list},
-                                 {'AGC', 'BLANKER', 'NOTCH', 'DE-EMPH', 'TONE',
-                                  'HF ENH', 'PASSBAND', 'OUTPUT', 'RESET'})
+                                 {'NOTCH', 'DE-EMPH', 'HF ENH', 'PASSBAND', 'OUTPUT', 'RESET'})
             else:
                 self.assertEqual({c.args[2] for c in sliders.call_args_list},
                                  {'DENOISE', 'Voice (RNNoise)', 'SQUELCH'})
                 self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
-                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['MUTE'])
+                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['MUTE', 'AGC', 'TONE', 'BLANKER'])
                 self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
 
 

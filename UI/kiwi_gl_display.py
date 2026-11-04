@@ -11531,20 +11531,22 @@ def set_audio_page(advanced=False):
                 "RESET", "TONE", "BACKEND", "ADVANCED")
     boxes = {"AUDIO_" + name + "_BOX": (-1, -1, -1, -1) for name in controls}
     if advanced:
-        for index, pair in enumerate((("AGC", "BLANKER"), ("NOTCH", "DEEMP"),
-                                      ("TONE", "HF_ENHANCE"))):
-            top = 64 + index * 88
+        for col, name in enumerate(("NOTCH", "DEEMP")):
+            left = x0 + col * 122
+            boxes["AUDIO_" + name + "_BOX"] = (left, 64, left + 114, 128)
+        for name, top in (("HF_ENHANCE", 152), ("FILTER", 240),
+                          ("BACKEND", 328), ("RESET", 432)):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
+    else:
+        for name, top in (("VOLUME", 48), ("SQUELCH", 160),
+                          ("DENOISE", 272), ("VOICE_CLEAN", 384)):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 88)
+        for row, pair in enumerate((("MUTE", "AGC"), ("TONE", "BLANKER"))):
+            top = 488 + row * 72
             for col, name in enumerate(pair):
                 left = x0 + col * 122
                 boxes["AUDIO_" + name + "_BOX"] = (left, top, left + 114, top + 64)
-        for name, top in (("FILTER", 344), ("BACKEND", 432), ("RESET", 536)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
-    else:
-        for name, top in (("VOLUME", 48), ("DENOISE", 160),
-                          ("VOICE_CLEAN", 272), ("SQUELCH", 384)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 88)
-        boxes["AUDIO_MUTE_BOX"] = (x0, 504, x1, 568)
-        boxes["AUDIO_ADVANCED_BOX"] = (x0, 592, x1, 656)
+        boxes["AUDIO_ADVANCED_BOX"] = (x0, 648, x1, 712)
     boxes["AUDIO_PANEL_BOX"] = (LCD_NAV_X0, AUDIO_HEADER_H, LOGICAL_W, lcd_rail_bottom())
     globals().update(boxes)
 
@@ -11730,24 +11732,27 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
         draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
 
         for box, title, value, maximum, detail, active in (
+            (AUDIO_SQUELCH_BOX, "SQUELCH", sq, sq_maximum,
+             "OFF" if sq <= 0 else (str(sq) if sq_maximum == 99 else f"{sq} dB"), sq > 0),
             (AUDIO_DENOISE_BOX, "DENOISE", denoise_level, kiwi.DENOISE_MAX,
              denoise_detail, denoise_level > 0 and not (voice_level or hf_active)),
             (AUDIO_VOICE_CLEAN_BOX, "Voice (RNNoise)", voice_level, VOICE_CLEAN_MAX,
              voice_clean_label(voice_level), voice_level > 0),
-            (AUDIO_SQUELCH_BOX, "SQUELCH", sq, sq_maximum,
-             "OFF" if sq <= 0 else (str(sq) if sq_maximum == 99 else f"{sq} dB"), sq > 0),
         ):
             draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum,
                                        detail, active, full_width=True, roomy=True)
-        draw_lcd_audio_tile(text_cache, AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
+        for box, title, detail, active in (
+            (AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted),
+            (AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"])),
+            (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
+            (AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0),
+        ):
+            draw_lcd_audio_tile(text_cache, box, title, detail, active)
         draw_styled_text_button(text_cache, AUDIO_ADVANCED_BOX, "ADVANCED")
     else:
         for box, title, detail, active in (
-            (AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"])),
-            (AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0),
             (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
             (AUDIO_DEEMP_BOX, "DE-EMPH", deemp, controls["deemphasis"] > 0),
-            (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
             (AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active),
             (AUDIO_FILTER_BOX, "PASSBAND", format_filter_width(high_cut - low_cut), False),
             (AUDIO_BACKEND_BOX, "OUTPUT", "ALSA DIRECT" if audio_backend == "alsa" else "PIPEWIRE", audio_backend == "alsa"),

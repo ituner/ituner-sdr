@@ -355,8 +355,8 @@ class BoardLayoutTests(unittest.TestCase):
                     self.assertFalse(box[0] < other[2] and other[0] < box[2]
                                      and box[1] < other[3] and other[1] < box[3])
             if not advanced:
-                sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_DENOISE_BOX,
-                           ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_SQUELCH_BOX)
+                sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
+                           ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX)
                 for box in sliders:
                     self.assertEqual((box[0], box[2]), full_edges)
                     self.assertGreaterEqual(box[3] - box[1], 88)
