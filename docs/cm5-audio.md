@@ -117,6 +117,24 @@ there so they cannot keep launching the separate test application.
 
 ## Validation
 
+**Denoise** and **Voice (RNNoise)** are separate Audio controls. Denoise changes
+the Kiwi receiver's WDSP filter continuously from OFF to MAX; the previous
+preset values remain interpolation anchors. Voice (RNNoise) blends local neural
+speech cleanup continuously from OFF to STR. Its previous MED and STR settings
+retain their processing amounts. Moving Denoise selects receiver processing;
+moving Voice selects local speech processing. They do not stack. Voice is
+trained for speech, so leave it off for music and digital signals.
+
+Slider drags retain their last multitouch position on release, even when the
+touch controller's legacy absolute axes are stale. Denoise changes are coalesced
+at 120 ms and send only changed receiver settings. OFF and mute remain prompt.
+
+The optional native Voice dependency can be built on the CM5 with
+`python3 scripts/build-rnnoise.py`. It verifies the official RNNoise 0.2 archive
+and installs under `vendor/rnnoise-install`; SpeexDSP must also be available.
+The build corrects stale Opus header/macro names in the release's ARM NEON
+header without changing the released model or DSP arithmetic.
+
 On the working CM5, direct reference speech/music and the improved SDR
 conversion were accepted by listening; reverting to linear brought back the
 metallic sound. Headphone detection changed 0x26 -> 0x22 on unplug, GPIO13

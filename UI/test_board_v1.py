@@ -339,7 +339,7 @@ class BoardLayoutTests(unittest.TestCase):
         back = ui.lcd_audio_drawer_close_box()
         full_edges = (back[0], back[2])
         for box in (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
-                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_BACKEND_BOX):
+                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX):
             self.assertEqual((box[0], box[2]), full_edges)
             self.assertEqual(box[2] - box[0], 236)
 
@@ -403,7 +403,7 @@ class BoardLayoutTests(unittest.TestCase):
                           [entry.args[:4] for entry in rectangles.call_args_list])
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[0]), 0)
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[2]),
-                         len(ui.DENOISE_SLIDER_POSITIONS) - 1)
+                         ui.kiwi.DENOISE_MAX)
 
     def test_scope_drag_requires_a_held_vertical_move(self):
         self.assertFalse(ui.scope_hold_drag_ready(0.2, 0, 80, 10))

@@ -1325,8 +1325,8 @@ FILTER_WIDTH_PRESETS = (
 AUDIO_PANEL_BOX = (12, 34, 948, 380)
 AUDIO_VOLUME_BOX = (42, 76, 612, 128)
 AUDIO_MUTE_BOX = (624, 76, 710, 128)
-AUDIO_VOICE_CLEAN_BOX = (722, 76, 818, 128)
-AUDIO_HF_ENHANCE_BOX = (830, 76, 918, 128)
+AUDIO_VOICE_CLEAN_BOX = (722, 76, 918, 128)
+AUDIO_HF_ENHANCE_BOX = (494, 294, 706, 350)
 AUDIO_SQUELCH_BOX = (42, 154, 256, 210)
 AUDIO_AGC_BOX = (268, 154, 482, 210)
 AUDIO_BLANKER_BOX = (494, 154, 706, 210)
@@ -1337,17 +1337,15 @@ AUDIO_FILTER_BOX = (494, 224, 706, 280)
 AUDIO_RESET_BOX = (718, 224, 918, 280)
 AUDIO_TONE_BOX = (42, 294, 256, 350)
 AUDIO_BACKEND_BOX = (268, 294, 482, 350)
-# Six evenly spaced, discrete Denoise settings. The DSP presets themselves
-# remain intentionally useful at the strong end; only the touch scale is linear.
-DENOISE_SLIDER_POSITIONS = (0.00, 0.20, 0.40, 0.60, 0.80, 1.00)
+# Interpolate the legacy preset anchors across a continuous touch track.
 # A clear, no-extra-controls loudness recovery curve. It reaches the requested
 # 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
 DENOISE_MAKEUP_GAIN_DB = (0, 2, 4, 6, 9, 12)
 # The two listener-only processors are intentionally distinct controls. They
 # never stack, while caption/callsign queues remain raw in every selection.
-VOICE_CLEAN_PRESETS = ("OFF", "MED", "STR")
-VOICE_CLEAN_MIX = (0.0, 0.75, 1.0)
-RNNOISE_VOICE_LEVELS = frozenset((1, 2))
+# Keep the saved 0..2 range: the former MED position (1) still blends 75%
+# processed audio. Fractional levels now fill the whole range continuously.
+VOICE_CLEAN_MAX = 2.0
 HF_ENHANCE_MODELS = (
     None,
     vendor_path("hf-enhance-tiny", "hf-enhance-tiny-v1.onnx"),
@@ -1935,15 +1933,15 @@ def configure_popup_layout():
         AUDIO_SQUELCH_BOX = (slider_x0, squelch_y0, slider_x1, squelch_y1)
         AUDIO_DENOISE_BOX = (slider_x0, denoise_y0, slider_x1, denoise_y1)
         rows = tuple(rows_y0 + index * (tile_h + tile_gap) for index in range(6))
-        AUDIO_VOICE_CLEAN_BOX = (left_x0, rows[0], left_x1, rows[0] + tile_h)
-        AUDIO_HF_ENHANCE_BOX = (right_x0, rows[0], right_x1, rows[0] + tile_h)
+        AUDIO_VOICE_CLEAN_BOX = (slider_x0, rows[0], slider_x1, rows[0] + tile_h)
+        AUDIO_HF_ENHANCE_BOX = (right_x0, rows[4], right_x1, rows[4] + tile_h)
         AUDIO_AGC_BOX = (left_x0, rows[1], left_x1, rows[1] + tile_h)
         AUDIO_BLANKER_BOX = (right_x0, rows[1], right_x1, rows[1] + tile_h)
         AUDIO_NOTCH_BOX = (left_x0, rows[2], left_x1, rows[2] + tile_h)
         AUDIO_DEEMP_BOX = (right_x0, rows[2], right_x1, rows[2] + tile_h)
         AUDIO_TONE_BOX = (left_x0, rows[3], left_x1, rows[3] + tile_h)
         AUDIO_FILTER_BOX = (right_x0, rows[3], right_x1, rows[3] + tile_h)
-        AUDIO_BACKEND_BOX = (slider_x0, rows[4], slider_x1, rows[4] + tile_h)
+        AUDIO_BACKEND_BOX = (left_x0, rows[4], left_x1, rows[4] + tile_h)
         last_row_y0, last_row_y1 = rows[5], rows[5] + tile_h
         AUDIO_RESET_BOX = (left_x0, last_row_y0, left_x1, last_row_y1)
         AUDIO_MUTE_BOX = (right_x0, last_row_y0, right_x1, last_row_y1)
@@ -6255,9 +6253,9 @@ class SharedState:
             self.deemphasis = int(clamp(int(self.deemphasis), 0, 2))
             self.nb_algo = int(clamp(int(self.nb_algo), 0, 2))
             self.nr_algo = int(clamp(int(self.nr_algo), 0, 3))
-            self.denoise_level = int(clamp(int(self.denoise_level), 0, len(kiwi.DENOISE_PRESETS) - 1))
+            self.denoise_level = kiwi.denoise_level(self.denoise_level)
             if "voice_clean_level" in changes:
-                self.voice_clean_level = int(clamp(int(self.voice_clean_level), 0, len(VOICE_CLEAN_PRESETS) - 1))
+                self.voice_clean_level = normalize_voice_clean_level(self.voice_clean_level)
             elif "voice_clean_enabled" in changes:
                 self.voice_clean_level = 2 if bool(self.voice_clean_enabled) else 0
             if "hf_enhance_level" in changes:
@@ -10001,17 +9999,81 @@ def waterfall_ceiling_at_x(x, floor):
 
 
 def audio_denoise_level_at_x(x):
-    """Snap a finger position to the evenly spaced Denoise detents."""
     x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
-    fraction = clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
-    return min(
-        range(len(DENOISE_SLIDER_POSITIONS)),
-        key=lambda index: abs(DENOISE_SLIDER_POSITIONS[index] - fraction),
-    )
+    return kiwi.denoise_level((x - x0) / max(1, x1 - x0) * kiwi.DENOISE_MAX)
+
+
+def denoise_label(level):
+    level = kiwi.denoise_level(level)
+    return "OFF" if level == 0 else ("MAX" if level == kiwi.DENOISE_MAX
+                                    else f"{max(1, min(99, round(level / kiwi.DENOISE_MAX * 100)))}%")
+
+
+def apply_audio_slider(state, gesture, x):
+    if gesture == "audio_denoise_level":
+        return state.set_audio_controls(
+            nr_algo=1, denoise_level=audio_denoise_level_at_x(x),
+            voice_clean_level=0, hf_enhance_level=0,
+        )
+    if gesture == "audio_voice_level":
+        return state.set_audio_controls(voice_clean_level=audio_voice_level_at_x(x))
+    if gesture == "audio_squelch_level":
+        return state.set_audio_controls(squelch_level=audio_squelch_at_x(
+            x, squelch_maximum(state.radio_snapshot()[0]),
+        ))
+
+
+def normalize_voice_clean_level(level):
+    try:
+        level = float(level)
+    except (TypeError, ValueError):
+        return 0.0
+    return clamp(level, 0.0, VOICE_CLEAN_MAX) if math.isfinite(level) else 0.0
+
+
+def voice_clean_mix(level):
+    """Smooth blend with exactly the same legacy MED and STR endpoints."""
+    level = normalize_voice_clean_level(level)
+    return 0.75 * level if level <= 1.0 else 0.75 + 0.25 * (level - 1.0)
+
+
+def voice_clean_label(level):
+    level = normalize_voice_clean_level(level)
+    if level <= 0:
+        return "OFF"
+    if level >= VOICE_CLEAN_MAX:
+        return "STR"
+    return f"{max(1, min(99, round(level / VOICE_CLEAN_MAX * 100)))}%"
+
+
+def audio_voice_level_at_x(x):
+    x0, _y0, x1, _y1 = AUDIO_VOICE_CLEAN_BOX
+    # Match the full-width track drawn in both the rail and desktop panel.
+    return normalize_voice_clean_level((x - x0) / max(1, x1 - x0) * VOICE_CLEAN_MAX)
+
+
+def restore_voice_clean_profile(controls, profile):
+    controls = dict(controls)
+    # Before separate HF/Voice controls, level 3 selected the HF model.
+    if profile < 3 and controls.get("voice_clean_level", 0) == 3:
+        controls["voice_clean_level"] = 0
+        controls["hf_enhance_level"] = 1
+    elif profile not in (2, 3, 4) and controls.get("voice_clean_level", 0):
+        controls["voice_clean_level"] = 1
+    return controls
+
+
+def remote_audio_controls_key(controls):
+    """Local blend changes must not resend Kiwi's full SND configuration."""
+    local = {"voice_clean_level", "tone_profile"}
+    return tuple(sorted((name, value) for name, value in controls.items() if name not in local))
 
 
 def denoise_makeup_gain_db(level):
-    return DENOISE_MAKEUP_GAIN_DB[int(clamp(level, 0, len(DENOISE_MAKEUP_GAIN_DB) - 1))]
+    level = kiwi.denoise_level(level)
+    lower = int(level)
+    upper = min(lower + 1, len(DENOISE_MAKEUP_GAIN_DB) - 1)
+    return DENOISE_MAKEUP_GAIN_DB[lower] + (DENOISE_MAKEUP_GAIN_DB[upper] - DENOISE_MAKEUP_GAIN_DB[lower]) * (level - lower)
 
 
 def apply_denoise_makeup_gain(audio, gain_db):
@@ -11483,12 +11545,7 @@ def asr_caption_worker(stop_event, state, audio_queue):
 
 def rnnoise_voice_mode(radio_mode):
     """RNNoise is a speech enhancer, not a useful DSP stage for digital/IQ."""
-    return str(radio_mode).lower() in (
-        "am", "amn", "amw",
-        "sam", "sau", "sal", "sas", "qam",
-        "lsb", "lsn", "usb", "usn",
-        "nbfm", "nnfm",
-    )
+    return str(radio_mode).lower() in kiwi.VOICE_AUDIO_MODES
 
 
 def audio_option_at(x, y):
@@ -11648,7 +11705,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
 
     muted = controls["mute"]
-    voice_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
+    voice_level = normalize_voice_clean_level(controls.get("voice_clean_level", 0))
     hf_level = int(clamp(controls.get("hf_enhance_level", 0), 0, len(HF_ENHANCE_PRESETS) - 1))
     tone_profile = int(clamp(controls.get("tone_profile", 0), 0, len(TONE_PRESETS) - 1))
     hf_active = hf_level > 0
@@ -11656,10 +11713,14 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     sq_maximum = squelch_maximum(radio_mode)
     agc_detail = "AUTO" if controls["agc"] and not controls["agc_hang"] else ("HANG" if controls["agc"] else "MANUAL")
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
-    denoise_level = int(controls["denoise_level"])
-    denoise_detail = "BYPASS" if voice_level or hf_active else kiwi.DENOISE_PRESETS[denoise_level][0]
+    denoise_level = kiwi.denoise_level(controls["denoise_level"])
+    denoise_detail = "BYPASS" if voice_level or hf_active else denoise_label(denoise_level)
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
-    draw_lcd_audio_tile(text_cache, AUDIO_VOICE_CLEAN_BOX, "VOICE", VOICE_CLEAN_PRESETS[voice_level], voice_level > 0, (123, 193, 250, 230))
+    draw_lcd_audio_slider_tile(
+        text_cache, AUDIO_VOICE_CLEAN_BOX, "Voice (RNNoise)", voice_level,
+        VOICE_CLEAN_MAX, voice_clean_label(voice_level), voice_level > 0,
+        full_width=True,
+    )
     draw_lcd_audio_tile(text_cache, AUDIO_HF_ENHANCE_BOX, "HF ENH", HF_ENHANCE_PRESETS[hf_level], hf_active, (93, 226, 170, 230))
     draw_lcd_audio_slider_tile(
         text_cache, AUDIO_SQUELCH_BOX, "SQUELCH", sq, sq_maximum,
@@ -11670,9 +11731,8 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
     draw_lcd_audio_tile(text_cache, AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
     draw_lcd_audio_slider_tile(
         text_cache, AUDIO_DENOISE_BOX, "DENOISE", denoise_level,
-        len(DENOISE_SLIDER_POSITIONS) - 1, denoise_detail,
+        kiwi.DENOISE_MAX, denoise_detail,
         denoise_level > 0 and not (voice_level or hf_active),
-        steps=len(DENOISE_SLIDER_POSITIONS),
         full_width=True,
     )
     draw_lcd_audio_tile(text_cache, AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
@@ -11744,41 +11804,21 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, themed_instrument_color("slider_thumb", (229, 246, 246, 245)))
 
     def denoise_slider(box, level, bypassed=False):
-        bx0, by0, bx1, by1 = box
-        level = int(clamp(level, 0, len(kiwi.DENOISE_PRESETS) - 1))
-        active = level > 0 and not bypassed
-        draw_logical_rect(bx0, by0, bx1, by1, themed_instrument_color("active_surface", (24, 63, 57, 224)) if active else themed_instrument_color("section_surface", (18, 29, 38, 220)))
-        line = (themed_instrument_color("slider_marker", (93, 235, 174, 184)) if active
-                else themed_instrument_color("section_border", (115, 140, 151, 82)))
-        for line_y in (by0, by1):
-            draw_logical_line(bx0, line_y, bx1, line_y, line, 1)
-        draw_logical_line(bx0, by0, bx0, by1, line, 1)
-        draw_logical_line(bx1, by0, bx1, by1, line, 1)
-        label_y = by0 + (19 if LCD_800_MODE else 16)
-        draw_text(text_cache, bx0 + 14, label_y, "DENOISE", themed_instrument_color("section_heading", (230, 246, 247)), 16 if LCD_800_MODE else 14, True, True, "lm", family="Liberation Sans")
-        label = "BYPASS" if bypassed else kiwi.DENOISE_PRESETS[level][0]
-        draw_text(text_cache, bx1 - 14, label_y, label, themed_instrument_color("slider_fill", (112, 235, 175))[:3] if active else themed_instrument_color("secondary_text", (153, 185, 191)), 15 if LCD_800_MODE else 14, True, True, "rm", family="Liberation Sans")
-        track_x0, track_x1 = bx0 + 14, bx1 - 14
-        denoise_track_y = by1 - (18 if LCD_800_MODE else 15)
-        draw_logical_rect(track_x0, denoise_track_y - 3, track_x1, denoise_track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
-        current_x = track_x0 + (track_x1 - track_x0) * DENOISE_SLIDER_POSITIONS[level]
-        draw_logical_rect(track_x0, denoise_track_y - 3, current_x, denoise_track_y + 3, themed_instrument_color("slider_fill", (80, 226, 164, 235)))
-        for index, position in enumerate(DENOISE_SLIDER_POSITIONS):
-            marker_x = track_x0 + (track_x1 - track_x0) * position
-            marker_color = themed_instrument_color("slider_marker", (112, 238, 177, 230)) if index <= level else themed_instrument_color("slider_track", (107, 139, 147, 128))
-            draw_logical_line(marker_x, denoise_track_y - 5, marker_x, denoise_track_y + 5, marker_color, 1)
-        draw_logical_rect(current_x - 6, denoise_track_y - 10, current_x + 6, denoise_track_y + 10, themed_instrument_color("slider_thumb", (229, 246, 246, 255)))
+        level = kiwi.denoise_level(level)
+        draw_lcd_audio_slider_tile(
+            text_cache, box, "DENOISE", level, kiwi.DENOISE_MAX,
+            "BYPASS" if bypassed else denoise_label(level), level > 0 and not bypassed,
+            full_width=True,
+        )
 
     muted = controls["mute"]
     panel_button(AUDIO_MUTE_BOX, "MUTE", "ON" if muted else "OFF", muted, MUTE_ACCENT_ALPHA)
-    voice_clean_level = int(clamp(controls.get("voice_clean_level", 0), 0, len(VOICE_CLEAN_PRESETS) - 1))
+    voice_clean_level = normalize_voice_clean_level(controls.get("voice_clean_level", 0))
     voice_clean = voice_clean_level > 0
-    panel_button(
-        AUDIO_VOICE_CLEAN_BOX,
-        "VOICE",
-        VOICE_CLEAN_PRESETS[voice_clean_level],
-        voice_clean,
-        (123, 193, 250, 230),
+    draw_lcd_audio_slider_tile(
+        text_cache, AUDIO_VOICE_CLEAN_BOX, "Voice (RNNoise)", voice_clean_level,
+        VOICE_CLEAN_MAX, voice_clean_label(voice_clean_level), voice_clean,
+        full_width=True,
     )
     hf_enhance_level = int(clamp(controls.get("hf_enhance_level", 0), 0, len(HF_ENHANCE_PRESETS) - 1))
     hf_active = hf_enhance_level > 0
@@ -11798,7 +11838,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     panel_button(AUDIO_AGC_BOX, "AGC", agc_detail, bool(controls["agc"]))
     blanker = ("OFF", "STANDARD", "WILD")[int(controls["nb_algo"])]
     panel_button(AUDIO_BLANKER_BOX, "BLANKER", blanker, controls["nb_algo"] > 0)
-    denoise_level = int(controls["denoise_level"])
+    denoise_level = kiwi.denoise_level(controls["denoise_level"])
     denoise_slider(AUDIO_DENOISE_BOX, denoise_level, voice_clean or hf_active)
     panel_button(AUDIO_NOTCH_BOX, "AUTO NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"])
     deemp = ("OFF", "75 uS", "50 uS")[int(controls["deemphasis"])]
@@ -20968,11 +21008,18 @@ UI_CONFIRMATION_TONE_SECONDS = 0.070
 UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS = 0.075
 _ui_confirmation_tone_last_at = 0.0
 _ui_confirmation_tone_payload = None
+VALUE_SLIDER_GESTURES = frozenset((
+    "audio_volume", "home_volume", "audio_squelch_level", "audio_denoise_level",
+    "audio_voice_level", "display_floor_slider", "display_ceiling_slider",
+    "fan_start_slider", "fan_full_slider", "fan_minimum_slider",
+    "lcd_filter_shift", "lcd_filter_width",
+))
 TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "audio_test",
     "audio_volume",
     "home_volume",
     "audio_squelch_level",
+    "audio_voice_level",
     "audio_denoise_level",
     "display_floor_slider",
     "display_ceiling_slider",
@@ -22941,6 +22988,8 @@ def snd_meter_worker(
     seen_radio_generation = -1
     seen_server_generation = -1
     seen_audio_generation = -1
+    seen_remote_audio_controls = None
+    next_denoise_send_at = 0.0
     player = None
     player_channels = None
     player_server_generation = None
@@ -23086,9 +23135,9 @@ def snd_meter_worker(
                 else:
                     ensure_audio_player(desired_channels, server_generation)
                 audio_controls, audio_generation = state.audio_controls_snapshot()
-                voice_clean_level = int(audio_controls.get("voice_clean_level", 0))
+                voice_clean_level = normalize_voice_clean_level(audio_controls.get("voice_clean_level", 0))
                 want_voice_clean = (
-                    voice_clean_level in RNNOISE_VOICE_LEVELS
+                    voice_clean_level > 0
                     and desired_channels == 1
                     and rnnoise_voice_mode(radio_mode)
                 )
@@ -23169,6 +23218,7 @@ def snd_meter_worker(
                     seen_view_generation = view_generation
                     seen_radio_generation = radio_generation
                     seen_audio_generation = audio_generation
+                    seen_remote_audio_controls = remote_audio_controls_key(audio_controls)
                     next_view_send_at = now_monotonic + live_tune_interval
 
                 # Receiving PCM does not refresh Kiwi's *client* protocol
@@ -23218,6 +23268,7 @@ def snd_meter_worker(
                         seen_view_generation = view_generation
                         seen_radio_generation = radio_generation
                         seen_audio_generation = audio_generation
+                        seen_remote_audio_controls = remote_audio_controls_key(audio_controls)
                         next_view_send_at = time.monotonic() + live_tune_interval
                         print(
                             f"gl snd setup mode={radio_mode} carrier={snd_freq_khz:.3f} view={freq_khz:.3f}",
@@ -23225,8 +23276,17 @@ def snd_meter_worker(
                         )
                     continue
                 if configured and audio_generation != seen_audio_generation:
-                    kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut, audio_controls)
-                    seen_audio_generation = audio_generation
+                    remote_controls = remote_audio_controls_key(audio_controls)
+                    previous_controls = dict(seen_remote_audio_controls or ())
+                    changed_controls = {key for key, value in remote_controls
+                                        if previous_controls.get(key) != value}
+                    strength_only = changed_controls <= {"denoise_level"} and audio_controls.get("denoise_level", 0) > 0
+                    if not strength_only or time.monotonic() >= next_denoise_send_at:
+                        if remote_controls != seen_remote_audio_controls:
+                            kiwi.send_snd_setup(ws, snd_carrier_khz(freq_khz, low_cut, high_cut), radio_mode, low_cut, high_cut, audio_controls)
+                            seen_remote_audio_controls = remote_controls
+                            next_denoise_send_at = time.monotonic() + 0.12
+                        seen_audio_generation = audio_generation
                 if message[:3] != b"SND" or len(message) < 10:
                     continue
                 if retry_failures:
@@ -23278,10 +23338,11 @@ def snd_meter_worker(
                             if packet_is_stereo else raw_audio
                         )
                         dual_matcher.submit(dual_source, match_audio, silence=squelched)
-                    denoise_level = int(audio_controls.get("denoise_level", 0))
+                    denoise_level = kiwi.denoise_level(audio_controls.get("denoise_level", 0))
                     if voice_cleaner is not None:
-                        voice_level = int(clamp(audio_controls.get("voice_clean_level", 2), 0, len(VOICE_CLEAN_MIX) - 1))
-                        listening_audio = voice_cleaner.process_pcm(raw_audio, mix=VOICE_CLEAN_MIX[voice_level])
+                        listening_audio = voice_cleaner.process_pcm(
+                            raw_audio, mix=voice_clean_mix(audio_controls.get("voice_clean_level", 2)),
+                        )
                     elif hf_enhancer is not None:
                         listening_audio = hf_enhancer.process_pcm(raw_audio)
                     elif denoise_level > 0:
@@ -23897,13 +23958,7 @@ def main():
                 }
             }
             profile = int(audio_preferences.get("voice_clean_profile", 0) or 0)
-            # A prior HF Enhance setting lived as the fourth Voice choice.
-            # Migrate it to Epoch 1 so it remains an intentional choice.
-            if profile < 3 and restored_audio.get("voice_clean_level", 0) == 3:
-                restored_audio["voice_clean_level"] = 0
-                restored_audio["hf_enhance_level"] = 1
-            elif profile != 2 and restored_audio.get("voice_clean_level", 0):
-                restored_audio["voice_clean_level"] = 1
+            restored_audio = restore_voice_clean_profile(restored_audio, profile)
             state.set_audio_controls(**restored_audio)
     instrument_layout = normalize_frequency_position(
         remembered_preferences.get("instrument_layout", visible_frequency_position("right"))
@@ -24749,6 +24804,7 @@ def main():
     }
     active = False
     raw_x = raw_y = None
+    slider_last_point = None
     current_slot = 0
     mt_slots = {}
     touch_started = False
@@ -24816,7 +24872,7 @@ def main():
                 "voice_clean_level": audio_controls["voice_clean_level"],
                 "hf_enhance_level": audio_controls["hf_enhance_level"],
                 "tone_profile": audio_controls["tone_profile"],
-                "voice_clean_profile": 3,
+                "voice_clean_profile": 4,
                 "autonotch_enabled": audio_controls["autonotch"],
             },
             "audio_volume": None if audio_volume is None else round(float(audio_volume), 3),
@@ -26830,6 +26886,16 @@ def main():
                     if rail_relocation_active() and not is_active and raw_x is not None:
                         x = theme_system.display_to_logical_x(x)
 
+                    if touch_started and gesture in VALUE_SLIDER_GESTURES:
+                        if is_active and len(points) != 1:
+                            continue
+                        if not is_active and slider_last_point is not None:
+                            # MT movement is authoritative. Legacy ABS_X/Y can
+                            # still contain the down point when the finger lifts.
+                            x, y = slider_last_point
+                    if is_active and len(points) == 1:
+                        slider_last_point = (x, y)
+
                     if usb_notice_touch.handle(is_active,x,y,usb_popup,args.tap_px,touch_started):
                         touch_started=False;gesture=None
                         set_ui_press_point(x,y) if is_active else set_ui_press_point()
@@ -27284,6 +27350,8 @@ def main():
                                     gesture = "audio_volume"
                                 elif contains(AUDIO_SQUELCH_BOX, x, y):
                                     gesture = "audio_squelch_level"
+                                elif contains(AUDIO_VOICE_CLEAN_BOX, x, y):
+                                    gesture = "audio_voice_level"
                                 elif contains(AUDIO_DENOISE_BOX, x, y):
                                     gesture = "audio_denoise_level"
                                 else:
@@ -27354,6 +27422,8 @@ def main():
                                 gesture = "audio_volume"
                             elif audio_panel_open and contains(AUDIO_SQUELCH_BOX, x, y):
                                 gesture = "audio_squelch_level"
+                            elif audio_panel_open and contains(AUDIO_VOICE_CLEAN_BOX, x, y):
+                                gesture = "audio_voice_level"
                             elif audio_panel_open and contains(AUDIO_DENOISE_BOX, x, y):
                                 gesture = "audio_denoise_level"
                             elif audio_panel_open and audio_option_at(x, y) is not None:
@@ -27473,6 +27543,8 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                            if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level"):
+                                apply_audio_slider(state, gesture, x)
                         elif scope_drag_eligible and (
                             gesture == "scope_hold_drag"
                             or (
@@ -27543,6 +27615,8 @@ def main():
                             state.set_audio_controls(
                                 squelch_level=audio_squelch_at_x(x, squelch_maximum(current_radio_mode))
                             )
+                        elif gesture == "audio_voice_level":
+                            state.set_audio_controls(voice_clean_level=audio_voice_level_at_x(x))
                         elif gesture == "audio_denoise_level":
                             state.set_audio_controls(
                                 nr_algo=1,
@@ -28146,6 +28220,9 @@ def main():
                                 squelch_level=audio_squelch_at_x(x, squelch_maximum(current_radio_mode))
                             )
                             wake_controls()
+                        elif touch_started and gesture == "audio_voice_level":
+                            state.set_audio_controls(voice_clean_level=audio_voice_level_at_x(x))
+                            wake_controls()
                         elif touch_started and gesture == "audio_denoise_level":
                             state.set_audio_controls(
                                 nr_algo=1,
@@ -28178,9 +28255,6 @@ def main():
                                     audio_panel_open = False
                                 elif choice == "mute":
                                     set_main_mute(not controls["mute"])
-                                elif choice == "voice_clean":
-                                    next_level = (int(controls.get("voice_clean_level", 0)) + 1) % len(VOICE_CLEAN_PRESETS)
-                                    state.set_audio_controls(voice_clean_level=next_level, hf_enhance_level=0)
                                 elif choice == "hf_enhance":
                                     available_levels = [0] + [index for index in range(1, len(HF_ENHANCE_MODELS)) if hf_enhance_available(index)]
                                     current_level = int(controls.get("hf_enhance_level", 0))
@@ -29982,6 +30056,7 @@ def main():
                         filter_drag_audio_center = 0.0
                         filter_drag_limit = FILTER_LIMIT_HZ
                         start_x = start_freq = start_view_center_khz = last_x = None
+                        slider_last_point = None
 
             now = time.monotonic()
             # The drawer shares its logical bounds with hit-testing. Update
