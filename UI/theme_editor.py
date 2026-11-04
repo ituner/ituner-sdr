@@ -5,7 +5,7 @@ import math
 import time
 
 from smeter_styles import METER_STYLES
-from theme_colors import shade_grid, transparency_percent, with_transparency
+from theme_colors import transparency_percent, with_transparency
 from theme_system import (BUILTIN_THEME_IDS, COLOR_NAMES, DEFAULT_THEME_ID,
                           TEXT_SCALE_MIN, TEXT_SCALE_MAX, is_builtin_theme_id,
                           normalize_theme, theme_appearance)
@@ -95,7 +95,9 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
         boxes.update({"appearance": (660, 112, 856, 164),
                       "group_previous": (660, 184, 724, 240), "group_next": (1192, 184, 1256, 240),
                       "part_previous": (660, 396, 852, 440), "part_next": (1064, 396, 1256, 440),
-                      "hue": (660, 472, 1256, 520),
+                      "hue": (660, 472, 1256, 512),
+                      "saturation": (660, 540, 1256, 580),
+                      "intensity": (660, 608, 1256, 648),
                       "hex_open": (660, 656, 952, 712)})
         keys = editor.family_keys
         for slot in range(4):
@@ -103,9 +105,6 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             if index < len(keys):
                 x, y = 660 + (slot % 2) * 304, 260 + (slot // 2) * 64
                 boxes[f"part:{index}"] = (x, y, x + 292, y + 56)
-        for index in range(16):
-            x, y = 660 + (index % 8) * 76, 540 + (index // 8) * 52
-            boxes[f"shade:{index}"] = (x, y, x + 64, y + 44)
         if len(editor.current_color) == 4:
             boxes["alpha_open"] = (964, 656, 1256, 712)
     else:
@@ -274,17 +273,26 @@ class ThemeEditor:
         return True
 
     def _sync_hue(self):
-        self.hue = colorsys.rgb_to_hsv(*(value / 255 for value in self.current_color[:3]))[0]
+        self.hue, self.saturation, self.intensity = colorsys.rgb_to_hsv(
+            *(value / 255 for value in self.current_color[:3]))
 
-    def set_hue(self, x):
-        box = theme_screen_boxes(self).get("hue")
+    def set_color_component(self, component, x):
+        box = theme_screen_boxes(self).get(component)
         if box:
-            self.hue = max(0, min(1, (x - box[0]) / (box[2] - box[0])))
-            self.draft["colors"][self.color_key] = [*shade_grid(self.hue)[10], *self.current_color[3:]]
+            value = max(0, min(1, (x - box[0]) / (box[2] - box[0])))
+            setattr(self, component, value)
+            rgb = [round(channel * 255) for channel in
+                   colorsys.hsv_to_rgb(self.hue, self.saturation, self.intensity)]
+            self.draft["colors"][self.color_key] = [*rgb, *self.current_color[3:]]
 
-    def drag(self, x, y):
+    def drag(self, x, y, *, started_at=None):
         if self.open and self.colors_open and not self.overlay:
-            self.set_hue(x)
+            origin = started_at or (x, y)
+            for component in ("hue", "saturation", "intensity"):
+                box = theme_screen_boxes(self).get(component)
+                if box and contains(box, *origin):
+                    self.set_color_component(component, x)
+                    break
 
     def _key(self, value):
         if self.overlay == "name":
@@ -307,6 +315,7 @@ class ThemeEditor:
                         raise ValueError("Enter 6 or 8 hex digits")
                     rgb = list(bytes.fromhex(self.buffer))
                     self.draft["colors"][self.color_key] = rgb + self.current_color[3:] if len(rgb) == 3 else rgb[:len(self.current_color)]
+                    self._sync_hue()
                 else:
                     self.draft["colors"][self.color_key] = with_transparency(self.current_color, int(self.buffer))
             except ValueError as error:
@@ -405,10 +414,8 @@ class ThemeEditor:
             self._sync_hue()
         elif action in ("part_previous", "part_next"):
             self.part_page = max(0, min((len(self.family_keys) - 1) // 4, self.part_page + (-1 if action.endswith("previous") else 1)))
-        elif action == "hue":
-            self.set_hue(x)
-        elif action.startswith("shade:"):
-            self.draft["colors"][self.color_key] = [*shade_grid(self.hue)[int(action.split(":")[1])], *self.current_color[3:]]
+        elif action in ("hue", "saturation", "intensity"):
+            self.set_color_component(action, x)
         elif action == "hex_open":
             self.overlay, self.buffer, self.pristine = "hex", "".join(f"{v:02X}" for v in self.current_color), True
         elif action == "alpha_open":
