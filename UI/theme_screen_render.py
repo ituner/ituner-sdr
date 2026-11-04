@@ -3,7 +3,7 @@ import colorsys
 
 import theme_system
 from smeter_styles import METER_STYLES
-from theme_colors import shade_grid, transparency_percent
+from theme_colors import transparency_percent
 from theme_editor import (APPLY_BOX, BACK_BOX, COLOR_GROUPS, METER_FILTERS,
                           PREVIEW_BOX, FULLSCREEN_BOX, CONTINUE_BOX, FULLSCREEN_SAVE_BOX,
                           CARDS_PER_PAGE, METER_CARDS_PER_PAGE, theme_screen_boxes)
@@ -116,16 +116,26 @@ def _customize(ui, cache, editor, boxes):
         _button(ui, cache, boxes["part_previous"], "PREVIOUS", enabled=editor.part_page > 0)
         _button(ui, cache, boxes["part_next"], "NEXT", enabled=editor.part_page + 1 < count)
         _text(ui, cache, 996, 418, f"{editor.part_page + 1} / {count}", palette.secondary_text, 13, "cm")
-        _text(ui, cache, 736, 454, "HUE", palette.secondary_text, 12)
-        hue = boxes["hue"]
-        for index in range(96):
-            x = hue[0] + index * (hue[2] - hue[0]) / 96
-            rgb = tuple(round(v * 255) for v in colorsys.hsv_to_rgb(index / 96, 1, 1))
-            ui.draw_logical_rect(x, hue[1], x + (hue[2] - hue[0]) / 96 + 1, hue[3], rgb)
-        for name, box in boxes.items():
-            if name.startswith("shade:"):
-                color = shade_grid(editor.hue)[int(name.split(":")[1])]
-                ui.draw_logical_rounded_rect(*box, ui.APP_UI_STYLE.button.radius, color, palette.border)
+        for component, label in (("hue", "HUE"), ("saturation", "SATURATION · 0% = GRAY"),
+                                 ("intensity", "INTENSITY · DARK TO LIGHT")):
+            box = boxes[component]
+            value = getattr(editor, component)
+            _text(ui, cache, box[0], box[1]-14, label, palette.secondary_text, 12)
+            _text(ui, cache, box[2], box[1]-14, f"{round(value*100)}%", palette.text, 12, "rm")
+            for index in range(96):
+                hsv = [editor.hue, editor.saturation, editor.intensity]
+                if component == "hue":
+                    hsv = [index/95, 1, 1]
+                else:
+                    hsv[1 if component == "saturation" else 2] = index/95
+                rgb = tuple(round(v*255) for v in colorsys.hsv_to_rgb(*hsv))
+                x = box[0]+index*(box[2]-box[0])/96
+                ui.draw_logical_rect(x, box[1], min(box[2], x+(box[2]-box[0])/96+1), box[3], rgb)
+            marker = box[0]+value*(box[2]-box[0])
+            # A two-tone cursor remains visible at both gradient endpoints.
+            marker = max(box[0]+3, min(box[2]-3, marker))
+            ui.draw_logical_rect(marker-3, box[1], marker+3, box[3], (0,0,0,255))
+            ui.draw_logical_rect(marker-1, box[1], marker+1, box[3], (255,255,255,255))
         _button(ui, cache, boxes["hex_open"], "#" + "".join(f"{v:02X}" for v in editor.current_color[:3]))
         if "alpha_open" in boxes:
             _button(ui, cache, boxes["alpha_open"], f"TRANSPARENCY {transparency_percent(editor.current_color)}%")

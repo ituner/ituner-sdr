@@ -27562,9 +27562,7 @@ def main():
                         elif gesture == "fan_minimum_slider":
                             adjust_fan_curve_slider(fan_curve, "minimum", x)
                         elif gesture == "theme":
-                            hue_box = theme_screen_boxes(theme_editor).get("hue")
-                            if hue_box and contains(hue_box, start_x, start_y):
-                                theme_editor.drag(x, y)
+                            theme_editor.drag(x, y, started_at=(start_x, start_y))
                         elif gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
                             state.set_waterfall(
@@ -29266,10 +29264,8 @@ def main():
                                 if not theme_editor.open:
                                     restore_navigation_parent(theme_editor.exit_surface)
                             else:
-                                hue_box = theme_screen_boxes(theme_editor).get("hue")
-                                if hue_box and contains(hue_box, start_x, start_y):
-                                    theme_editor.drag(x, y)
-                                    refresh_receiver_list_theme()
+                                theme_editor.drag(x, y, started_at=(start_x, start_y))
+                                refresh_receiver_list_theme()
                             wake_controls()
                         elif touch_started and gesture == "lcd_nav":
                             moved = max(abs(x - start_x), abs(y - start_y))
