@@ -32,6 +32,42 @@ class ThemeEditorTests(unittest.TestCase):
         apply_theme(DEFAULT_THEME)
         self.directory.cleanup()
 
+    def test_intensity_and_saturation_allow_gray_preserve_alpha_and_restore_black(self):
+        self.tap('tab:customize')
+        self.tap('colors')
+        self.editor.draft['colors'][self.editor.color_key] = [160, 80, 40, 123]
+        self.editor._sync_hue()
+        boxes = theme_screen_boxes(self.editor)
+        def set_to(name, fraction):
+            box = boxes[name]
+            self.editor.tap(box[0]+fraction*(box[2]-box[0]), (box[1]+box[3])/2)
+        set_to('saturation', 0)
+        set_to('intensity', .25)
+        self.assertEqual(self.editor.current_color, [64, 64, 64, 123])
+        set_to('intensity', 0)
+        self.assertEqual(self.editor.current_color, [0, 0, 0, 123])
+        box = boxes['intensity']
+        self.editor.drag(box[2]+20, box[3]+100, started_at=(box[0]+2, box[1]+2))
+        self.assertEqual(self.editor.current_color, [255, 255, 255, 123])
+        set_to('intensity', .4)
+        set_to('saturation', .5)
+        before = self.editor.current_color[:]
+        set_to('hue', .5)
+        self.assertEqual(self.editor.intensity, .4)
+        self.assertEqual(self.editor.saturation, .5)
+        self.assertEqual(self.editor.current_color[3], 123)
+        self.assertNotEqual(before, self.editor.current_color)
+
+    def test_color_sliders_do_not_overlap_other_controls(self):
+        self.tap('tab:customize')
+        self.tap('colors')
+        boxes = theme_screen_boxes(self.editor)
+        for name in ('hue', 'saturation', 'intensity'):
+            a = boxes[name]
+            for other, b in boxes.items():
+                if name != other:
+                    self.assertFalse(a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1], (name, other))
+
     def tap(self, action):
         if action.startswith(('theme:', 'meter:')):
             prefix, identifier = action.split(':', 1)

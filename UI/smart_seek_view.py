@@ -594,6 +594,7 @@ class SmartSeekView:
 
     def draw_waterfall(self, cache, box, ink):
         ui = self.ui
+        palette = ui.APP_UI_STYLE.palette
         generation, rows, center, span, updated = self.state.take_seek_waterfall()
         if generation != self.waterfall_generation:
             if self.waterfall_texture is not None:
@@ -612,23 +613,24 @@ class SmartSeekView:
             image = ui.kiwi.waterfall_line(samples, self.waterfall_mapper, low, high, width=512)
             self.waterfall_texture.push_rgba(image.convert('RGBA').tobytes())
         x0, y0, x1, y1 = box
-        ui.draw_logical_rect(x0, y0, x1, y1, (4, 12, 18, 255))
+        ui.draw_logical_rect(x0, y0, x1, y1, palette.spectrum_field)
         self.waterfall_texture.draw(x0, y0, x1, y1-18, visible_fraction=1)
         fresh = updated is not None and time.monotonic()-updated < 2
         label = 'LIVE' if fresh else 'Waiting for waterfall…'
-        ink(x0+6, y0+9, label, 14, (101, 223, 194), max_width=x1-x0-12)
+        ink(x0+6, y0+9, label, 14, palette.ready, max_width=x1-x0-12)
         marker = (x0+x1)/2
-        ui.draw_logical_line(marker, y0, marker, y1-18, (255, 209, 94), 1)
+        ui.draw_logical_line(marker, y0, marker, y1-18, palette.passband_center, 1)
         # The marker is the received tuning frequency, not a rounded schedule channel.
         tick = 10 if span > 60 else 5
         for frequency in range(int((center-span/2)//tick)*tick, int(center+span/2)+1, tick):
             px = x0+(frequency-center+span/2)/span*(x1-x0)
             if x0+23 < px < x1-23 and abs(px-marker) > 43:
-                ink(px-18, y1-8, str(frequency), 12, (146, 166, 179))
-        ink(marker-37, y1-8, f'{center:.1f} kHz', 12, (255, 209, 94))
+                ink(px-18, y1-8, str(frequency), 12, palette.secondary_text)
+        ink(marker-37, y1-8, f'{center:.1f} kHz', 12, palette.passband_center)
 
     def draw(self, cache):
         ui = self.ui
+        palette = ui.APP_UI_STYLE.palette
         snapshot = self.state.smart_seek_snapshot()
         if not snapshot['open']:
             return
@@ -642,23 +644,27 @@ class SmartSeekView:
                                    self.search_text,self.keyboard_mode,submit='Search',
                                    placeholder='e.g. Romania',rail_title='SMART SCAN')
             return
-        ui.draw_logical_rect(0, 0, width, bottom, (0, 0, 0, 255))
+        ui.draw_logical_rect(0, 0, width, bottom, palette.background)
         dim_row = False
+        row_text = None
 
-        def ink(x, y, text, size=20, color=(205, 221, 229), max_width=None, bold=None):
+        def ink(x, y, text, size=20, color=None, max_width=None, bold=None):
+            color = (row_text or palette.text) if color is None else color
             if dim_row:
-                color = tuple(round(channel*.5) for channel in color[:3])
+                # Blend toward this theme's surface, including in light themes.
+                color = tuple(round((channel+background)/2) for channel,background
+                              in zip(color[:3], palette.surface[:3]))
             weight = size >= 22 if bold is None else bool(bold)
             if max_width:
-                text = ui.fit_station_text(cache, text, max_width, size, weight, False, family='Liberation Sans')
-            ui.draw_text(cache, x, y, text, color, size, weight, False, 'lm', family='Liberation Sans')
+                text = ui.fit_station_text(cache, text, max_width, size, weight, False, family=ui.APP_UI_STYLE.button.font_family)
+            ui.draw_text(cache, x, y, text, color, size, weight, False, 'lm', family=ui.APP_UI_STYLE.button.font_family)
 
         def button(box, label, action, active=False):
             style = ui.APP_UI_STYLE.button
             ui.draw_styled_text_button(cache,box,label,active=active,style=style)
             if action == ('tool_preview','Record'):
                 cx,cy = (box[0]+box[2])/2,(box[1]+box[3])/2
-                ui.draw_logical_circle(cx,cy+16,6,(235,55,65,255))
+                ui.draw_logical_circle(cx,cy+16,6,palette.danger_border)
             self.actions.append((box, action))
 
         if self.research_frequency is not None:
@@ -670,7 +676,7 @@ class SmartSeekView:
             style = replace(style,palette=replace(style.palette,surface=(0,0,0,0),border=(0,0,0,0)))
             ui.draw_styled_button_frame(title,style=style)
             self.actions.append((title,('long_setup',None)))
-        ink(20, 31, 'SMART SCAN', 26, (101, 223, 194))
+        ink(20, 31, 'SMART SCAN', 26, palette.section_heading)
         waterfall = snapshot.get('waterfall', False)
         back = self.back_box()
         button(back, 'BACK', ('close', None))
@@ -711,40 +717,40 @@ class SmartSeekView:
                 box = (x, y, x+card_width, y+row_height)
                 row_y += row_height+gap
                 selected = candidate.frequency_khz == snapshot['selected']
-                ui.draw_styled_button_frame(box, active=selected,
+                visual = ui.draw_styled_button_frame(box, active=selected,
                                             pressed=not self.drag_scroll and self.press_action==('tune',candidate.frequency_khz)
                                             and ui.ui_button_pressed(box))
-                ui.draw_logical_rect(x+2,y+2,x+meta_left-8,y+row_height-2,(0,0,0,255))
+                row_text = visual.text
                 self.actions.append((box, ('tune', candidate.frequency_khz)))
                 matches = self.matches.get(candidate.frequency_khz)
                 displayed_frequency, approximate = station_frequency(candidate.tuning_khz,matches)
                 ink(x+12, y+20, ('≈ ' if approximate else '')+frequency_label(displayed_frequency), 22,
-                    (101, 223, 194) if playing else (205, 221, 229))
+                    palette.ready if playing else palette.text)
                 if playing:
                     centered = abs(candidate.tuning_khz-snapshot['playing_khz']) < .5
                     status = 'PLAYING' if centered else 'Tap to center'
                     if self.search_query:
                         status += ' · '+snapshot['candidate_bands'][candidate.frequency_khz]
-                    ink(x+76,y+44,status,14,(101,223,194),max_width=meta_left-80)
+                    ink(x+76,y+44,status,14,palette.ready,max_width=meta_left-80)
                 else:
                     status = snapshot['signal_status'].get(candidate.frequency_khz,'')
                     status = 'Rechecking…' if dim_row else 'AM' if status=='AM signal' else status
                     if self.search_query:
                         band = snapshot['candidate_bands'][candidate.frequency_khz]
                         status = band+(' · '+status if status else '')
-                    ink(x+76,y+44,status,14,(146,166,179),max_width=meta_left-80)
+                    ink(x+76,y+44,status,14,palette.secondary_text,max_width=meta_left-80)
                 displayed_matches = (matches or ())[:2 if playing else 4]
                 for match_index, match in enumerate(displayed_matches):
                     if preview:
                         match_x = x+meta_left
                         column_width = scope_left-meta_left-12
                         top = y+match_index*row_height/len(displayed_matches)
-                        font = cache.font(28,bold=False,family='Liberation Sans')
+                        font = cache.font(28,bold=False,family=ui.APP_UI_STYLE.button.font_family)
                         title = wrap_station_title(match.name,lambda text:font.size(text)[0],column_width-86)
                         ui.draw_country_flag(match.country,match_x,top+2,60,40,
                                              alpha=.4 if dim_row else 1)
                         if match.old_schedule:
-                            ink(match_x-14,top+22,'*',18,(210,181,119))
+                            ink(match_x-14,top+22,'*',18,palette.waiting)
                         for line,text in enumerate(title):
                             ink(match_x+76,top+22+line*28,text,28,bold=False)
                         details = station_detail_lines(match)
@@ -752,7 +758,7 @@ class SmartSeekView:
                             details = (details[0],details[1].removeprefix('Power: ')+' · '+details[2])
                         detail_top = 52 if len(title)==1 else 82
                         for line,text in enumerate(details):
-                            ink(match_x,top+detail_top+line*22,text,18,(166,190,202),
+                            ink(match_x,top+detail_top+line*22,text,18,palette.secondary_text,
                                 max_width=column_width-12)
                         continue
                     column, row = match_index % 2, match_index // 2
@@ -762,7 +768,7 @@ class SmartSeekView:
                     match_y = y+(15+row*26 if crowded else 22)
                     flag_width, flag_height = (52, 30) if crowded else (60, 40)
                     if match.old_schedule:
-                        ink(match_x-14, match_y, '*', 18, (210, 181, 119))
+                        ink(match_x-14, match_y, '*', 18, palette.waiting)
                     ui.draw_country_flag(match.country, match_x, match_y-flag_height/2,
                                          flag_width, flag_height, alpha=.4 if dim_row else 1)
                     name = match.name if len(matches) == 1 else short_station_name(match.name)
@@ -771,21 +777,21 @@ class SmartSeekView:
                     if playing:
                         details = station_detail_lines(match)
                         for line, text in enumerate(details):
-                            ink(match_x, y+52+line*22, text, 18, (166, 190, 202),
+                            ink(match_x, y+52+line*22, text, 18, palette.secondary_text,
                                 max_width=column_width-12)
                 if playing and matches and len(matches) > 2:
-                    ink(x+meta_left+190, y+details_height-10, f'+{len(matches)-2} matches', 14, (146, 166, 179), max_width=175)
+                    ink(x+meta_left+190, y+details_height-10, f'+{len(matches)-2} matches', 14, palette.secondary_text, max_width=175)
                 if playing and abs(displayed_frequency-candidate.tuning_khz) > .001:
                     ink(x+meta_left+(200 if not matches else 0),y+details_height-10,
-                        'RF '+frequency_label(candidate.tuning_khz),12,(146,166,179),max_width=175)
+                        'RF '+frequency_label(candidate.tuning_khz),12,palette.secondary_text,max_width=175)
                 if not matches:
                     classification = snapshot['signal_status'].get(candidate.frequency_khz,'')
                     label = classification if classification in ('Carrier only','Unconfirmed') else 'Unknown'
                     ink(x+meta_left, y+22, 'Checking…' if matches is None else label, 28,
-                        (146, 166, 179), bold=False)
+                        palette.secondary_text, bold=False)
                     if playing:
                         ink(x+meta_left, y+53, 'Schedule and transmitter details unavailable.', 18,
-                            (146, 166, 179), max_width=(scope_left-meta_left-12 if preview else info_width-12))
+                            palette.secondary_text, max_width=(scope_left-meta_left-12 if preview else info_width-12))
                     if matches is not None:
                         button((x+meta_left,y+68,x+meta_left+165,y+124) if playing else
                                (width-192, y, width-20, y+card_height), 'RESEARCH',
@@ -806,7 +812,7 @@ class SmartSeekView:
                     height = 6+bar*3
                     ui.draw_logical_rect(x+12+bar*10, y+49-height,
                                          x+19+bar*10, y+49,
-                                         ((45, 78, 68, 255) if dim_row else (71, 204, 164, 255)) if bar < strength else (41, 55, 63, 255))
+                                         (palette.meter_off if dim_row else palette.meter_on) if bar < strength else palette.meter_off)
         clipped = []
         for box,action in self.actions[row_action_start:]:
             hit = (max(20,box[0]),max(self.LIST_TOP,box[1]),
@@ -815,6 +821,7 @@ class SmartSeekView:
                 clipped.append((hit,action))
         self.actions[row_action_start:] = clipped
         dim_row = False
+        row_text = None
         if not candidates:
             message = ('Matching station names…' if self.pending else 'No matching stations in the scanned bands.') if self.search_query else ('Checking AM modulation…' if snapshot['active'] else 'No stations detected yet.')
             ink(32,self.LIST_TOP+80,message,24)
@@ -822,23 +829,24 @@ class SmartSeekView:
         if total_height > viewport:
             thumb_height = viewport*viewport/total_height
             top = self.LIST_TOP+(viewport-thumb_height)*self.scroll_y/(total_height-viewport)
-            ui.draw_logical_rect(width-12,top,width-7,top+thumb_height,(101,223,194,255))
+            ui.draw_logical_rect(width-12,top,width-7,top+thumb_height,palette.slider_thumb)
         if self.tool_preview is not None:
             self.draw_tool_preview(cache, ink, button)
 
     def draw_tool_preview(self, cache, ink, button):
         ui = self.ui
+        palette = ui.APP_UI_STYLE.palette
         self.actions = []
-        ui.draw_logical_rect(0,0,ui.LOGICAL_W,ui.LOGICAL_H,(0,0,0,210))
+        ui.draw_logical_rect(0,0,ui.LOGICAL_W,ui.LOGICAL_H,(*palette.background[:3],210))
         left,top = (ui.LOGICAL_W-680)/2,(ui.LOGICAL_H-280)/2
         right,bottom = left+680,top+280
         ui.draw_styled_button_frame((left,top,right,bottom))
         label = 'Text' if self.tool_preview == 'Transcribe' else 'REC'
-        ink(left+28,top+40,label+' · Preview',26,(101,223,194))
+        ink(left+28,top+40,label+' · Preview',26,palette.section_heading)
         message = ('Transcription controls will appear here.' if self.tool_preview == 'Transcribe'
                    else 'Recording controls will appear here.')
         ink(left+28,top+100,message,22,bold=False)
-        ink(left+28,top+139,'Interface preview only. Listening stays unchanged.',20,(146,166,179))
+        ink(left+28,top+139,'Interface preview only. Listening stays unchanged.',20,palette.secondary_text)
         style = ui.APP_UI_STYLE.button
         button((right-28-style.height,bottom-24-style.height,right-28,bottom-24),
                'Close',('tool_close',None))
@@ -846,6 +854,7 @@ class SmartSeekView:
     def draw_band_activity(self, cache, snapshot):
         """Direct band selection with a 90 px chart, 40% shorter than the banner."""
         ui = self.ui
+        palette = ui.APP_UI_STYLE.palette
         bands = snapshot['bands']
         if not bands:
             return
@@ -859,11 +868,11 @@ class SmartSeekView:
             box = (x0+1, top, x1-1, bottom)
             visual = ui.draw_styled_button_frame(box, active=selected)
             self.actions.append((box, ('band', label)))
-            color = visual.text if selected else (141,178,196)
+            color = visual.text if selected else palette.secondary_text
             if scanning:
                 progress = max(0,min(1,(snapshot['completed']+snapshot['window_progress'])
                                       /max(1,snapshot['total'])))
-                ui.draw_logical_rect(box[0], top-6, box[2], top-4, (49,70,81,255))
+                ui.draw_logical_rect(box[0], top-6, box[2], top-4, palette.slider_track)
                 ui.draw_logical_rect(box[0], top-6,
                                      box[0]+max(2,(box[2]-box[0])*progress), top-4, (*color[:3],255))
             ui.draw_text(cache, (x0+x1)/2, top+14, label.replace(' ', ''), visual.text,
@@ -885,8 +894,9 @@ class SmartSeekView:
 
     def draw_research(self, cache, ink, button):
         ui = self.ui
+        palette = ui.APP_UI_STYLE.palette
         self.actions = []
-        ui.draw_logical_rect(0,0,ui.LOGICAL_W,ui.LOGICAL_H,(0,0,0,255))
+        ui.draw_logical_rect(0,0,ui.LOGICAL_W,ui.LOGICAL_H,palette.background)
         future = self.research_future
         if future and future.done():
             try:
@@ -895,15 +905,15 @@ class SmartSeekView:
             except Exception:
                 self.research_rows,self.research_error = [],True
             self.research_future = None
-        ink(20,30,'POSSIBLE STATIONS',28,(101,223,194))
+        ink(20,30,'POSSIBLE STATIONS',28,palette.section_heading)
         ink(20,66,f'{self.research_frequency:,.3f} kHz · online schedule suggestions',22)
-        ink(20,94,'Listening stays unchanged · suggestions are not confirmed identities',18,(146,166,179))
+        ink(20,94,'Listening stays unchanged · suggestions are not confirmed identities',18,palette.secondary_text)
         rows = self.research_rows
         if rows is None:
             ink(28,166,'Searching online schedules…',28)
         elif not rows:
             ink(28,166,'Search unavailable.' if self.research_error else 'No online schedule matches found.',26)
-            ink(28,210,'Try again later; you can still listen to this frequency.',20,(146,166,179))
+            ink(28,210,'Try again later; you can still listen to this frequency.',20,palette.secondary_text)
         else:
             for index,row in enumerate(rows[self.research_offset:self.research_offset+6]):
                 y = 112+index*96
@@ -915,9 +925,9 @@ class SmartSeekView:
                 match = BroadcastMatch(row.get('station',''),row.get('country',''),
                     row.get('transmitter',''),row.get('power_kw',''),row.get('language',''),row.get('time',''))
                 location,power,schedule = station_detail_lines(match)
-                ink(32,y+52,location+' · '+power,19,(166,190,202),max_width=ui.LOGICAL_W-64)
+                ink(32,y+52,location+' · '+power,19,palette.secondary_text,max_width=ui.LOGICAL_W-64)
                 ink(32,y+77,schedule+' · '+row.get('source','Online schedule'),18,
-                    (146,166,179),max_width=ui.LOGICAL_W-64)
+                    palette.secondary_text,max_width=ui.LOGICAL_W-64)
         button(self.back_box(),'BACK',('research_back',None))
         if rows is not None:
             button((self.ui.LOGICAL_W-494,8,self.ui.LOGICAL_W-258,66),'SEARCH AGAIN',('research_retry',None))

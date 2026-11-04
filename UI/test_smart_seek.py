@@ -594,6 +594,40 @@ class IntegrationTests(unittest.TestCase):
         state.connection_streams = {'audio': True, 'waterfall': True}
         return state
 
+    def test_scan_and_research_follow_live_theme(self):
+        from contextlib import nullcontext
+        from copy import deepcopy
+        previous = deepcopy(ui.theme_system.runtime_theme)
+        self.addCleanup(ui.theme_system.apply_theme, previous)
+        ui.configure_output(True)
+        state = self.state()
+        state.start_smart_seek()
+        view = SmartSeekView(ui, state)
+        self.addCleanup(view.shutdown)
+        for theme_id in ('default', 'straight-inverted', 'green'):
+            ui.theme_system.apply_theme(ui.theme_system.BUILTIN_THEMES[theme_id])
+            palette = ui.APP_UI_STYLE.palette
+            for research in (False, True):
+                with self.subTest(theme=theme_id, research=research):
+                    view.research_frequency = 7300 if research else None
+                    view.research_rows = []
+                    with patch.object(view, 'list_clip', return_value=nullcontext()), \
+                         patch.object(view, '_names_for_page'), \
+                         patch.object(ui, 'draw_logical_rect') as rect, \
+                         patch.object(ui, 'draw_text') as text, \
+                         patch.object(ui, 'draw_styled_text_button'), \
+                         patch.object(ui, 'draw_styled_button_frame', return_value=ui.APP_UI_STYLE.button.resolve()):
+                        view.draw(Mock())
+                    self.assertEqual(rect.call_args_list[0].args[-1], palette.background)
+                    title = 'POSSIBLE STATIONS' if research else 'SMART SCAN'
+                    heading = next(call for call in text.call_args_list if call.args[3] == title)
+                    self.assertEqual(heading.args[4], palette.section_heading)
+                    for call in text.call_args_list:
+                        self.assertEqual(call.kwargs['family'], ui.APP_UI_STYLE.button.font_family)
+                    if research:
+                        detail = next(call for call in text.call_args_list if 'Try again later' in call.args[3])
+                        self.assertEqual(detail.args[4], palette.secondary_text)
+
     def test_visible_scan_owns_edges_and_margin_without_stealing_other_tiles(self):
         ui.configure_output(True)
         box = ui.smart_seek_waterfall_box()

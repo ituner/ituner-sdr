@@ -1,5 +1,11 @@
 # S-meter designs
 
+On **Home**, tap the S-meter to open the experimental **3 × 2 quick picker**
+over the waterfall. Tap a thumbnail to apply and save it immediately; the live
+meter changes without leaving Home. Previous/Next browse all designs. Close,
+Escape, or a tap outside dismisses the picker without changing the selection.
+The picker follows the selected theme and works with either sidebar position.
+
 Open **Display → Themes → S-Meters**. Choose a thumbnail to see that meter
 inside a complete, live Home preview. **Full-screen Preview** shows all of Home
 at normal size; **Continue Choosing** returns without saving. **Save & Home**

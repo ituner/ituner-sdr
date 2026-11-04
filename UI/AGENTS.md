@@ -58,9 +58,8 @@ field. Dedicated numeric and hexadecimal keypads may retain their existing
 purpose-specific layouts.
 
 SYSTEM is an explicit placement exception: keep its button group bottom-aligned
-8 px above the fixed BACK button. DISPLAY, AUDIO, and Wi-Fi / ETHERNET are its
-first three full-width controls, in that order. Preserve the spaces around the
-slash.
+8 px above the fixed BACK button. Its first Wi-Fi / ETHERNET control remains
+full-width; preserve the spaces around the slash.
 
 Keyboard previews must apply the chosen runtime theme before rendering; never
 present the uninitialized renderer fallback as the active theme. Keyboard
