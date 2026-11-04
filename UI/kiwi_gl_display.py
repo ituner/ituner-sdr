@@ -1198,9 +1198,9 @@ def radio_panel_box():
 
 def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Top of the tuning-step heading, below the mode family grid."""
-    rows = max(1, math.ceil(int(mode_family_count) / 2))
-    grid_height = rows * APP_UI_STYLE.button.height + (rows - 1) * APP_UI_STYLE.button.gap
-    return lcd_radio_mode_grid_y0() + grid_height + APP_UI_STYLE.button.gap
+    rows = max(1, math.ceil(int(mode_family_count) / 3))
+    grid_height = rows * 64 + (rows - 1) * 16
+    return lcd_radio_mode_grid_y0() + grid_height + 16
 
 
 def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
@@ -1230,7 +1230,7 @@ def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
 
 
 def lcd_radio_mode_grid_y0():
-    """Top of the top-justified 2×4 LCD mode-family matrix."""
+    """Top of the three-column LCD mode-family matrix."""
     # Keep all mode instruments together at the top; the lower area remains
     # intentionally quiet until the separate Back control at the bottom.
     return 80
@@ -1238,9 +1238,7 @@ def lcd_radio_mode_grid_y0():
 
 def radio_family_button_width():
     if LCD_800_MODE:
-        x0, _y0, x1, _y1 = radio_panel_box()
-        available = (x1 - 28) - (x0 + 28)
-        return (available - 14 * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
+        return 64
     available = RADIO_FAMILY_GRID_X1 - RADIO_FAMILY_GRID_X0
     return (available - RADIO_FAMILY_BUTTON_GAP * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
 
@@ -9374,11 +9372,10 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
         panel_x0, _panel_y0, panel_x1, _panel_y1 = radio_panel_box()
         grid_x0, grid_x1 = panel_x0 + 10, panel_x1 - 10
         grid_y0 = lcd_radio_mode_grid_y0()
-        gap = APP_UI_STYLE.button.gap
-        button_h = APP_UI_STYLE.button.height
-        cols = 2
-        button_w = APP_UI_STYLE.button.width
-        grid_x0 = (panel_x0 + panel_x1 - (cols * button_w + gap)) / 2
+        gap = 16
+        button_h = button_w = 64
+        cols = 3
+        grid_x0 = (panel_x0 + panel_x1 - (cols * button_w + (cols - 1)*gap)) / 2
         for index, (family, modes) in enumerate(mode_families):
             col = index % cols
             row = index // cols
@@ -9654,7 +9651,13 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     """Draw a large mode-family button without cramming its variants inside."""
     active = active_mode in modes
     detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
-    draw_styled_two_line_button(text_cache, box, family, detail, active=active)
+    style = APP_UI_STYLE.button
+    if LCD_800_MODE:
+        # Compact native squares retain full family names; the live variant
+        # uses the same short demodulator code as the radio state.
+        detail = str(active_mode).upper() if active else ""
+        style = replace(style, title_size=navigation_label_size(text_cache, family, box[2]-box[0]-8, style.title_size))
+    draw_styled_two_line_button(text_cache, box, family, detail, active=active, style=style)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):

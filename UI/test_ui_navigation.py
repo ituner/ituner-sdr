@@ -724,11 +724,15 @@ class DrawerGeometryTests(unittest.TestCase):
         mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
         step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
         back_box = ui.lcd_radio_drawer_close_box()
-        for row in range(0, len(mode_boxes), 2):
-            left, right = mode_boxes[row:row + 2]
-            self.assertEqual(left[0], back_box[0])
-            self.assertEqual(right[2], back_box[2])
-            self.assertEqual(right[0] - left[2], 8)
+        self.assertEqual(len({box[1] for box in mode_boxes}),3)
+        ui.set_audio_page(False)
+        audio=(ui.AUDIO_AGC_BOX,ui.AUDIO_TONE_BOX,ui.AUDIO_NOTCH_BOX)
+        for i,box in enumerate(mode_boxes):
+            reference=audio[i%3]
+            self.assertEqual((box[0],box[2],box[3]-box[1]),
+                             (reference[0],reference[2],reference[3]-reference[1]))
+            self.assertEqual(ui.radio_option_at(*self._center(box)),('mode_cycle',ui.KIWI_MODE_FAMILIES[i][1]))
+        self.assertGreater(min(box[1] for box in step_boxes),max(box[3] for box in mode_boxes))
         self.assertEqual([step for step, _box in ui.radio_step_options("kiwi")],
                          [10, 100, 1000, 5000])
         self.assertEqual(len(step_boxes), 4)

@@ -554,3 +554,14 @@ Recommended order for future work:
 | `systemd/kiwi-live-display.service` | Legacy framebuffer service template. |
 | `baselines/kiwi-basic-20260728-235830/` | Preserved direct-framebuffer baseline. |
 | `docs/yx45011a-pi5-display-bringup.md` | Panel driver, physical geometry, touch overlay, and driver rebuild instructions. |
+
+
+### Native mode selector
+
+The AM/FM annunciators open a three-column grid of mode-family squares.
+Each square uses the same 64 px size and 16 px spacing as Audio's compact
+controls. Eight Kiwi families occupy three rows; USB receiver capabilities
+use only the families they support. Taps still cycle the family's demodulator
+variants. The selected variant appears as its short mode code, and full
+family names use the shared font-fitting helper. Tune-step controls sit
+below the last mode row; decoder launchers and Back keep their positions.
