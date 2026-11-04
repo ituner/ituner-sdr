@@ -334,44 +334,43 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(len(lines.call_args_list), 1)
         close_button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
 
-    def test_audio_rail_uses_full_width_sliders_and_bottom_reset_mute_row(self):
+    def test_audio_pages_keep_visible_controls_separate_and_sliders_roomy(self):
         ui.configure_output(True)
-        back = ui.lcd_audio_drawer_close_box()
-        full_edges = (back[0], back[2])
-        for box in (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
-                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX):
-            self.assertEqual((box[0], box[2]), full_edges)
-            self.assertEqual(box[2] - box[0], 236)
-
-        reset, mute = ui.AUDIO_RESET_BOX, ui.AUDIO_MUTE_BOX
-        self.assertEqual((reset[1], reset[3]), (mute[1], mute[3]))
-        self.assertEqual((reset[0], mute[2]), full_edges)
-        self.assertEqual(mute[0] - reset[2], 8)
-        self.assertEqual(ui.AUDIO_BACKEND_BOX[3] + 8, reset[1])
-        self.assertGreaterEqual(back[1] - mute[3], 16)
-        self.assertEqual(ui.AUDIO_DENOISE_BOX[3] + 8,
-                         ui.AUDIO_VOICE_CLEAN_BOX[1])
-        for action, box in (('reset', reset), ('mute', mute),
-                            ('backend', ui.AUDIO_BACKEND_BOX),
-                            ('filter', ui.AUDIO_FILTER_BOX)):
-            self.assertEqual(ui.audio_option_at(
-                (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-            ), action)
-
-        controls = (
-            ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX, ui.AUDIO_DENOISE_BOX,
-            ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_HF_ENHANCE_BOX,
-            ui.AUDIO_AGC_BOX, ui.AUDIO_BLANKER_BOX, ui.AUDIO_NOTCH_BOX,
-            ui.AUDIO_DEEMP_BOX, ui.AUDIO_TONE_BOX, ui.AUDIO_FILTER_BOX,
-            ui.AUDIO_BACKEND_BOX, reset, mute,
-        )
-        for index, box in enumerate(controls):
-            for other in controls[index + 1:]:
-                self.assertFalse(
-                    box[0] < other[2] and other[0] < box[2]
-                    and box[1] < other[3] and other[1] < box[3],
-                    (box, other),
-                )
+        self.addCleanup(ui.set_audio_page, False)
+        for advanced in (False, True):
+            ui.set_audio_page(advanced)
+            back = ui.lcd_audio_drawer_close_box()
+            full_edges = (back[0], back[2])
+            boxes = [getattr(ui, name) for name in (
+                'AUDIO_VOLUME_BOX', 'AUDIO_DENOISE_BOX', 'AUDIO_VOICE_CLEAN_BOX',
+                'AUDIO_SQUELCH_BOX', 'AUDIO_MUTE_BOX', 'AUDIO_ADVANCED_BOX',
+                'AUDIO_AGC_BOX', 'AUDIO_BLANKER_BOX', 'AUDIO_NOTCH_BOX',
+                'AUDIO_DEEMP_BOX', 'AUDIO_TONE_BOX', 'AUDIO_FILTER_BOX',
+                'AUDIO_HF_ENHANCE_BOX', 'AUDIO_BACKEND_BOX', 'AUDIO_RESET_BOX')]
+            visible = [box for box in boxes if box[0] >= 0] + [back]
+            for index, box in enumerate(visible):
+                self.assertGreaterEqual(box[1], ui.AUDIO_HEADER_H + 16)
+                self.assertGreaterEqual(box[3] - box[1], 56)
+                for other in visible[index + 1:]:
+                    self.assertFalse(box[0] < other[2] and other[0] < box[2]
+                                     and box[1] < other[3] and other[1] < box[3])
+            if not advanced:
+                sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_DENOISE_BOX,
+                           ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_SQUELCH_BOX)
+                for box in sliders:
+                    self.assertEqual((box[0], box[2]), full_edges)
+                    self.assertGreaterEqual(box[3] - box[1], 88)
+                for first, second in zip(sliders, sliders[1:]):
+                    self.assertGreaterEqual(second[1] - first[3], 24)
+                self.assertLess(ui.AUDIO_HF_ENHANCE_BOX[0], 0)
+            else:
+                self.assertLess(ui.AUDIO_DENOISE_BOX[0], 0)
+                for action, box in (('filter', ui.AUDIO_FILTER_BOX),
+                                    ('backend', ui.AUDIO_BACKEND_BOX),
+                                    ('reset', ui.AUDIO_RESET_BOX)):
+                    self.assertEqual(ui.audio_option_at((box[0]+box[2])/2,
+                                                       (box[1]+box[3])/2), action)
+        ui.set_audio_page(False)
 
     def test_audio_rail_draws_full_width_volume_and_slider_tracks(self):
         ui.configure_output(True)
@@ -385,11 +384,12 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_lcd_audio_tile'), \
              patch.object(ui, 'draw_lcd_audio_slider_tile'), \
-             patch.object(ui, 'draw_sidebar_header'):
+             patch.object(ui, 'draw_sidebar_header'), \
+             patch.object(ui, 'draw_styled_text_button'):
             ui.draw_lcd_audio_drawer(object(), 0.5, controls, -400, 400,
                                      True, 'am', 'pipewire')
         volume = ui.AUDIO_VOLUME_BOX
-        track_y = volume[3] - 16
+        track_y = volume[3] - 28
         self.assertIn((volume[0], track_y - 3, volume[2], track_y + 3),
                       [entry.args[:4] for entry in rectangles.call_args_list])
 
@@ -2115,6 +2115,7 @@ class ReceiverBrowserEmptyStateTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect"), patch.object(ui, "draw_logical_line"), \
              patch.object(ui, "draw_receiver_action_button"), \
              patch.object(ui, "draw_receiver_filter_button"), \
+             patch.object(ui, "draw_directory_refresh_button"), \
              patch.object(ui, "draw_receiver_sidebar_header"), \
              patch.object(ui, "draw_receiver_back_button"), \
              patch.object(ui, "draw_text",

@@ -460,6 +460,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_lcd_audio_tile"), \
                 patch.object(ui, "draw_lcd_audio_slider_tile"), \
                 patch.object(ui, "draw_sidebar_header"), \
+                patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_styled_button_frame",
                              return_value=APP_UI_STYLE.button.resolve()):
             ui.draw_lcd_audio_drawer(None, 0.5, controls, -400, 400,

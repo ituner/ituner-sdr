@@ -236,7 +236,8 @@ class MenuIconTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
             draws = {}
             for name in ('draw_logical_rect', 'draw_receiver_action_button',
-                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_filter_button', 'draw_directory_refresh_button',
+                         'draw_receiver_sidebar_header',
                          'draw_receiver_back_button', 'draw_picker_two_line_button',
                          'draw_station_list_frame', 'draw_text', 'draw_receiver_badge'):
                 draws[name] = stack.enter_context(mock.patch.object(ui, name))
@@ -268,7 +269,8 @@ class MenuIconTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(ui, 'LCD_800_MODE', True))
             draws = {}
             for name in ('draw_logical_rect', 'draw_receiver_action_button',
-                         'draw_receiver_filter_button', 'draw_receiver_sidebar_header',
+                         'draw_receiver_filter_button', 'draw_directory_refresh_button',
+                         'draw_receiver_sidebar_header',
                          'draw_receiver_back_button', 'draw_station_list_frame',
                          'draw_logical_rounded_rect', 'draw_text', 'draw_receiver_badge'):
                 draws[name] = stack.enter_context(mock.patch.object(ui, name))
@@ -1807,6 +1809,7 @@ class ReceiverListStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "draw_logical_rounded_rect"), \
                 mock.patch.object(ui, "draw_receiver_action_button"), \
                 mock.patch.object(ui, "draw_receiver_filter_button"), \
+                mock.patch.object(ui, "draw_directory_refresh_button"), \
                 mock.patch.object(ui, "draw_receiver_sidebar_header"), \
                 mock.patch.object(ui, "draw_receiver_back_button"), \
                 mock.patch.object(ui, "draw_receiver_badge", side_effect=badge), \

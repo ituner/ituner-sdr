@@ -1,0 +1,61 @@
+import unittest
+from unittest.mock import patch
+
+import kiwi_gl_display as ui
+
+
+class AudioPageTests(unittest.TestCase):
+    def setUp(self):
+        ui.configure_output(True)
+        ui.set_audio_page(False)
+        self.addCleanup(ui.set_audio_page, False)
+        self.state = ui.SharedState('http://kiwi.test', 7075, 8, -95, 142, 245, 3, 'am', True)
+
+    def test_advanced_and_back_leave_audio_settings_and_frequency_unchanged(self):
+        self.state.set_audio_controls(voice_clean_level=.74, tone_profile=2, squelch_level=12)
+        audio = self.state.audio_controls_snapshot()
+        frequency = self.state.snapshot()
+        self.assertTrue(ui.audio_page_action('advanced'))
+        self.assertTrue(ui.AUDIO_ADVANCED_OPEN)
+        self.assertTrue(ui.audio_page_action('close'))
+        self.assertFalse(ui.AUDIO_ADVANCED_OPEN)
+        self.assertFalse(ui.audio_page_action('close'))
+        self.assertEqual(self.state.audio_controls_snapshot(), audio)
+        self.assertEqual(self.state.snapshot(), frequency)
+
+    def test_header_is_quiet_and_slider_gaps_are_not_other_buttons(self):
+        self.assertEqual(ui.AUDIO_HEADER_H, 32)
+        self.assertIsNone(ui.audio_option_at(ui.LCD_NAV_X0 + 128, 17))
+        self.assertIn('audio_header', ui.TOOLBOX_CONTINUOUS_GESTURES)
+        sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_DENOISE_BOX,
+                   ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_SQUELCH_BOX)
+        for a, b in zip(sliders, sliders[1:]):
+            self.assertGreaterEqual(b[1] - a[3], 24)
+            self.assertIsNone(ui.audio_option_at(a[0] + 20, (a[3]+b[1])/2))
+
+    def test_main_and_advanced_render_only_their_own_controls(self):
+        controls, _ = self.state.audio_controls_snapshot()
+        for advanced in (False, True):
+            ui.set_audio_page(advanced)
+            with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_text'), patch.object(ui, 'draw_section_divider'), \
+                 patch.object(ui, 'draw_radio_close_button'), \
+                 patch.object(ui, 'draw_lcd_audio_slider_tile') as sliders, \
+                 patch.object(ui, 'draw_lcd_audio_tile') as tiles, \
+                 patch.object(ui, 'draw_styled_text_button') as buttons:
+                ui.draw_lcd_audio_drawer(object(), .5, controls, -400, 400, True, 'am', 'alsa')
+            if advanced:
+                self.assertFalse(sliders.called)
+                self.assertEqual({c.args[2] for c in tiles.call_args_list},
+                                 {'AGC', 'BLANKER', 'NOTCH', 'DE-EMPH', 'TONE',
+                                  'HF ENH', 'PASSBAND', 'OUTPUT', 'RESET'})
+            else:
+                self.assertEqual({c.args[2] for c in sliders.call_args_list},
+                                 {'DENOISE', 'Voice (RNNoise)', 'SQUELCH'})
+                self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
+                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['MUTE'])
+                self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
+
+
+if __name__ == '__main__':
+    unittest.main()
