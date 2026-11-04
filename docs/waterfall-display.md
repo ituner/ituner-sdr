@@ -8,7 +8,9 @@ cycles Slow, Medium and Fast. Waterfall visibility and the explicit contrast
 mode are saved across restarts; old settings default to visible Auto.
 
 The three waterfall color presets sit below the level sliders on the main
-page. Advanced holds Themes and Readout Position. The
+page, using Audio’s 64 px squares and 16 px gaps. STD (Standard, formerly
+Classic), Kiwi and GQRX keep their existing saved palette identities. The top
+four controls also use 16 px gaps. Advanced holds Themes and Readout Position. The
 last option moves the frequency readout and meter left, middle or right;
 it does not move the tuned station within the RF view. Back returns to the
 main Display page before closing the drawer.

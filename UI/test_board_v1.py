@@ -729,7 +729,7 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertEqual([c.args[2:4] for c in cycles.call_args_list],
                                  [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('RESET','DISPLAY')])
                 self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
-                self.assertEqual([c.args[2] for c in controls.call_args_list], ['CLASSIC','KIWI','GQRX'])
+                self.assertEqual([c.args[2] for c in controls.call_args_list], ['STD','KIWI','GQRX'])
                 self.assertIn('ADVANCED', [c.args[2] for c in tiles.call_args_list])
 
     def test_display_drawer_options_fit_the_rail(self):
@@ -752,8 +752,15 @@ class BoardLayoutTests(unittest.TestCase):
                     self.assertFalse(box[0]<other[2] and other[0]<box[2] and box[1]<other[3] and other[1]<box[3])
             if not advanced:
                 for action,box in (('spectrum_cycle',ui.DISPLAY_SPECTRUM_BOX),('waterfall_cycle',ui.DISPLAY_WATERFALL_BOX),('speed_cycle',ui.DISPLAY_SPEED_BOX)):
-                    self.assertEqual((box[2]-box[0],box[3]-box[1]),(114,56))
+                    self.assertEqual((box[2]-box[0],box[3]-box[1]),(110,56))
                     self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),(action,None))
+                ui.set_audio_page(False)
+                audio=(ui.AUDIO_AGC_BOX,ui.AUDIO_TONE_BOX,ui.AUDIO_NOTCH_BOX)
+                colors=[b for _,b,_ in ui.DISPLAY_PALETTE_BOXES]
+                self.assertEqual([(b[0],b[2],b[3]-b[1]) for b in colors],
+                                 [(b[0],b[2],b[3]-b[1]) for b in audio])
+                self.assertEqual(ui.DISPLAY_WATERFALL_BOX[0]-ui.DISPLAY_SPECTRUM_BOX[2],
+                                 colors[1][0]-colors[0][2])
                 self.assertFalse(ui.DISPLAY_RATE_BOXES)
                 self.assertFalse(ui.DISPLAY_WATERFALL_MODE_BOXES)
 

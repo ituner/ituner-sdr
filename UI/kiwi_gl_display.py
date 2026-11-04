@@ -9792,12 +9792,12 @@ def set_display_page(advanced=False):
     else:
         for row, pair in enumerate((("SPECTRUM", "WATERFALL"), ("SPEED", "RESET"))):
             for col, name in enumerate(pair):
-                left, top = x0 + col*122, 80 + row*72
-                boxes["DISPLAY_" + name + "_BOX"] = (left, top, left + 114, top + 56)
+                left, top = x0 + col*126, 80 + row*72
+                boxes["DISPLAY_" + name + "_BOX"] = (left, top, left + 110, top + 56)
         boxes["DISPLAY_FLOOR_MINUS_BOX"] = (x0, 224, x1, 300)
         boxes["DISPLAY_CEIL_MINUS_BOX"] = (x0, 316, x1, 392)
-        palettes = tuple((name, (x0 + i*81, 432, x0 + i*81 + 74, 488), label)
-                         for i, (name, label) in enumerate((("classic", "CLASSIC"), ("kiwi", "KIWI"), ("gqrx", "GQRX"))))
+        palettes = tuple((name, (x0 + 6 + i*80, 432, x0 + 70 + i*80, 496), label)
+                         for i, (name, label) in enumerate((("classic", "STD"), ("kiwi", "KIWI"), ("gqrx", "GQRX"))))
         back = lcd_drawer_back_box()
         boxes["DISPLAY_ADVANCED_BOX"] = (x0, back[1] - LCD_NAV_GAP - 64, x1, back[1] - LCD_NAV_GAP)
     globals().update(boxes, DISPLAY_PALETTE_BOXES=palettes, DISPLAY_LAYOUT_BOXES=layouts)
