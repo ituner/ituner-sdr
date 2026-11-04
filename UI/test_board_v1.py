@@ -697,115 +697,64 @@ class BoardLayoutTests(unittest.TestCase):
     def test_display_reset_sits_directly_above_back(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
-                         ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
-                         ui.lcd_drawer_back_box()[1])
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        self.assertEqual(ui.DISPLAY_THEME_BOX[2] - ui.DISPLAY_THEME_BOX[0], 236)
-        self.assertEqual(ui.display_option_at(1150, (ui.DISPLAY_THEME_BOX[1] + ui.DISPLAY_THEME_BOX[3]) / 2),
-                         ('theme', None))
+        self.addCleanup(ui.set_display_page, False)
+        for advanced in (False, True):
+            ui.set_display_page(advanced)
+            self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
+                             ui.lcd_drawer_back_box()[1])
+        box=ui.DISPLAY_THEME_BOX
+        self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2), ('theme', None))
 
     def test_display_drawer_draws_layout_and_speed_without_scope(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        seen = []
-        with patch.object(ui, 'draw_lcd_audio_tile',
-                          side_effect=lambda *_a, **_k: seen.append((_a[1], _a[2]))), \
-             patch.object(ui, 'draw_display_slider_section'), \
-             patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
-             patch.object(ui, 'draw_radio_close_button'), \
-             patch.object(ui, 'draw_sidebar_header'), \
-             patch.object(ui, 'draw_display_control') as controls, \
-             patch.object(ui, 'draw_lcd_drawer_heading') as headings:
-            ui.draw_display_setup_panel(None, -95, -20, 1, False, 'kiwi', True)
-        self.assertIn((ui.DISPLAY_RESET_BOX, 'RESET DISPLAY'), seen)
-        self.assertIn((ui.DISPLAY_THEME_BOX, 'THEMES'), seen)
-        self.assertIn('LEFT', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('MIDDLE', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('RIGHT', [entry.args[2] for entry in controls.call_args_list])
-        self.assertNotIn('DRAG', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('WATERFALL SPEED', [entry.args[3] for entry in headings.call_args_list])
-        self.assertIn('WATERFALL THEME', [entry.args[3] for entry in headings.call_args_list])
-        self.assertIn('FREQUENCY POSITION', [entry.args[3] for entry in headings.call_args_list])
-        self.assertNotIn('SCOPE', [entry.args[3] for entry in headings.call_args_list])
-        heading_y = {entry.args[3]: entry.args[2] for entry in headings.call_args_list}
-        self.assertEqual(heading_y['WATERFALL THEME'] - 8
-                         - ui.DISPLAY_CEIL_MINUS_BOX[3], 16)
-        self.assertEqual(heading_y['WATERFALL SPEED'] - 8
-                         - ui.DISPLAY_PALETTE_BOXES[0][1][3], 16)
-        self.assertEqual(heading_y['FREQUENCY POSITION'] - 8
-                         - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
-                         ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
-                         ui.lcd_drawer_back_box()[1])
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        states = {entry.args[2]: entry.args[3] for entry in controls.call_args_list}
-        self.assertFalse(states['LEFT'])
-        self.assertTrue(states['MIDDLE'])
-        self.assertFalse(states['RIGHT'])
+        self.addCleanup(ui.set_display_page, False)
+        for advanced in (False, True):
+            ui.set_display_page(advanced)
+            with patch.object(ui, 'draw_lcd_audio_tile') as tiles, \
+                 patch.object(ui, 'draw_styled_two_line_button') as cycles, \
+                 patch.object(ui, 'draw_display_slider_section') as sliders, \
+                 patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_radio_close_button'), patch.object(ui, 'draw_sidebar_header'), \
+                 patch.object(ui, 'draw_display_control') as controls, \
+                 patch.object(ui, 'draw_lcd_drawer_heading'):
+                ui.draw_display_setup_panel(None, 100, 200, 1, False, 'kiwi', True)
+            if advanced:
+                self.assertFalse(cycles.called)
+                self.assertFalse(sliders.called)
+                self.assertIn('THEMES', [c.args[2] for c in tiles.call_args_list])
+                self.assertEqual([c.args[2] for c in controls.call_args_list],
+                                 ['CLASSIC', 'KIWI', 'GQRX', 'LEFT', 'MIDDLE', 'RIGHT'])
+            else:
+                self.assertEqual([c.args[2:4] for c in cycles.call_args_list],
+                                 [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('ADVANCED','SETTINGS')])
+                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
+                self.assertFalse(controls.called)
 
     def test_display_drawer_options_fit_the_rail(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        rail_bottom = ui.lcd_drawer_back_box()[1]
-        self.assertEqual(ui.DISPLAY_THEME_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
-        self.assertEqual(ui.DISPLAY_AUTO_BOX[1], ui.DISPLAY_SPECTRUM_BOX[1])
-        boxes = [ui.DISPLAY_THEME_BOX, ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
-                 ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX]
-        boxes.extend(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES)
-        boxes.extend(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES)
-        boxes.extend(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES)
-        for box in boxes:
-            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
-            self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertLess(box[3], rail_bottom, box)
-        for layout, box in ui.DISPLAY_LAYOUT_BOXES:
-            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
-                                                  (box[1] + box[3]) / 2), ('layout', layout))
-        back_x0, rail_bottom, back_x1, _back_bottom = ui.lcd_drawer_back_box()
-        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[::2], (back_x0, back_x1))
-        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[::2], (back_x0, back_x1))
-        for group in (
-            (ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX),
-            tuple(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES),
-            tuple(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES),
-            tuple(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES),
-        ):
-            self.assertEqual((group[0][0], group[-1][2]), (back_x0, back_x1))
-        self.assertEqual([box[3] - box[1] for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
-                         [31] * 3)
-        self.assertEqual([position for position, _box in ui.DISPLAY_LAYOUT_BOXES],
-                         ['left', 'middle', 'right'])
-        self.assertEqual(
-            [(box[0], box[2] - box[0], box[3] - box[1])
-             for _position, box in ui.DISPLAY_LAYOUT_BOXES],
-            [(box[0], box[2] - box[0], box[3] - box[1])
-             for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
-        )
-        self.assertEqual([(box[2] - box[0], box[3] - box[1])
-                          for _name, box, _label in ui.DISPLAY_PALETTE_BOXES],
-                         [(box[2] - box[0], box[3] - box[1])
-                          for _rate, box, _label in ui.DISPLAY_RATE_BOXES])
-        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[1] - ui.DISPLAY_SPECTRUM_BOX[3], 16)
-        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[1] - ui.DISPLAY_FLOOR_MINUS_BOX[3], 16)
-        self.assertEqual(ui.DISPLAY_PALETTE_BOXES[0][1][1] - ui.DISPLAY_CEIL_MINUS_BOX[3], 40)
-        self.assertEqual([name for name, _box, _label in ui.DISPLAY_PALETTE_BOXES],
-                         ['classic', 'kiwi', 'gqrx'])
-        for palette, box, _label in ui.DISPLAY_PALETTE_BOXES:
-            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
-                                                  (box[1] + box[3]) / 2),
-                             ('palette', palette))
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], ui.LCD_NAV_GAP)
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        for earlier in boxes:
-            if earlier != ui.DISPLAY_RESET_BOX:
-                self.assertFalse(earlier[0] < ui.DISPLAY_RESET_BOX[2]
-                                 and ui.DISPLAY_RESET_BOX[0] < earlier[2]
-                                 and earlier[1] < ui.DISPLAY_RESET_BOX[3]
-                                 and ui.DISPLAY_RESET_BOX[1] < earlier[3])
+        self.addCleanup(ui.set_display_page, False)
+        for advanced in (False,True):
+            ui.set_display_page(advanced)
+            boxes=[getattr(ui,'DISPLAY_'+n+'_BOX') for n in
+                   ('THEME','RESET','SPECTRUM','AUTO','WATERFALL','SPEED','ADVANCED','FLOOR_MINUS','CEIL_MINUS')]
+            boxes += [b for _,b in ui.DISPLAY_LAYOUT_BOXES]
+            boxes += [b for _,b,_ in ui.DISPLAY_PALETTE_BOXES]
+            boxes=[b for b in boxes if b[0]>=0]
+            for i,box in enumerate(boxes):
+                self.assertGreaterEqual(box[0],ui.LCD_NAV_X0)
+                self.assertLessEqual(box[2],ui.LOGICAL_W)
+                self.assertGreaterEqual(box[3]-box[1],56)
+                self.assertLess(box[3],ui.lcd_drawer_back_box()[1])
+                for other in boxes[i+1:]:
+                    self.assertFalse(box[0]<other[2] and other[0]<box[2] and box[1]<other[3] and other[1]<box[3])
+            if not advanced:
+                for action,box in (('spectrum_cycle',ui.DISPLAY_SPECTRUM_BOX),('waterfall_cycle',ui.DISPLAY_WATERFALL_BOX),('speed_cycle',ui.DISPLAY_SPEED_BOX)):
+                    self.assertEqual(box[2]-box[0],box[3]-box[1])
+                    self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),(action,None))
+                self.assertFalse(ui.DISPLAY_RATE_BOXES)
+                self.assertFalse(ui.DISPLAY_WATERFALL_MODE_BOXES)
 
     def test_palette_choice_restores_both_contrast_sliders(self):
         state = ui.SharedState(

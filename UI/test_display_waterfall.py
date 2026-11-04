@@ -60,15 +60,57 @@ class DisplayWaterfallTests(unittest.TestCase):
         ui.restore_waterfall_preferences(state, {'contrast_mode': 'auto', 'floor': 90, 'ceil': 150})
         self.assertTrue(state.waterfall_snapshot()[3])
 
-    def test_mode_controls_fit_existing_rail_without_covering_other_controls(self):
-        ui.configure_output(True)
-        ui.configure_popup_layout()
-        for automatic, box in ui.DISPLAY_WATERFALL_MODE_BOXES:
-            self.assertGreaterEqual(box[1], ui.DISPLAY_LAYOUT_BOXES[0][1][3]+8)
-            self.assertLessEqual(box[3], ui.DISPLAY_RESET_BOX[1]-8)
-            self.assertGreaterEqual(box[3]-box[1], 56)
-            self.assertEqual(ui.display_option_at((box[0]+box[2])/2, (box[1]+box[3])/2),
-                             ('waterfall_mode', automatic))
+    def test_cycles_preserve_listening_and_do_not_pause_or_clear_the_receiver(self):
+        state=self.state();before=state.snapshot()
+        for name in ('spectrum','waterfall'):
+            if name=='spectrum':
+                state.set_spectrum_enabled(False)
+                enabled=state.spectrum_enabled_snapshot
+                automatic=state.spectrum_auto_snapshot
+            else:
+                state.set_waterfall_enabled(False)
+                enabled=state.waterfall_enabled_snapshot
+                automatic=lambda:state.waterfall_snapshot()[3]
+            for want_enabled,want_auto in ((True,False),(True,True),(False,True)):
+                ui.cycle_display_control(state,name+'_cycle')
+                self.assertEqual((enabled(),automatic()),(want_enabled,want_auto))
+                self.assertFalse(state.stream_paused_snapshot())
+                self.assertEqual(state.snapshot(),before)
+        state.set_waterfall(speed=1)
+        for wanted in (2,4,1):
+            ui.cycle_display_control(state,'speed_cycle')
+            self.assertEqual(state.waterfall_snapshot()[2],wanted)
+
+    def test_floor_ceiling_fixed_tracks_keep_other_edge_unchanged(self):
+        ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
+        state=self.state();state.set_waterfall(floor=80,ceil=190,auto=False)
+        floor_box,ceil_box=ui.DISPLAY_FLOOR_MINUS_BOX,ui.DISPLAY_CEIL_MINUS_BOX
+        x=floor_box[0]+4+(floor_box[2]-floor_box[0]-8)*.8
+        state.set_waterfall(floor=ui.waterfall_floor_at_x(x,190),auto=False)
+        self.assertEqual(state.waterfall_snapshot()[1],190)
+        self.assertEqual(state.waterfall_snapshot()[0],160)
+        self.assertEqual(ui.waterfall_floor_at_x(x,240),184)
+        # The same pointer position maps to the same level until gap-clamped.
+        x=ceil_box[0]+4+(ceil_box[2]-ceil_box[0]-8)*.8
+        self.assertEqual(ui.waterfall_ceiling_at_x(x,80),ui.waterfall_ceiling_at_x(x,150))
+        state.set_waterfall(ceil=ui.waterfall_ceiling_at_x(ceil_box[0],160),auto=False)
+        self.assertEqual(state.waterfall_snapshot()[:2],(160,190))
+
+    def test_auto_display_tracks_live_levels_and_manual_freezes_them(self):
+        state=self.state()
+        observed=state.waterfall_levels(bytes([100]*900+[120]*100+[145]*24))
+        self.assertEqual(state.waterfall_display_levels(),observed)
+        state.select_waterfall_mode(False)
+        state.waterfall_levels(bytes([200]*1024))
+        self.assertEqual(state.waterfall_display_levels(),observed)
+        ui.restore_waterfall_preferences(state,{'enabled':False,'contrast_mode':'auto'})
+        self.assertFalse(state.waterfall_enabled_snapshot())
+        ui.reset_display_view(state)
+        self.assertTrue(state.waterfall_enabled_snapshot())
+        ui.configure_output(True);ui.set_display_page(False)
+        self.assertTrue(ui.display_page_action('advanced'))
+        self.assertTrue(ui.display_page_action('close'))
+        self.assertFalse(ui.DISPLAY_ADVANCED_OPEN)
 
     def test_spectrum_auto_is_independent_of_waterfall_manual(self):
         state = self.state()

@@ -74,6 +74,8 @@ class ThemeSystemTests(unittest.TestCase):
         middle_trace = ui.mirror_smeter_trace_x(675 + (50 if ui.DESKTOP_1280_MODE else 0), 6)
         self.assertLess(middle_trace + ui.SMETER_TRACE_WIDTH, middle_frequency[0])
         self.assertLess(middle_frequency[2], middle_band[0])
+        ui.set_display_page(True)
+        self.addCleanup(ui.set_display_page, False)
         with patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \

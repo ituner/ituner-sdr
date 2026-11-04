@@ -1277,6 +1277,10 @@ DISPLAY_CEIL_PLUS_BOX = (758, 130, 830, 180)
 DISPLAY_RESET_BOX = (0, 0, 0, 0)
 DISPLAY_LAYOUT_BOXES = ()
 DISPLAY_WATERFALL_MODE_BOXES = ()
+DISPLAY_WATERFALL_BOX = (-1, -1, -1, -1)
+DISPLAY_SPEED_BOX = (-1, -1, -1, -1)
+DISPLAY_ADVANCED_BOX = (-1, -1, -1, -1)
+DISPLAY_ADVANCED_OPEN = False
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -1791,7 +1795,7 @@ def configure_popup_layout():
     global DISPLAY_FLOOR_MINUS_BOX, DISPLAY_FLOOR_PLUS_BOX
     global DISPLAY_CEIL_MINUS_BOX, DISPLAY_CEIL_PLUS_BOX
     global DISPLAY_RESET_BOX, DISPLAY_THEME_BOX, DISPLAY_LAYOUT_BOXES
-    global DISPLAY_WATERFALL_MODE_BOXES
+    global DISPLAY_WATERFALL_MODE_BOXES, DISPLAY_WATERFALL_BOX, DISPLAY_SPEED_BOX
     global DISPLAY_RATE_BOXES, DISPLAY_PALETTE_BOXES
     global FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX
     global FILTER_WIDTH_LABEL_BOX, FILTER_WIDTH_PLUS_BOX
@@ -1832,76 +1836,16 @@ def configure_popup_layout():
     DISPLAY_THEME_BOX = (0, 0, 0, 0)
     DISPLAY_LAYOUT_BOXES = ()
     DISPLAY_WATERFALL_MODE_BOXES = ()
+    DISPLAY_WATERFALL_BOX = DISPLAY_SPEED_BOX = (-1, -1, -1, -1)
     DISPLAY_RATE_BOXES = tuple((rate, popup_shift_box(box, dy), label) for rate, box, label in base_rates)
     DISPLAY_PALETTE_BOXES = tuple((name, popup_shift_box(box, dy), label) for name, box, label in base_palettes)
     if LCD_800_MODE:
-        # Display is a true right-hand drawer, matching Mode and Audio. Start
-        # the control stack 16 px below the title divider.
-        display_x0, display_x1 = LCD_ANNUNCIATOR_BOX[0], LCD_ANNUNCIATOR_BOX[2]
-        display_y0, display_y1 = LCD_DRAWER_HEADER_H, lcd_rail_bottom()
-        DISPLAY_PANEL_BOX = (display_x0, display_y0, display_x1, display_y1)
-        back_box = lcd_drawer_back_box()
-        inner_x0, inner_x1 = back_box[0], back_box[2]
-        column_gap, section_gap, tile_h, adjust_h, small_h = 8, 16, 64, 56, 31
-        # Every titled section spans the same 236 px as BACK. Sections have
-        # 16 px breathing room. RESET is the final utility action, anchored
-        # directly above BACK with the shared 8 px control gap.
-        theme_y0 = LCD_DRAWER_HEADER_H + 16
-        DISPLAY_THEME_BOX = (inner_x0, theme_y0, inner_x1, theme_y0 + tile_h)
-        toggle_y0 = DISPLAY_THEME_BOX[3] + section_gap
-        toggle_y1 = toggle_y0 + tile_h
-        floor_y0 = toggle_y1 + section_gap
-        floor_y1 = floor_y0 + adjust_h
-        ceiling_y0 = floor_y1 + section_gap
-        ceiling_y1 = ceiling_y0 + adjust_h
-        palette_y0 = ceiling_y1 + section_gap + 24
-        palette_y1 = palette_y0 + small_h
-        rate_y0 = palette_y1 + section_gap + 24
-        layout_y0 = rate_y0 + small_h + section_gap + 24
-        reset_y1 = back_box[1] - LCD_NAV_GAP
-        reset_y0 = reset_y1 - tile_h
-        DISPLAY_RESET_BOX = (inner_x0, reset_y0, inner_x1, reset_y1)
-        half_w = (inner_x1 - inner_x0 - column_gap) / 2
-        DISPLAY_SPECTRUM_BOX = (inner_x0, toggle_y0, inner_x0 + half_w, toggle_y1)
-        DISPLAY_AUTO_BOX = (inner_x0 + half_w + column_gap, toggle_y0, inner_x1, toggle_y1)
-        # Floor and ceiling are continuous instruments on the LCD drawer, not
-        # little +/- buttons.  Keep the legacy plus boxes empty so the desktop
-        # popup can retain its existing controls without competing for touches.
-        DISPLAY_FLOOR_MINUS_BOX = (inner_x0, floor_y0, inner_x1, floor_y1)
-        DISPLAY_FLOOR_PLUS_BOX = (0, 0, 0, 0)
-        DISPLAY_CEIL_MINUS_BOX = (inner_x0, ceiling_y0, inner_x1, ceiling_y1)
-        DISPLAY_CEIL_PLUS_BOX = (0, 0, 0, 0)
-        rate_w, rate_h = (inner_x1 - inner_x0 - 2 * column_gap) // 3, small_h
-        rate_starts = (inner_x0, inner_x0 + rate_w + column_gap,
-                       inner_x1 - rate_w)
-        rate_widths = (rate_w, inner_x1 - inner_x0 - 2 * column_gap - 2 * rate_w,
-                       rate_w)
-        DISPLAY_RATE_BOXES = tuple(
-            (rate, (rate_starts[index], rate_y0,
-                    rate_starts[index] + rate_widths[index], rate_y0 + rate_h), label)
-            for index, (rate, _box, label) in enumerate(base_rates)
-        )
-        palette_w = (inner_x1 - inner_x0 - 2 * column_gap) // 3
-        palette_starts = (inner_x0, inner_x0 + palette_w + column_gap,
-                          inner_x1 - palette_w)
-        palette_widths = (palette_w,
-                          inner_x1 - inner_x0 - 2 * column_gap - 2 * palette_w,
-                          palette_w)
-        DISPLAY_PALETTE_BOXES = tuple(
-            (name, (palette_starts[index], palette_y0,
-                    palette_starts[index] + palette_widths[index], palette_y1), label)
-            for index, (name, _box, label) in enumerate(base_palettes)
-        )
-        DISPLAY_LAYOUT_BOXES = tuple(
-            (position, (rate_starts[index], layout_y0,
-                        rate_starts[index] + rate_widths[index], layout_y0 + small_h))
-            for index, position in enumerate(("left", "middle", "right"))
-        )
-        mode_y0 = layout_y0 + small_h + 8
-        DISPLAY_WATERFALL_MODE_BOXES = (
-            (True, (inner_x0, mode_y0, inner_x0+half_w, mode_y0+56)),
-            (False, (inner_x0+half_w+column_gap, mode_y0, inner_x1, mode_y0+56)),
-        )
+        DISPLAY_PANEL_BOX = (LCD_NAV_X0, LCD_DRAWER_HEADER_H, LOGICAL_W, lcd_rail_bottom())
+        back = lcd_drawer_back_box()
+        DISPLAY_RESET_BOX = (back[0], back[1] - LCD_NAV_GAP - 64, back[2], back[1] - LCD_NAV_GAP)
+        DISPLAY_RATE_BOXES = ()
+        DISPLAY_WATERFALL_MODE_BOXES = ()
+        set_display_page(DISPLAY_ADVANCED_OPEN)
 
     dy = offset("filter")
     (FILTER_PANEL_BOX, FILTER_EDIT_BOX, FILTER_WIDTH_MINUS_BOX,
@@ -5141,6 +5085,7 @@ class SharedState:
         self.callsign_updated_at = 0.0
         self.spectrum_enabled = bool(spectrum_enabled)
         self.spectrum_auto = True
+        self.waterfall_enabled = True
         self.spectrum_leveler = AutoWaterfallLevels()
         self.spectrum_level_context = None
         self.spectrum_values = ()
@@ -5838,6 +5783,11 @@ class SharedState:
             self.wf_live_levels = levels
             return levels
 
+    def waterfall_display_levels(self):
+        """Show the levels actually applied to the live waterfall in Auto."""
+        with self.lock:
+            return self.wf_live_levels if self.wf_auto and self.wf_live_levels is not None else (self.wf_floor, self.wf_ceil)
+
     def select_waterfall_mode(self, automatic):
         with self.lock:
             floor, ceiling = self.wf_live_levels or (self.wf_floor, self.wf_ceil)
@@ -6340,6 +6290,15 @@ class SharedState:
     def spectrum_snapshot(self):
         with self.lock:
             return self.spectrum_enabled, self.spectrum_values, self.spectrum_peak_values
+
+    def waterfall_enabled_snapshot(self):
+        with self.lock:
+            return self.waterfall_enabled
+
+    def set_waterfall_enabled(self, enabled):
+        with self.lock:
+            self.waterfall_enabled = bool(enabled)
+            return self.waterfall_enabled
 
     def spectrum_enabled_snapshot(self):
         """Read the inexpensive Scope toggle without copying spectrum data."""
@@ -9813,6 +9772,42 @@ def draw_radio_setup_panel(
         draw_radio_option(text_cache, box, label, option == step_hz)
 
 
+def set_display_page(advanced=False):
+    global DISPLAY_ADVANCED_OPEN
+    DISPLAY_ADVANCED_OPEN = bool(advanced)
+    if not LCD_800_MODE:
+        return
+    x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
+    names = ("SPECTRUM", "AUTO", "WATERFALL", "SPEED", "ADVANCED", "THEME",
+             "FLOOR_MINUS", "FLOOR_PLUS", "CEIL_MINUS", "CEIL_PLUS")
+    boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
+    palettes, layouts = (), ()
+    if advanced:
+        boxes["DISPLAY_THEME_BOX"] = (x0, 80, x1, 144)
+        palettes = tuple((name, (x0 + i*81, 184, x0 + i*81 + 74, 240), label)
+                         for i, (name, label) in enumerate((("classic", "CLASSIC"), ("kiwi", "KIWI"), ("gqrx", "GQRX"))))
+        layouts = tuple((name, (x0 + i*81, 280, x0 + i*81 + 74, 336))
+                        for i, name in enumerate(("left", "middle", "right")))
+    else:
+        for row, pair in enumerate((("SPECTRUM", "WATERFALL"), ("SPEED", "ADVANCED"))):
+            for col, name in enumerate(pair):
+                left, top = x0 + 6 + col*120, 80 + row*120
+                boxes["DISPLAY_" + name + "_BOX"] = (left, top, left + 104, top + 104)
+        boxes["DISPLAY_FLOOR_MINUS_BOX"] = (x0, 320, x1, 396)
+        boxes["DISPLAY_CEIL_MINUS_BOX"] = (x0, 412, x1, 488)
+    globals().update(boxes, DISPLAY_PALETTE_BOXES=palettes, DISPLAY_LAYOUT_BOXES=layouts)
+
+
+def display_page_action(choice):
+    if LCD_800_MODE and choice == "advanced":
+        set_display_page(True)
+        return True
+    if LCD_800_MODE and choice == "close" and DISPLAY_ADVANCED_OPEN:
+        set_display_page(False)
+        return True
+    return False
+
+
 def lcd_display_themes_box():
     x0, _y0, x1, y1 = DISPLAY_RESET_BOX
     return x0, y1 + 16, x1, y1 + 80
@@ -9821,11 +9816,18 @@ def lcd_display_themes_box():
 def display_option_at(x, y):
     if LCD_800_MODE and contains(lcd_display_drawer_close_box(), x, y):
         return "close", None
+    if LCD_800_MODE and contains(DISPLAY_ADVANCED_BOX, x, y):
+        return "advanced", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
     if LCD_800_MODE and contains(DISPLAY_THEME_BOX, x, y):
         return "theme", None
     if LCD_800_MODE:
+        for action, box in (("spectrum_cycle", DISPLAY_SPECTRUM_BOX),
+                            ("waterfall_cycle", DISPLAY_WATERFALL_BOX),
+                            ("speed_cycle", DISPLAY_SPEED_BOX)):
+            if contains(box, x, y):
+                return action, None
         for layout, box in DISPLAY_LAYOUT_BOXES:
             if contains(box, x, y):
                 return "layout", layout
@@ -9862,6 +9864,7 @@ def apply_waterfall_palette_preset(state, palette):
 def restore_waterfall_preferences(state, preferences):
     """Migrate legacy implicit/manual presets to the requested Auto default."""
     preferences = preferences if isinstance(preferences, dict) else {}
+    state.set_waterfall_enabled(preferences.get("enabled", True))
     return state.set_waterfall(
         floor=preferences.get('floor'), ceil=preferences.get('ceil'),
         speed=preferences.get('speed'), palette=preferences.get('palette'),
@@ -9880,6 +9883,7 @@ def reset_display_view(state):
     )
     state.set_spectrum_enabled(True)
     state.set_spectrum_auto(True)
+    state.set_waterfall_enabled(True)
     return waterfall
 
 
@@ -9891,6 +9895,40 @@ def toggle_display_spectrum_control(state, kind):
         state.set_spectrum_auto(not state.spectrum_auto_snapshot())
     else:
         raise ValueError(f"unsupported spectrum control: {kind}")
+    return state.waterfall_snapshot()
+
+
+def display_cycle_label(enabled, automatic):
+    return "OFF" if not enabled else ("ON (AUTO)" if automatic else "ON")
+
+
+def cycle_display_control(state, kind):
+    """Cycle display presentation without interrupting receiver transports."""
+    if kind == "spectrum_cycle":
+        enabled = state.spectrum_enabled_snapshot()
+        automatic = state.spectrum_auto_snapshot()
+        if not enabled:
+            state.set_spectrum_auto(False)
+            state.set_spectrum_enabled(True)
+        elif not automatic:
+            state.set_spectrum_auto(True)
+        else:
+            state.set_spectrum_enabled(False)
+    elif kind == "waterfall_cycle":
+        enabled = state.waterfall_enabled_snapshot()
+        automatic = state.waterfall_snapshot()[3]
+        if not enabled:
+            state.select_waterfall_mode(False)
+            state.set_waterfall_enabled(True)
+        elif not automatic:
+            state.select_waterfall_mode(True)
+        else:
+            state.set_waterfall_enabled(False)
+    elif kind == "speed_cycle":
+        speed = state.waterfall_snapshot()[2]
+        state.set_waterfall(speed=next((n for n in (1, 2, 4) if n > speed), 1))
+    else:
+        raise ValueError("Unknown Display cycle")
     return state.waterfall_snapshot()
 
 
@@ -9963,12 +10001,12 @@ def waterfall_slider_fraction(x, box):
 
 def waterfall_floor_at_x(x, ceiling):
     maximum = min(220.0, float(ceiling) - 30.0)
-    return round(40.0 + waterfall_slider_fraction(x, DISPLAY_FLOOR_MINUS_BOX) * (maximum - 40.0))
+    return round(clamp(40.0 + waterfall_slider_fraction(x, DISPLAY_FLOOR_MINUS_BOX) * 180.0, 40.0, maximum))
 
 
 def waterfall_ceiling_at_x(x, floor):
     minimum = float(floor) + 30.0
-    return round(minimum + waterfall_slider_fraction(x, DISPLAY_CEIL_MINUS_BOX) * (255.0 - minimum))
+    return round(clamp(70.0 + waterfall_slider_fraction(x, DISPLAY_CEIL_MINUS_BOX) * 185.0, minimum, 255.0))
 
 
 def audio_denoise_level_at_x(x):
@@ -14776,51 +14814,38 @@ def draw_filter_width_control(text_cache, box, label):
 
 
 def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, palette, spectrum_enabled,
-                             instrument_layout="middle", waterfall_auto=True):
+                             instrument_layout="middle", waterfall_auto=True, waterfall_enabled=True):
     x0, y0, x1, y1 = DISPLAY_PANEL_BOX
     if LCD_800_MODE:
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, y1, APP_UI_STYLE.palette.sidebar)
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         draw_lcd_audio_tile(text_cache, DISPLAY_RESET_BOX, "RESET DISPLAY", "DEFAULTS")
-        draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "COLORS & S-METERS")
-        draw_lcd_drawer_heading(text_cache, DISPLAY_LAYOUT_BOXES[0][1][0] + 4,
-                                DISPLAY_LAYOUT_BOXES[0][1][1] - 16,
-                                "FREQUENCY POSITION")
-        for layout, box in DISPLAY_LAYOUT_BOXES:
-            draw_display_control(text_cache, box, layout.upper(),
-                                 layout == visible_frequency_position(instrument_layout))
-        for automatic, box in DISPLAY_WATERFALL_MODE_BOXES:
-            draw_lcd_audio_tile(text_cache, box, "WATERFALL", "AUTO" if automatic else "MANUAL",
-                                waterfall_auto == automatic)
-        draw_lcd_audio_tile(
-            text_cache, DISPLAY_SPECTRUM_BOX, "SPECTRUM",
-            "ON" if spectrum_enabled else "OFF", spectrum_enabled,
-        )
-        draw_lcd_audio_tile(
-            text_cache, DISPLAY_AUTO_BOX, "AUTO",
-            "ON" if spectrum_auto else "OFF", spectrum_auto,
-        )
-
-        floor_maximum = min(220.0, ceiling - 30.0)
-        ceiling_minimum = floor + 30.0
-        draw_display_slider_section(
-            text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
-            floor - 40.0, floor_maximum - 40.0, "AUTO" if waterfall_auto else f"{floor:.0f}", not waterfall_auto,
-        )
-        draw_display_slider_section(
-            text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
-            ceiling - ceiling_minimum, 255.0 - ceiling_minimum,
-            "AUTO" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto,
-        )
-        draw_lcd_drawer_heading(text_cache, DISPLAY_PALETTE_BOXES[0][1][0] + 4,
-                                DISPLAY_PALETTE_BOXES[0][1][1] - 16, "WATERFALL THEME")
-        for rate, box, label in DISPLAY_RATE_BOXES:
-            draw_display_control(text_cache, box, label, rate == speed)
-        draw_lcd_drawer_heading(text_cache, DISPLAY_RATE_BOXES[0][1][0] + 4,
-                                DISPLAY_RATE_BOXES[0][1][1] - 16, "WATERFALL SPEED")
-        for option, box, label in DISPLAY_PALETTE_BOXES:
-            draw_display_control(text_cache, box, label, option == palette)
-        draw_sidebar_header(text_cache, "DISPLAY")
+        if DISPLAY_ADVANCED_OPEN:
+            draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "STYLE SETTINGS")
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 168, "WATERFALL COLORS")
+            for option, box, label in DISPLAY_PALETTE_BOXES:
+                draw_display_control(text_cache, box, label, option == palette)
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 264, "READOUT POSITION")
+            for layout, box in DISPLAY_LAYOUT_BOXES:
+                draw_display_control(text_cache, box, layout.upper(),
+                                     layout == visible_frequency_position(instrument_layout))
+        else:
+            for box, title, detail, active in (
+                (DISPLAY_SPECTRUM_BOX, "SPECTRUM", display_cycle_label(spectrum_enabled, spectrum_auto), spectrum_enabled),
+                (DISPLAY_WATERFALL_BOX, "WATERFALL", display_cycle_label(waterfall_enabled, waterfall_auto), waterfall_enabled),
+                (DISPLAY_SPEED_BOX, "SPEED", {1: "SLOW", 2: "MEDIUM", 4: "FAST"}.get(speed, str(speed)), True),
+                (DISPLAY_ADVANCED_BOX, "ADVANCED", "SETTINGS", False),
+            ):
+                draw_styled_two_line_button(text_cache, box, title, detail, active=active)
+            draw_display_slider_section(
+                text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
+                floor - 40.0, 180.0, f"AUTO {floor:.0f}" if waterfall_auto else f"{floor:.0f}", not waterfall_auto,
+            )
+            draw_display_slider_section(
+                text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
+                ceiling - 70.0, 185.0, f"AUTO {ceiling:.0f}" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto,
+            )
+        draw_sidebar_header(text_cache, "DISPLAY · ADVANCED" if DISPLAY_ADVANCED_OPEN else "DISPLAY")
         return
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
@@ -24962,6 +24987,7 @@ def main():
             "tune_step_hz": int(tune_step_hz),
             "fmdx_tune_step_hz": int(fmdx_tune_step_hz),
             "waterfall": {
+                "enabled": state.waterfall_enabled_snapshot(),
                 "floor": round(float(floor), 1),
                 "ceil": round(float(ceiling), 1),
                 "speed": int(speed),
@@ -25924,6 +25950,7 @@ def main():
             display_parent = parent
             settings_menu_open = False
             digital_menu_open = False
+            set_display_page(False)
             display_setup_open = True
             picker_open = radio_setup_open = filter_drawer_open = receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
             tests_panel_open = dj_tune_open = filter_panel_open = False
@@ -27424,8 +27451,12 @@ def main():
                                 # Display is also a non-modal rail drawer.
                                 # Its controls own the rail, not the waterfall.
                                 if contains(DISPLAY_FLOOR_MINUS_BOX, x, y):
+                                    state.select_waterfall_mode(False)
+                                    state.set_waterfall_enabled(True)
                                     gesture = "display_floor_slider"
                                 elif contains(DISPLAY_CEIL_MINUS_BOX, x, y):
+                                    state.select_waterfall_mode(False)
+                                    state.set_waterfall_enabled(True)
                                     gesture = "display_ceiling_slider"
                                 else:
                                     gesture = "display_setup"
@@ -29230,7 +29261,9 @@ def main():
                                     wake_controls()
                                 elif choice is not None:
                                     kind, value = choice
-                                    if kind == "close":
+                                    if display_page_action(kind):
+                                        pass
+                                    elif kind == "close":
                                         display_setup_open = False
                                         restore_navigation_parent(display_parent)
                                     elif kind == "theme":
@@ -29254,6 +29287,10 @@ def main():
                                                 preferences_dirty = True
                                                 write_remembered_view(force=True)
                                                 print(f"gl instruments {instrument_layout}", flush=True)
+                                        elif kind in ("spectrum_cycle", "waterfall_cycle", "speed_cycle"):
+                                            floor, ceiling, speed, auto, palette, _generation = cycle_display_control(state, kind)
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
                                         elif kind == "spectrum":
                                             toggle_display_spectrum_control(state, kind)
                                         elif kind == "auto":
@@ -29274,7 +29311,7 @@ def main():
                                             floor, ceiling, speed, auto, palette, _generation = (
                                                 apply_waterfall_palette_preset(state, value)
                                             )
-                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset"):
+                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset", "spectrum_cycle", "waterfall_cycle", "speed_cycle"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -30631,7 +30668,7 @@ def main():
             # waterfall itself must still occupy the full post-ruler region.
             normal_waterfall_y1 = LOGICAL_H
             waterfall_y1 = normal_waterfall_y1 + (WATERFALL_FOCUS_Y1 - normal_waterfall_y1) * focus_progress
-            waterfall_visible = waterfall_y1 > waterfall_y0 and not globe_covering_radio
+            waterfall_visible = waterfall_y1 > waterfall_y0 and not globe_covering_radio and state.waterfall_enabled_snapshot()
             local_iq_active = state.external_waterfall_snapshot() or rtl_lab.is_running()
             view_center_khz = active_waterfall_center(display_freq, display_span)
             source_span_khz = active_source_span_khz(zoom)
@@ -31033,6 +31070,7 @@ def main():
             if display_setup_open:
                 wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, _wf_generation = state.waterfall_snapshot()
                 spectrum_enabled, _spectrum_values, _spectrum_peak_values = state.spectrum_snapshot()
+                wf_floor, wf_ceil = state.waterfall_display_levels()
                 draw_display_setup_panel(
                     text_cache,
                     wf_floor,
@@ -31043,6 +31081,7 @@ def main():
                     spectrum_enabled,
                     instrument_layout,
                     waterfall_auto=wf_auto,
+                    waterfall_enabled=state.waterfall_enabled_snapshot(),
                 )
             if filter_drawer_open and LCD_800_MODE:
                 draw_lcd_filter_drawer(text_cache, radio_mode, low_cut, high_cut)
