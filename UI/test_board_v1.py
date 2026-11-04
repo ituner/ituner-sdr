@@ -694,16 +694,16 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
-    def test_display_reset_sits_directly_above_back(self):
-        ui.configure_output(True)
-        ui.configure_popup_layout()
-        self.addCleanup(ui.set_display_page, False)
-        for advanced in (False, True):
-            ui.set_display_page(advanced)
-            self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
-                             ui.lcd_drawer_back_box()[1])
+    def test_display_advanced_sits_above_back_and_reset_beside_speed(self):
+        ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
+        self.addCleanup(ui.set_display_page,False)
+        self.assertEqual(ui.DISPLAY_ADVANCED_BOX[3]+ui.LCD_NAV_GAP,ui.lcd_drawer_back_box()[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[1::2],ui.DISPLAY_SPEED_BOX[1::2])
+        self.assertGreater(ui.DISPLAY_RESET_BOX[0],ui.DISPLAY_SPEED_BOX[2])
+        ui.set_display_page(True)
         box=ui.DISPLAY_THEME_BOX
-        self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2), ('theme', None))
+        self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),('theme',None))
+        self.assertLess(ui.DISPLAY_RESET_BOX[0],0)
 
     def test_display_drawer_draws_layout_and_speed_without_scope(self):
         ui.configure_output(True)
@@ -724,12 +724,13 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertFalse(sliders.called)
                 self.assertIn('THEMES', [c.args[2] for c in tiles.call_args_list])
                 self.assertEqual([c.args[2] for c in controls.call_args_list],
-                                 ['CLASSIC', 'KIWI', 'GQRX', 'LEFT', 'MIDDLE', 'RIGHT'])
+                                 ['LEFT', 'MIDDLE', 'RIGHT'])
             else:
                 self.assertEqual([c.args[2:4] for c in cycles.call_args_list],
-                                 [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('ADVANCED','SETTINGS')])
+                                 [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('RESET','DISPLAY')])
                 self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
-                self.assertFalse(controls.called)
+                self.assertEqual([c.args[2] for c in controls.call_args_list], ['CLASSIC','KIWI','GQRX'])
+                self.assertIn('ADVANCED', [c.args[2] for c in tiles.call_args_list])
 
     def test_display_drawer_options_fit_the_rail(self):
         ui.configure_output(True)
@@ -751,7 +752,7 @@ class BoardLayoutTests(unittest.TestCase):
                     self.assertFalse(box[0]<other[2] and other[0]<box[2] and box[1]<other[3] and other[1]<box[3])
             if not advanced:
                 for action,box in (('spectrum_cycle',ui.DISPLAY_SPECTRUM_BOX),('waterfall_cycle',ui.DISPLAY_WATERFALL_BOX),('speed_cycle',ui.DISPLAY_SPEED_BOX)):
-                    self.assertEqual(box[2]-box[0],box[3]-box[1])
+                    self.assertEqual((box[2]-box[0],box[3]-box[1]),(114,56))
                     self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),(action,None))
                 self.assertFalse(ui.DISPLAY_RATE_BOXES)
                 self.assertFalse(ui.DISPLAY_WATERFALL_MODE_BOXES)

@@ -112,6 +112,32 @@ class DisplayWaterfallTests(unittest.TestCase):
         self.assertTrue(ui.display_page_action('close'))
         self.assertFalse(ui.DISPLAY_ADVANCED_OPEN)
 
+    def test_returning_to_auto_reseeds_from_next_row_instead_of_manual_or_old_estimate(self):
+        state=self.state()
+        weak=bytes([100]*900+[120]*100+[145]*24)
+        strong=bytes([170]*900+[190]*100+[215]*24)
+        state.waterfall_levels(weak)
+        state.select_waterfall_mode(False)
+        state.set_waterfall(floor=180,ceil=240,auto=False)
+        # No intervening waterfall row: the old context can still say Auto.
+        state.select_waterfall_mode(True)
+        self.assertIsNone(state.wf_live_levels)
+        self.assertIsNone(state.wf_level_context)
+        expected=ui.AutoWaterfallLevels().levels_for(strong)
+        self.assertEqual(state.waterfall_levels(strong),expected)
+        self.assertNotEqual(expected,(180,240))
+
+    def test_auto_level_instruments_are_dimmed_and_readonly_gesture_is_quiet(self):
+        ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
+        with patch.object(ui,'draw_lcd_audio_tile'), patch.object(ui,'draw_styled_two_line_button'), \
+             patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_radio_close_button'), \
+             patch.object(ui,'draw_sidebar_header'), patch.object(ui,'draw_display_control'), \
+             patch.object(ui,'draw_lcd_drawer_heading'), patch.object(ui,'draw_display_slider_section') as sliders:
+            ui.draw_display_setup_panel(None,105,195,2,True,'kiwi',True,waterfall_auto=True)
+        self.assertTrue(all(not c.args[-1] for c in sliders.call_args_list))
+        self.assertEqual([c.args[-2] for c in sliders.call_args_list],['AUTO 105','AUTO 195'])
+        self.assertIn('display_readonly',ui.TOOLBOX_CONTINUOUS_GESTURES)
+
     def test_spectrum_auto_is_independent_of_waterfall_manual(self):
         state = self.state()
         state.select_waterfall_mode(False)
