@@ -17066,7 +17066,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     value = "CENTER" if center_notice else f"{width_hz / 1000.0:.1f} kHz"
     value_scale = min(1.0, max(1.0, value_right - value_left) / max(1, header_font.size(value)[0]))
     draw_text_scaled_x(text_cache, (value_left + value_right) / 2, y0 + 14, value,
-                       APP_UI_STYLE.palette.ready if center_notice else APP_UI_STYLE.palette.text,
+                       edge if center_notice else APP_UI_STYLE.palette.text,
                        13, value_scale, True, False, "cm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", themed_instrument_color("secondary_text", (180, 214, 220)), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
@@ -17094,7 +17094,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    center_color = APP_UI_STYLE.palette.ready if centered else (*APP_UI_STYLE.palette.home_passband_center[:3], 100)
+    center_color = (*edge[:3], 150 if centered else 100)
     draw_logical_line(center_x, top_y - 2, center_x, plot_y + 4, center_color, 1)
     # Attach a small vertical grip to the moving passband center. A short guide
     # suggests horizontal motion without pretending to be a second full scale.
@@ -17103,7 +17103,7 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 7, plot_x1 - 7)
     draw_logical_rounded_rect(max(plot_x0, handle_x - 22), rail_y - 1,
                               min(plot_x1, handle_x + 22), rail_y + 1, 1, track_color)
-    handle_color = APP_UI_STYLE.palette.ready if centered else (*APP_UI_STYLE.palette.slider_thumb[:3], 210)
+    handle_color = (*edge[:3], 230 if centered else 190)
     draw_logical_line(handle_x, top_y + 3, handle_x, rail_y, handle_color, 1)
     draw_logical_rounded_rect(handle_x - 7, rail_y - 11, handle_x + 7, rail_y + 11, 2, handle_color)
     for grip_y in (rail_y - 5, rail_y, rail_y + 5):
