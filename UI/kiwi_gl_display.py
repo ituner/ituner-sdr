@@ -17098,16 +17098,16 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     draw_logical_line(center_x, top_y - 2, center_x, plot_y + 4, center_color, 1)
     # Attach a small vertical grip to the moving passband center. A short guide
     # suggests horizontal motion without pretending to be a second full scale.
-    rail_y = y1 - 22
+    rail_y = plot_y
     track_color = (*APP_UI_STYLE.palette.slider_track[:3], 150)
     handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 7, plot_x1 - 7)
     draw_logical_rounded_rect(max(plot_x0, handle_x - 22), rail_y - 1,
                               min(plot_x1, handle_x + 22), rail_y + 1, 1, track_color)
     handle_color = APP_UI_STYLE.palette.ready if centered else (*APP_UI_STYLE.palette.slider_thumb[:3], 210)
     draw_logical_line(handle_x, top_y + 3, handle_x, rail_y, handle_color, 1)
-    draw_logical_rounded_rect(handle_x - 7, rail_y - 8, handle_x + 7, rail_y + 8, 2, handle_color)
-    for grip_y in (rail_y - 4, rail_y, rail_y + 4):
-        draw_logical_rect(handle_x - 5, grip_y - 1, handle_x + 5, grip_y + 1,
+    draw_logical_rounded_rect(handle_x - 7, rail_y - 11, handle_x + 7, rail_y + 11, 2, handle_color)
+    for grip_y in (rail_y - 5, rail_y, rail_y + 5):
+        draw_logical_rect(handle_x - 6, grip_y - 1, handle_x + 6, grip_y + 1,
                           APP_UI_STYLE.palette.sidebar)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
