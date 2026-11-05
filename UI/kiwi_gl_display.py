@@ -15923,7 +15923,7 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True, trial=None):
     compact_cell_h = LCD_RADIO_SQUARE_SIZE if trial else 31
     grid_y0 = (LCD_COMPACT_MODE_GRID_TOP + smeter_rail_extra_height()
                if show_compact_readouts else 28)
-    if show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
+    if show_compact_readouts and home_smeter_needs_tight_stack():
         # Full-width square housings fit by reclaiming surplus gaps, preserving
         # the same touch targets and the complete Volume block below them.
         grid_y0 = LCD_COMPACT_SMETER_TOP + LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height() + 4
@@ -16210,7 +16210,14 @@ def smeter_rail_extra_height():
     height = METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
     if HOME_MODE_SELECTOR_TRIAL and height >= 236:
         height -= 28
+    elif HOME_MODE_SELECTOR_TRIAL and theme_system.runtime_theme["smeter_style"] == "bakelite_round":
+        height = 208
     return height - LCD_COMPACT_SMETER_HEIGHT
+
+
+def home_smeter_needs_tight_stack():
+    identifier = theme_system.runtime_theme["smeter_style"]
+    return METER_STYLES[identifier].height >= 236 or (HOME_MODE_SELECTOR_TRIAL and identifier == "bakelite_round")
 
 
 def smeter_supports_top_instrument_strip(style_id=None):
@@ -16697,7 +16704,7 @@ def lcd_home_volume_box(show_compact_readouts=True):
             pass_y1 = lcd_home_mode_grid_bottom(show_compact_readouts)
         else:
             pass_y1 = lcd_home_bandwidth_box(False)[1] + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
-    tight = show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236
+    tight = show_compact_readouts and home_smeter_needs_tight_stack()
     y0 = pass_y1 + (4 if tight else 16)
     y1 = min(lcd_nav_top(len(MENU_ITEMS)) - 12, y0 + 72)
     return x0, y0, x1, max(y0 + 46, y1)
@@ -16767,12 +16774,12 @@ def lcd_compact_smeter_box():
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     top = y0 + LCD_COMPACT_SMETER_TOP
     height = LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height()
+    if HOME_MODE_SELECTOR_TRIAL and theme_system.runtime_theme["smeter_style"] in ("bakelite_square", "bakelite_round"):
+        # Use the spare room above and beside the case without moving the mode
+        # grid or Volume. Keep the dial proportional and the bottom edge fixed.
+        top -= 20
+        height += 20
     if HOME_MODE_SELECTOR_TRIAL and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
-        if theme_system.runtime_theme["smeter_style"] == "bakelite_square":
-            # Use the spare room above and beside the case without moving the
-            # mode grid or squeezing Volume. Keep the case and dial square.
-            top -= 20
-            height += 20
         left = (LCD_NAV_X0 + LOGICAL_W - height) / 2
         return left, top, left + height, top + height
     return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + height
