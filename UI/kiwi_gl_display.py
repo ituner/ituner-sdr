@@ -8683,7 +8683,8 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None, fit_full_subtitle=False, enabled=True, content_offset_y=0):
+                                style=None, fit_full_subtitle=False, enabled=True, content_offset_y=0,
+                                footnote=None):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
@@ -8692,7 +8693,7 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
     text_color = visual.text if enabled else style.palette.untested_text
     center_x = (x0 + x1) / 2
 
-    def draw_line(caption, center_y, color, size, *, fit_full=False):
+    def draw_line(caption, center_y, color, size, *, fit_full=False, bold=True):
         caption = str(caption).upper()
         if not fit_full:
             draw_text(text_cache, center_x, center_y,
@@ -8700,21 +8701,25 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
                       color, size, True, False, "cm", family=style.font_family)
             return
         texture = getattr(text_cache, "texture", None)
-        width = texture(caption, size, color, bold=True, family=style.font_family)[1] if callable(texture) else 0
+        width = texture(caption, size, color, bold=bold, family=style.font_family)[1] if callable(texture) else 0
         x_scale = min(1.0, (x1 - x0 - 4) / width) if isinstance(width, (int, float)) and width > 0 else 1.0
         if x_scale < 1.0:
             draw_text_scaled_x(text_cache, center_x, center_y, caption, color,
-                               size, x_scale, True, False, "cm", family=style.font_family)
+                               size, x_scale, bold, False, "cm", family=style.font_family)
         else:
             draw_text(text_cache, center_x, center_y, caption, color,
-                      size, True, False, "cm", family=style.font_family)
+                      size, bold, False, "cm", family=style.font_family)
 
     if subtitle:
         center_y = (y0 + y1) / 2 + content_offset_y
-        draw_line(title, center_y - 12, text_color, style.title_size)
-        draw_line(subtitle, center_y + 12,
+        draw_line(title, center_y - (18 if footnote else 12), text_color, style.title_size)
+        draw_line(subtitle, center_y + (2 if footnote else 12),
                   text_color if pressed or not enabled else (style.palette.ready if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
                   fit_full=fit_full_subtitle)
+        if footnote:
+            draw_line(footnote, center_y + 20,
+                      text_color if pressed else style.subtitle_color,
+                      max(8, style.subtitle_size - 3), fit_full=True, bold=False)
     else:
         draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, style.title_size)
     return visual
@@ -16130,10 +16135,12 @@ def draw_band_navigation(text_cache, freq_khz, mode, band_counts=None, tuning_bo
 
 
 def draw_band_waterfall_button(text_cache, freq_khz, mode):
-    label = frequency_band_context(freq_khz, mode)[0].split(" · ", 1)[0]
+    context, kind = frequency_band_context(freq_khz, mode)
+    label = context.split(" · ", 1)[0]
+    category = {"broadcast": "(Broadcast)", "ham": "(Ham)", "general": "(General)"}[kind]
     draw_styled_two_line_button(text_cache, band_waterfall_box(), "BAND", label,
                                style=replace(APP_UI_STYLE.button, title_size=18, subtitle_size=13),
-                               fit_full_subtitle=True)
+                               fit_full_subtitle=True, footnote=category)
 
 
 def compact_font_review_boxes():
