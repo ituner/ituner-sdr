@@ -83,7 +83,7 @@ class FmdxRailRegressionTests(unittest.TestCase):
                  patch.object(ui, "draw_sidebar_header"), \
                  patch.object(ui, "fit_station_text", side_effect=lambda _c, label, *_a, **_kw: label), \
                  patch.object(ui, "draw_lcd_audio_tile") as tile, \
-                 patch.object(ui, "draw_picker_button") as step_button:
+                 patch.object(ui, "draw_selection_button") as step_button:
                 ui.draw_radio_setup_panel(None, "AM", "DIG", 100000,
                     receiver_type="fmdx", fmdx_stations=stations, fmdx_shared_control=shared)
                 calls = tile.call_args_list
@@ -98,5 +98,5 @@ class FmdxRailRegressionTests(unittest.TestCase):
                 if shared:
                     self.assertEqual([call.args[2] for call in steps],
                                      ["50K", "100K", "200K"])
-                    self.assertEqual([call.args[4] for call in steps],
+                    self.assertEqual([call.args[3] for call in steps],
                                      [False, True, False])

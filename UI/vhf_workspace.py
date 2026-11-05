@@ -11,6 +11,8 @@ from sstv_workspace import SSTVWorkspace
 from vhf_catalog import MODES
 from vhf_monitor import clean_position
 from spectrum_workspace import SpectrumWorkspace
+from ui_style import APP_UI_STYLE
+from theme_system import runtime_theme
 
 
 class MapAdapter:
@@ -135,7 +137,9 @@ class VHFWorkspace(DecoderStyle, SSTVWorkspace):
     def header(self,cache,state):
         ui=self.ui;meta=MODES[self.mode]
         ui.draw_logical_rect(0,0,1024,82,self.PANEL)
-        ui.draw_text(cache,20,30,meta['title'].upper(),self.TEXT,25,True,False,'lm',family='Oxanium')
+        family = ('Oxanium' if runtime_theme.get('font_style','current')=='current'
+                  else APP_UI_STYLE.button.font_family)
+        ui.draw_text(cache,20,30,meta['title'].upper(),self.TEXT,25,True,False,'lm',family=family)
         self.text(cache,22,60,meta['label']+' / '+meta['engine'],13,self.MUTED)
         for x,label,value in ((610,'FREQUENCY',f"{state['settings']['frequency']/1e6:.3f} MHz"),(850,'DECODED',state['messages'])):
             self.text(cache,x,22,label,10,self.MUTED);self.text(cache,x,52,value,23,self.CYAN)

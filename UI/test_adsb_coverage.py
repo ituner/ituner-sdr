@@ -24,6 +24,22 @@ def row(stamp=None,**fields):
 
 
 class CoverageTests(unittest.TestCase):
+    def test_history_and_dome_choices_use_selection_lamps_without_changing_actions(self):
+        ui=Mock();w=ADSBWorkspace(ui,Mock());cache=Mock()
+        w.history_draft=3600
+        w.draw_history_window(cache)
+        choices=ui.draw_selection_button.call_args_list
+        self.assertEqual(len(choices),9)
+        self.assertEqual(sum(bool(call.args[3]) for call in choices),1)
+        self.assertEqual(len([action for _box,action in w.actions if action[0]=='history_choice']),9)
+        self.assertIn(('history_apply',None),[action for _box,action in w.actions])
+        ui.reset_mock();w.actions=[];w.coverage_view.window_open=True
+        w.coverage_view.draw(cache,dict(aircraft=[]))
+        choices=ui.draw_selection_button.call_args_list
+        self.assertEqual(len(choices),len(COVERAGE_WINDOWS))
+        self.assertEqual(sum(bool(call.args[3]) for call in choices),1)
+        self.assertEqual(len([action for _box,action in w.actions if action[0]=='coverage_span']),len(COVERAGE_WINDOWS))
+
     def test_empty_dome_message_clears_height_controls_without_moving_them(self):
         w=ADSBWorkspace(Mock(),Mock());w.ink=Mock();w.manager.coverage_error=''
         view=w.coverage_view;view.mode='space';view.data=dict(status='NO SITE',meta={})

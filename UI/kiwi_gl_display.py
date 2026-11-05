@@ -250,6 +250,8 @@ from directory_refresh import DailyDirectoryRefresh, checked_refresh, directory_
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
+from theme_fonts import resolve_font_path
+from theme_colors import saturate_rgb, muted_text_color
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 from smeter_picker import SMeterPicker
 from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SKIN_CALIBRATION,
@@ -1233,9 +1235,10 @@ def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
 
 def draw_radio_tune_step(text_cache,box,step_hz,active=False):
     if box[3]-box[1] <= FREQUENCY_SMALL_BUTTON_H:
-        return draw_picker_button(text_cache,box,format_small_tune_step(step_hz),15,active)
+        return draw_selection_button(text_cache,box,format_small_tune_step(step_hz),active,size=15)
     value,unit=(f"{step_hz/1000:g}","kHz") if step_hz>=1000 else (str(step_hz),"Hz")
-    return draw_styled_two_line_button(text_cache,box,value,unit,active=active,style=APP_UI_STYLE.smart_button)
+    draw_styled_two_line_button(text_cache,box,value,unit,active=active,style=APP_UI_STYLE.smart_button,content_offset_y=-4)
+    draw_selection_indicator(box,active)
 
 
 def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
@@ -2270,9 +2273,7 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     track_x0, track_x1 = x0 + 14, x1 - 14
     track_y = y0 + 33
     knob_x = track_x0 + (track_x1 - track_x0) * mix
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (29, 52, 61, 255)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (83, 216, 248, 228)))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (228, 244, 245, 238)))
+    draw_theme_slider(track_x0, track_x1, track_y, mix, thumb_half=(6,11))
     legend_y = y1 - 9
     legend_color = themed_instrument_color("secondary_text", (138, 166, 176))
     draw_text(text_cache, track_x0, legend_y, "VFO A", legend_color, 10, True, False, "lm", family="Liberation Sans")
@@ -2393,7 +2394,7 @@ def dual_vfo_mode_picker_action_at(x, y):
     for _family, mode, box in boxes["buttons"]:
         if contains(box, x, y):
             return "mode", mode
-    return "outside", None
+    return ("idle", None) if contains(boxes["panel"], x, y) else ("outside", None)
 
 
 def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
@@ -2413,7 +2414,9 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
         active = family == current_family
         label = "FM" if family == "FM" else family
         detail = KIWI_MODE_LABELS.get(selected_mode, selected_mode)
-        draw_styled_two_line_button(text_cache, box, label, detail, active=active)
+        draw_styled_two_line_button(text_cache, box, label, detail, active=active,
+                                    style=APP_UI_STYLE.smart_button, content_offset_y=-4)
+        draw_selection_indicator(box, active)
 
 
 def dual_vfo_receiver_picker_boxes():
@@ -4413,9 +4416,9 @@ def configure_output(desktop=False):
     # 480-pixel prototype coordinate.
     content_bottom = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
     control_bottom = content_bottom - LCD_CONTROL_GAP
-    # Leave a full finger's clearance above the status bar. Drawing and
-    # touch routing share these boxes, so the old lower position stays inert.
-    zoom_bottom = control_bottom - 55
+    # Anchor Home zoom just above the footer/ruler band. Drawing and touch
+    # routing share these boxes, preserving the gap below the controls.
+    zoom_bottom = control_bottom
     # The wide LCD keeps Zoom anchored to the canvas's left edge. Passband
     # editing lives in the Home drawer, outside the live RF surface.
     # Do not inherit the old 960 px coordinate positions here: the live radio
@@ -4581,22 +4584,24 @@ def stream_waterfall_box():
     return x0, y0, x1, y0 + height
 
 
+def waterfall_tuning_row_box(column):
+    """TUNE / SCAN / BAND share a right-aligned row below Favorite/Pause."""
+    _x0, y0, right, y1 = stream_waterfall_box()
+    width = y1 - y0
+    left = right - 3 * width - 20 + column * (width + 10)
+    return left, y1 + 10, left + width, y1 + 10 + width
+
+
 def carrier_waterfall_box():
-    """TUNE occupies the square immediately below Favorite."""
-    x0, y0, x1, y1 = favorite_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+    return waterfall_tuning_row_box(0)
 
 
 def smart_seek_waterfall_box():
-    """SCAN occupies the square immediately below Play/Pause."""
-    x0, y0, x1, y1 = stream_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+    return waterfall_tuning_row_box(1)
 
 
 def band_waterfall_box():
-    """Third row, aligned with the right-hand Pause and Scan squares."""
-    x0, _y0, x1, y1 = smart_seek_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (x1-x0)
+    return waterfall_tuning_row_box(2)
 
 
 def waterfall_band_touch(x, y, drawn, modal_open=False):
@@ -6481,7 +6486,9 @@ class TextCache:
 
     def font(self, size, bold=False, mono=False, family=None):
         size = theme_system.scaled_text_size(size)
-        key = ("font", size, bold, mono, family)
+        path = resolve_font_path(theme_system.runtime_theme.get('font_style','current'),
+                                 family=family,mono=mono,bold=bold)
+        key = ("font", size, bold, mono, path or family)
         font = self.cache.get(key)
         if font is None:
             if family:
@@ -6489,7 +6496,8 @@ class TextCache:
             else:
                 names = ["DejaVu Sans Mono", "monospace"] if mono else ["DejaVu Sans", "sans"]
             try:
-                font = pygame.font.SysFont(names, size, bold=bold)
+                font = (pygame.font.Font(path,size) if path else
+                        pygame.font.SysFont(names, size, bold=bold))
             except (OSError, pygame.error) as exc:
                 # Some fontconfig entries on the Pi can survive an interrupted
                 # package update while their target font file no longer exists.
@@ -6505,7 +6513,9 @@ class TextCache:
         return font
 
     def texture(self, text, size, color, bold=False, mono=False, family=None):
-        key = ("text", text, theme_system.scaled_text_size(size), color, bold, mono, family)
+        path = resolve_font_path(theme_system.runtime_theme.get('font_style','current'),
+                                 family=family,mono=mono,bold=bold)
+        key = ("text", text, theme_system.scaled_text_size(size), color, bold, mono, path or family)
         cached = self._cached_texture(key)
         if cached is not None:
             return cached
@@ -7039,15 +7049,19 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     """Recolor stored waterfall pixels without discarding their RF history."""
     theme = theme or theme_system.runtime_theme
     palette = palette or APP_UI_STYLE.palette
-    identifier = theme["id"]
+    identifier = theme.get("waterfall_style", theme["id"])
+    intensity = theme.get('color_intensity_percent',100)
+    def finish(pixels):
+        return waterfall_saturation_pixels(waterfall_intensity_pixels(pixels,intensity),
+                                            theme.get('saturation_percent',100))
     if identifier == theme_system.DEFAULT_THEME_ID:
-        return bytes(data)
+        return finish(data)
     if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
                            theme_system.GREEN_THEME_ID,
                            theme_system.BLACK_WHITE_THEME_ID)
             and tuple(palette.waterfall_low) == (0, 0, 0)
             and tuple(palette.waterfall_high) == (255, 255, 255)):
-        return bytes(data)
+        return finish(data)
     inverted = identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
     if np is None:
         pixels = bytearray(data)
@@ -7055,20 +7069,17 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
             inverse = bytes(reversed(range(256)))
             for channel in range(3):
                 pixels[channel::4] = bytes(pixels[channel::4]).translate(inverse)
-            return bytes(pixels)
+            return finish(pixels)
         low, high = palette.waterfall_low, palette.waterfall_high
-        color_map = tuple(bytes(
-            max(0, min(255, round(low[index] + level / 255.0 * (high[index] - low[index]))))
-            for index in range(3)
-        ) for level in range(256))
         red_part = tuple(0.2126 * value for value in range(256))
         green_part = tuple(0.7152 * value for value in range(256))
         blue_part = tuple(0.0722 * value for value in range(256))
         for offset in range(0, len(pixels), 4):
-            lightness = round(red_part[pixels[offset]] + green_part[pixels[offset + 1]]
-                              + blue_part[pixels[offset + 2]])
-            pixels[offset:offset + 3] = color_map[lightness]
-        return bytes(pixels)
+            lightness = (red_part[pixels[offset]] + green_part[pixels[offset + 1]]
+                         + blue_part[pixels[offset + 2]])
+            pixels[offset:offset + 3] = bytes(max(0,min(255,round(
+                low[index]+lightness/255.0*(high[index]-low[index])))) for index in range(3))
+        return finish(pixels)
     pixels = np.frombuffer(data, dtype=np.uint8).reshape(-1, 4).copy()
     rgb = pixels[:, :3]
     if inverted:
@@ -7083,17 +7094,51 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
         high = np.asarray(palette.waterfall_high, dtype=np.float32)
         rgb[:] = np.clip(np.rint(low + lightness[:, None] / 255.0 * (high - low)),
                          0, 255).astype(np.uint8)
-    return pixels.tobytes()
+    return finish(pixels.tobytes())
+
+
+def waterfall_intensity_pixels(data, percent):
+    """Brightness after color mapping, retaining original alpha and RF history."""
+    if percent == 100:
+        return bytes(data)
+    if np is not None:
+        pixels = np.frombuffer(data,dtype=np.uint8).reshape(-1,4).copy()
+        pixels[:,:3] = np.clip(np.rint(pixels[:,:3].astype(np.float32)*percent/100),0,255).astype(np.uint8)
+        return pixels.tobytes()
+    pixels = bytearray(data)
+    lut = bytes(min(255,round(v*percent/100)) for v in range(256))
+    for channel in range(3):
+        pixels[channel::4] = bytes(pixels[channel::4]).translate(lut)
+    return bytes(pixels)
+
+
+def waterfall_saturation_pixels(data, percent):
+    """Adjust colorfulness without touching stored signal data or alpha."""
+    if percent == 100:
+        return bytes(data)
+    if np is not None:
+        pixels = np.frombuffer(data,dtype=np.uint8).reshape(-1,4).copy()
+        rgb = pixels[:,:3].astype(np.float64)
+        gray = rgb[:,0]*.2126+rgb[:,1]*.7152+rgb[:,2]*.0722
+        pixels[:,:3] = np.clip(np.rint(gray[:,None]+(rgb-gray[:,None])*percent/100),0,255).astype(np.uint8)
+        return pixels.tobytes()
+    pixels = bytearray(data)
+    for i in range(0,len(pixels),4):
+        pixels[i:i+3] = bytes(saturate_rgb(pixels[i:i+3],percent))
+    return bytes(pixels)
 
 
 def waterfall_empty_background_color():
     """Color exposed by transparent waterfall rows before RF data arrives."""
-    return (*themed_instrument_color("waterfall_low", (4, 7, 11))[:3], 255)
+    color = themed_instrument_color("waterfall_low", (4, 7, 11))[:3]
+    factor = theme_system.runtime_theme.get('color_intensity_percent',100)/100
+    rgb = [min(255,round(v*factor)) for v in color]
+    return (*saturate_rgb(rgb,theme_system.runtime_theme.get('saturation_percent',100)),255)
 
 
 def waterfall_theme_signature():
     """Only changes to waterfall mapping require a whole-texture upload."""
-    identifier = theme_system.runtime_theme["id"]
+    identifier = theme_system.runtime_theme.get("waterfall_style", theme_system.runtime_theme["id"])
     palette = APP_UI_STYLE.palette
     low, high = tuple(palette.waterfall_low), tuple(palette.waterfall_high)
     identity = (identifier == theme_system.DEFAULT_THEME_ID or
@@ -7104,7 +7149,8 @@ def waterfall_theme_signature():
     mapping = ("identity" if identity else
                "inverted" if identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
                else "mapped")
-    return mapping, low, high
+    return (mapping, low, high, theme_system.runtime_theme.get('color_intensity_percent',100),
+            theme_system.runtime_theme.get('saturation_percent',100))
 
 
 class WaterfallTexture:
@@ -8667,11 +8713,14 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
                             danger=False, bold=True, style=None):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     style = style or APP_UI_STYLE.button
+    label_size = style.label_size if size is None else size
+    if str(label).strip() in ('−', '-', '+'):
+        label_size = round(label_size * 1.5)
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-        button_label_for_box(text_cache, label, box, style), visual.text,
-        style.label_size, True, False, "cm",
+        button_label_for_box(text_cache, label, box, style, size=label_size), visual.text,
+        label_size, True, False, "cm",
         family=style.font_family,
     )
     return visual
@@ -8709,14 +8758,15 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
         center_y = (y0 + y1) / 2 + content_offset_y
         draw_line(title, center_y - (18 if footnote else 12), text_color, style.title_size)
         draw_line(subtitle, center_y + (2 if footnote else 12),
-                  text_color if pressed or not enabled else (style.palette.ready if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
+                  tuple(muted_text_color(text_color,visual.fill)) if pressed or not enabled else (style.palette.ready if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
                   fit_full=fit_full_subtitle)
         if footnote:
             draw_line(footnote, center_y + 20,
                       text_color if pressed else style.subtitle_color,
                       max(8, style.subtitle_size - 3), fit_full=True, bold=False)
     else:
-        draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, style.title_size)
+        title_size = round(style.title_size * 1.5) if str(title).strip() in ('−', '-', '+') else style.title_size
+        draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, title_size)
     return visual
 
 
@@ -8744,7 +8794,7 @@ def draw_navigation_button(text_cache, box, title, subtitle):
     subtitle_y = y1 - 16 if taller_tile else y0 + 51
     for text, preferred, cy, color in (
         (title, 14, title_y, visual.text),
-        (subtitle, 13 if taller_tile else 12, subtitle_y, visual.text if pressed else style.subtitle_color),
+        (subtitle, 13 if taller_tile else 12, subtitle_y, tuple(muted_text_color(visual.text,visual.fill)) if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
         draw_text(text_cache, cx, round(cy), str(text) if text == "Wi-Fi / ETHERNET" else str(text).upper(), color,
@@ -8804,7 +8854,7 @@ def waterfall_button_fill_alpha(active=False, pressed=False):
     return 216 if active or pressed else 184
 
 
-def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
+def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False, *, symbol_scale=1.5):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
@@ -8814,10 +8864,12 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         fill_alpha=waterfall_button_fill_alpha(active, pressed),
     )
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    half_sign = 16
-    draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, 4)
+    # Match the shared +/− button emphasis without enlarging its touch target.
+    half_sign = 16 * symbol_scale
+    stroke = 4 * symbol_scale
+    draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, stroke)
     if label == "+":
-        draw_logical_line(cx, cy - half_sign, cx, cy + half_sign, visual.text, 4)
+        draw_logical_line(cx, cy - half_sign, cx, cy + half_sign, visual.text, stroke)
 
 
 def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
@@ -8900,8 +8952,8 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, p
     # Zoom is two standalone bordered + / - tiles; the shared pill background
     # and its centre "ZOOM" label were removed. ``pressed`` names the zoom
     # gesture in progress so a knob or finger press lights the tile.
-    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus")
-    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus")
+    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus", symbol_scale=1.0)
+    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus", symbol_scale=1.0)
     if LCD_800_MODE:
         # The waterfall no longer carries a DISPLAY button. Spectrum on/off
         # lives in the DISPLAY drawer; held vertical resizing works directly
@@ -9010,7 +9062,7 @@ def draw_favorite_waterfall_button(favorited):
         (x0, y0, x1, y1), active=favorited, pressed=pressed,
         fill_alpha=waterfall_button_fill_alpha(favorited, pressed),
     )
-    edge = visual.text
+    edge = APP_UI_STYLE.palette.ready if favorited else visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     draw_favorite_star(cx, cy, 17, edge, filled=favorited)
 
@@ -9737,7 +9789,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
 def draw_radio_variant_option(text_cache, box, mode, active):
     """Render one readable option in the compact second-level popover."""
     label = KIWI_MODE_LABELS.get(mode, mode)
-    draw_styled_text_button(text_cache, box, label, active=active)
+    draw_selection_button(text_cache, box, label, active)
 
 
 def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
@@ -9856,7 +9908,7 @@ def draw_radio_setup_panel(
         draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
     for option, box in radio_step_options(receiver_type):
         label = f"{option // 1000}k" if option >= 1000 else str(option)
-        draw_radio_option(text_cache, box, label, option == step_hz)
+        draw_selection_button(text_cache, box, label, option == step_hz)
 
 
 def set_display_page(advanced=False):
@@ -9870,8 +9922,10 @@ def set_display_page(advanced=False):
     boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
     palettes, layouts, spectrum_styles = (), (), ()
     if advanced:
-        boxes["DISPLAY_THEME_BOX"] = (x0, 80, x1, 144)
-        layouts = tuple((name, (x0 + i*81, 184, x0 + i*81 + 74, 240))
+        bottom = lcd_drawer_back_box()[1] - LCD_NAV_GAP
+        top = bottom - 160
+        boxes["DISPLAY_THEME_BOX"] = (x0, top, x1, top + 64)
+        layouts = tuple((name, (x0 + i*81, bottom - 56, x0 + i*81 + 74, bottom))
                         for i, name in enumerate(("left", "middle", "right")))
     else:
         for row, pair in enumerate((("SPECTRUM", "WATERFALL"), ("SPEED", "RESET"))):
@@ -10045,11 +10099,26 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_styled_text_button(text_cache, box, label, active=active)
 
 
-def draw_display_preset_button(text_cache, box, label, selected):
-    """Both palette rows use the same dark Smart Button and status lamp."""
+def draw_selection_indicator(box, selected, *, enabled=True):
+    """Theme-ready accent for persistent choices with an existing caption."""
+    ready = APP_UI_STYLE.palette.ready
+    color = ready if selected and enabled else tuple(round(channel * .2) for channel in ready[:3])
+    cx, cy = (box[0] + box[2]) / 2, box[3] - 8
+    draw_logical_rect(cx - 7.5, cy - 2.5, cx + 7.5, cy + 2.5, color)
+
+
+def draw_selection_button(text_cache, box, label, selected, *, size=None, enabled=True):
+    """Persistent options share DISPLAY's theme-aware Smart Button and lamp."""
+    style = APP_UI_STYLE.smart_button
+    if size is not None:
+        style = replace(style, title_size=size)
     draw_styled_two_line_button(text_cache, box, label, "", active=selected,
-        style=APP_UI_STYLE.smart_button, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
-    draw_radio_mode_indicator(text_cache, box, "", selected)
+        enabled=enabled, style=style, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+    draw_radio_mode_indicator(text_cache, box, "", selected and enabled)
+
+
+def draw_display_preset_button(text_cache, box, label, selected):
+    draw_selection_button(text_cache, box, label, selected)
 
 
 def slider_track_bounds(box):
@@ -10057,31 +10126,153 @@ def slider_track_bounds(box):
     return box[0] + LCD_SLIDER_TRACK_INSET, box[2] - LCD_SLIDER_TRACK_INSET
 
 
+def draw_theme_slider(track_x0, track_x1, track_y, fraction, *, active=True, center=None,
+                      labels=None, label_y=None, thumb_half=(6, 11), style_id=None,
+                      text_cache=None, thumb_x=None):
+    """One theme-selected slider face; callers retain their original touch mapping."""
+    style = style_id or theme_system.runtime_theme.get('slider_style', 'classic')
+    fraction = clamp(fraction, 0.0, 1.0)
+    current_x = track_x0 + (track_x1 - track_x0) * fraction
+    thumb_x = current_x if thumb_x is None else thumb_x
+    start_fraction = center if center is not None else 0.0
+    start_x = track_x0 + (track_x1 - track_x0) * start_fraction
+    track = themed_instrument_color('slider_track', (27, 45, 52, 255))
+    fill = themed_instrument_color('slider_fill', (80, 226, 164, 235)) if active else APP_UI_STYLE.palette.secondary_text
+    marker = themed_instrument_color('slider_marker', (112, 238, 177, 190))
+    thumb = themed_instrument_color('slider_thumb', (229, 246, 246, 250)) if active else APP_UI_STYLE.palette.secondary_text
+    if style in ('precision', 'ruler', 'pointer'):
+        count = 24 if style == 'ruler' else 10
+        for index in range(count + 1):
+            x = track_x0 + (track_x1 - track_x0) * index / count
+            major = index % (6 if style == 'ruler' else 5) == 0
+            if style == 'pointer':
+                draw_logical_line(x, track_y + 8, x, track_y + (15 if major else 11),
+                                  marker if major and active else APP_UI_STYLE.palette.secondary_text, 1)
+            else:
+                draw_logical_line(x, track_y - (18 if major and style == 'ruler' else 15 if major else 11),
+                                  x, track_y - 7,
+                                  marker if major and active else APP_UI_STYLE.palette.secondary_text, 1)
+    if labels and label_y is not None and style in ('precision','studio','ruler'):
+        for index, label in enumerate(labels):
+            x = track_x0 + (track_x1 - track_x0) * index / max(1, len(labels) - 1)
+            anchor = 'lm' if index == 0 else 'rm' if index == len(labels) - 1 else 'cm'
+            draw_text(text_cache, x, label_y, label, APP_UI_STYLE.palette.secondary_text,
+                      11, False, False, anchor, family=APP_UI_STYLE.button.font_family)
+    if style == 'studio':
+        for index in range(12):
+            a = track_x0 + (track_x1 - track_x0) * index / 12 + 1
+            b = track_x0 + (track_x1 - track_x0) * (index + 1) / 12 - 2
+            middle = (index + .5) / 12
+            lit = min(start_fraction, fraction) <= middle <= max(start_fraction, fraction)
+            draw_logical_rect(a, track_y - 4, b, track_y + 4, fill if lit else track)
+    elif style == 'halo':
+        half_height = 5
+        draw_logical_rounded_rect(track_x0,track_y-half_height,track_x1,track_y+half_height,
+                                  half_height,track)
+        if abs(start_x-current_x)>1:
+            draw_logical_rounded_rect(min(start_x,current_x),track_y-half_height,
+                                      max(start_x,current_x),track_y+half_height,
+                                      half_height,fill)
+    elif style == 'dots':
+        for index in range(21):
+            x = track_x0 + (track_x1-track_x0)*index/20
+            position = index/20
+            lit = min(start_fraction,fraction) <= position <= max(start_fraction,fraction)
+            draw_logical_circle(x,track_y,2.5,fill if lit else track,segments=12)
+    elif style == 'pin':
+        draw_logical_rect(track_x0,track_y-2,track_x1,track_y+2,track)
+        for index in range(21):
+            x = track_x0+(track_x1-track_x0)*index/20
+            position = index/20
+            lit = min(start_fraction,fraction) <= position <= max(start_fraction,fraction)
+            draw_logical_circle(x,track_y-10,1.7,fill if lit else marker,segments=12)
+        draw_logical_rect(min(start_x,current_x),track_y-2,max(start_x,current_x),track_y+2,fill)
+    else:
+        half_height = 1 if style in ('arrows','diamond','bubble') else 3
+        draw_logical_rect(track_x0, track_y-half_height, track_x1, track_y+half_height, track)
+        draw_logical_rect(min(start_x,current_x), track_y-half_height,
+                          max(start_x,current_x), track_y+half_height, fill)
+    if center is not None:
+        draw_logical_line(start_x, track_y - 16, start_x, track_y + 16, marker, 2)
+    if style == 'studio':
+        draw_logical_circle(thumb_x, track_y, 9, thumb)
+        draw_logical_circle(thumb_x, track_y, 3, fill)
+    elif style in ('halo','dots'):
+        radius = 8 if style == 'dots' else 10
+        draw_logical_circle(thumb_x,track_y,radius,thumb,segments=32)
+        draw_logical_circle(thumb_x,track_y,radius-3,APP_UI_STYLE.palette.section_surface,segments=32)
+        draw_logical_circle(thumb_x,track_y,3,fill,segments=24)
+    elif style == 'pointer':
+        draw_logical_rounded_rect(thumb_x-6,track_y-17,thumb_x+6,track_y+5,3,thumb)
+        draw_logical_polyline(((thumb_x-6,track_y+5),(thumb_x,track_y+13),
+                               (thumb_x+6,track_y+5)),thumb,2)
+        draw_logical_line(thumb_x,track_y-12,thumb_x,track_y+2,fill,2)
+    elif style == 'pin':
+        draw_logical_line(thumb_x,track_y-16,thumb_x,track_y+13,thumb,2)
+        draw_logical_polyline(((thumb_x-6,track_y+13),(thumb_x-3,track_y+18),
+                               (thumb_x+3,track_y+18),(thumb_x+6,track_y+13),
+                               (thumb_x-6,track_y+13)),fill,2)
+    elif style == 'fader':
+        draw_logical_rounded_rect(thumb_x-14,track_y-9,thumb_x+14,track_y+9,5,thumb)
+        for offset in (-5,0,5):
+            draw_logical_line(thumb_x+offset,track_y-4,thumb_x+offset,track_y+4,fill,1.5)
+    elif style == 'arrows':
+        # The accent forms the grip face; black/white arrows stay legible for
+        # any chosen accent, including white and low-intensity dark colors.
+        brightness = fill[0]*.2126 + fill[1]*.7152 + fill[2]*.0722
+        arrow_ink = (0,0,0,255) if brightness >= 128 else (255,255,255,255)
+        draw_logical_rounded_rect(thumb_x-20,track_y-10,thumb_x+20,track_y+10,
+                                  6,fill,thumb,2)
+        draw_logical_polyline(((thumb_x-5,track_y-6),(thumb_x-12,track_y),
+                               (thumb_x-5,track_y+6)),arrow_ink,3.5)
+        draw_logical_polyline(((thumb_x+5,track_y-6),(thumb_x+12,track_y),
+                               (thumb_x+5,track_y+6)),arrow_ink,3.5)
+    elif style == 'diamond':
+        draw_logical_area(((thumb_x-14,track_y),(thumb_x,track_y-11),
+                           (thumb_x+14,track_y)),track_y,fill)
+        draw_logical_area(((thumb_x-14,track_y),(thumb_x,track_y+11),
+                           (thumb_x+14,track_y)),track_y,fill)
+        draw_logical_polyline(((thumb_x,track_y-11),(thumb_x+14,track_y),
+                               (thumb_x,track_y+11),(thumb_x-14,track_y),
+                               (thumb_x,track_y-11)),thumb,2)
+        draw_logical_circle(thumb_x,track_y,2.5,thumb,segments=20)
+    elif style == 'bubble':
+        draw_logical_circle(thumb_x,track_y,14,thumb,segments=40)
+        draw_logical_circle(thumb_x,track_y,11,fill,segments=40)
+    else:
+        half_w, half_h = thumb_half
+        if style in ('precision','ruler'):
+            half_w += 1
+            half_h += 2
+        draw_logical_rect(thumb_x-half_w, track_y-half_h, thumb_x+half_w,
+                          track_y+half_h, thumb)
+        if style in ('precision','ruler'):
+            draw_logical_line(thumb_x, track_y-half_h+3, thumb_x, track_y+half_h-3,
+                              APP_UI_STYLE.palette.section_surface, 1)
+    return current_x
+
+
 def slider_fraction_at_x(x, box):
     left, right = slider_track_bounds(box)
     return clamp((x-left)/max(1,right-left),0.0,1.0)
 
 
-def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active):
+def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active, *, detail_color=None,
+                                scale_labels=None):
     """Full-width Display instrument with the same visible 236 px bounds as BACK."""
     x0, y0, x1, y1 = box
     palette = APP_UI_STYLE.palette
     draw_logical_rect(x0, y0, x1, y1, palette.section_surface)
     draw_text(text_cache, x0 + 10, y0 + 14, title, palette.section_heading if active else palette.secondary_text,
-              LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
+              LCD_SLIDER_TITLE_SIZE, True, False, "lm", family=APP_UI_STYLE.button.font_family)
     draw_text(text_cache, x1 - 10, y0 + 14, detail,
-              palette.ready[:3] if active else palette.secondary_text,
-              LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
+              detail_color if detail_color is not None else palette.ready[:3] if active else palette.secondary_text,
+              LCD_SLIDER_VALUE_SIZE, True, False, "rm", family=APP_UI_STYLE.button.font_family)
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 13
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3,
-                      themed_instrument_color("slider_track", (27, 45, 52, 255)))
-    current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3,
-                      themed_instrument_color("slider_fill", (80, 226, 164, 235)) if active else (*palette.secondary_text[:3], 105))
-    draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9,
-                      themed_instrument_color("slider_thumb", (229, 246, 246, 250)) if active else (*palette.secondary_text[:3], 180))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, active=active,
+                      labels=scale_labels, label_y=track_y-27, thumb_half=(5,9), text_cache=text_cache)
 
 
 def volume_at_x(x, box):
@@ -11804,12 +11995,12 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), APP_UI_STYLE.palette.text, 21, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 154, ('Not configured' if profile.get('source')=='unconfigured' else f"{profile['lat']:.4f}, {profile['lon']:.4f}"), (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
-    draw_text(text_cache, x0 + 12, 180, source, (153, 185, 191), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 180, source, APP_UI_STYLE.palette.secondary_text, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
     fan_curve = fan_curve or load_fan_curve()
     fan_range = (
         f"{fan_curve['start_c']}→{fan_curve['full_c']} C"
@@ -11845,10 +12036,10 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     live = f"CPU {theme_system.display_temperature(temp_c)}" if isinstance(temp_c, (int, float)) else "CPU WAITING"
-    draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 124, live, APP_UI_STYLE.palette.text, 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", APP_UI_STYLE.palette.text, 13, True, False, "lm", family="Liberation Sans")
     stop_delta = "5 F" if theme_system.runtime_theme["units"] == "imperial" else "3 C"
-    draw_text(text_cache, x0 + 12, 178, f"SMOOTHED · STOPS {stop_delta} BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 178, f"SMOOTHED · STOPS {stop_delta} BELOW START", APP_UI_STYLE.palette.secondary_text, 12, False, False, "lm", family="Liberation Sans")
     start = float(curve["start_c"])
     full = float(curve["full_c"])
     draw_lcd_audio_slider_tile(text_cache, boxes["start"], "FAN START", start - 45.0, 20.0, theme_system.display_temperature(start), True)
@@ -11871,17 +12062,14 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = slider_track_bounds(box) if LCD_800_MODE or not full_width else (x0,x1)
     track_y = y1 - (28 if roomy else 15)
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
-    current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, themed_instrument_color("slider_fill", (80, 226, 164, 235)))
+    thumb_x = clamp(track_x0 + (track_x1-track_x0)*fraction, x0+5, x1-5) if full_width else track_x0 + (track_x1-track_x0)*fraction
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, active=active,
+                      thumb_half=(7,14) if roomy else (5,9), thumb_x=thumb_x)
     if steps:
         for index in range(steps):
             marker_x = track_x0 + (track_x1 - track_x0) * index / max(1, steps - 1)
             draw_logical_line(marker_x, track_y - 5, marker_x, track_y + 5,
                               themed_instrument_color("slider_marker", (112, 238, 177, 190)) if index <= value else themed_instrument_color("slider_track", (107, 139, 147, 128)), 1)
-    thumb_x = clamp(current_x, x0 + 5, x1 - 5) if full_width else current_x
-    half_w, half_h = (7, 14) if roomy else (5, 9)
-    draw_logical_rect(thumb_x - half_w, track_y - half_h, thumb_x + half_w, track_y + half_h, themed_instrument_color("slider_thumb", (229, 246, 246, 250)))
 
 
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
@@ -11965,10 +12153,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     track_y = (vy0 + vy1) / 2 + 9
     draw_text(text_cache, vx0, vy0 + 2, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
     draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx0 + (vx1 - vx0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
-    knob_x = vx0 + (vx1 - vx0) * level
-    draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
+    draw_theme_slider(vx0, vx1, track_y, level, thumb_half=(8,16),
+                      thumb_x=clamp(vx0+(vx1-vx0)*level,vx0+8,vx1-8))
 
     def panel_button(box, title, detail, active=False, accent=(92, 229, 174, 220)):
         bx0, by0, bx1, by1 = box
@@ -11993,10 +12179,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_text(text_cache, bx1 - 14, label_y, label, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if value else themed_instrument_color("secondary_text", (153, 185, 191)), 17 if LCD_800_MODE else 15, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
         track_y = by1 - (18 if LCD_800_MODE else 15)
-        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (31, 48, 57, 255)))
-        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * fraction, track_y + 3, themed_instrument_color("slider_fill", (76, 221, 159, 230)))
-        knob_x = track_x0 + (track_x1 - track_x0) * fraction
-        draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, themed_instrument_color("slider_thumb", (229, 246, 246, 245)))
+        draw_theme_slider(track_x0, track_x1, track_y, fraction, thumb_half=(4,9))
 
     def denoise_slider(box, level, bypassed=False):
         level = kiwi.denoise_level(level)
@@ -13615,7 +13798,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", themed_instrument_color("secondary_text", (139, 205, 201)), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
-        draw_styled_text_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active=active)
+        draw_selection_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active)
     start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
     visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
     for index, box in enumerate(boxes):
@@ -14956,9 +15139,10 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         if DISPLAY_ADVANCED_OPEN:
             draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "STYLE SETTINGS")
-            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 168, "READOUT POSITION")
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14,
+                                   DISPLAY_LAYOUT_BOXES[0][1][1] - 16, "READOUT POSITION")
             for layout, box in DISPLAY_LAYOUT_BOXES:
-                draw_display_control(text_cache, box, layout.upper(),
+                draw_selection_button(text_cache, box, layout.upper(),
                                      layout == visible_frequency_position(instrument_layout))
         else:
             for box, title, detail, active in (
@@ -14972,10 +15156,12 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             draw_display_slider_section(
                 text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
                 floor - 40.0, 180.0, f"AUTO {floor:.0f}" if waterfall_auto else f"{floor:.0f}", not waterfall_auto and waterfall_enabled,
+                scale_labels=("40", "130", "220"),
             )
             draw_display_slider_section(
                 text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
                 ceiling - 70.0, 185.0, f"AUTO {ceiling:.0f}" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto and waterfall_enabled,
+                scale_labels=("70", "163", "255"),
             )
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 416, "WATERFALL COLORS")
             for option, box, label in DISPLAY_PALETTE_BOXES:
@@ -15077,13 +15263,14 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
     right = clamp(raw_right, 0.0, float(canvas_w))
     if right <= left:
         return
-    # Passband colors live in the shared palette so future app themes can
-    # change them without replacing this RF geometry.
+    # Follow the same live theme accent as selected controls and Favorites.
+    # Retain each overlay layer's opacity so RF detail remains visible.
     palette = APP_UI_STYLE.palette
-    fill = (*palette.passband_fill[:3], int(palette.passband_fill[3] * alpha))
-    edge = (*palette.passband_border[:3], int(palette.passband_border[3] * alpha))
+    accent = palette.ready[:3]
+    fill = (*accent, int(palette.passband_fill[3] * alpha))
+    edge = (*accent, int(palette.passband_border[3] * alpha))
     center_shadow = (2, 7, 11, int(128 * alpha))
-    center = (*palette.passband_center[:3], int(palette.passband_center[3] * alpha))
+    center = (*accent, int(palette.passband_center[3] * alpha))
     if raw_right - raw_left < 10:
         # At wide waterfall spans the real filter can be sub-pixel narrow.
         # Show a compact bracket instead of visually falsifying its width.
@@ -15753,7 +15940,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     subtitle = menu_subtitle(kind)
     for caption, center_y, color, size in (
         (label, 28 if subtitle else height / 2, visual.text, 14),
-        (subtitle, 51, visual.text if pressed else style.subtitle_color, 12),
+        (subtitle, 51, tuple(muted_text_color(visual.text,visual.fill)) if pressed else style.subtitle_color, 12),
     ):
         if caption:
             size = navigation_label_size(text_cache, caption, width - 6, size)
@@ -15897,7 +16084,7 @@ def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
 def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     """Render the common Settings leaf rail without veiling live content."""
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, APP_UI_STYLE.palette.sidebar_rule, 1)
     draw_sidebar_header(text_cache, title)
     draw_text(
         text_cache, LCD_NAV_X0 + 18, 96, detail,
@@ -15909,10 +16096,7 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
 def draw_theme_panel(text_cache, editor):
     """Render the full-canvas Theme Library or live editor."""
     from theme_screen_render import draw_theme_screen
-    # The editor is itself a live preview: its controls, surfaces, corners, and
-    # text must follow the unsaved draft just like the Home preview does.
-    with theme_system.preview_theme(editor.preview):
-        return draw_theme_screen(text_cache, editor, sys.modules[__name__])
+    return draw_theme_screen(text_cache, editor, sys.modules[__name__])
 
 
 def lcd_radio_drawer_close_box():
@@ -16263,9 +16447,7 @@ def smeter_supports_top_instrument_strip(style_id=None):
 
 
 def instrument_layout_after_theme_save(instrument_layout, style_id=None):
-    """Make a newly saved large meter visible instead of leaving it hidden."""
-    if LCD_800_MODE and not smeter_supports_top_instrument_strip(style_id):
-        return visible_frequency_position("right")
+    """Meter selection must not change the user's frequency position."""
     return instrument_layout
 
 
@@ -16289,8 +16471,8 @@ def smeter_is_slim():
 
 
 def home_rail_has_meter(instrument_layout):
-    """The Home rail meter is present only with the RIGHT frequency layout."""
-    return instrument_layout == "right"
+    """Large meters stay in the rail independently of frequency placement."""
+    return instrument_layout == "right" or not smeter_supports_top_instrument_strip()
 
 
 def is_home_mode_touch(x, y, instrument_layout):
@@ -16946,6 +17128,25 @@ def stats_keeps_settings_sidebar(parent):
     return navigation_back_surface(parent) == "settings"
 
 
+def confirmed_tap_action(action_at, start_x, start_y, x, y, *args, **kwargs):
+    """A release activates only the same visible target touched on press."""
+    started = action_at(start_x, start_y, *args, **kwargs)
+    ended = action_at(x, y, *args, **kwargs)
+    return ended if started is not None and started == ended else None
+
+
+def confirmed_box_tap(box, start_x, start_y, x, y):
+    return contains(box, start_x, start_y) and contains(box, x, y)
+
+
+def inert_sidebar_gesture(gesture, x, y):
+    """Rail margins and headers never serve as implicit dismissal controls."""
+    if LCD_800_MODE and LCD_NAV_X0 <= x < LOGICAL_W and 0 <= y < LOGICAL_H:
+        if gesture.endswith("_outside"):
+            return "none"
+    return gesture
+
+
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
@@ -16996,10 +17197,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
     track_x0, track_y0, track_x1, track_y1 = volume_track_box(panel)
     track_y = (track_y0 + track_y1) / 2
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
-    knob_x = track_x0 + (track_x1 - track_x0) * level
-    draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, level, thumb_half=(6,12))
 
 
 def compact_smeter_label(dbm):
@@ -17248,18 +17446,14 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     fraction = filter_shift_slider_fraction(center_hz, high_cut - low_cut)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
-    label_y = track_y - 27
-    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    slider_style = theme_system.runtime_theme.get('slider_style','classic')
+    label_y = y0 + 18 if slider_style in ('precision','studio','ruler') else track_y - 27
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
     draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
-    zero_x = (track_x0 + track_x1) / 2
-    draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, themed_instrument_color("slider_marker", (241, 193, 82, 248)), 2)
-    draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
-    draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
-    draw_logical_rect(min(zero_x, knob_x), track_y - SLIDER_STEM_HALF_HEIGHT, max(zero_x, knob_x), track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (76, 214, 170, 184)))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, center=.5,
+                      labels=('−12k','0','+12k'), label_y=track_y-24,
+                      thumb_half=(6,11), text_cache=text_cache)
 
 
 def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
@@ -17268,16 +17462,13 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     fraction = filter_width_slider_fraction(width_hz)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
-    label_y = track_y - 27
-    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    slider_style = theme_system.runtime_theme.get('slider_style','classic')
+    label_y = y0 + 18 if slider_style in ('precision','studio','ruler') else track_y - 27
     draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (84, 188, 226, 184)))
-    for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
-        mark_x = track_x0 + (track_x1 - track_x0) * fraction_mark
-        draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, themed_instrument_color("slider_marker", (98, 154, 170, 156)), 1)
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction,
+                      labels=('50 Hz','12 kHz'), label_y=track_y-24,
+                      thumb_half=(6,11), text_cache=text_cache)
 
 
 def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
@@ -17330,7 +17521,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
     # uninterrupted black panel from the VFO to the physical bottom edge.
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, APP_UI_STYLE.palette.sidebar_rule, 1)
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
@@ -17867,7 +18058,7 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
     panel, entry, commands, keys = layout
     x0, y0, x1, y1 = panel
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(x0, y0, x0, y1, (125, 147, 158, 118), 1)
+    draw_logical_line(x0, y0, x0, y1, APP_UI_STYLE.palette.sidebar_rule, 1)
     draw_sidebar_header(text_cache, "SET FREQUENCY")
     ex0, ey0, ex1, ey1 = entry
     draw_logical_rect(ex0, ey0, ex1, ey1, (3, 10, 15, 240))
@@ -18428,9 +18619,7 @@ def draw_receiver_action_button(text_cache, box, label, kind, selected=False,
 
 
 def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
-    draw_styled_text_button(
-        text_cache, box, label, size=theme.label_size, active=selected,
-    )
+    draw_selection_button(text_cache, box, label, selected, size=theme.label_size)
 
 
 def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
@@ -19611,12 +19800,6 @@ def draw_ui(
         left_instruments = LCD_800_MODE and instrument_layout == "left"
         mirrored_instruments = mirror_top_instruments()
         frequency_x, frequency_anchor = large_frequency_placement(instrument_layout)
-        if LCD_800_MODE:
-            draw_band_context_chip(
-                text_cache, main_band_context_box(
-                    text_cache, freq_khz, compact_frequency_font_family, instrument_layout,
-                ), freq_khz, mode, compact=left_instruments,
-            )
         draw_big_frequency(
             text_cache, freq_khz,
             frequency_x,
@@ -27648,13 +27831,6 @@ def main():
                                 and (
                                     (instrument_layout == "right" and not HOME_MODE_SELECTOR_TRIAL and not home_sidebar_open
                                      and contains(compact_band_context_touch_box(), x, y))
-                                    or (
-                                        instrument_layout != "right"
-                                        and contains(main_band_context_box(
-                                            text_cache, display_freq,
-                                            compact_frequency_font_family, instrument_layout,
-                                        ), x, y)
-                                    )
                                 )
                             ):
                                 gesture = "band_navigation_toggle"
@@ -27742,9 +27918,9 @@ def main():
                                 # target. Compact typography review remains a
                                 # Settings tool and must never steal this tap.
                                 gesture = "frequency_drawer_open"
-                            elif contains(CPU_ANNUNCIATOR_BOX, x, y):
+                            elif (not LCD_800_MODE or x < LCD_NAV_X0) and contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
-                            elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, AUDIO_PANEL_BOX[3]), x, y):
+                            elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 # The drawer owns the top-right rail while it
                                 # is open; do not leak touches to the covered
                                 # mode annunciators.
@@ -27767,9 +27943,9 @@ def main():
                                     gesture = "audio_denoise_level"
                                 else:
                                     gesture = "audio_control" if audio_option_at(x, y) is not None else "audio_header"
-                            elif receiver_home_panel_open and LCD_800_MODE and contains(receiver_home_drawer_boxes()["panel"], x, y):
+                            elif receiver_home_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 gesture = "receiver_home"
-                            elif fan_curve_panel_open and LCD_800_MODE and contains(fan_curve_drawer_boxes()["panel"], x, y):
+                            elif fan_curve_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 fan_boxes = fan_curve_drawer_boxes()
                                 if contains(fan_boxes["start"], x, y):
                                     gesture = "fan_start_slider"
@@ -27924,6 +28100,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif LCD_800_MODE and home_sidebar_open and LCD_NAV_X0 <= x < LOGICAL_W:
+                                gesture = "none"
                             elif not picker_open and not settings_menu_open and not digital_menu_open and (nav_items := lcd_nav_items(settings_menu_open, digital_menu_open)) and (nav_index := lcd_nav_item_at(x, y, nav_items)) is not None:
                                 # Network must be dependable even on touch
                                 # controllers that occasionally lose the UP
@@ -27956,6 +28134,7 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                            gesture = inert_sidebar_gesture(gesture, x, y)
                             if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level", "audio_passband"):
                                 apply_audio_slider(state, gesture, x)
                             elif gesture in ("radio_filter_shift","radio_filter_width"):
@@ -28237,7 +28416,7 @@ def main():
                         if touch_started and gesture == "dual_vfo_mode":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action, selected_mode = dual_vfo_mode_picker_action_at(x, y)
+                                action, selected_mode = confirmed_tap_action(dual_vfo_mode_picker_action_at, start_x, start_y, x, y) or (None, None)
                                 if action in ("close", "outside"):
                                     dual_vfo_mode_open = False
                                 elif action == "mode" and selected_mode:
@@ -28308,7 +28487,7 @@ def main():
                         elif touch_started and gesture == "dual_vfo":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = dual_vfo_action_at(x, y)
+                                action = confirmed_tap_action(dual_vfo_action_at, start_x, start_y, x, y)
                                 if action == "home":
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
@@ -28373,8 +28552,8 @@ def main():
                         elif touch_started and gesture == "band_navigation":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = band_navigation_action_at(x, y)
-                                if action == "close" or action is None:
+                                action = confirmed_tap_action(band_navigation_action_at, start_x, start_y, x, y)
+                                if action == "close":
                                     band_navigation_open = False
                                 elif isinstance(action, int):
                                     _label, target_khz, _kind = BAND_NAV_PRESETS[action]
@@ -28406,7 +28585,7 @@ def main():
                         elif touch_started and gesture == "frequency_entry":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = frequency_entry_action_at(x, y)
+                                action = confirmed_tap_action(frequency_entry_action_at, start_x, start_y, x, y)
                                 if action == "BACK":
                                     frequency_entry_value = frequency_entry_value[:-1]
                                     frequency_entry_invalid = False
@@ -28550,7 +28729,7 @@ def main():
                         elif touch_started and gesture == "compact_font_review":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = compact_font_review_action_at(x, y)
+                                action = confirmed_tap_action(compact_font_review_action_at, start_x, start_y, x, y)
                                 if action == "previous":
                                     compact_frequency_font_index = (
                                         compact_frequency_font_index - 1
@@ -28681,7 +28860,7 @@ def main():
                         elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = audio_option_at(x, y)
+                                choice = confirmed_tap_action(audio_option_at, start_x, start_y, x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 if audio_page_action(choice):
                                     pass
@@ -28779,7 +28958,7 @@ def main():
                         elif touch_started and gesture == "wspr_identity":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_identity_action_at(x, y, wspr_identity_keyboard_mode)
+                                choice = confirmed_tap_action(wspr_identity_action_at, start_x, start_y, x, y, wspr_identity_keyboard_mode)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "field":
@@ -28836,7 +29015,7 @@ def main():
                         elif touch_started and gesture == "wspr_decoder_settings":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice, value = wspr_decoder_settings_action_at(x, y)
+                                choice, value = confirmed_tap_action(wspr_decoder_settings_action_at, start_x, start_y, x, y) or (None, None)
                                 if choice == "profile":
                                     wspr_decoder_profile, wspr_decoder_osd_depth = wspr_decoder_settings.update(profile=value)
                                     preferences_dirty = True
@@ -28949,7 +29128,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choices = wspr_receiver_choices()
-                                choice = wspr_add_action_at(x, y, choices, wspr_add_station_page)
+                                choice = confirmed_tap_action(wspr_add_action_at, start_x, start_y, x, y, choices, wspr_add_station_page)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "band":
@@ -29060,10 +29239,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choices = wspr_receiver_choices()
-                                choice, value = wspr_tile_settings_action_at(
-                                    x, y, choices, wspr_tile_receiver_page,
+                                choice, value = confirmed_tap_action(
+                                    wspr_tile_settings_action_at, start_x, start_y, x, y, choices, wspr_tile_receiver_page,
                                     wspr_tile_receiver_open, wspr_tile_band_open,
-                                )
+                                ) or (None, None)
                                 if choice == "close":
                                     wspr_tile_settings_open = False
                                     wspr_tile_settings_id = ""
@@ -29198,7 +29377,7 @@ def main():
                         elif touch_started and gesture == "wspr_workspace":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_workspace_action_at(x, y, wspr_tiles, wspr_workspace_scroll)
+                                choice = confirmed_tap_action(wspr_workspace_action_at, start_x, start_y, x, y, wspr_tiles, wspr_workspace_scroll)
                                 if choice is not None:
                                     kind, _value = choice
                                     if kind == "back":
@@ -29314,7 +29493,7 @@ def main():
                         elif touch_started and gesture == "tests_panel":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = tests_option_at(x, y)
+                                choice = confirmed_tap_action(tests_option_at, start_x, start_y, x, y)
                                 if choice == "back":
                                     tests_panel_open = False
                                     restore_navigation_parent(tests_parent)
@@ -29351,7 +29530,7 @@ def main():
                         elif touch_started and gesture == "font_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = font_lab_option_at(x, y)
+                                choice = confirmed_tap_action(font_lab_option_at, start_x, start_y, x, y)
                                 if choice == "back":
                                     font_lab_open = False
                                     tests_panel_open = True
@@ -29363,7 +29542,7 @@ def main():
                         elif touch_started and gesture == "rtl_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = rtl_lab_option_at(x, y)
+                                choice = confirmed_tap_action(rtl_lab_option_at, start_x, start_y, x, y)
                                 if choice == "source":
                                     rtl_lab.cycle_source()
                                     rtl_lab.probe()
@@ -29427,23 +29606,15 @@ def main():
                                     wake_controls()
                             elif moved <= args.tap_px:
                                 active_mode_families = rtl_lab.mode_families() if rtl_lab.is_running() else KIWI_MODE_FAMILIES
-                                choice = radio_option_at(
-                                    x, y, radio_family_open,
+                                choice = confirmed_tap_action(
+                                    radio_option_at, start_x, start_y, x, y, radio_family_open,
                                     mode_families=active_mode_families,
                                     receiver_type=state.receiver_type_snapshot(),
                                     fmdx_stations=state.fmdx_stations_snapshot(),
                                     fmdx_scan_active=state.fmdx_scan_request_snapshot()[0],
                                     fmdx_shared_control=fmdx_shared_control_acknowledged(state.snapshot()[0]),
                                 )
-                                if choice is None:
-                                    # The drawer is intentionally modal only
-                                    # inside its own rail: a blank tap is the
-                                    # quickest, least surprising close action.
-                                    radio_setup_open = False
-                                    radio_family_open = None
-                                    fmdx_shared_prompt_open = False
-                                    wake_controls()
-                                else:
+                                if choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         radio_setup_open = False
@@ -29559,7 +29730,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 filter_boxes = lcd_filter_drawer_boxes()
-                                if contains(filter_boxes["close"], x, y):
+                                if confirmed_box_tap(filter_boxes["close"], start_x, start_y, x, y):
                                     filter_drawer_open = False
                                     filter_drawer_width_hz = None
                                     if filter_drawer_return_to_audio:
@@ -29567,7 +29738,7 @@ def main():
                                         filter_drawer_return_to_audio = False
                                 else:
                                     for _name, preset_width_hz, preset_box in filter_boxes["presets"]:
-                                        if contains(preset_box, x, y):
+                                        if confirmed_box_tap(preset_box, start_x, start_y, x, y):
                                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                                             target_width_hz = preset_width_hz
                                             actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, target_width_hz))
@@ -29613,14 +29784,8 @@ def main():
                         elif touch_started and gesture == "display_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = display_option_at(x, y)
-                                if choice is None and LCD_800_MODE:
-                                    # Match the other rail drawers: a blank
-                                    # rail tap is an easy, unambiguous close.
-                                    display_setup_open = False
-                                    restore_navigation_parent(display_parent)
-                                    wake_controls()
-                                elif choice is not None:
+                                choice = confirmed_tap_action(display_option_at, start_x, start_y, x, y)
+                                if choice is not None:
                                     kind, value = choice
                                     if display_page_action(kind):
                                         pass
@@ -29700,36 +29865,33 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 home_boxes = receiver_home_drawer_boxes()
-                                if contains(home_boxes["close"], x, y):
+                                if confirmed_box_tap(home_boxes["close"], start_x, start_y, x, y):
                                     receiver_home_panel_open = False
                                     restore_navigation_parent(receiver_home_parent)
-                                elif contains(home_boxes["usb_radios"], x, y):
+                                elif confirmed_box_tap(home_boxes["usb_radios"], start_x, start_y, x, y):
                                     receiver_home_panel_open=False;usb_radios_parent="info";usb_radios_workspace.show()
-                                elif contains(home_boxes["fan"], x, y):
+                                elif confirmed_box_tap(home_boxes["fan"], start_x, start_y, x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
                                     fan_curve_parent = navigation_previous_surface("fan_curve", receiver_home_parent)
-                                elif contains(home_boxes["locate"],x,y) and peek_station():
+                                elif confirmed_box_tap(home_boxes["locate"],start_x,start_y,x,y) and peek_station():
                                     station_workspace.show();receiver_home_panel_open=False
-                                elif contains(home_boxes["fallback"], x, y) and not peek_station():
+                                elif confirmed_box_tap(home_boxes["fallback"], start_x, start_y, x, y) and not peek_station():
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
                                     receiver_home_locating = False
-                                elif contains(home_boxes["locate"], x, y) and not receiver_home_locating:
+                                elif confirmed_box_tap(home_boxes["locate"], start_x, start_y, x, y) and not receiver_home_locating:
                                     receiver_home_locating = True
                                     threading.Thread(
                                         target=detect_receiver_home,
                                         args=(receiver_home_result_queue,), daemon=True,
                                     ).start()
-                                else:
-                                    receiver_home_panel_open = False
-                                    restore_navigation_parent(receiver_home_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_curve":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 fan_boxes = fan_curve_drawer_boxes()
-                                if contains(fan_boxes["close"], x, y):
+                                if confirmed_box_tap(fan_boxes["close"], start_x, start_y, x, y):
                                     fan_curve_panel_open = False
                                     restore_navigation_parent(fan_curve_parent)
                                 wake_controls()
@@ -29763,6 +29925,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 previous_sidebar = theme_system.runtime_theme["sidebar"]
+                                previous_meter = theme_system.runtime_theme["smeter_style"]
                                 theme_action = next(
                                     (name for name, box in theme_screen_boxes(theme_editor).items()
                                      if contains(box, x, y)),
@@ -29781,6 +29944,7 @@ def main():
                                     theme_action == "save"
                                     and not theme_editor.open
                                     and not theme_editor.error
+                                    and theme_system.runtime_theme["smeter_style"] != previous_meter
                                 ):
                                     reconciled_layout = instrument_layout_after_theme_save(
                                         instrument_layout,
@@ -29807,7 +29971,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 nav_items = lcd_nav_items(settings_menu_open, digital_menu_open)
-                                idx = lcd_nav_item_at(x, y, nav_items)
+                                idx = confirmed_tap_action(lcd_nav_item_at, start_x, start_y, x, y, nav_items)
                                 if idx is not None:
                                     activate_navigation_item(idx, nav_items)
                         elif touch_started and gesture in ("menu_close", "menu_outside"):
@@ -29909,7 +30073,7 @@ def main():
                         elif touch_started and gesture == "deepgram_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = deepgram_setup_action_at(x, y, deepgram_key_mode)
+                                action = confirmed_tap_action(deepgram_setup_action_at, start_x, start_y, x, y, deepgram_key_mode)
                                 if action in ("MODE", "CAPS"):
                                     deepgram_key_mode = touch_keyboard_next_mode(deepgram_key_mode, action)
                                 elif action == "SPACE" and len(deepgram_key_value) < 512:
@@ -30014,40 +30178,40 @@ def main():
                                 networks = (snapshot.get("countries") if network_country_open else snapshot.get("networks")) or []
                                 if network_action is not None:
                                     action_boxes = network_action_boxes()
-                                    if contains(boxes["back"], x, y) or contains(action_boxes["cancel"], x, y):
+                                    if confirmed_box_tap(boxes["back"], start_x, start_y, x, y) or confirmed_box_tap(action_boxes["cancel"], start_x, start_y, x, y):
                                         network_action = None
                                     elif not busy:
-                                        if contains(action_boxes["forget"], x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
+                                        if confirmed_box_tap(action_boxes["forget"], start_x, start_y, x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
                                             network_action = dict(network_action, confirm_forget=True)
-                                        elif contains(action_boxes["primary"], x, y):
+                                        elif confirmed_box_tap(action_boxes["primary"], start_x, start_y, x, y):
                                             operation = "forget" if network_action.get("confirm_forget") else ("disconnect" if network_action.get("active") else "connect")
                                             if network_bridge.request(operation, network_action):
                                                 network_connect_pending = operation == "connect"
                                                 network_notice = ""
                                                 network_action = None
                                                 network_next_refresh = time.monotonic() + 12.0
-                                elif contains(boxes["back"], x, y):
+                                elif confirmed_box_tap(boxes["back"], start_x, start_y, x, y):
                                     network_panel_open = False
                                     network_selected_ssid = ""
                                     settings_menu_open = True
                                     digital_menu_open = False
-                                elif contains(boxes["country"], x, y) and not busy:
+                                elif confirmed_box_tap(boxes["country"], start_x, start_y, x, y) and not busy:
                                     network_country_open = not network_country_open
                                     network_page = 0
-                                elif contains(boxes["rescan"], x, y):
+                                elif confirmed_box_tap(boxes["rescan"], start_x, start_y, x, y):
                                     if network_country_open:
                                         network_country_open = False
                                         network_page = 0
                                     elif network_bridge.request("scan"):
                                         network_notice = ""
-                                elif contains(boxes["previous"], x, y):
+                                elif confirmed_box_tap(boxes["previous"], start_x, start_y, x, y):
                                     network_page = max(0, network_page - 1)
-                                elif contains(boxes["next"], x, y):
+                                elif confirmed_box_tap(boxes["next"], start_x, start_y, x, y):
                                     network_page = min(max(0, (len(networks) - 1) // NETWORK_PAGE_SIZE), network_page + 1)
                                 elif not busy:
                                     visible = networks[network_page * NETWORK_PAGE_SIZE:(network_page + 1) * NETWORK_PAGE_SIZE]
                                     for network, box in zip(visible, network_scan_boxes(visible)):
-                                        if not contains(box, x, y):
+                                        if not confirmed_box_tap(box, start_x, start_y, x, y):
                                             continue
                                         if network_country_open:
                                             if network_bridge.request("country", {"country": network["code"]}):
@@ -30094,7 +30258,7 @@ def main():
                         elif touch_started and gesture == "asr_select":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                selection = asr_option_at(x, y, asr_moon_language_open)
+                                selection = confirmed_tap_action(asr_option_at, start_x, start_y, x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
                                 if selection_kind == "back":
                                     if asr_moon_language_open:

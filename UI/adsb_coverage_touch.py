@@ -240,7 +240,7 @@ class CoverageTouch:
             w.ink(cache,80,176,'Choose rolling history · Reset starts the selected window from now',20,w.MUTED)
             for index,(seconds,label) in enumerate(COVERAGE_WINDOWS):
                 x=80+(index%3)*376;y=220+(index//3)*96
-                self.button(cache,(x,y,x+352,y+72),label,'coverage_span',seconds,seconds==self.window.seconds)
+                w.selection_button(cache,(x,y,x+352,y+72),label,('coverage_span',seconds),seconds==self.window.seconds)
             w.draw_status(cache,'Choose a timespan · Back cancels','ADS-B storage cap 250 MiB · oldest history reclaimed as needed',full_width=True)
             return
         self.draw_scene(cache,data,frame,identity)

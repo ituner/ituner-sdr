@@ -40,6 +40,8 @@ class DecoderStyle:
         x0, y0, x1, y1 = box
         family = style.font_family
         title = str(title).upper() if uppercase else str(title)
+        if not subtitle and title.strip() in ('-', '−', '+'):
+            font_size = int(round(font_size * 1.5))
         title = ui.fit_station_text(cache, title, x1-x0-20, font_size, True, False, family)
         ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2-(10 if subtitle else 0), title,
                      color, font_size, True, False, 'cm', family=family)
@@ -64,7 +66,8 @@ class DecoderStyle:
         message=ui.fit_station_text(cache,str(message),988,STATUS_FONT_SIZE,True,False,STATUS_FONT)
         ui.draw_text(cache,offset+18,STATUS_FIRST_Y,message,self.color('footer_primary'),STATUS_FONT_SIZE,True,False,'lm',family=STATUS_FONT)
         clock = draw_status_clock(ui,cache,offset+18)
-        clock_width = cache.font(STATUS_FONT_SIZE,family=STATUS_FONT).size(clock)[0]
+        dimensions = cache.font(STATUS_FONT_SIZE,family=STATUS_FONT).size(clock) if cache is not None else None
+        clock_width = dimensions[0] if isinstance(dimensions, (tuple, list)) else len(clock)*STATUS_FONT_SIZE*.6
         detail_x = max(340,18+clock_width+24)
         detail=ui.fit_station_text(cache,str(detail),max(0,CANVAS_WIDTH-detail_x-18),STATUS_FONT_SIZE,False,False,STATUS_FONT)
         ui.draw_text(cache,offset+detail_x,STATUS_CLOCK_Y,detail,self.color('footer_primary'),STATUS_FONT_SIZE,False,False,'lm',family=STATUS_FONT)

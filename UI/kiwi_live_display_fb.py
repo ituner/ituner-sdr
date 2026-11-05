@@ -801,7 +801,7 @@ def draw_zoom_buttons(draw):
             ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2 - 1),
             label,
             (222, 246, 249, 226),
-            32,
+            48,
             True,
             mono=True,
             anchor="mm",
