@@ -11736,7 +11736,7 @@ def draw_lcd_audio_annunciator(text_cache, box, title, detail, active, *, binary
     style = replace(APP_UI_STYLE.smart_button,
                     title_size=navigation_label_size(text_cache,title,box[2]-box[0]-8,APP_UI_STYLE.button.title_size))
     draw_styled_two_line_button(text_cache, box, title, "", active=active and not indicator_only, style=style,
-                               content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+                               content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y - 5)
     if active or not indicator_only:
         draw_radio_mode_indicator(text_cache, box, "" if binary else detail, active,
                                   lamp=binary, size=13)
