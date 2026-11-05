@@ -19303,7 +19303,7 @@ def zoomed_spectrum_values(values, source_span_khz, visible_span_khz):
 
 
 def spectrum_view_palette():
-    """FILL retains the exact existing theme; alternatives affect only drawing."""
+    """Spectrum presets affect drawing only; FILL uses restrained slate-blue shading."""
     palette = APP_UI_STYLE.palette
     if SPECTRUM_STYLE == "dark":
         return replace(palette, spectrum_field=(0, 0, 0, 255),
@@ -19316,7 +19316,10 @@ def spectrum_view_palette():
                        spectrum_grid=(55, 75, 82, 48), spectrum_line=(108, 215, 232, 235),
                        spectrum_fill=(0, 0, 0, 0), spectrum_peak_fill=(0, 0, 0, 0),
                        spectrum_peak_line=(213, 174, 108, 190))
-    return palette
+    return replace(palette, spectrum_fill=(44, 73, 90, 115),
+                   spectrum_line=(151, 190, 207, 220),
+                   spectrum_peak_fill=(78, 111, 128, 28),
+                   spectrum_peak_line=(105, 139, 153, 105))
 
 
 def draw_spectrum(
