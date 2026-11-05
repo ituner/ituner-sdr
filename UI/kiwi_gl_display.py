@@ -17074,7 +17074,11 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, APP_UI_STYLE.palette.home_passband_center, 1.5)
+    centered = abs((low_cut + high_cut) / 2) < FILTER_SNAP_HZ
+    center_color = APP_UI_STYLE.palette.ready if centered else APP_UI_STYLE.palette.home_passband_center
+    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, center_color, 1.5)
+    draw_logical_polyline(((center_x - 4, plot_y + 4), (center_x, plot_y + 8),
+                           (center_x + 4, plot_y + 4)), center_color, 1.5)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
     draw_text(
@@ -17089,6 +17093,22 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
         "cm",
         family="Liberation Sans",
     )
+
+
+def passband_graph_shift_bounds(low_cut, high_cut, start_x, x, box):
+    """Drag the visible 10 kHz axis relatively, with a magnetic zero detent."""
+    hz_per_pixel = 10000.0 / max(1.0, box[2] - box[0] - 36)
+    width = high_cut - low_cut
+    center = (low_cut + high_cut) / 2 + (x - start_x) * hz_per_pixel
+    if abs(center) <= FILTER_SHIFT_CENTER_DETENT_PX * hz_per_pixel:
+        center = 0.0
+    limit = max(0.0, FILTER_LIMIT_HZ - width / 2)
+    center = clamp(center, -limit, limit)
+    # Quantize one edge, then derive the other. Independently rounding both
+    # would change odd-50-Hz widths when crossing the center notch.
+    low = round((center - width / 2) / FILTER_SNAP_HZ) * FILTER_SNAP_HZ
+    low = clamp(low, -FILTER_LIMIT_HZ, FILTER_LIMIT_HZ - width)
+    return low, low + width
 
 
 def filter_width_preset_boxes(top):
@@ -17136,6 +17156,8 @@ def lcd_filter_drawer_action_at(x, y):
     boxes = lcd_filter_drawer_boxes()
     if not contains(boxes["panel"], x, y):
         return None
+    if contains(boxes["visual"], x, y):
+        return "graph"
     if contains(boxes["width"], x, y):
         return "width"
     if contains(boxes["shift"], x, y):
@@ -21229,12 +21251,14 @@ UI_CONFIRMATION_TONE_MIN_INTERVAL_SECONDS = 0.075
 _ui_confirmation_tone_last_at = 0.0
 _ui_confirmation_tone_payload = None
 VALUE_SLIDER_GESTURES = frozenset((
+    "passband_graph",
     "audio_volume", "home_volume", "audio_squelch_level", "audio_denoise_level",
     "audio_voice_level", "audio_passband", "display_floor_slider", "display_ceiling_slider",
     "fan_start_slider", "fan_full_slider", "fan_minimum_slider",
     "lcd_filter_shift", "lcd_filter_width", "radio_filter_shift", "radio_filter_width",
 ))
 TOOLBOX_CONTINUOUS_GESTURES = frozenset((
+    "passband_graph",
     "display_readonly",  # Auto/Off level instruments never act on touches.
     "audio_header",  # Quiet title, with no button action or confirmation tone.
     "audio_test",
@@ -24390,6 +24414,7 @@ def main():
     filter_drawer_open = False
     filter_drawer_return_to_audio = False
     filter_drawer_width_hz = None
+    passband_graph_drag = None
     settings_menu_open = False
     digital_menu_open = args.decoder_menu_preview
     receiver_home_panel_open = False
@@ -26337,6 +26362,26 @@ def main():
             state.set_filter(low_cut=low_cut, high_cut=cut_hz)
         filter_custom_width = True
 
+    def start_passband_graph_gesture(x, box, source):
+        nonlocal passband_graph_drag
+        _mode, low, high, _generation = state.radio_snapshot()
+        passband_graph_drag = dict(start_x=x, low=low, high=high, box=box,
+                                   source=source, moved=False)
+        return "passband_graph"
+
+    def apply_passband_graph_drag(x):
+        nonlocal filter_custom_width, filter_drawer_width_hz
+        drag = passband_graph_drag
+        if drag is None:
+            return
+        if not drag["moved"] and abs(x - drag["start_x"]) < 4:
+            return
+        drag["moved"] = True
+        bounds = passband_graph_shift_bounds(drag["low"], drag["high"], drag["start_x"], x, drag["box"])
+        low, high, _generation = state.set_filter(*bounds)
+        filter_drawer_width_hz = high - low
+        filter_custom_width = True
+
     def set_lcd_filter_shift(x, slider=None):
         """Move both filter edges together while preserving bandwidth."""
         nonlocal filter_custom_width, filter_drawer_width_hz
@@ -26395,6 +26440,8 @@ def main():
         nonlocal filter_drawer_width_hz
         if LCD_800_MODE and receiver_worker_protocol(state.receiver_type_snapshot())!="fmdx":
             boxes=mode_filter_boxes()
+            if contains(boxes["viewer"],x,y):
+                return start_passband_graph_gesture(x, boxes["viewer"], "modes")
             if contains(boxes["shift"],x,y):
                 _m,low,high,_g=state.radio_snapshot()
                 filter_drawer_width_hz=high-low
@@ -27619,6 +27666,8 @@ def main():
                                     gesture = "audio_squelch_level"
                                 elif contains(AUDIO_VOICE_CLEAN_BOX, x, y):
                                     gesture = "audio_voice_level"
+                                elif contains(AUDIO_PASSBAND_GRAPH_BOX, x, y):
+                                    gesture = start_passband_graph_gesture(x, AUDIO_PASSBAND_GRAPH_BOX, "audio")
                                 elif contains(AUDIO_PASSBAND_BOX, x, y):
                                     gesture = "audio_passband"
                                 elif contains(AUDIO_DENOISE_BOX, x, y):
@@ -27655,7 +27704,9 @@ def main():
                                 # The open PASSBAND rail owns every visible
                                 # control before hidden Home instruments get a
                                 # chance to inspect the same coordinates.
-                                if filter_action == "shift":
+                                if filter_action == "graph":
+                                    gesture = start_passband_graph_gesture(x, lcd_filter_drawer_boxes()["visual"], "filter")
+                                elif filter_action == "shift":
                                     gesture = "lcd_filter_shift"
                                 elif filter_action == "width":
                                     gesture = "lcd_filter_width"
@@ -27672,7 +27723,7 @@ def main():
                             elif LCD_800_MODE and home_bandpass_visible() and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and contains(
                                 lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), x, y
                             ):
-                                gesture = "home_passband"
+                                gesture = start_passband_graph_gesture(x, lcd_home_bandwidth_box(home_rail_has_meter(instrument_layout)), "home")
                             elif LCD_800_MODE and home_rail_controls_available(picker_open, settings_menu_open, digital_menu_open, home_sidebar_open) and (
                                 volume_action := home_volume_action_at(x, y, home_rail_has_meter(instrument_layout))
                             ):
@@ -27896,6 +27947,8 @@ def main():
                                 voice_clean_level=0,
                                 hf_enhance_level=0,
                             )
+                        elif gesture == "passband_graph":
+                            apply_passband_graph_drag(x)
                         elif gesture == "audio_passband":
                             apply_audio_slider(state, gesture, x)
                             filter_custom_width = True
@@ -29385,10 +29438,16 @@ def main():
                                 radio_setup_open = False
                                 radio_family_open = None
                                 wake_controls()
-                        elif touch_started and gesture == "home_passband":
+                        elif touch_started and gesture == "passband_graph":
+                            # Use the final MT point, never the stale legacy
+                            # touch-down coordinates, and never turn a drag into
+                            # a tap even if the finger comes back to its origin.
+                            apply_passband_graph_drag(x)
                             moved = max(abs(x - start_x), abs(y - start_y))
-                            if moved <= args.tap_px:
+                            source = passband_graph_drag["source"]
+                            if not passband_graph_drag["moved"] and moved <= args.tap_px and source in ("home", "audio"):
                                 open_lcd_filter_drawer()
+                                filter_drawer_return_to_audio = source == "audio"
                                 menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
                             wake_controls()
                         elif touch_started and gesture in ("radio_filter_shift","radio_filter_width"):
@@ -30352,6 +30411,7 @@ def main():
                                     print(f"gl tuned {candidate_freq:.3f} kHz", flush=True)
                         frequency_drawer_hold.cancel()
                         touch_started = False
+                        passband_graph_drag = None
                         scope_drag_eligible = False
                         gesture = None
                         picker_map_pinch_active = False
@@ -30768,7 +30828,7 @@ def main():
             if inertia_active or (touch_started and gesture in (
                 'waterfall', 'frequency_identity_tune', 'frequency_drawer',
                 'zoom_plus', 'zoom_minus', 'dj_tune', 'dual_vfo',
-                'filter_drag', 'lcd_filter_shift', 'lcd_filter_width', 'home_passband',
+                'filter_drag', 'lcd_filter_shift', 'lcd_filter_width', 'home_passband', 'passband_graph',
             )):
                 state.note_carrier_activity()
             carrier_tuned_khz = state.take_carrier_result()
