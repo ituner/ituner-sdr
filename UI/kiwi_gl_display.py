@@ -17065,8 +17065,8 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
-    draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], 17, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], 13, True, False, "rm", family="Liberation Sans")
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
     zero_x = (track_x0 + track_x1) / 2
     draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, themed_instrument_color("slider_marker", (241, 193, 82, 248)), 2)
@@ -17084,8 +17084,8 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     track_y = y1 - 14
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), 15, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], 17, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], 13, True, False, "rm", family="Liberation Sans")
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (84, 188, 226, 184)))
     for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):

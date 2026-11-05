@@ -570,3 +570,7 @@ below the last mode row as four squares, with a number above its Hz/kHz unit.
 The former decoder shortcuts are replaced by the live passband viewer and
 Width directly below the viewer and Shift below Width. Decoders remain in
 Digital; Back keeps its position.
+
+The shared Shift/Width sliders in Modes and the detailed Passband drawer use
+14 px titles and 13 px values, matching Audio slider typography; Center Lock
+is a normal value label rather than a larger status heading.
