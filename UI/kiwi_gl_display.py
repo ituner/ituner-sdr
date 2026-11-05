@@ -17100,12 +17100,12 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     # suggests horizontal motion without pretending to be a second full scale.
     rail_y = y1 - 22
     track_color = (*APP_UI_STYLE.palette.slider_track[:3], 150)
-    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 5, plot_x1 - 5)
+    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 6, plot_x1 - 6)
     draw_logical_rounded_rect(max(plot_x0, handle_x - 22), rail_y - 1,
                               min(plot_x1, handle_x + 22), rail_y + 1, 1, track_color)
     handle_color = APP_UI_STYLE.palette.ready if centered else (*APP_UI_STYLE.palette.slider_thumb[:3], 210)
     draw_logical_line(handle_x, top_y + 3, handle_x, rail_y, handle_color, 1)
-    draw_logical_rounded_rect(handle_x - 5, rail_y - 6, handle_x + 5, rail_y + 6, 2, handle_color)
+    draw_logical_rounded_rect(handle_x - 6, rail_y - 7, handle_x + 6, rail_y + 7, 2, handle_color)
     for grip_y in (rail_y - 1.5, rail_y + 1.5):
         draw_logical_line(handle_x - 2, grip_y, handle_x + 2, grip_y,
                           APP_UI_STYLE.palette.section_surface, 1)
