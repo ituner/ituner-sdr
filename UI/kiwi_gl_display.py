@@ -1297,8 +1297,8 @@ DISPLAY_WATERFALL_BOX = (-1, -1, -1, -1)
 DISPLAY_SPEED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_OPEN = False
-SPECTRUM_STYLE_OPTIONS = (("icom", "ICOM"), ("dark", "DARK"), ("peak", "PEAK"))
-SPECTRUM_STYLE = "icom"
+SPECTRUM_STYLE_OPTIONS = (("fill", "FILL"), ("dark", "DARK"), ("peak", "PEAK"))
+SPECTRUM_STYLE = "peak"
 DISPLAY_SPECTRUM_STYLE_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
@@ -9904,7 +9904,9 @@ def set_display_page(advanced=False):
 def set_spectrum_style(style):
     """Select a display-only preset, preserving all live receiver settings."""
     global SPECTRUM_STYLE
-    SPECTRUM_STYLE = style if isinstance(style, str) and style in dict(SPECTRUM_STYLE_OPTIONS) else "icom"
+    if style == "icom":  # Preserve saved selections from the former label.
+        style = "fill"
+    SPECTRUM_STYLE = style if isinstance(style, str) and style in dict(SPECTRUM_STYLE_OPTIONS) else "peak"
     return SPECTRUM_STYLE
 
 
@@ -9987,7 +9989,7 @@ def restore_waterfall_preferences(state, preferences):
 
 def reset_display_view(state):
     """Restore Display defaults while retaining the waterfall image."""
-    set_spectrum_style("icom")
+    set_spectrum_style("peak")
     waterfall = state.set_waterfall(
         floor=WATERFALL_DEFAULT_FLOOR,
         ceil=WATERFALL_DEFAULT_CEIL,
@@ -19301,7 +19303,7 @@ def zoomed_spectrum_values(values, source_span_khz, visible_span_khz):
 
 
 def spectrum_view_palette():
-    """ICOM retains the exact existing theme; alternatives affect only drawing."""
+    """FILL retains the exact existing theme; alternatives affect only drawing."""
     palette = APP_UI_STYLE.palette
     if SPECTRUM_STYLE == "dark":
         return replace(palette, spectrum_field=(0, 0, 0, 255),
@@ -19331,7 +19333,7 @@ def draw_spectrum(
     # In the wide layout the scope intentionally sits over the lower edge of
     # the information strip. Keep its field translucent there so the reading
     # remains behind the live trace rather than becoming a separate hard box.
-    field_alpha = (156 if foreground else 236) if SPECTRUM_STYLE == "icom" else 255
+    field_alpha = (156 if foreground else 236) if SPECTRUM_STYLE == "fill" else 255
     canvas_w = rf_canvas_width()
     spectrum_colors = spectrum_view_palette()
     draw_logical_rect(0, y0, canvas_w, y1,
