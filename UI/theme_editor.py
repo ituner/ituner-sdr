@@ -6,7 +6,7 @@ from theme_colors import saturate_rgb, apply_muted_text_colors
 import math
 
 from theme_system import (BUILTIN_THEMES, BUILTIN_THEME_IDS, DEFAULT_THEME, COLOR_NAMES, TEXT_SCALE_MIN,
-                          TEXT_SCALE_MAX, is_builtin_theme_id)
+                          TEXT_SCALE_MAX, SLIDER_STYLES, is_builtin_theme_id)
 
 COLOR_GROUPS = (
     ("BASE", ("background", "sidebar", "sidebar_header", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
@@ -24,10 +24,11 @@ COLOR_GROUPS = (
 assert set(COLOR_NAMES) == {key for _, keys in COLOR_GROUPS for key in keys}
 
 CARDS_PER_PAGE = 4
+SLIDER_CARDS_PER_PAGE = 4
 ACCENTS = (("original", "Original", None), ("mint", "Mint", (114, 235, 174)),
            ("cyan", "Cyan", (87, 212, 235)), ("amber", "Amber", (255, 194, 92)),
            ("white", "White", (235, 235, 235)))
-ACCENT_ROLES = ("focus", "focus_text", "frequency", "slider_fill", "active_border",
+ACCENT_ROLES = ("focus", "focus_text", "frequency", "slider_fill", "slider_marker", "active_border",
                 "selected_border", "pressed_border", "pressed_surface",
                 "passband_fill", "passband_border", "passband_center",
                 "home_passband_fill", "home_passband_border", "home_passband_center")
@@ -89,6 +90,15 @@ def inspector_box(editor):
 def theme_screen_boxes(editor, *, ignore_overlay=False):
     """Physical-screen rectangles shared by drawing and touch; never double-mirrored."""
     dx = inspector_box(editor)[0] - 16
+    if editor.overlay == 'sliders':
+        boxes = {'slider:previous': (36,634,204,698), 'slider:next': (220,634,388,698),
+                 'slider:cancel': (652,634,812,698), 'slider:save': (828,634,988,698)}
+        shown = SLIDER_STYLES[editor.slider_page * SLIDER_CARDS_PER_PAGE:
+                              (editor.slider_page + 1) * SLIDER_CARDS_PER_PAGE]
+        for index, (identifier, _label) in enumerate(shown):
+            x, y = 36 + (index % 2) * 484, 312 + (index // 2) * 136
+            boxes['slider:' + identifier] = (x,y,x+468,y+120)
+        return {key: (a+dx,b,c+dx,d) for key,(a,b,c,d) in boxes.items()}
     if editor.overlay == 'colors':
         boxes = {'color:cancel':(652,634,812,698), 'color:save':(828,634,988,698)}
         for field,x in (('accent',36),('text',524)):
@@ -104,7 +114,8 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             return {'show': (756 + dx, 642, 992 + dx, 706)}
         boxes = {'hide': (828, 240, 988, 304), 'reset': (36, 634, 196, 698),
                  'choose': (212, 634, 372, 698), 'back': (652, 634, 812, 698),
-                 'save': (828, 634, 988, 698), 'text:smaller': (396, 344, 460, 408),
+                 'save': (828, 634, 988, 698), 'sliders': (828,508,988,572),
+                 'text:smaller': (396, 344, 460, 408),
                  'text:reset': (468, 344, 564, 408), 'text:larger': (572, 344, 636, 408),
                  'option:straight': (732, 344, 846, 408),
                  'option:rounded': (854, 344, 968, 408)}
@@ -137,6 +148,7 @@ class ThemeEditor:
         self.exit_surface = 'home'
         self.mode = 'browse'
         self.page = 0
+        self.slider_page = 0
         self.selected_id = library.active_id
         self.entry_theme = deepcopy(library.get(library.active_id))
         self.draft = deepcopy(self.entry_theme)
@@ -179,13 +191,14 @@ class ThemeEditor:
         theme = deepcopy(theme)
         if not is_builtin_theme_id(self.selected_id):
             base = deepcopy(theme.get('customization_base', {
-                key: theme[key] for key in ('colors','radius','text_scale_percent','font_style')}))
+                key: theme[key] for key in ('colors','radius','text_scale_percent','font_style','slider_style')}))
             theme.update(base)
             theme['customization_base'] = base
         theme.pop('accent_rgb',None)
         theme.pop('text_rgb',None)
         if not is_builtin_theme_id(self.selected_id):
             theme['font_style'] = theme.get('customization_base',{}).get('font_style','current')
+            theme['slider_style'] = theme.get('customization_base',{}).get('slider_style','classic')
         theme.update(accent_id='original', color_intensity_percent=100, border_intensity_percent=25,
                      saturation_percent=100)
         return self._keep_operational_settings(theme)
@@ -294,6 +307,7 @@ class ThemeEditor:
                          if theme['id'] == self.selected_id)
         self.error = self.status = ''
         self.overlay = None
+        self.slider_page = 0
 
     def select_theme(self, identifier):
         theme = self.library.get(identifier)
@@ -383,8 +397,28 @@ class ThemeEditor:
             return
         if action == 'theme_next' and self.page + 1 >= self.page_count:
             return
+        if action == 'slider:previous' and self.slider_page == 0:
+            return
+        if action == 'slider:next' and self.slider_page + 1 >= math.ceil(len(SLIDER_STYLES)/SLIDER_CARDS_PER_PAGE):
+            return
         self.error = self.status = ''
-        if action.startswith('colors:'):
+        if action == 'sliders':
+            self._slider_entry = self.draft['slider_style']
+            self.slider_page = next(index // SLIDER_CARDS_PER_PAGE for index,(identifier,_label)
+                                    in enumerate(SLIDER_STYLES) if identifier == self._slider_entry)
+            self.overlay = 'sliders'
+        elif action == 'slider:previous':
+            self.slider_page -= 1
+        elif action == 'slider:next':
+            self.slider_page += 1
+        elif action == 'slider:save':
+            self.overlay = None
+        elif action == 'slider:cancel':
+            self.draft['slider_style'] = self._slider_entry
+            self.overlay = None
+        elif action.startswith('slider:'):
+            self.draft['slider_style'] = action.split(':',1)[1]
+        elif action.startswith('colors:'):
             self._color_entry = deepcopy(self.draft)
             self.overlay = 'colors'
         elif action == 'color:save':

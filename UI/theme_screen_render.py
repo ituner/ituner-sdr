@@ -3,11 +3,12 @@ from dataclasses import replace
 
 import theme_system
 from ui_style import ButtonStyle, UIPalette
-from theme_editor import (CARDS_PER_PAGE, FULL_HOME_BOX, INTENSITY_LIMITS, inspector_box,
+from theme_editor import (CARDS_PER_PAGE, SLIDER_CARDS_PER_PAGE, FULL_HOME_BOX, INTENSITY_LIMITS, inspector_box,
                           theme_screen_boxes, rainbow_rgb, contrast, COLOR_STRIP_HEIGHT)
 from theme_colors import muted_text_color
 import colorsys
 from theme_fonts import FONT_STYLES
+from theme_system import SLIDER_STYLES
 
 
 def _text(ui, cache, x, y, value, size=14, color=None, anchor='lm', width=None):
@@ -93,11 +94,43 @@ def _inspector(ui, cache, editor, boxes):
     _text(ui,cache,396+dx,436,'Tap the percentage for 100%',12,p.secondary_text)
     _text(ui,cache,732+dx,436,'Applies to interface controls',12,p.secondary_text)
     _text(ui,cache,36+dx,484,'FONT STYLE',13,p.section_heading)
+    _text(ui,cache,828+dx,484,'SLIDER STYLE',13,p.section_heading)
     for identifier,label in FONT_STYLES:
         style = replace(ui.APP_UI_STYLE.button,font_family='theme-style:'+identifier)
         ui.draw_styled_text_button(cache,boxes['font:'+identifier],label,
             active=editor.preview.get('font_style','current')==identifier,style=style)
-    _text(ui,cache,36+dx,600,'AM · 14.250 MHz · −73 dBm',17,width=952)
+    style_name = dict(SLIDER_STYLES).get(editor.preview.get('slider_style'), 'CLASSIC')
+    _button(ui,cache,boxes['sliders'],style_name)
+
+
+def _slider_picker(ui, cache, editor, boxes):
+    p = ui.APP_UI_STYLE.palette
+    dx = _floating_panel(ui, editor)
+    _text(ui,cache,36+dx,250,'SLIDER STYLE',18)
+    _text(ui,cache,36+dx,276,'Choose one look for sliders across the app. Preview on HOME.',13,p.secondary_text)
+    captions = {
+        'classic':'Plain bar thumb', 'precision':'Ticks and notched pointer',
+        'studio':'Segments and round knob', 'pointer':'Pointed indicator',
+        'halo':'Ring knob and filled rail', 'arrows':'Large two-arrow grip',
+        'ruler':'Fine graduated marks', 'dots':'Dotted level scale',
+        'pin':'Stem and pin marker', 'fader':'Wide grooved grip',
+        'diamond':'Filled diamond and hairline', 'bubble':'Large circle and hairline',
+    }
+    shown = SLIDER_STYLES[editor.slider_page * SLIDER_CARDS_PER_PAGE:
+                          (editor.slider_page + 1) * SLIDER_CARDS_PER_PAGE]
+    for identifier, label in shown:
+        box = boxes['slider:'+identifier]
+        ui.draw_styled_button_frame(box,active=editor.preview.get('slider_style')==identifier)
+        x0,y0,x1,_y1=box
+        _text(ui,cache,x0+16,y0+23,label,16,p.text)
+        ui.draw_theme_slider(x0+24,x1-24,y0+60,.62,style_id=identifier)
+        _text(ui,cache,x0+16,y0+98,captions[identifier],12,p.secondary_text)
+    page_count = (len(SLIDER_STYLES) + SLIDER_CARDS_PER_PAGE - 1)//SLIDER_CARDS_PER_PAGE
+    _button(ui,cache,boxes['slider:previous'],'PREVIOUS',enabled=editor.slider_page > 0)
+    _button(ui,cache,boxes['slider:next'],'NEXT',enabled=editor.slider_page + 1 < page_count)
+    _text(ui,cache,520+dx,666,f'{editor.slider_page + 1} / {page_count}',14,p.secondary_text,'cm')
+    _button(ui,cache,boxes['slider:cancel'],'CANCEL')
+    _button(ui,cache,boxes['slider:save'],'SAVE')
 
 
 def _color_picker(ui, cache, editor, boxes):
@@ -165,6 +198,8 @@ def draw_theme_screen(cache, editor, ui):
         boxes=theme_screen_boxes(editor)
         if editor.overlay == 'colors':
             _color_picker(ui,cache,editor,boxes)
+        elif editor.overlay == 'sliders':
+            _slider_picker(ui,cache,editor,boxes)
         elif not editor.fullscreen:
             _chooser(ui,cache,editor,boxes)
         elif editor.fullscreen_controls:

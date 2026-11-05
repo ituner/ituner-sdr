@@ -8,7 +8,7 @@ available on additional chooser pages; paging does not select or apply a theme.
 single-page chooser. Unavailable directions are dimmed and do nothing when tapped.
 
 The customization panel overlays the waterfall without shrinking HOME. It has
-four sections:
+five sections:
 
 - **Colors:** tap **Accent** or **Text** to open the color editor. It has
   side-by-side Accent and Text sections, each with separate unlabeled square
@@ -29,12 +29,32 @@ four sections:
   80–120% range. Tap the percentage to return to 100%.
 - **Corners:** **Straight** or **Rounded** (0 or 8 pixels), previewed on HOME's
   interface controls.
-- **Font style:** **Current** preserves the original typography; **Clean** uses
-  bundled Liberation Sans labels; **Instrument** uses bundled Liberation Mono
-  labels; **Classic** uses Liberation Serif; **Readable** uses DejaVu Sans.
-  Each equal-width button shows its own font, with a live sample below.
+- **Font style:** **Original** keeps the app's established mix of label fonts;
+  **Clean** uses bundled Liberation Sans labels; **Instrument** uses bundled
+  Liberation Mono labels; **Readable** uses DejaVu Sans. The four equal-width
+  font buttons share a row with the equal-width Slider Style button.
+  Previously saved Classic fonts remain readable but are no longer offered.
   Tapping changes the HOME labels and Customize immediately. Dedicated frequency
   and fixed-width numeric readouts keep their existing faces and alignment.
+- **Slider style:** tap the selected-style button beside Font Style to compare twelve
+  designs across three pages: **Classic** (plain bar), **Precision** (major and
+  minor ticks), **Studio** (segments and round knob), **Pointer** (pointed grip),
+  **Halo** (ring knob), **Arrows** (large two-arrow grip), **Ruler** (dense
+  gradations), **Dots** (dotted scale), **Pin** (stem marker), **Fader**
+  (wide grooved grip), **Diamond** (filled diamond on a hairline), and **Bubble**
+  (large circle on a hairline). All three pages contain four choices.
+  Previous and Next stay visible at the bottom of the
+  picker and dim when unavailable. The choice previews on HOME immediately.
+  **Save** returns to Customize with the choice
+  in the draft; **Cancel** restores the previous choice. **Apply** saves it with
+  the theme, and **Reset Theme** restores the preset's Classic style. The same
+  style appears on HOME volume, AUDIO sliders, DISPLAY waterfall limits,
+  PASSBAND shift and width, and the dual-receiver audio mixer. Where the control
+  has room, Precision, Studio, and Ruler show its actual scale labels. Active
+  tracks, selected gradations, and knob details use the selected theme accent;
+  other parts follow the theme's text, slider, and surface colors. Touch ranges
+  and radio values do not change with the artwork. Saved Capsule selections
+  load as Halo, the closest surviving appearance.
 Within **Color**:
 
 - **Color intensity:** brighter/dimmer theme colors, from 50% to 150%, with

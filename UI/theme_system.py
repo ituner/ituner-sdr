@@ -27,6 +27,15 @@ REMOVED_THEME_MIGRATIONS = {
 }
 TEXT_SCALE_MIN = 80
 TEXT_SCALE_MAX = 120
+SLIDER_STYLES = (
+    ("classic", "CLASSIC"), ("precision", "PRECISION"),
+    ("studio", "STUDIO"), ("pointer", "POINTER"),
+    ("halo", "HALO"), ("arrows", "ARROWS"),
+    ("ruler", "RULER"), ("dots", "DOTS"),
+    ("pin", "PIN"), ("fader", "FADER"),
+    ("diamond", "DIAMOND"), ("bubble", "BUBBLE"),
+)
+SLIDER_STYLE_MIGRATIONS = {"capsule": "halo"}
 DEFAULT_COLORS = {
     **{field.name: list(getattr(UIPalette(), field.name)) for field in fields(UIPalette)},
     # Full-color bases; ThemeLibrary supplies the default 25% border intensity.
@@ -48,6 +57,7 @@ DEFAULT_THEME = {
     "sidebar": "right",
     "text_scale_percent": 100,
     "font_style": "current",
+    "slider_style": "classic",
     # The historical UI mixes station miles and WSPR kilometres. Keep the
     # built-in theme visually unchanged; saved themes choose a unified system.
     "units": "original",
@@ -171,7 +181,13 @@ def normalize_theme(value, *, allow_default=False):
         "radius": 0 if value.get("radius") == 0 else 8,
         "sidebar": value.get("sidebar") if value.get("sidebar") in ("left", "right") else "right",
         "text_scale_percent": text_scale,
-        "font_style": value.get('font_style') if value.get('font_style') in tuple(key for key,_ in FONT_STYLES) else 'current',
+        # Classic remains loadable for existing saved themes, but is no longer a picker choice.
+        "font_style": value.get('font_style') if value.get('font_style') in
+                      (*tuple(key for key,_ in FONT_STYLES), 'classic') else 'current',
+        "slider_style": (
+            SLIDER_STYLE_MIGRATIONS.get(value.get('slider_style'),value.get('slider_style'))
+            if value.get('slider_style') in (*tuple(key for key,_ in SLIDER_STYLES), *SLIDER_STYLE_MIGRATIONS)
+            else 'classic'),
         "smeter_style": normalize_meter_style(value.get("smeter_style")),
         "units": value.get("units") if value.get("units") in ("original", "imperial", "metric") else "original",
     }
@@ -192,7 +208,7 @@ def normalize_theme(value, *, allow_default=False):
     if isinstance(base, dict):
         original = normalize_theme({**base, 'id': 'customization-base', 'name': 'Original',
                                     'customization_base': None})
-        normalized['customization_base'] = {key: original[key] for key in ('colors', 'radius', 'text_scale_percent', 'font_style')}
+        normalized['customization_base'] = {key: original[key] for key in ('colors', 'radius', 'text_scale_percent', 'font_style', 'slider_style')}
     return normalized
 
 

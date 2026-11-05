@@ -77,11 +77,25 @@ class ThemeFontTests(unittest.TestCase):
 
     def test_picker_buttons_have_equal_width_and_fit_both_sidebar_sides(self):
         from theme_editor import inspector_box
+        from theme_fonts import FONT_STYLES
+        self.assertEqual(tuple(FONT_STYLES),
+                         (('current','Original'),('clean','Clean'),
+                          ('instrument','Instrument'),('readable','Readable')))
         for side in ('left','right'):
             self.editor.entry_theme['sidebar'] = side
             a,b,c,d = inspector_box(self.editor)
             boxes = theme_screen_boxes(self.editor)
-            for style in ('current','clean','instrument','classic','readable'):
+            self.assertNotIn('font:classic',boxes)
+            for style in ('current','clean','instrument','readable'):
                 x,y,z,w = boxes['font:'+style]
                 self.assertEqual(z-x,boxes['save'][2]-boxes['save'][0])
                 self.assertTrue(a<=x<z<=c and b<=y<w<=d)
+            slider=boxes['sliders']
+            self.assertEqual(slider[2]-slider[0],boxes['font:current'][2]-boxes['font:current'][0])
+            self.assertEqual(slider[1:4:2],boxes['font:current'][1:4:2])
+            self.assertGreaterEqual(slider[0]-boxes['font:readable'][2],16)
+
+    def test_saved_classic_font_remains_readable_without_picker_button(self):
+        theme = normalize_theme({**DEFAULT_THEME,'font_style':'classic'},allow_default=True)
+        self.assertEqual(theme['font_style'],'classic')
+        self.assertNotIn('font:classic',theme_screen_boxes(self.editor))

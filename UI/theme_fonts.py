@@ -1,8 +1,8 @@
 """Small, bundled label-font choices; numeric instrument faces stay fixed."""
 from pathlib import Path
 
-FONT_STYLES = (('current','Current'),('clean','Clean'),('instrument','Instrument'),
-               ('classic','Classic'),('readable','Readable'))
+FONT_STYLES = (('current','Original'),('clean','Clean'),
+               ('instrument','Instrument'),('readable','Readable'))
 FONT_ROOT = Path(__file__).resolve().parent.parent/'assets'/'fonts'
 FONT_FILES = {'current':('roboto','Roboto'), 'clean':('liberation','LiberationSans'),
               'instrument':('liberation','LiberationMono'),

@@ -2273,9 +2273,7 @@ def draw_dual_vfo_audio_mixer(text_cache, box, mix):
     track_x0, track_x1 = x0 + 14, x1 - 14
     track_y = y0 + 33
     knob_x = track_x0 + (track_x1 - track_x0) * mix
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (29, 52, 61, 255)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (83, 216, 248, 228)))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (228, 244, 245, 238)))
+    draw_theme_slider(track_x0, track_x1, track_y, mix, thumb_half=(6,11))
     legend_y = y1 - 9
     legend_color = themed_instrument_color("secondary_text", (138, 166, 176))
     draw_text(text_cache, track_x0, legend_y, "VFO A", legend_color, 10, True, False, "lm", family="Liberation Sans")
@@ -10128,12 +10126,139 @@ def slider_track_bounds(box):
     return box[0] + LCD_SLIDER_TRACK_INSET, box[2] - LCD_SLIDER_TRACK_INSET
 
 
+def draw_theme_slider(track_x0, track_x1, track_y, fraction, *, active=True, center=None,
+                      labels=None, label_y=None, thumb_half=(6, 11), style_id=None,
+                      text_cache=None, thumb_x=None):
+    """One theme-selected slider face; callers retain their original touch mapping."""
+    style = style_id or theme_system.runtime_theme.get('slider_style', 'classic')
+    fraction = clamp(fraction, 0.0, 1.0)
+    current_x = track_x0 + (track_x1 - track_x0) * fraction
+    thumb_x = current_x if thumb_x is None else thumb_x
+    start_fraction = center if center is not None else 0.0
+    start_x = track_x0 + (track_x1 - track_x0) * start_fraction
+    track = themed_instrument_color('slider_track', (27, 45, 52, 255))
+    fill = themed_instrument_color('slider_fill', (80, 226, 164, 235)) if active else APP_UI_STYLE.palette.secondary_text
+    marker = themed_instrument_color('slider_marker', (112, 238, 177, 190))
+    thumb = themed_instrument_color('slider_thumb', (229, 246, 246, 250)) if active else APP_UI_STYLE.palette.secondary_text
+    if style in ('precision', 'ruler', 'pointer'):
+        count = 24 if style == 'ruler' else 10
+        for index in range(count + 1):
+            x = track_x0 + (track_x1 - track_x0) * index / count
+            major = index % (6 if style == 'ruler' else 5) == 0
+            if style == 'pointer':
+                draw_logical_line(x, track_y + 8, x, track_y + (15 if major else 11),
+                                  marker if major and active else APP_UI_STYLE.palette.secondary_text, 1)
+            else:
+                draw_logical_line(x, track_y - (18 if major and style == 'ruler' else 15 if major else 11),
+                                  x, track_y - 7,
+                                  marker if major and active else APP_UI_STYLE.palette.secondary_text, 1)
+    if labels and label_y is not None and style in ('precision','studio','ruler'):
+        for index, label in enumerate(labels):
+            x = track_x0 + (track_x1 - track_x0) * index / max(1, len(labels) - 1)
+            anchor = 'lm' if index == 0 else 'rm' if index == len(labels) - 1 else 'cm'
+            draw_text(text_cache, x, label_y, label, APP_UI_STYLE.palette.secondary_text,
+                      11, False, False, anchor, family=APP_UI_STYLE.button.font_family)
+    if style == 'studio':
+        for index in range(12):
+            a = track_x0 + (track_x1 - track_x0) * index / 12 + 1
+            b = track_x0 + (track_x1 - track_x0) * (index + 1) / 12 - 2
+            middle = (index + .5) / 12
+            lit = min(start_fraction, fraction) <= middle <= max(start_fraction, fraction)
+            draw_logical_rect(a, track_y - 4, b, track_y + 4, fill if lit else track)
+    elif style == 'halo':
+        half_height = 5
+        draw_logical_rounded_rect(track_x0,track_y-half_height,track_x1,track_y+half_height,
+                                  half_height,track)
+        if abs(start_x-current_x)>1:
+            draw_logical_rounded_rect(min(start_x,current_x),track_y-half_height,
+                                      max(start_x,current_x),track_y+half_height,
+                                      half_height,fill)
+    elif style == 'dots':
+        for index in range(21):
+            x = track_x0 + (track_x1-track_x0)*index/20
+            position = index/20
+            lit = min(start_fraction,fraction) <= position <= max(start_fraction,fraction)
+            draw_logical_circle(x,track_y,2.5,fill if lit else track,segments=12)
+    elif style == 'pin':
+        draw_logical_rect(track_x0,track_y-2,track_x1,track_y+2,track)
+        for index in range(21):
+            x = track_x0+(track_x1-track_x0)*index/20
+            position = index/20
+            lit = min(start_fraction,fraction) <= position <= max(start_fraction,fraction)
+            draw_logical_circle(x,track_y-10,1.7,fill if lit else marker,segments=12)
+        draw_logical_rect(min(start_x,current_x),track_y-2,max(start_x,current_x),track_y+2,fill)
+    else:
+        half_height = 1 if style in ('arrows','diamond','bubble') else 3
+        draw_logical_rect(track_x0, track_y-half_height, track_x1, track_y+half_height, track)
+        draw_logical_rect(min(start_x,current_x), track_y-half_height,
+                          max(start_x,current_x), track_y+half_height, fill)
+    if center is not None:
+        draw_logical_line(start_x, track_y - 16, start_x, track_y + 16, marker, 2)
+    if style == 'studio':
+        draw_logical_circle(thumb_x, track_y, 9, thumb)
+        draw_logical_circle(thumb_x, track_y, 3, fill)
+    elif style in ('halo','dots'):
+        radius = 8 if style == 'dots' else 10
+        draw_logical_circle(thumb_x,track_y,radius,thumb,segments=32)
+        draw_logical_circle(thumb_x,track_y,radius-3,APP_UI_STYLE.palette.section_surface,segments=32)
+        draw_logical_circle(thumb_x,track_y,3,fill,segments=24)
+    elif style == 'pointer':
+        draw_logical_rounded_rect(thumb_x-6,track_y-17,thumb_x+6,track_y+5,3,thumb)
+        draw_logical_polyline(((thumb_x-6,track_y+5),(thumb_x,track_y+13),
+                               (thumb_x+6,track_y+5)),thumb,2)
+        draw_logical_line(thumb_x,track_y-12,thumb_x,track_y+2,fill,2)
+    elif style == 'pin':
+        draw_logical_line(thumb_x,track_y-16,thumb_x,track_y+13,thumb,2)
+        draw_logical_polyline(((thumb_x-6,track_y+13),(thumb_x-3,track_y+18),
+                               (thumb_x+3,track_y+18),(thumb_x+6,track_y+13),
+                               (thumb_x-6,track_y+13)),fill,2)
+    elif style == 'fader':
+        draw_logical_rounded_rect(thumb_x-14,track_y-9,thumb_x+14,track_y+9,5,thumb)
+        for offset in (-5,0,5):
+            draw_logical_line(thumb_x+offset,track_y-4,thumb_x+offset,track_y+4,fill,1.5)
+    elif style == 'arrows':
+        # The accent forms the grip face; black/white arrows stay legible for
+        # any chosen accent, including white and low-intensity dark colors.
+        brightness = fill[0]*.2126 + fill[1]*.7152 + fill[2]*.0722
+        arrow_ink = (0,0,0,255) if brightness >= 128 else (255,255,255,255)
+        draw_logical_rounded_rect(thumb_x-20,track_y-10,thumb_x+20,track_y+10,
+                                  6,fill,thumb,2)
+        draw_logical_polyline(((thumb_x-5,track_y-6),(thumb_x-12,track_y),
+                               (thumb_x-5,track_y+6)),arrow_ink,3.5)
+        draw_logical_polyline(((thumb_x+5,track_y-6),(thumb_x+12,track_y),
+                               (thumb_x+5,track_y+6)),arrow_ink,3.5)
+    elif style == 'diamond':
+        draw_logical_area(((thumb_x-14,track_y),(thumb_x,track_y-11),
+                           (thumb_x+14,track_y)),track_y,fill)
+        draw_logical_area(((thumb_x-14,track_y),(thumb_x,track_y+11),
+                           (thumb_x+14,track_y)),track_y,fill)
+        draw_logical_polyline(((thumb_x,track_y-11),(thumb_x+14,track_y),
+                               (thumb_x,track_y+11),(thumb_x-14,track_y),
+                               (thumb_x,track_y-11)),thumb,2)
+        draw_logical_circle(thumb_x,track_y,2.5,thumb,segments=20)
+    elif style == 'bubble':
+        draw_logical_circle(thumb_x,track_y,14,thumb,segments=40)
+        draw_logical_circle(thumb_x,track_y,11,fill,segments=40)
+    else:
+        half_w, half_h = thumb_half
+        if style in ('precision','ruler'):
+            half_w += 1
+            half_h += 2
+        draw_logical_rect(thumb_x-half_w, track_y-half_h, thumb_x+half_w,
+                          track_y+half_h, thumb)
+        if style in ('precision','ruler'):
+            draw_logical_line(thumb_x, track_y-half_h+3, thumb_x, track_y+half_h-3,
+                              APP_UI_STYLE.palette.section_surface, 1)
+    return current_x
+
+
 def slider_fraction_at_x(x, box):
     left, right = slider_track_bounds(box)
     return clamp((x-left)/max(1,right-left),0.0,1.0)
 
 
-def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active, *, detail_color=None):
+def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active, *, detail_color=None,
+                                scale_labels=None):
     """Full-width Display instrument with the same visible 236 px bounds as BACK."""
     x0, y0, x1, y1 = box
     palette = APP_UI_STYLE.palette
@@ -10146,13 +10271,8 @@ def draw_display_slider_section(text_cache, box, title, value, maximum, detail, 
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 13
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3,
-                      themed_instrument_color("slider_track", (27, 45, 52, 255)))
-    current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3,
-                      themed_instrument_color("slider_fill", (80, 226, 164, 235)) if active else (*palette.secondary_text[:3], 105))
-    draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9,
-                      themed_instrument_color("slider_thumb", (229, 246, 246, 250)) if active else (*palette.secondary_text[:3], 180))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, active=active,
+                      labels=scale_labels, label_y=track_y-27, thumb_half=(5,9), text_cache=text_cache)
 
 
 def volume_at_x(x, box):
@@ -11942,17 +12062,14 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = slider_track_bounds(box) if LCD_800_MODE or not full_width else (x0,x1)
     track_y = y1 - (28 if roomy else 15)
-    draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
-    current_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_logical_rect(track_x0, track_y - 3, current_x, track_y + 3, themed_instrument_color("slider_fill", (80, 226, 164, 235)))
+    thumb_x = clamp(track_x0 + (track_x1-track_x0)*fraction, x0+5, x1-5) if full_width else track_x0 + (track_x1-track_x0)*fraction
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, active=active,
+                      thumb_half=(7,14) if roomy else (5,9), thumb_x=thumb_x)
     if steps:
         for index in range(steps):
             marker_x = track_x0 + (track_x1 - track_x0) * index / max(1, steps - 1)
             draw_logical_line(marker_x, track_y - 5, marker_x, track_y + 5,
                               themed_instrument_color("slider_marker", (112, 238, 177, 190)) if index <= value else themed_instrument_color("slider_track", (107, 139, 147, 128)), 1)
-    thumb_x = clamp(current_x, x0 + 5, x1 - 5) if full_width else current_x
-    half_w, half_h = (7, 14) if roomy else (5, 9)
-    draw_logical_rect(thumb_x - half_w, track_y - half_h, thumb_x + half_w, track_y + half_h, themed_instrument_color("slider_thumb", (229, 246, 246, 250)))
 
 
 def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend):
@@ -12036,10 +12153,8 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
     track_y = (vy0 + vy1) / 2 + 9
     draw_text(text_cache, vx0, vy0 + 2, "VOLUME", themed_instrument_color("section_heading", (164, 193, 198)), 16 if LCD_800_MODE else 14, True, True, "lt", family="Liberation Sans")
     draw_text(text_cache, vx1, vy0 + 2, main_volume_label(level), themed_instrument_color("danger_border", MUTE_ACCENT)[:3] if level <= MAIN_VOLUME_MUTE_THRESHOLD else themed_instrument_color("text", (232, 246, 248)), 24 if LCD_800_MODE else 22, True, True, "rt", family="Liberation Sans")
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
-    draw_logical_rect(vx0, track_y - SLIDER_STEM_HALF_HEIGHT, vx0 + (vx1 - vx0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
-    knob_x = vx0 + (vx1 - vx0) * level
-    draw_logical_rect(knob_x - 8, track_y - 16, knob_x + 8, track_y + 16, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
+    draw_theme_slider(vx0, vx1, track_y, level, thumb_half=(8,16),
+                      thumb_x=clamp(vx0+(vx1-vx0)*level,vx0+8,vx1-8))
 
     def panel_button(box, title, detail, active=False, accent=(92, 229, 174, 220)):
         bx0, by0, bx1, by1 = box
@@ -12064,10 +12179,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_text(text_cache, bx1 - 14, label_y, label, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if value else themed_instrument_color("secondary_text", (153, 185, 191)), 17 if LCD_800_MODE else 15, True, True, "rm", family="Liberation Sans")
         track_x0, track_x1 = bx0 + 14, bx1 - 14
         track_y = by1 - (18 if LCD_800_MODE else 15)
-        draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (31, 48, 57, 255)))
-        draw_logical_rect(track_x0, track_y - 3, track_x0 + (track_x1 - track_x0) * fraction, track_y + 3, themed_instrument_color("slider_fill", (76, 221, 159, 230)))
-        knob_x = track_x0 + (track_x1 - track_x0) * fraction
-        draw_logical_rect(knob_x - 4, track_y - 9, knob_x + 4, track_y + 9, themed_instrument_color("slider_thumb", (229, 246, 246, 245)))
+        draw_theme_slider(track_x0, track_x1, track_y, fraction, thumb_half=(4,9))
 
     def denoise_slider(box, level, bypassed=False):
         level = kiwi.denoise_level(level)
@@ -15044,10 +15156,12 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             draw_display_slider_section(
                 text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
                 floor - 40.0, 180.0, f"AUTO {floor:.0f}" if waterfall_auto else f"{floor:.0f}", not waterfall_auto and waterfall_enabled,
+                scale_labels=("40", "130", "220"),
             )
             draw_display_slider_section(
                 text_cache, DISPLAY_CEIL_MINUS_BOX, "CEILING",
                 ceiling - 70.0, 185.0, f"AUTO {ceiling:.0f}" if waterfall_auto else f"{ceiling:.0f}", not waterfall_auto and waterfall_enabled,
+                scale_labels=("70", "163", "255"),
             )
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 416, "WATERFALL COLORS")
             for option, box, label in DISPLAY_PALETTE_BOXES:
@@ -17083,10 +17197,7 @@ def draw_lcd_home_volume_slider(text_cache, volume, muted=False, show_compact_re
         draw_logical_line(cx - 16, cy - 14, cx + 16, cy + 14, icon_color, 3)
     track_x0, track_y0, track_x1, track_y1 = volume_track_box(panel)
     track_y = (track_y0 + track_y1) / 2
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (20, 34, 42, 235)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x0 + (track_x1 - track_x0) * level, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (67, 205, 149, 230)))
-    knob_x = track_x0 + (track_x1 - track_x0) * level
-    draw_logical_rect(knob_x - 6, track_y - 12, knob_x + 6, track_y + 12, themed_instrument_color("slider_thumb", (233, 247, 248, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, level, thumb_half=(6,12))
 
 
 def compact_smeter_label(dbm):
@@ -17335,18 +17446,14 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     fraction = filter_shift_slider_fraction(center_hz, high_cut - low_cut)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
-    label_y = track_y - 27
-    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    slider_style = theme_system.runtime_theme.get('slider_style','classic')
+    label_y = y0 + 18 if slider_style in ('precision','studio','ruler') else track_y - 27
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
     draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
-    zero_x = (track_x0 + track_x1) / 2
-    draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, themed_instrument_color("slider_marker", (241, 193, 82, 248)), 2)
-    draw_logical_line(track_x0, track_y - 7, track_x0, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
-    draw_logical_line(track_x1, track_y - 7, track_x1, track_y + 7, themed_instrument_color("slider_marker", (77, 126, 139, 188)), 1)
-    draw_logical_rect(min(zero_x, knob_x), track_y - SLIDER_STEM_HALF_HEIGHT, max(zero_x, knob_x), track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (76, 214, 170, 184)))
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction, center=.5,
+                      labels=('−12k','0','+12k'), label_y=track_y-24,
+                      thumb_half=(6,11), text_cache=text_cache)
 
 
 def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
@@ -17355,16 +17462,13 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     fraction = filter_width_slider_fraction(width_hz)
     track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
-    label_y = track_y - 27
-    knob_x = track_x0 + (track_x1 - track_x0) * fraction
+    slider_style = theme_system.runtime_theme.get('slider_style','classic')
+    label_y = y0 + 18 if slider_style in ('precision','studio','ruler') else track_y - 27
     draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
-    draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (84, 188, 226, 184)))
-    for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
-        mark_x = track_x0 + (track_x1 - track_x0) * fraction_mark
-        draw_logical_line(mark_x, track_y - 7, mark_x, track_y + 7, themed_instrument_color("slider_marker", (98, 154, 170, 156)), 1)
-    draw_logical_rect(knob_x - 6, track_y - 11, knob_x + 6, track_y + 11, themed_instrument_color("slider_thumb", (231, 247, 247, 255)))
+    draw_theme_slider(track_x0, track_x1, track_y, fraction,
+                      labels=('50 Hz','12 kHz'), label_y=track_y-24,
+                      thumb_half=(6,11), text_cache=text_cache)
 
 
 def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):

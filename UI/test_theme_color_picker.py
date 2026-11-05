@@ -208,7 +208,7 @@ class ColorPickerTests(unittest.TestCase):
         captions = [c.args[3] for c in labels.call_args_list]
         self.assertIn('Selected: Black · #000000',captions)
         self.assertIn('Selected: White · #FFFFFF',captions)
-        # Two strokes per checkmark; slider rendering contains no line calls.
+        # Two strokes per checkmark; Classic sliders add no line calls.
         self.assertEqual(len(lines.call_args_list),4)
 
     def test_accent_updates_both_passbands_preserving_alpha_and_saves(self):
