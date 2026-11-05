@@ -1135,8 +1135,8 @@ RADIO_VARIANT_BUTTON_H = 52
 RADIO_VARIANT_BUTTON_GAP = 8
 RADIO_VARIANT_COLS = 2
 RADIO_STEP_OPTIONS = tuple(
-    (step,(590+i*58,74,642+i*58,100))
-    for i,step in enumerate((1,10,100,1000,5000,10000))
+    (step,(590+i*44,74,626+i*44,100))
+    for i,step in enumerate((1,10,100,1000,5000,10000,20000,100000))
 )
 
 
@@ -1194,10 +1194,15 @@ def radio_panel_box():
     return radio_popup_box(RADIO_PANEL_BOX)
 
 
+LCD_RADIO_SQUARE_SIZE = 52
+LCD_RADIO_SQUARE_GAP = 8
+LCD_RADIO_SQUARE_COLS = 4
+
+
 def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Top of the tuning-step heading, below the mode family grid."""
-    rows = max(1, math.ceil(int(mode_family_count) / 3))
-    grid_height = rows * 64 + (rows - 1) * 16
+    rows = max(1, math.ceil(int(mode_family_count) / LCD_RADIO_SQUARE_COLS))
+    grid_height = rows * LCD_RADIO_SQUARE_SIZE + (rows - 1) * LCD_RADIO_SQUARE_GAP
     return lcd_radio_mode_grid_y0() + grid_height + 16
 
 
@@ -1208,7 +1213,9 @@ def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
     steps=FMDX_TUNE_STEPS_HZ
     width,gap=FREQUENCY_SMALL_BUTTON_W,FREQUENCY_SMALL_BUTTON_GAP
     left=(LCD_NAV_X0+LOGICAL_W-(len(steps)*width+(len(steps)-1)*gap))/2
-    top=lcd_radio_step_y0(mode_family_count)+32
+    # The dedicated shared-FM drawer has its own instruments above this row.
+    rows=max(1,math.ceil(int(mode_family_count)/3))
+    top=lcd_radio_mode_grid_y0()+rows*64+(rows-1)*16+48
     return tuple((step,(left+i*(width+gap),top,left+i*(width+gap)+width,top+FREQUENCY_SMALL_BUTTON_H))
                  for i,step in enumerate(steps))
 
@@ -1240,7 +1247,7 @@ def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
 
 
 def lcd_radio_mode_grid_y0():
-    """Top of the three-column LCD mode-family matrix."""
+    """Top of the four-column LCD mode-family matrix."""
     # Keep all mode instruments together at the top; the lower area remains
     # intentionally quiet until the separate Back control at the bottom.
     return 80
@@ -1248,7 +1255,7 @@ def lcd_radio_mode_grid_y0():
 
 def radio_family_button_width():
     if LCD_800_MODE:
-        return 64
+        return LCD_RADIO_SQUARE_SIZE
     available = RADIO_FAMILY_GRID_X1 - RADIO_FAMILY_GRID_X0
     return (available - RADIO_FAMILY_BUTTON_GAP * (RADIO_FAMILY_COLS - 1)) / RADIO_FAMILY_COLS
 
@@ -4162,8 +4169,10 @@ def frequency_tune_steps(receiver_type="kiwi"):
 
 
 def tune_step_square_boxes(receiver_type,top):
-    """Identical three-column step squares in Frequency and Modes."""
-    width,gap,cols=64,16,3
+    """Identical four-column step squares in Frequency and Modes."""
+    width,gap,cols=LCD_RADIO_SQUARE_SIZE,LCD_RADIO_SQUARE_GAP,LCD_RADIO_SQUARE_COLS
+    if receiver_worker_protocol(receiver_type)=="fmdx":
+        width,gap,cols=64,16,3
     left=(LCD_NAV_X0+LOGICAL_W-(cols*width+(cols-1)*gap))/2
     return tuple((step,(left+(i%cols)*(width+gap),top+(i//cols)*(width+gap),
                        left+(i%cols)*(width+gap)+width,top+(i//cols)*(width+gap)+width))
@@ -9385,9 +9394,9 @@ def radio_mode_layout(mode_families=KIWI_MODE_FAMILIES):
         panel_x0, _panel_y0, panel_x1, _panel_y1 = radio_panel_box()
         grid_x0, grid_x1 = panel_x0 + 10, panel_x1 - 10
         grid_y0 = lcd_radio_mode_grid_y0()
-        gap = 16
-        button_h = button_w = 64
-        cols = 3
+        gap = LCD_RADIO_SQUARE_GAP
+        button_h = button_w = LCD_RADIO_SQUARE_SIZE
+        cols = LCD_RADIO_SQUARE_COLS
         grid_x0 = (panel_x0 + panel_x1 - (cols * button_w + (cols - 1)*gap)) / 2
         for index, (family, modes) in enumerate(mode_families):
             col = index % cols

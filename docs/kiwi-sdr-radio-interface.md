@@ -558,15 +558,15 @@ Recommended order for future work:
 
 ### Native mode selector
 
-The AM/FM annunciators open a three-column grid of mode-family squares.
-Each square uses the same 64 px size and 16 px spacing as Audio's compact
-controls. Eight Kiwi families occupy three rows; USB receiver capabilities
+The AM/FM annunciators open a four-column grid of mode-family squares.
+Each mode and step square is 52 px with 8 px spacing. Eight Kiwi families
+occupy two rows; USB receiver capabilities
 use only the families they support. Taps still cycle the family's demodulator
 variants. The selected variant appears as its short mode code, and full
 family names use the shared font-fitting helper. The synchronous AM family
 shows SYNC on the first line and AM (or the selected sync variant) below it,
 at the normal shared font size. Tune-step controls sit
-below the last mode row as two rows of three squares, with a number above its Hz/kHz unit.
+below the last mode row as two rows of four squares, with a number above its Hz/kHz unit.
 The former decoder shortcuts are replaced by the live passband viewer and
 Width directly below the viewer and Shift below Width. Decoders remain in
 Digital; Back keeps its position.
@@ -576,7 +576,7 @@ The shared Shift/Width sliders in Modes and the detailed Passband drawer use
 is a normal value label rather than a larger status heading.
 
 The frequency-entry rail uses larger 72 px digits with the selected frequency
-font, without changing the main instrument readout. Frequency and Modes share six step
-choices (1 Hz, 10 Hz, 100 Hz, 1 kHz, 5 kHz and 10 kHz), in two rows of three
-64 px squares, with the number above Hz/kHz. The keypad
+font, without changing the main instrument readout. Frequency and Modes share eight step
+choices (1 Hz, 10 Hz, 100 Hz, 1 kHz, 5 kHz, 10 kHz, 20 kHz and 100 kHz), in two rows of four
+52 px squares, with the number above Hz/kHz. The keypad
 and directional buttons retain their existing geometry.
