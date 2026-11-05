@@ -759,16 +759,30 @@ class DrawerGeometryTests(unittest.TestCase):
         for kind,box in ui.radio_decoder_boxes():
             self.assertNotEqual(ui.radio_option_at(*self._center(box)),('workspace',kind))
 
-    def test_sync_mode_label_uses_two_readable_lines(self):
+    def test_sync_mode_label_uses_variant_indicator(self):
         ui.configure_output(True)
         family,modes,box=next(item for item in ui.radio_mode_layout() if item[0]=='SYNC AM')
         for mode,wanted in (('AM','AM'),('SAM','AM'),('SAU','USB'),('SAL','LSB'),('SAS','STEREO'),('QAM','QAM')):
-            with mock.patch.object(ui,'draw_styled_two_line_button') as draw:
+            with mock.patch.object(ui,'draw_styled_two_line_button') as draw, \
+                 mock.patch.object(ui,'draw_radio_mode_indicator') as indicator:
                 ui.draw_radio_family_option(None,box,family,modes,mode)
-            self.assertEqual(draw.call_args.args[2:4],('SYNC',wanted))
+            self.assertEqual(draw.call_args.args[2:4],('SYNC',''))
             self.assertEqual(draw.call_args.kwargs['style'].title_size,ui.APP_UI_STYLE.button.title_size)
-            self.assertTrue(draw.call_args.kwargs['primary_centered'])
-            self.assertEqual(draw.call_args.kwargs['style'].subtitle_size,11)
+            self.assertEqual(indicator.call_args.args[2:],(wanted,mode in modes))
+
+    def test_mode_indicators_avoid_repeating_base_names(self):
+        ui.configure_output(True)
+        for family,modes,box in ui.radio_mode_layout():
+            for mode in modes:
+                with mock.patch.object(ui,'draw_styled_two_line_button'), \
+                     mock.patch.object(ui,'draw_radio_mode_indicator') as indicator:
+                    ui.draw_radio_family_option(None,box,family,modes,mode)
+                caption,active=indicator.call_args.args[2:]
+                self.assertTrue(active)
+                if mode.replace('/','')==family.replace('/',''):
+                    self.assertEqual(caption,'')
+                elif family=='FM':
+                    self.assertEqual(caption,mode)
 
     def test_modes_drawer_highlights_the_selected_step_in_eight_button_grid(self):
         ui.configure_output(True)

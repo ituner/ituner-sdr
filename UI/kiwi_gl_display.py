@@ -8661,7 +8661,7 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None, fit_full_subtitle=False, enabled=True, primary_centered=False):
+                                style=None, fit_full_subtitle=False, enabled=True):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
@@ -8689,8 +8689,8 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
 
     if subtitle:
         center_y = (y0 + y1) / 2
-        draw_line(title, center_y if primary_centered else center_y - 12, text_color, style.title_size)
-        draw_line(subtitle, center_y + (15 if primary_centered else 12),
+        draw_line(title, center_y - 12, text_color, style.title_size)
+        draw_line(subtitle, center_y + 12,
                   text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
@@ -9669,24 +9669,43 @@ def draw_radio_close_button(text_cache, box):
     draw_shared_back_button(text_cache, box)
 
 
+def draw_radio_mode_indicator(text_cache, box, caption, active):
+    """One status lamp per mode; variant captions share its illuminated color."""
+    style = APP_UI_STYLE.button
+    ready = APP_UI_STYLE.palette.ready
+    color = ready if active else tuple(round(channel * .2) for channel in ready[:3])
+    center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15
+    led, gap = 5, 4
+    if caption:
+        texture_width = text_cache.texture(caption, 11, color, bold=True, family=style.font_family)[1]
+        width = min(texture_width, box[2] - box[0] - 8 - led - gap)
+        left = center_x - (led + gap + width) / 2
+        draw_text_scaled_x(text_cache, left + led + gap + width / 2, center_y,
+                           caption, color, 11, min(1., width / max(1, texture_width)),
+                           True, False, "cm", family=style.font_family)
+    else:
+        left = center_x - led / 2
+    draw_logical_rect(left, center_y - led / 2, left + led, center_y + led / 2, color)
+
+
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
-    """Draw a large mode-family button without cramming its variants inside."""
+    """Keep mode labels aligned, with a lamp and only useful variant detail."""
     active = active_mode in modes
     detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
     style = APP_UI_STYLE.button
     title = family
     if LCD_800_MODE:
-        # Compact native squares retain full family names; the live variant
-        # uses the same short demodulator code as the radio state.
         detail = str(active_mode).upper() if active else ""
+        if detail.replace("/", "") == family.upper().replace("/", ""):
+            detail = ""
         if family == "SYNC AM":
             title = "SYNC"
             detail = {"SAM": "AM", "SAU": "USB", "SAL": "LSB", "SAS": "STEREO", "QAM": "QAM"}.get(str(active_mode).upper(), "AM") if active else "AM"
-        # Keep the primary annunciators on the same baseline even when a
-        # mode has a second line; the smaller variant fits beneath it.
-        style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size), subtitle_size=11)
-    draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style,
-                               primary_centered=LCD_800_MODE, fit_full_subtitle=LCD_800_MODE)
+        style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size))
+        draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style)
+        draw_radio_mode_indicator(text_cache, box, detail, active)
+        return
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
