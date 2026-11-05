@@ -1,229 +1,173 @@
-"""A stable gallery beside a faithful preview; one action applies and exits."""
-import colorsys
+"""Theme-aware floating controls over the actual full-size HOME preview."""
+from dataclasses import replace
 
 import theme_system
-from smeter_styles import METER_STYLES
-from theme_colors import transparency_percent
-from theme_editor import (APPLY_BOX, BACK_BOX, COLOR_GROUPS, METER_FILTERS,
-                          PREVIEW_BOX, FULLSCREEN_BOX, CONTINUE_BOX, FULLSCREEN_SAVE_BOX,
-                          CARDS_PER_PAGE, METER_CARDS_PER_PAGE, theme_screen_boxes)
-
-def _palette(ui):
-    return ui.APP_UI_STYLE.palette
+from ui_style import ButtonStyle, UIPalette
+from theme_editor import (CARDS_PER_PAGE, FULL_HOME_BOX, INTENSITY_LIMITS, inspector_box,
+                          theme_screen_boxes, rainbow_rgb, contrast, COLOR_STRIP_HEIGHT)
+from theme_colors import muted_text_color
+import colorsys
+from theme_fonts import FONT_STYLES
 
 
-def _text(ui, cache, x, y, value, color=None, size=14, anchor="lm", width=None):
-    value = str(value)
-    color = _palette(ui).text if color is None else color
-    # Gallery controls remain legible and stationary while preview text changes.
-    scale = theme_system.runtime_theme["text_scale_percent"] / 100
-    chosen = max(1, round(size / scale))
-    if isinstance(cache, ui.TextCache) and width:
-        while chosen > max(1, round(8 / scale)):
-            if cache.font(chosen, bold=True, family="Liberation Sans").size(value)[0] <= width:
-                break
-            chosen -= 1
-    ui.draw_text(cache, x, y, value, color, chosen, True, False, anchor, family="Liberation Sans")
+def _text(ui, cache, x, y, value, size=14, color=None, anchor='lm', width=None):
+    color = ui.APP_UI_STYLE.palette.text if color is None else color
+    if width and isinstance(cache, ui.TextCache):
+        value = ui.fit_station_text(cache, str(value), width, size, bold=True, family='Liberation Sans')
+    ui.draw_text(cache, x, y, str(value), color, size, True, False, anchor, family='Liberation Sans')
 
 
-def _button(ui, cache, box, label, *, active=False, primary=False, enabled=True, danger=False):
-    style = ui.APP_UI_STYLE.button
-    visual = style.resolve(
-        active=active or primary,
-        pressed=ui.ui_button_pressed(box),
-        danger=danger,
-    )
-    color = visual.text if enabled else _palette(ui).untested_text
-    ui.draw_logical_rounded_rect(
-        *box, style.radius, visual.fill, visual.border, visual.border_width,
-    )
-    _text(ui, cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-          label, color, 14, "cm", box[2] - box[0] - 20)
+def _button(ui, cache, box, label, active=False, *, enabled=True):
+    # The draft styles controls; their physical touch geometry stays fixed.
+    if not enabled:
+        ui.draw_styled_two_line_button(cache, box, label, '', enabled=False,
+            style=replace(ui.APP_UI_STYLE.button, title_size=ui.APP_UI_STYLE.button.label_size))
+        return
+    ui.draw_styled_text_button(cache, box, label, active=active,
+                              style=ui.APP_UI_STYLE.button)
 
 
-def _preview(ui, cache, editor, box=PREVIEW_BOX):
-    """Show the whole actual Home framebuffer, including the selected meter."""
+def _home(ui, cache, editor):
     if editor.live_frame is not None:
-        editor.live_frame.draw(box)
+        editor.live_frame.draw(FULL_HOME_BOX)
     else:
-        ui.draw_logical_rect(*box, _palette(ui).background)
-        _text(ui, cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-              "Waiting for live Home preview…", _palette(ui).secondary_text, 16, "cm")
+        ui.draw_logical_rect(*FULL_HOME_BOX, ui.APP_UI_STYLE.palette.background)
+        _text(ui, cache, 640, 200, 'Waiting for live HOME preview…', 18, anchor='cm')
 
 
-def _pages(ui, cache, boxes, prefix, page, count):
-    _button(ui, cache, boxes[prefix + "_previous"], "PREVIOUS", enabled=page > 0)
-    _button(ui, cache, boxes[prefix + "_next"], "NEXT", enabled=page + 1 < count)
-    _text(ui, cache, 1000, 660, f"{page + 1} / {count}", _palette(ui).secondary_text, 14, "cm")
+def _floating_panel(ui, editor):
+    p = ui.APP_UI_STYLE.palette
+    x0,y0,x1,y1 = inspector_box(editor)
+    radius = ui.APP_UI_STYLE.button.radius
+    ui.draw_logical_rounded_rect(x0-6,y0-6,x1+6,y1+6,radius+4 if radius else 0,(0,0,0,56))
+    ui.draw_logical_rounded_rect(x0,y0,x1,y1,radius,(*p.background[:3],228),p.border,1)
+    return x0-16
 
 
-def _gallery(ui, cache, editor, boxes):
-    if editor.tab == "themes":
-        palette = _palette(ui)
-        _text(ui, cache, 736, 122, "CHOOSE A THEME", palette.secondary_text, 13)
-        items = editor.themes[editor.page * CARDS_PER_PAGE:(editor.page + 1) * CARDS_PER_PAGE]
-        for item in items:
-            box = boxes["theme:" + item["id"]]
-            active = item["id"] == editor.selected_id
-            colors = item["colors"]
-            ui.draw_logical_rounded_rect(
-                *box, ui.APP_UI_STYLE.button.radius, colors["background"],
-                palette.focus if active else palette.border, 2 if active else 1,
-            )
-            _text(ui, cache, box[0] + 12, box[1] + 24, item["name"], colors["text"], 17, width=208)
-            _text(ui, cache, box[0] + 12, box[1] + 52,
-                  "Selected" if active else "Tap to preview", colors["secondary_text"], 13, width=208)
-            if active:
-                ui.draw_logical_circle(box[2] - 16, box[1] + 16, 3, palette.focus)
-        _pages(ui, cache, boxes, "theme", editor.page, editor.page_count)
-    else:
-        for name, label in METER_FILTERS:
-            _button(ui, cache, boxes["filter:" + name], label, active=editor.meter_filter == name)
-        for identifier in editor.meter_ids[editor.meter_page * METER_CARDS_PER_PAGE:(editor.meter_page + 1) * METER_CARDS_PER_PAGE]:
-            box = boxes["meter:" + identifier]
-            style = METER_STYLES[identifier]
-            active = identifier == editor.preview["smeter_style"]
-            name, separator, author = style.name.partition(" · ")
-            cx = (box[0] + box[2]) / 2
-            palette = _palette(ui)
-            _text(ui, cache, cx, box[1] + 14, name, palette.focus if active else palette.text, 13, "cm", 228)
-            if separator:
-                _text(ui, cache, cx, box[1] + 30, author, palette.secondary_text, 11, "cm", 228)
-            if active:
-                ui.draw_logical_circle(box[0] + 5, box[1] + 14, 3, palette.focus)
-            width = min(236, (box[3] - box[1] - 42) * 236 / style.height)
-            height = width * style.height / 236
-            y = box[1] + 42
-            ui.draw_selected_smeter(cache, (cx - width / 2, y, cx + width / 2, y + height),
-                                    -85, -73, theme=editor.preview, style_id=identifier)
-        _pages(ui, cache, boxes, "meter", editor.meter_page, editor.meter_page_count)
+def _chooser(ui, cache, editor, boxes):
+    p = ui.APP_UI_STYLE.palette
+    dx = _floating_panel(ui, editor)
+    _text(ui, cache, 36+dx, 250, 'THEMES', 22)
+    _text(ui, cache, 36+dx, 276, 'Choose a theme to customize on your full-size HOME screen.', 15, p.secondary_text)
+    items = editor.themes[editor.page * CARDS_PER_PAGE:(editor.page + 1) * CARDS_PER_PAGE]
+    for theme in items:
+        box = boxes['theme:' + theme['id']]
+        colors = theme['colors']
+        palette = UIPalette(**{k: tuple(v) for k,v in colors.items()})
+        style = ButtonStyle(replace(palette, surface=palette.background), radius=ui.APP_UI_STYLE.button.radius)
+        ui.draw_styled_button_frame(box, style=style)
+        x,y,_,_ = box
+        _text(ui, cache, x+18, y+26, theme['name'].upper(), 17, palette.text, width=388)
+        label = 'Current · tap to customize' if theme['id'] == editor.library.active_id else 'Tap to customize'
+        _text(ui, cache, x+18, y+54, label, 13, palette.secondary_text)
+        for i,key in enumerate(('background','surface','text','focus','frequency')):
+            ui.draw_logical_rect(x+18+i*48, y+78, x+58+i*48, y+96, colors[key])
+    _button(ui,cache,boxes['theme_previous'],'PREVIOUS',enabled=editor.page > 0)
+    _button(ui,cache,boxes['theme_next'],'NEXT',enabled=editor.page + 1 < editor.page_count)
+    _button(ui,cache,boxes['back'],'CANCEL')
+    _text(ui,cache,608+dx,666,f'{editor.page + 1} / {editor.page_count}',14,p.secondary_text,'cm')
 
 
-def _customize(ui, cache, editor, boxes):
-    theme = editor.preview
-    palette = _palette(ui)
-    if editor.colors_open:
-        _button(ui, cache, boxes["appearance"], "APPEARANCE")
-        _text(ui, cache, 1256, 138, "EDIT COLORS", palette.secondary_text, 14, "rm")
-        _button(ui, cache, boxes["group_previous"], "‹")
-        _button(ui, cache, boxes["group_next"], "›")
-        _text(ui, cache, 996, 212, COLOR_GROUPS[editor.color_group][0], palette.text, 20, "cm")
-        for name, box in boxes.items():
-            if name.startswith("part:"):
-                key = editor.family_keys[int(name.split(":")[1])]
-                _button(ui, cache, box, key.replace("_", " ").upper(), active=key == editor.color_key)
-        count = (len(editor.family_keys) + 3) // 4
-        _button(ui, cache, boxes["part_previous"], "PREVIOUS", enabled=editor.part_page > 0)
-        _button(ui, cache, boxes["part_next"], "NEXT", enabled=editor.part_page + 1 < count)
-        _text(ui, cache, 996, 418, f"{editor.part_page + 1} / {count}", palette.secondary_text, 13, "cm")
-        for component, label in (("hue", "HUE"), ("saturation", "SATURATION · 0% = GRAY"),
-                                 ("intensity", "INTENSITY · DARK TO LIGHT")):
-            box = boxes[component]
-            value = getattr(editor, component)
-            _text(ui, cache, box[0], box[1]-14, label, palette.secondary_text, 12)
-            _text(ui, cache, box[2], box[1]-14, f"{round(value*100)}%", palette.text, 12, "rm")
-            for index in range(96):
-                hsv = [editor.hue, editor.saturation, editor.intensity]
-                if component == "hue":
-                    hsv = [index/95, 1, 1]
-                else:
-                    hsv[1 if component == "saturation" else 2] = index/95
-                rgb = tuple(round(v*255) for v in colorsys.hsv_to_rgb(*hsv))
-                x = box[0]+index*(box[2]-box[0])/96
-                ui.draw_logical_rect(x, box[1], min(box[2], x+(box[2]-box[0])/96+1), box[3], rgb)
-            marker = box[0]+value*(box[2]-box[0])
-            # A two-tone cursor remains visible at both gradient endpoints.
-            marker = max(box[0]+3, min(box[2]-3, marker))
-            ui.draw_logical_rect(marker-3, box[1], marker+3, box[3], (0,0,0,255))
-            ui.draw_logical_rect(marker-1, box[1], marker+1, box[3], (255,255,255,255))
-        _button(ui, cache, boxes["hex_open"], "#" + "".join(f"{v:02X}" for v in editor.current_color[:3]))
-        if "alpha_open" in boxes:
-            _button(ui, cache, boxes["alpha_open"], f"TRANSPARENCY {transparency_percent(editor.current_color)}%")
-        return
-    _text(ui, cache, 736, 126, "NAME  ·  OPTIONAL", palette.secondary_text, 14)
-    _button(ui, cache, boxes["theme_name"], theme["name"] + "  ·  RENAME")
-    for row, label in enumerate(("SIDEBAR", "CORNERS", "TEXT SIZE", "UNITS")):
-        _text(ui, cache, 736, 276 + row * 72, label, palette.secondary_text, 14)
-    selected = {theme["sidebar"], "rounded" if theme["radius"] else "straight", theme["units"]}
-    labels = {"straight": "SQUARE", "original": "ORIGINAL"}
-    for name, box in boxes.items():
-        if name.startswith("option:"):
-            value = name.split(":")[1]
-            _button(ui, cache, box, labels.get(value, value.upper()), active=value in selected)
-    _button(ui, cache, boxes["text:smaller"], "−")
-    _button(ui, cache, boxes["text:reset"], f"{theme['text_scale_percent']}%  ·  RESET")
-    _button(ui, cache, boxes["text:larger"], "+")
-    _button(ui, cache, boxes["colors"], "EDIT COLORS")
-    _button(ui, cache, boxes["copy"], "MAKE A COPY")
-    if "delete" in boxes:
-        _button(ui, cache, boxes["delete"], "DELETE THEME", danger=True)
+def _inspector(ui, cache, editor, boxes):
+    p = ui.APP_UI_STYLE.palette
+    dx = _floating_panel(ui, editor)
+    radius = ui.APP_UI_STYLE.button.radius
+    _text(ui,cache,36+dx,250,'CUSTOMIZE '+editor.preview['name'].upper(),18,width=760)
+    status = editor.error or editor.status or 'Preview only · changes are not saved'
+    _text(ui,cache,36+dx,276,status,13,p.danger_border if editor.error else p.secondary_text,width=760)
+    for x,label in ((36,'COLORS'),(396,'TEXT SIZE'),(732,'CORNERS')):
+        _text(ui,cache,x+dx,320,label,13,p.section_heading)
+    for field,label,role in (('accent','ACCENT','focus'),('text','TEXT','text')):
+        box=boxes['colors:'+field]
+        _button(ui,cache,box,label)
+        a,b,c,d=box
+        color=editor.preview['colors'][role]
+        ui.draw_logical_rect(a+10,d-10,c-10,d-5,tuple(color))
+    _text(ui,cache,36+dx,436,'Tap to choose a color',12,p.secondary_text)
+    for key,label in (('text:smaller','−'),('text:reset',f"{editor.preview['text_scale_percent']}%"),
+                      ('text:larger','+'),('option:straight','STRAIGHT'),('option:rounded','ROUNDED'),
+                      ('hide','HIDE CONTROLS'),('reset','RESET THEME'),('choose','CHOOSE THEME'),
+                      ('back','CANCEL'),('save','APPLY')):
+        active = key=='save' or key=='option:straight' and editor.preview['radius']==0 or key=='option:rounded' and editor.preview['radius']>0
+        _button(ui,cache,boxes[key],label,active)
+    _text(ui,cache,396+dx,436,'Tap the percentage for 100%',12,p.secondary_text)
+    _text(ui,cache,732+dx,436,'Applies to interface controls',12,p.secondary_text)
+    _text(ui,cache,36+dx,484,'FONT STYLE',13,p.section_heading)
+    for identifier,label in FONT_STYLES:
+        style = replace(ui.APP_UI_STYLE.button,font_family='theme-style:'+identifier)
+        ui.draw_styled_text_button(cache,boxes['font:'+identifier],label,
+            active=editor.preview.get('font_style','current')==identifier,style=style)
+    _text(ui,cache,36+dx,600,'AM · 14.250 MHz · −73 dBm',17,width=952)
 
 
-def _overlay(ui, cache, editor):
-    if editor.overlay == 'name':
-        ui.draw_touch_keyboard(cache,'THEME NAME','Enter a name of 1–32 characters',editor.buffer,
-            mode=getattr(editor,'keyboard_mode','lower'),submit='Done',error=editor.error,rail_title='THEMES')
-        return
-    palette = _palette(ui)
-    ui.draw_logical_rect(0, 0, 1280, 800, (0, 0, 0, 215))
-    ui.draw_logical_rounded_rect(
-        64, 140, 1216, 680, ui.APP_UI_STYLE.button.radius,
-        palette.surface, palette.border,
-    )
-    boxes = theme_screen_boxes(editor)
-    if editor.overlay == "delete":
-        _text(ui, cache, 640, 300, "DELETE THIS THEME?", palette.text, 26, "cm")
-        _text(ui, cache, 640, 350, editor.draft["name"], palette.secondary_text, 20, "cm", 1000)
-        _button(ui, cache, boxes["delete_cancel"], "KEEP THEME")
-        _button(ui, cache, boxes["delete_confirm"], "DELETE", danger=True)
-    else:
-        title = {"name": "THEME NAME", "hex": "EXACT COLOR", "alpha": "TRANSPARENCY · 0–100%"}[editor.overlay]
-        _text(ui, cache, 640, 174, title, palette.secondary_text, 16, "cm")
-        _text(ui, cache, 640, 216, editor.buffer or "…", palette.text, 24, "cm", 1060)
-        for name, box in boxes.items():
-            label = name.split(":", 1)[1]
-            _button(ui, cache, box, label, primary=label in ("APPLY", "DONE"))
-        if editor.error:
-            _text(ui, cache, 640, 654, editor.error, palette.danger_border, 14, "cm", 1060)
+def _color_picker(ui, cache, editor, boxes):
+    p = ui.APP_UI_STYLE.palette
+    dx = _floating_panel(ui, editor)
+    # Keep the picker operable even while previewing black text on a dark theme.
+    ink = max(((0,0,0),(255,255,255)),key=lambda c:contrast(c,p.background))
+    if contrast(p.text,p.background)>=3:
+        ink = p.text
+    muted = tuple(muted_text_color(ink,p.background))
+    _text(ui,cache,36+dx,250,'COLOR',18,ink)
+    _text(ui,cache,36+dx,276,'Preview on HOME. Save returns to Customize.',13,muted)
+    for field,x,title,role in (('accent',36,'ACCENT COLOR','focus'),('text',524,'TEXT COLOR','text')):
+        _text(ui,cache,x+dx,320,title,13,ink)
+        chosen = editor.chosen_color(field)
+        for choice,rgb in (('black',(0,0,0)),('white',(255,255,255))):
+            box = boxes[f'color:{field}:{choice}']
+            selected = chosen == list(rgb)
+            a,b,c,d = box
+            cx,cy = (a+c)/2,(b+d)/2
+            half = COLOR_STRIP_HEIGHT/2
+            ui.draw_logical_rounded_rect(cx-half,cy-half,cx+half,cy+half,0,(*rgb,255),(*ink,255),2 if selected else 1)
+            if selected:
+                check = (255,255,255) if choice == 'black' else (0,0,0)
+                ui.draw_logical_line(cx-5,cy,cx-1,cy+4,check,2)
+                ui.draw_logical_line(cx-1,cy+4,cx+6,cy-5,check,2)
+                # An outer bracket remains visible beyond the small swatch.
+                ui.draw_logical_rect(cx-half-4,cy-half-4,cx+half+4,cy-half-2,ink)
+                ui.draw_logical_rect(cx-half-4,cy+half+2,cx+half+4,cy+half+4,ink)
+                ui.draw_logical_rect(cx-half,cy+half+4,cx+half,cy+half+6,ink)
+        a,b,c,d = boxes[f'color:{field}:rainbow']
+        # A slim color strip with a taller touch lane.
+        center_y = (b+d)/2
+        b,d = center_y-COLOR_STRIP_HEIGHT/2,center_y+COLOR_STRIP_HEIGHT/2
+        for i in range(256):
+            ui.draw_logical_rect(a+(c-a)*i/256,b,c-(c-a)*(255-i)/256,d,(*rainbow_rgb(i/255),255))
+        ui.draw_logical_rounded_rect(a,b,c,d,0,(0,0,0,0),(*ink,255),1)
+        rgb = chosen
+        if len(set(rgb)) > 1:
+            hue,_,_ = colorsys.rgb_to_hsv(*(v/255 for v in rgb))
+            marker_x = a+(c-a)*hue
+            ui.draw_logical_rect(marker_x-3,b-4,marker_x+3,d+4,(0,0,0,255))
+            ui.draw_logical_rect(marker_x-1,b-4,marker_x+1,d+4,(255,255,255,255))
+        name = 'Black' if rgb == [0,0,0] else 'White' if rgb == [255,255,255] else 'Rainbow'
+        _text(ui,cache,x+dx,416,'Selected: '+name+' · '+theme_system.color_hex(rgb),12,muted)
+    button_ink = ink if contrast(ink,p.surface)>=3 else max(
+        ((0,0,0),(255,255,255)),key=lambda c:contrast(c,p.surface))
+    style = replace(ui.APP_UI_STYLE.button,palette=replace(p,text=button_ink))
+    for field,x,y,title in (('color_intensity',36,460,'COLOR INTENSITY'),
+                          ('border_intensity',524,460,'BORDER COLOR INTENSITY'),
+                          ('saturation',36,548,'SATURATION')):
+        low,high = INTENSITY_LIMITS[field]
+        amount = editor.preview.get(field+'_percent',100 if field=='color_intensity' else 25)
+        _text(ui,cache,x+dx,y,title,13,ink)
+        ui.draw_display_slider_section(cache,boxes[field],f'{low}–{high}%',amount-low,high-low,f'{amount}%',True,
+                                       detail_color=ink)
+    for key,label in (('color:cancel','CANCEL'),('color:save','SAVE')):
+        ui.draw_styled_text_button(cache,boxes[key],label,style=style)
 
 
 def draw_theme_screen(cache, editor, ui):
-    editor.keyboard_ui = ui
-    palette = _palette(ui)
-    if editor.fullscreen:
-        _preview(ui, cache, editor, (0, 0, 1280, 800))
-        if editor.fullscreen_controls:
-            ui.draw_logical_rounded_rect(
-                320, 706, 960, 796, ui.APP_UI_STYLE.button.radius,
-                palette.background, palette.border,
-            )
-            _button(ui, cache, CONTINUE_BOX, "CONTINUE CHOOSING")
-            _button(ui, cache, FULLSCREEN_SAVE_BOX, "SAVE & HOME", primary=True)
-            _text(ui, cache, 640, 692, "Tap elsewhere to hide or show these controls", palette.text, 13, "cm")
-        if editor.error:
-            ui.draw_logical_rect(24, 620, 1256, 680, palette.background)
-            _text(ui, cache, 640, 650, editor.error, palette.danger_border, 16, "cm", 1200)
-        return
-    boxes = theme_screen_boxes(editor, ignore_overlay=True)
-    ui.draw_logical_rect(0, 0, 1280, 800, palette.background)
-    _text(ui, cache, 24, 42, "DISPLAY APPEARANCE", palette.text, 25)
-    _text(ui, cache, 24, 78, "Choose a look. Preview your complete Home screen.", palette.secondary_text, 15)
-    for tab, label in (("themes", "THEMES"), ("meters", "S-METERS"), ("customize", "CUSTOMIZE")):
-        _button(ui, cache, boxes[f"tab:{tab}"], label, active=editor.tab == tab)
-    _text(ui, cache, 24, 124, "LIVE HOME PREVIEW", palette.focus, 14)
-    _text(ui, cache, 704, 124, "Not saved yet" if editor.dirty else "Current settings", palette.secondary_text, 13, "rm")
-    _preview(ui, cache, editor)
-    _text(ui, cache, 24, 606, editor.preview["name"] + "  ·  " + METER_STYLES[editor.preview["smeter_style"]].name,
-          palette.text, 15, width=680)
-    _button(ui, cache, FULLSCREEN_BOX, "FULL-SCREEN PREVIEW")
-    ui.draw_logical_line(720, 112, 720, 714, palette.divider, 1)
-    if editor.tab in ("themes", "meters"):
-        _gallery(ui, cache, editor, boxes)
-    else:
-        _customize(ui, cache, editor, boxes)
-    _button(ui, cache, BACK_BOX, "CANCEL")
-    _button(ui, cache, APPLY_BOX, "SAVE & HOME", primary=True)
-    _text(ui, cache, 222, 760, editor.error or "Preview freely. Nothing is saved until Save & Home.",
-          palette.danger_border if editor.error else palette.secondary_text, 14, width=740)
-    if editor.overlay:
-        _overlay(ui, cache, editor)
+    _home(ui,cache,editor)
+    # Both floating panels follow the candidate without changing saved settings.
+    with theme_system.preview_theme(editor.preview):
+        boxes=theme_screen_boxes(editor)
+        if editor.overlay == 'colors':
+            _color_picker(ui,cache,editor,boxes)
+        elif not editor.fullscreen:
+            _chooser(ui,cache,editor,boxes)
+        elif editor.fullscreen_controls:
+            _inspector(ui,cache,editor,boxes)
+        else:
+            _button(ui,cache,boxes['show'],'SHOW THEME CONTROLS')

@@ -250,6 +250,8 @@ from directory_refresh import DailyDirectoryRefresh, checked_refresh, directory_
 import render_sdr_frontend_mockup as sdr_ui
 from ui_style import APP_UI_STYLE, ButtonVisualState
 import theme_system
+from theme_fonts import resolve_font_path
+from theme_colors import saturate_rgb, muted_text_color
 from theme_editor import ThemeEditor, COLOR_GROUPS, theme_screen_boxes
 from smeter_picker import SMeterPicker
 from smeter_styles import (METER_STYLES, DEFAULT_METER_STYLE, SKIN_ASSET_DIR, SKIN_CALIBRATION,
@@ -6512,7 +6514,9 @@ class TextCache:
 
     def font(self, size, bold=False, mono=False, family=None):
         size = theme_system.scaled_text_size(size)
-        key = ("font", size, bold, mono, family)
+        path = resolve_font_path(theme_system.runtime_theme.get('font_style','current'),
+                                 family=family,mono=mono,bold=bold)
+        key = ("font", size, bold, mono, path or family)
         font = self.cache.get(key)
         if font is None:
             if family:
@@ -6520,7 +6524,8 @@ class TextCache:
             else:
                 names = ["DejaVu Sans Mono", "monospace"] if mono else ["DejaVu Sans", "sans"]
             try:
-                font = pygame.font.SysFont(names, size, bold=bold)
+                font = (pygame.font.Font(path,size) if path else
+                        pygame.font.SysFont(names, size, bold=bold))
             except (OSError, pygame.error) as exc:
                 # Some fontconfig entries on the Pi can survive an interrupted
                 # package update while their target font file no longer exists.
@@ -6536,7 +6541,9 @@ class TextCache:
         return font
 
     def texture(self, text, size, color, bold=False, mono=False, family=None):
-        key = ("text", text, theme_system.scaled_text_size(size), color, bold, mono, family)
+        path = resolve_font_path(theme_system.runtime_theme.get('font_style','current'),
+                                 family=family,mono=mono,bold=bold)
+        key = ("text", text, theme_system.scaled_text_size(size), color, bold, mono, path or family)
         cached = self._cached_texture(key)
         if cached is not None:
             return cached
@@ -7070,15 +7077,19 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
     """Recolor stored waterfall pixels without discarding their RF history."""
     theme = theme or theme_system.runtime_theme
     palette = palette or APP_UI_STYLE.palette
-    identifier = theme["id"]
+    identifier = theme.get("waterfall_style", theme["id"])
+    intensity = theme.get('color_intensity_percent',100)
+    def finish(pixels):
+        return waterfall_saturation_pixels(waterfall_intensity_pixels(pixels,intensity),
+                                            theme.get('saturation_percent',100))
     if identifier == theme_system.DEFAULT_THEME_ID:
-        return bytes(data)
+        return finish(data)
     if (identifier not in (theme_system.STRAIGHT_INVERTED_THEME_ID,
                            theme_system.GREEN_THEME_ID,
                            theme_system.BLACK_WHITE_THEME_ID)
             and tuple(palette.waterfall_low) == (0, 0, 0)
             and tuple(palette.waterfall_high) == (255, 255, 255)):
-        return bytes(data)
+        return finish(data)
     inverted = identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
     if np is None:
         pixels = bytearray(data)
@@ -7086,20 +7097,17 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
             inverse = bytes(reversed(range(256)))
             for channel in range(3):
                 pixels[channel::4] = bytes(pixels[channel::4]).translate(inverse)
-            return bytes(pixels)
+            return finish(pixels)
         low, high = palette.waterfall_low, palette.waterfall_high
-        color_map = tuple(bytes(
-            max(0, min(255, round(low[index] + level / 255.0 * (high[index] - low[index]))))
-            for index in range(3)
-        ) for level in range(256))
         red_part = tuple(0.2126 * value for value in range(256))
         green_part = tuple(0.7152 * value for value in range(256))
         blue_part = tuple(0.0722 * value for value in range(256))
         for offset in range(0, len(pixels), 4):
-            lightness = round(red_part[pixels[offset]] + green_part[pixels[offset + 1]]
-                              + blue_part[pixels[offset + 2]])
-            pixels[offset:offset + 3] = color_map[lightness]
-        return bytes(pixels)
+            lightness = (red_part[pixels[offset]] + green_part[pixels[offset + 1]]
+                         + blue_part[pixels[offset + 2]])
+            pixels[offset:offset + 3] = bytes(max(0,min(255,round(
+                low[index]+lightness/255.0*(high[index]-low[index])))) for index in range(3))
+        return finish(pixels)
     pixels = np.frombuffer(data, dtype=np.uint8).reshape(-1, 4).copy()
     rgb = pixels[:, :3]
     if inverted:
@@ -7114,17 +7122,51 @@ def themed_waterfall_pixels(data, theme=None, palette=None):
         high = np.asarray(palette.waterfall_high, dtype=np.float32)
         rgb[:] = np.clip(np.rint(low + lightness[:, None] / 255.0 * (high - low)),
                          0, 255).astype(np.uint8)
-    return pixels.tobytes()
+    return finish(pixels.tobytes())
+
+
+def waterfall_intensity_pixels(data, percent):
+    """Brightness after color mapping, retaining original alpha and RF history."""
+    if percent == 100:
+        return bytes(data)
+    if np is not None:
+        pixels = np.frombuffer(data,dtype=np.uint8).reshape(-1,4).copy()
+        pixels[:,:3] = np.clip(np.rint(pixels[:,:3].astype(np.float32)*percent/100),0,255).astype(np.uint8)
+        return pixels.tobytes()
+    pixels = bytearray(data)
+    lut = bytes(min(255,round(v*percent/100)) for v in range(256))
+    for channel in range(3):
+        pixels[channel::4] = bytes(pixels[channel::4]).translate(lut)
+    return bytes(pixels)
+
+
+def waterfall_saturation_pixels(data, percent):
+    """Adjust colorfulness without touching stored signal data or alpha."""
+    if percent == 100:
+        return bytes(data)
+    if np is not None:
+        pixels = np.frombuffer(data,dtype=np.uint8).reshape(-1,4).copy()
+        rgb = pixels[:,:3].astype(np.float64)
+        gray = rgb[:,0]*.2126+rgb[:,1]*.7152+rgb[:,2]*.0722
+        pixels[:,:3] = np.clip(np.rint(gray[:,None]+(rgb-gray[:,None])*percent/100),0,255).astype(np.uint8)
+        return pixels.tobytes()
+    pixels = bytearray(data)
+    for i in range(0,len(pixels),4):
+        pixels[i:i+3] = bytes(saturate_rgb(pixels[i:i+3],percent))
+    return bytes(pixels)
 
 
 def waterfall_empty_background_color():
     """Color exposed by transparent waterfall rows before RF data arrives."""
-    return (*themed_instrument_color("waterfall_low", (4, 7, 11))[:3], 255)
+    color = themed_instrument_color("waterfall_low", (4, 7, 11))[:3]
+    factor = theme_system.runtime_theme.get('color_intensity_percent',100)/100
+    rgb = [min(255,round(v*factor)) for v in color]
+    return (*saturate_rgb(rgb,theme_system.runtime_theme.get('saturation_percent',100)),255)
 
 
 def waterfall_theme_signature():
     """Only changes to waterfall mapping require a whole-texture upload."""
-    identifier = theme_system.runtime_theme["id"]
+    identifier = theme_system.runtime_theme.get("waterfall_style", theme_system.runtime_theme["id"])
     palette = APP_UI_STYLE.palette
     low, high = tuple(palette.waterfall_low), tuple(palette.waterfall_high)
     identity = (identifier == theme_system.DEFAULT_THEME_ID or
@@ -7135,7 +7177,8 @@ def waterfall_theme_signature():
     mapping = ("identity" if identity else
                "inverted" if identifier == theme_system.STRAIGHT_INVERTED_THEME_ID
                else "mapped")
-    return mapping, low, high
+    return (mapping, low, high, theme_system.runtime_theme.get('color_intensity_percent',100),
+            theme_system.runtime_theme.get('saturation_percent',100))
 
 
 class WaterfallTexture:
@@ -8698,11 +8741,14 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
                             danger=False, bold=True, style=None):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     style = style or APP_UI_STYLE.button
+    label_size = style.label_size if size is None else size
+    if size is None and str(label).strip() in ('−', '-', '+'):
+        label_size = round(label_size * 1.5)
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-        button_label_for_box(text_cache, label, box, style), visual.text,
-        style.label_size, True, False, "cm",
+        button_label_for_box(text_cache, label, box, style, size=label_size), visual.text,
+        label_size, True, False, "cm",
         family=style.font_family,
     )
     return visual
@@ -8739,7 +8785,7 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
         center_y = (y0 + y1) / 2
         draw_line(title, center_y - 12, text_color, style.title_size)
         draw_line(subtitle, center_y + 12,
-                  text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
+                  tuple(muted_text_color(text_color,visual.fill)) if pressed or not enabled else style.subtitle_color, style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
         draw_line(title, (y0 + y1) / 2, text_color, style.title_size)
@@ -8770,7 +8816,7 @@ def draw_navigation_button(text_cache, box, title, subtitle):
     subtitle_y = y1 - 16 if taller_tile else y0 + 51
     for text, preferred, cy, color in (
         (title, 14, title_y, visual.text),
-        (subtitle, 13 if taller_tile else 12, subtitle_y, visual.text if pressed else style.subtitle_color),
+        (subtitle, 13 if taller_tile else 12, subtitle_y, tuple(muted_text_color(visual.text,visual.fill)) if pressed else style.subtitle_color),
     ):
         size = navigation_label_size(text_cache, text, x1 - x0 - 6, preferred)
         draw_text(text_cache, cx, round(cy), str(text) if text == "Wi-Fi / ETHERNET" else str(text).upper(), color,
@@ -9932,7 +9978,7 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_styled_text_button(text_cache, box, label, active=active)
 
 
-def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active):
+def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active, *, detail_color=None):
     """Full-width Display instrument with the same visible 236 px bounds as BACK."""
     x0, y0, x1, y1 = box
     palette = APP_UI_STYLE.palette
@@ -9940,7 +9986,7 @@ def draw_display_slider_section(text_cache, box, title, value, maximum, detail, 
     draw_text(text_cache, x0 + 4, y0 + 14, title, palette.section_heading,
               13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
     draw_text(text_cache, x1 - 4, y0 + 14, detail,
-              palette.ready[:3] if active else palette.secondary_text,
+              detail_color if detail_color is not None else palette.ready[:3] if active else palette.secondary_text,
               13, True, False, "rm", family=APP_UI_STYLE.button.font_family)
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1, track_y = x0 + 4, x1 - 4, y1 - 13
@@ -11553,12 +11599,12 @@ def draw_receiver_home_drawer(text_cache, profile, locating=False, fan_curve=Non
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     profile = valid_receiver_home_profile(profile) or dict(RECEIVER_HOME_FALLBACK)
-    draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), (116, 238, 180), 21, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 126, fit_station_text(text_cache, profile["name"], x1 - x0 - 24, 21, True, False, family="Liberation Sans"), APP_UI_STYLE.palette.text, 21, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x0 + 12, 154, ('Not configured' if profile.get('source')=='unconfigured' else f"{profile['lat']:.4f}, {profile['lon']:.4f}"), (184, 211, 214), 15, False, False, "lm", family="Liberation Sans")
     source = "LOCATING FROM IP…" if locating else f"SOURCE  {profile['source'].upper()}"
-    draw_text(text_cache, x0 + 12, 180, source, (153, 185, 191), 13, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", (181, 209, 212), 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 180, source, APP_UI_STYLE.palette.secondary_text, 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 220, "DIRECTORY DISTANCES", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 240, "ARE MEASURED FROM HERE", APP_UI_STYLE.palette.secondary_text, 14, True, False, "lm", family="Liberation Sans")
     fan_curve = fan_curve or load_fan_curve()
     fan_range = (
         f"{fan_curve['start_c']}→{fan_curve['full_c']} C"
@@ -11594,10 +11640,10 @@ def draw_fan_curve_drawer(text_cache, curve, temp_c=None):
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_radio_close_button(text_cache, boxes["close"])
     live = f"CPU {theme_system.display_temperature(temp_c)}" if isinstance(temp_c, (int, float)) else "CPU WAITING"
-    draw_text(text_cache, x0 + 12, 124, live, (116, 238, 180), 20, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", (116, 238, 180), 13, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 124, live, APP_UI_STYLE.palette.text, 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 156, "LIVE · NO RESTART NEEDED", APP_UI_STYLE.palette.text, 13, True, False, "lm", family="Liberation Sans")
     stop_delta = "5 F" if theme_system.runtime_theme["units"] == "imperial" else "3 C"
-    draw_text(text_cache, x0 + 12, 178, f"SMOOTHED · STOPS {stop_delta} BELOW START", (153, 185, 191), 12, False, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 12, 178, f"SMOOTHED · STOPS {stop_delta} BELOW START", APP_UI_STYLE.palette.secondary_text, 12, False, False, "lm", family="Liberation Sans")
     start = float(curve["start_c"])
     full = float(curve["full_c"])
     draw_lcd_audio_slider_tile(text_cache, boxes["start"], "FAN START", start - 45.0, 20.0, theme_system.display_temperature(start), True)
@@ -15525,7 +15571,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
     subtitle = menu_subtitle(kind)
     for caption, center_y, color, size in (
         (label, 28 if subtitle else height / 2, visual.text, 14),
-        (subtitle, 51, visual.text if pressed else style.subtitle_color, 12),
+        (subtitle, 51, tuple(muted_text_color(visual.text,visual.fill)) if pressed else style.subtitle_color, 12),
     ):
         if caption:
             size = navigation_label_size(text_cache, caption, width - 6, size)
@@ -15668,7 +15714,7 @@ def draw_big_frequency(text_cache, freq_khz, right_x, center_y, max_width,
 def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
     """Render the common Settings leaf rail without veiling live content."""
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, (125, 147, 158, 118), 1)
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, LOGICAL_H, APP_UI_STYLE.palette.sidebar_rule, 1)
     draw_sidebar_header(text_cache, title)
     if detail:
         draw_text(
@@ -15681,10 +15727,7 @@ def draw_settings_leaf_sidebar(text_cache, title, detail="CENTER WORKSPACE"):
 def draw_theme_panel(text_cache, editor):
     """Render the full-canvas Theme Library or live editor."""
     from theme_screen_render import draw_theme_screen
-    # The editor is itself a live preview: its controls, surfaces, corners, and
-    # text must follow the unsaved draft just like the Home preview does.
-    with theme_system.preview_theme(editor.preview):
-        return draw_theme_screen(text_cache, editor, sys.modules[__name__])
+    return draw_theme_screen(text_cache, editor, sys.modules[__name__])
 
 
 def lcd_radio_drawer_close_box():
@@ -16795,7 +16838,16 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     quiet = APP_UI_STYLE.palette.section_heading
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
-    draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
+    if isinstance(text_cache, TextCache):
+        # Keep the full passband value readable at the supported text sizes.
+        # Fit its neighboring caption into the remaining left-hand space.
+        value_width = text_cache.font(14, bold=True, family="Liberation Sans").size(f"{width_hz / 1000.0:.1f} kHz")[0]
+        title_width = text_cache.font(13, bold=True, family="Liberation Sans").size(title)[0]
+        available = max(1, center_x - value_width / 2 - 8 - (x0 + 4))
+        draw_text_scaled_x(text_cache, x0 + 4, y0 + 14, title, quiet, 13,
+                          min(1.0, available / max(1, title_width)), True, False, "lm", family="Liberation Sans")
+    else:
+        draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", themed_instrument_color("secondary_text", (180, 214, 220)), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
     # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
@@ -17027,7 +17079,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
     # uninterrupted black panel from the VFO to the physical bottom edge.
     draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, rail_bottom, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, (125, 147, 158, 118), 1)
+    draw_logical_line(LCD_NAV_X0, 0, LCD_NAV_X0, rail_bottom, APP_UI_STYLE.palette.sidebar_rule, 1)
     if settings_open or digital_open:
         draw_sidebar_header(text_cache, "SETTINGS" if settings_open else "DECODERS")
     if digital_open:
@@ -17511,7 +17563,7 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
     panel, entry, commands, keys = layout
     x0, y0, x1, y1 = panel
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
-    draw_logical_line(x0, y0, x0, y1, (125, 147, 158, 118), 1)
+    draw_logical_line(x0, y0, x0, y1, APP_UI_STYLE.palette.sidebar_rule, 1)
     draw_sidebar_header(text_cache, "SET FREQUENCY")
     ex0, ey0, ex1, ey1 = entry
     draw_logical_rect(ex0, ey0, ex1, ey1, (3, 10, 15, 240))
@@ -29230,6 +29282,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 previous_sidebar = theme_system.runtime_theme["sidebar"]
+                                previous_meter = theme_system.runtime_theme["smeter_style"]
                                 theme_action = next(
                                     (name for name, box in theme_screen_boxes(theme_editor).items()
                                      if contains(box, x, y)),
@@ -29248,6 +29301,7 @@ def main():
                                     theme_action == "save"
                                     and not theme_editor.open
                                     and not theme_editor.error
+                                    and theme_system.runtime_theme["smeter_style"] != previous_meter
                                 ):
                                     reconciled_layout = instrument_layout_after_theme_save(
                                         instrument_layout,

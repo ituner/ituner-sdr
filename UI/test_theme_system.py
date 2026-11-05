@@ -9,7 +9,7 @@ from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
     BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID, BLACK_WHITE_THEME_ID,
     REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
-    ThemeLibrary, apply_theme,
+    ThemeLibrary, apply_theme, normalize_theme,
     display_distance, display_temperature, distance_axis_label,
     display_to_logical_x, new_theme, runtime_theme,
 )
@@ -95,6 +95,7 @@ class ThemeSystemTests(unittest.TestCase):
         custom["colors"]["section_heading"] = [237, 208, 41]
         custom["colors"]["ready"] = [37, 244, 68, 255]
         custom["colors"]["sidebar_header"] = [19, 29, 39, 255]
+        custom = normalize_theme(custom, allow_default=True)
         apply_theme(custom)
         with patch.object(ui, "draw_logical_rect") as rectangles, patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_rounded_rect"), \
@@ -231,15 +232,14 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(restarted.active_id, replacement_id)
             self.assertNotIn(removed_id, BUILTIN_THEME_IDS)
 
-    def test_default_theme_uses_quiet_square_controls(self):
+    def test_default_theme_uses_quarter_intensity_borders_on_square_controls(self):
         theme = self.library.get(DEFAULT_THEME_ID)
         self.assertEqual(theme["name"], "Default")
         self.assertEqual(theme["radius"], 0)
         self.assertEqual(theme["colors"]["surface"], [0, 0, 0, 255])
-        self.assertEqual(theme["colors"]["border"], [46, 46, 46, 255])
-        self.assertLess(sum(theme["colors"]["border"][:3]),
-                        sum(theme["colors"]["text"][:3]) / 4)
+        self.assertEqual(theme["colors"]["border"], [64, 64, 64, 255])
         self.library.activate(DEFAULT_THEME_ID)
+        self.assertEqual(APP_UI_STYLE.button.resolve().border, (64,64,64,255))
         self.assertEqual(APP_UI_STYLE.button.label_size, 13)
         self.assertEqual(APP_UI_STYLE.button.font_family,
                          ("Roboto", "Inter", "DejaVu Sans"))

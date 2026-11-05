@@ -11,6 +11,8 @@ import uuid
 
 from ui_style import UIPalette, apply_ui_style
 from smeter_styles import DEFAULT_METER_STYLE, normalize_meter_style
+from theme_fonts import FONT_STYLES
+from theme_colors import saturate_rgb, apply_muted_text_colors
 
 
 DEFAULT_THEME_ID = "default"
@@ -27,13 +29,13 @@ TEXT_SCALE_MIN = 80
 TEXT_SCALE_MAX = 120
 DEFAULT_COLORS = {
     **{field.name: list(getattr(UIPalette(), field.name)) for field in fields(UIPalette)},
-    # Quiet instrument controls replace the earlier bright default grid.
+    # Full-color bases; ThemeLibrary supplies the default 25% border intensity.
     "surface": [0, 0, 0, 255],
-    "border": [46, 46, 46, 255],
+    "border": [255, 255, 255, 255],
     "active_surface": [30, 30, 30, 255],
-    "active_border": [96, 96, 96, 255],
+    "active_border": [255, 255, 255, 255],
     "selected_surface": [24, 24, 24, 255],
-    "selected_border": [82, 82, 82, 255],
+    "selected_border": [255, 255, 255, 255],
     "pressed_surface": [0, 229, 255, 255],
     "pressed_border": [0, 229, 255, 255],
     "secondary_text": [132, 132, 132],
@@ -45,6 +47,7 @@ DEFAULT_THEME = {
     "radius": 0,
     "sidebar": "right",
     "text_scale_percent": 100,
+    "font_style": "current",
     # The historical UI mixes station miles and WSPR kilometres. Keep the
     # built-in theme visually unchanged; saved themes choose a unified system.
     "units": "original",
@@ -87,7 +90,7 @@ def black_white_colors(colors):
     # clear neutral edges and preserving a readable live trace.
     for name, gray in (("background", 0), ("section_surface", 24),
                        ("section_border", 205),
-                       ("active_border", 255), ("selected_border", 225),
+                       ("active_border", 255), ("selected_border", 255),
                        ("section_heading", 240), ("frequency", 255),
                        ("smeter_active", 225), ("smeter_hot", 255),
                        ("smeter_marker", 245)):
@@ -108,6 +111,8 @@ BUILTIN_THEMES = {
         DEFAULT_THEME, STRAIGHT_INVERTED_THEME, GREEN_THEME, BLACK_WHITE_THEME,
     )
 }
+for _theme in BUILTIN_THEMES.values():
+    apply_muted_text_colors(_theme['colors'])
 BUILTIN_THEME_IDS = tuple(BUILTIN_THEMES)
 COLOR_NAMES = tuple(DEFAULT_THEME["colors"])
 runtime_theme = dict(DEFAULT_THEME)
@@ -156,18 +161,39 @@ def normalize_theme(value, *, allow_default=False):
         key: list(parse_color(given_colors.get(key), fallback))
         for key, fallback in DEFAULT_THEME["colors"].items()
     }
+    apply_muted_text_colors(colors)
     text_scale = value.get("text_scale_percent", 100)
     text_scale = max(TEXT_SCALE_MIN, min(TEXT_SCALE_MAX, text_scale)) if type(text_scale) is int else 100
-    return {
+    normalized = {
         "id": identifier,
         "name": name,
         "colors": colors,
         "radius": 0 if value.get("radius") == 0 else 8,
         "sidebar": value.get("sidebar") if value.get("sidebar") in ("left", "right") else "right",
         "text_scale_percent": text_scale,
+        "font_style": value.get('font_style') if value.get('font_style') in tuple(key for key,_ in FONT_STYLES) else 'current',
         "smeter_style": normalize_meter_style(value.get("smeter_style")),
         "units": value.get("units") if value.get("units") in ("original", "imperial", "metric") else "original",
     }
+    if value.get('waterfall_style') in (*BUILTIN_THEME_IDS, 'custom'):
+        normalized['waterfall_style'] = value['waterfall_style']
+    for key, low, high in (('color_intensity_percent', 50, 150), ('border_intensity_percent', 25, 200),
+                           ('saturation_percent',0,200)):
+        if key in value:
+            amount = value[key]
+            normalized[key] = max(low, min(high, amount)) if type(amount) is int else 100
+    if value.get('accent_id') in ('original', 'mint', 'cyan', 'amber', 'white'):
+        normalized['accent_id'] = value['accent_id']
+    for key in ('accent_rgb', 'text_rgb'):
+        rgb = value.get(key)
+        if isinstance(rgb, (list, tuple)) and len(rgb) == 3 and all(type(v) is int and 0 <= v <= 255 for v in rgb):
+            normalized[key] = list(rgb)
+    base = value.get('customization_base')
+    if isinstance(base, dict):
+        original = normalize_theme({**base, 'id': 'customization-base', 'name': 'Original',
+                                    'customization_base': None})
+        normalized['customization_base'] = {key: original[key] for key in ('colors', 'radius', 'text_scale_percent', 'font_style')}
+    return normalized
 
 
 def new_theme(name="New Theme", source=None):
@@ -192,7 +218,8 @@ def apply_theme(theme):
     palette = UIPalette(**{
         name: tuple(value) for name, value in normalized["colors"].items()
     })
-    apply_ui_style(palette, radius=normalized["radius"])
+    font_family = None if normalized['font_style'] == 'current' else 'theme-style:'+normalized['font_style']
+    apply_ui_style(palette, radius=normalized["radius"], font_family=font_family)
     runtime_revision += 1
     return normalized
 
@@ -255,14 +282,44 @@ class ThemeLibrary:
         self.themes = []
         self.active_id = DEFAULT_THEME_ID
         self.smeter_style = DEFAULT_METER_STYLE
+        self.builtin_overrides = {}
         self.load()
 
     def get(self, identifier):
         if is_builtin_theme_id(identifier):
-            theme = normalize_theme(BUILTIN_THEMES[identifier], allow_default=True)
+            theme = normalize_theme(self.builtin_overrides.get(identifier, BUILTIN_THEMES[identifier]), allow_default=True)
+            if identifier not in self.builtin_overrides:
+                theme.update(color_intensity_percent=100, border_intensity_percent=25)
+                for role, background in {'border':'surface', 'active_border':'active_surface',
+                        'selected_border':'selected_surface', 'pressed_border':'pressed_surface',
+                        'section_border':'section_surface', 'divider':'background', 'sidebar_rule':'sidebar'}.items():
+                    colors = BUILTIN_THEMES[identifier]['colors']
+                    theme['colors'][role] = [round(bg+(v-bg)*.25)
+                        for v,bg in zip(colors[role][:3],colors[background][:3])] + colors[role][3:]
+            # Rebase older built-in drafts onto the bright factory outlines,
+            # retaining the user's explicit intensity and accent choices.
+            if identifier in self.builtin_overrides:
+                roles = {'border': 'surface'}
+                if theme.get('accent_id', 'original') == 'original' and 'accent_rgb' not in theme:
+                    roles.update(active_border='active_surface', selected_border='selected_surface')
+                colors = BUILTIN_THEMES[identifier]['colors']
+                factor = theme.get('border_intensity_percent', 100) / 100
+                for role, background in roles.items():
+                    theme['colors'][role] = [
+                        max(0, min(255, round(bg + (value - bg) * factor)))
+                        for bg, value in zip(colors[background][:3], colors[role][:3])
+                    ] + colors[role][3:]
+                    theme['colors'][role] = saturate_rgb(theme['colors'][role],theme.get('saturation_percent',100))
+            # Early HOME-editor drafts deliberately retained the previous RF
+            # appearance. Themes now own spectrum/waterfall colors again.
+            if 'waterfall_style' in theme and theme['waterfall_style'] != identifier:
+                for key, color in BUILTIN_THEMES[identifier]['colors'].items():
+                    if key.startswith(('spectrum_', 'waterfall_')):
+                        theme['colors'][key] = deepcopy(color)
+                theme['waterfall_style'] = identifier
         else:
             theme = next((theme for theme in self.themes if theme["id"] == identifier), None)
-        return {**theme, "smeter_style": self.smeter_style} if theme is not None else None
+        return {**deepcopy(theme), "smeter_style": self.smeter_style} if theme is not None else None
 
     def new_theme(self, source=None, *, name="New Theme"):
         """Give each new editor draft a name that can be saved immediately."""
@@ -293,6 +350,14 @@ class ThemeLibrary:
                 if normalized["id"] not in {item["id"] for item in themes}:
                     themes.append(normalized)
             self.themes = themes
+            overrides = document.get('builtin_overrides', {})
+            if isinstance(overrides, dict):
+                for identifier, raw in overrides.items():
+                    if identifier not in BUILTIN_THEMES or not isinstance(raw, dict):
+                        continue
+                    normalized = normalize_theme({**raw, 'id': identifier,
+                        'name': BUILTIN_THEMES[identifier]['name']}, allow_default=True)
+                    self.builtin_overrides[identifier] = theme_appearance(normalized)
             active_id = str(document.get("active_id") or DEFAULT_THEME_ID)
             active_id = REMOVED_THEME_MIGRATIONS.get(active_id, active_id)
             self.active_id = active_id if self.get(active_id) else DEFAULT_THEME_ID
@@ -307,7 +372,8 @@ class ThemeLibrary:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(self.path.name + ".tmp")
         document = {"version": 1, "active_id": self.active_id,
-                    "smeter_style": self.smeter_style, "themes": self.themes}
+                    "smeter_style": self.smeter_style, "themes": self.themes,
+                    "builtin_overrides": self.builtin_overrides}
         temporary.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, self.path)
 
@@ -328,6 +394,20 @@ class ThemeLibrary:
         if theme is None:
             raise ValueError("unknown theme")
         self._commit(self.themes, identifier, smeter_style=smeter_style)
+
+    def customize_builtin(self, theme):
+        """Store a separate preset customization; the factory definition stays immutable."""
+        identifier = theme.get('id')
+        if identifier not in BUILTIN_THEMES:
+            raise ValueError('unknown built-in theme')
+        normalized = normalize_theme({**theme, 'name': BUILTIN_THEMES[identifier]['name']}, allow_default=True)
+        previous = self.builtin_overrides
+        self.builtin_overrides = {**previous, identifier: theme_appearance(normalized)}
+        try:
+            self._commit(self.themes, identifier)
+        except OSError:
+            self.builtin_overrides = previous
+            raise
 
     def set_smeter_style(self, identifier):
         self._commit(self.themes, self.active_id, smeter_style=identifier)

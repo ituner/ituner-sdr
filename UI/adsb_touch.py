@@ -6,6 +6,7 @@ same instruments and touch actions as the browser without embedding a browser.
 import math
 import time
 from ui_style import APP_UI_STYLE
+from theme_system import runtime_theme
 from decoder_style import full_width_back_box
 from adsb_traffic import historical_aircraft, position_age, reception_summary, trail_label
 from adsb_view import aged, freshness
@@ -18,8 +19,10 @@ class AirspaceDashboard:
     def ink(self, cache, x, y, value, size=16, color=None, width=None, anchor='lm', bold=False):
         value=str(value)
         bold=bold or size>=20
-        if width:value=self.ui.fit_station_text(cache,value,width,size,bold,False,'Oxanium')
-        self.ui.draw_text(cache,x,y,value,color or self.TEXT,size,bold,False,anchor,family='Oxanium')
+        family = ('Oxanium' if runtime_theme.get('font_style','current')=='current'
+                  else APP_UI_STYLE.button.font_family)
+        if width:value=self.ui.fit_station_text(cache,value,width,size,bold,False,family)
+        self.ui.draw_text(cache,x,y,value,color or self.TEXT,size,bold,False,anchor,family=family)
 
     def surface(self, box, fill=None, border=None, radius=8):
         self.ui.draw_logical_rounded_rect(*box,APP_UI_STYLE.button.radius,fill or self.PANEL,border or self.LINE,1)

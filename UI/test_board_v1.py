@@ -2021,14 +2021,15 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         self.assertEqual(fills[0], ui.APP_UI_STYLE.palette.active_surface)
         self.assertEqual(colors[0], ui.APP_UI_STYLE.palette.text)
 
-    def test_two_line_button_turns_title_and_subtitle_black_when_pressed(self):
+    def test_two_line_button_keeps_pressed_subtitle_dimmed(self):
         box = (10, 20, 104, 114)
         colors = []
         ui.set_ui_press_point(40, 50)
         with patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
-        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
+        pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
+        self.assertEqual(colors, [pressed.text, tuple(ui.muted_text_color(pressed.text,pressed.fill))])
 
     def test_legacy_close_entry_point_draws_the_shared_text_back_button(self):
         box = (10, 20, 104, 114)

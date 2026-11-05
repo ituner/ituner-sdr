@@ -1765,22 +1765,22 @@ class ReceiverListStyleTests(unittest.TestCase):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
         self.assertEqual(normal.fill, (0, 0, 0, 255))
-        self.assertEqual(normal.border, (46, 46, 46, 255))
+        self.assertEqual(normal.border, (255, 255, 255, 255))
         self.assertEqual(active.fill, (30, 30, 30, 255))
-        self.assertEqual(active.border, (96, 96, 96, 255))
+        self.assertEqual(active.border, (255, 255, 255, 255))
         self.assertEqual(active.text, (255, 255, 255))
         self.assertEqual(pressed.fill, (0, 229, 255, 255))
         self.assertEqual(pressed.border, (0, 229, 255, 255))
         self.assertEqual(pressed.text, (0, 0, 0))
 
-    def test_pressed_two_line_button_uses_black_title_and_subtitle(self):
+    def test_pressed_two_line_button_dims_subtitle_from_title(self):
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
         with mock.patch.object(ui, "ui_button_pressed", return_value=True), \
                 mock.patch.object(ui, "draw_styled_button_frame", return_value=pressed), \
                 mock.patch.object(ui, "draw_text") as text:
             ui.draw_styled_two_line_button(None, (10, 20, 124, 84), "TITLE", "SUBTITLE")
         self.assertEqual([call.args[4] for call in text.call_args_list],
-                         [(0, 0, 0), (0, 0, 0)])
+                         [pressed.text, tuple(ui.muted_text_color(pressed.text,pressed.fill))])
 
     def test_home_favorite_uses_shared_active_style_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
