@@ -592,6 +592,6 @@ sit above the actual width. The last preset selects 12 kHz directly; it no
 longer cycles between 9 and 12 kHz. Width, Shift and Back retain their positions. The same six preset squares also
 appear below Shift in Modes, with the same widths and selection behavior.
 
-Modes uses a compact 32 px, left-aligned heading and a taller 127 px passband
-graphic. The recovered heading space and smaller gaps above Tune Step and
-before the presets make room without shrinking sliders, buttons or touch targets.
+Modes uses a compact 32 px, left-aligned heading and a 103 px passband
+graphic. Extra space above and below the Tune Step heading keeps it clear
+of both button grids. Slider and preset button sizes are retained.
