@@ -767,6 +767,7 @@ class DrawerGeometryTests(unittest.TestCase):
                  mock.patch.object(ui,'draw_radio_mode_indicator') as indicator:
                 ui.draw_radio_family_option(None,box,family,modes,mode)
             self.assertEqual(draw.call_args.args[2:4],('SYNC',''))
+            self.assertEqual(draw.call_args.kwargs['content_offset_y'],ui.LCD_RADIO_MODE_CONTENT_OFFSET_Y)
             self.assertEqual(draw.call_args.kwargs['style'].title_size,ui.APP_UI_STYLE.button.title_size)
             self.assertEqual(indicator.call_args.args[2:],(wanted,mode in modes))
 

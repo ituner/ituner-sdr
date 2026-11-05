@@ -566,8 +566,7 @@ variants. The selected variant appears as its short mode code, and full
 family names use the shared font-fitting helper. The synchronous AM family
 shows SYNC on the first line and AM (or the selected sync variant) below it,
 with the primary label centered on the same baseline as the other modes and
-a smaller variant caption underneath. Every mode has a square status lamp below
-its label; the selected lamp and any variant caption glow green. Base names
+a smaller variant caption underneath. Every mode centers its label and square status lamp together as one group; the selected lamp and any variant caption glow green. Base names
 are not repeated underneath (AM, CW, USB, LSB, I/Q and DRM). Active FM variants
 use that same alignment. Tune-step controls sit
 below the last mode row as two rows of four squares, with a number above its Hz/kHz unit.

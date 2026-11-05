@@ -1197,6 +1197,7 @@ def radio_panel_box():
 LCD_RADIO_SQUARE_SIZE = 52
 LCD_RADIO_SQUARE_GAP = 8
 LCD_RADIO_SQUARE_COLS = 4
+LCD_RADIO_MODE_CONTENT_OFFSET_Y = -6
 
 
 def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
@@ -8661,7 +8662,7 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None, fit_full_subtitle=False, enabled=True):
+                                style=None, fit_full_subtitle=False, enabled=True, content_offset_y=0):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
@@ -8688,13 +8689,13 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
                       size, True, False, "cm", family=style.font_family)
 
     if subtitle:
-        center_y = (y0 + y1) / 2
+        center_y = (y0 + y1) / 2 + content_offset_y
         draw_line(title, center_y - 12, text_color, style.title_size)
         draw_line(subtitle, center_y + 12,
                   text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
-        draw_line(title, (y0 + y1) / 2, text_color, style.title_size)
+        draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, style.title_size)
     return visual
 
 
@@ -9674,7 +9675,7 @@ def draw_radio_mode_indicator(text_cache, box, caption, active):
     style = APP_UI_STYLE.button
     ready = APP_UI_STYLE.palette.ready
     color = ready if active else tuple(round(channel * .2) for channel in ready[:3])
-    center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15
+    center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15 + LCD_RADIO_MODE_CONTENT_OFFSET_Y
     led, gap = 5, 4
     if caption:
         texture_width = text_cache.texture(caption, 11, color, bold=True, family=style.font_family)[1]
@@ -9702,7 +9703,8 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
             title = "SYNC"
             detail = {"SAM": "AM", "SAU": "USB", "SAL": "LSB", "SAS": "STEREO", "QAM": "QAM"}.get(str(active_mode).upper(), "AM") if active else "AM"
         style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size))
-        draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style)
+        draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style,
+                                   content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
         draw_radio_mode_indicator(text_cache, box, detail, active)
         return
     draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style)
