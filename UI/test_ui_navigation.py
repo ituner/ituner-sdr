@@ -767,6 +767,8 @@ class DrawerGeometryTests(unittest.TestCase):
                 ui.draw_radio_family_option(None,box,family,modes,mode)
             self.assertEqual(draw.call_args.args[2:4],('SYNC',wanted))
             self.assertEqual(draw.call_args.kwargs['style'].title_size,ui.APP_UI_STYLE.button.title_size)
+            self.assertTrue(draw.call_args.kwargs['primary_centered'])
+            self.assertEqual(draw.call_args.kwargs['style'].subtitle_size,11)
 
     def test_modes_drawer_highlights_the_selected_step_in_eight_button_grid(self):
         ui.configure_output(True)

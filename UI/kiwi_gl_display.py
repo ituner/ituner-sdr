@@ -8661,7 +8661,7 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
-                                style=None, fit_full_subtitle=False, enabled=True):
+                                style=None, fit_full_subtitle=False, enabled=True, primary_centered=False):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
@@ -8689,8 +8689,8 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
 
     if subtitle:
         center_y = (y0 + y1) / 2
-        draw_line(title, center_y - 12, text_color, style.title_size)
-        draw_line(subtitle, center_y + 12,
+        draw_line(title, center_y if primary_centered else center_y - 12, text_color, style.title_size)
+        draw_line(subtitle, center_y + (15 if primary_centered else 12),
                   text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
@@ -9682,8 +9682,11 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
         if family == "SYNC AM":
             title = "SYNC"
             detail = {"SAM": "AM", "SAU": "USB", "SAL": "LSB", "SAS": "STEREO", "QAM": "QAM"}.get(str(active_mode).upper(), "AM") if active else "AM"
-        style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size))
-    draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style)
+        # Keep the primary annunciators on the same baseline even when a
+        # mode has a second line; the smaller variant fits beneath it.
+        style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size), subtitle_size=11)
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style,
+                               primary_centered=LCD_800_MODE, fit_full_subtitle=LCD_800_MODE)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
