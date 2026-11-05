@@ -74,6 +74,8 @@ class ThemeSystemTests(unittest.TestCase):
         middle_trace = ui.mirror_smeter_trace_x(675 + (50 if ui.DESKTOP_1280_MODE else 0), 6)
         self.assertLess(middle_trace + ui.SMETER_TRACE_WIDTH, middle_frequency[0])
         self.assertLess(middle_frequency[2], middle_band[0])
+        ui.set_display_page(True)
+        self.addCleanup(ui.set_display_page, False)
         with patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \
@@ -143,6 +145,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_big_frequency"), \
                 patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_radio_tune_step"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_frequency_drawer(None, 7075, 100, "Oxanium")
@@ -443,7 +446,8 @@ class ThemeSystemTests(unittest.TestCase):
                                  station_name="Test Receiver", audio_jitter_depth=3)
             colors = {item.args[3]: item.args[4] for item in text_draw.call_args_list}
             self.assertEqual(colors["Test Receiver"], APP_UI_STYLE.palette.footer_primary)
-            self.assertEqual(colors["BUFFER Q3/T6"], APP_UI_STYLE.palette.footer_live)
+            self.assertFalse(any(label.startswith("BUFFER") for label in colors))
+            self.assertTrue(any("UTC" in label and color == APP_UI_STYLE.palette.footer_live for label, color in colors.items()))
 
     def test_audio_volume_uses_the_same_theme_colors_as_home(self):
         self.library.activate(GREEN_THEME_ID)
@@ -455,11 +459,14 @@ class ThemeSystemTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect") as rectangles, \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_polyline"), \
+                patch.object(ui, "draw_lcd_home_bandwidth"), \
                 patch.object(ui, "draw_text"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \
+                patch.object(ui, "draw_lcd_audio_annunciator"), \
                 patch.object(ui, "draw_lcd_audio_slider_tile"), \
                 patch.object(ui, "draw_sidebar_header"), \
+                patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_styled_button_frame",
                              return_value=APP_UI_STYLE.button.resolve()):
             ui.draw_lcd_audio_drawer(None, 0.5, controls, -400, 400,
@@ -477,13 +484,16 @@ class ThemeSystemTests(unittest.TestCase):
     def test_passband_labels_and_each_band_position_follow_theme(self):
         self.library.activate(GREEN_THEME_ID)
         ui.configure_output(True)
-        with patch.object(ui, "draw_logical_rect"), \
+        with patch.object(ui, "draw_text_scaled_x") as scaled, \
+                patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_area"), \
                 patch.object(ui, "draw_logical_polyline"), \
                 patch.object(ui, "draw_text") as labels:
-            ui.draw_lcd_home_bandwidth(None, -1200, 1200)
-        colors = {item.args[3]: item.args[4] for item in labels.call_args_list}
+            cache = MagicMock()
+            cache.font.return_value.size.return_value = (60, 13)
+            ui.draw_lcd_home_bandwidth(cache, -1200, 1200)
+        colors = {item.args[3]: item.args[4] for item in labels.call_args_list + scaled.call_args_list}
         self.assertEqual(colors["PASSBAND"], APP_UI_STYLE.palette.section_heading)
         for label in ("10 kHz", "−5", "0", "+5"):
             self.assertEqual(colors[label], APP_UI_STYLE.palette.secondary_text)

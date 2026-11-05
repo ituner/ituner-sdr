@@ -117,6 +117,39 @@ there so they cannot keep launching the separate test application.
 
 ## Validation
 
+**Denoise** and **Voice (RNNoise)** are separate Audio controls. Denoise changes
+the Kiwi receiver's WDSP filter continuously from OFF to MAX; the previous
+preset values remain interpolation anchors. Voice (RNNoise) blends local neural
+speech cleanup continuously from OFF to STR. Its previous MED and STR settings
+retain their processing amounts. Moving Denoise selects receiver processing;
+moving Voice selects local speech processing. They do not stack. Voice is
+trained for speech, so leave it off for music and digital signals.
+
+The main Audio page reuses Home's combined Volume/speaker-mute instrument,
+followed by Squelch, Denoise and Voice (RNNoise). The standalone Mute tile is
+removed. The same Home passband graphic sits above a direct Width slider,
+then square AGC, Tone and Notch buttons, Advanced, and the fixed Back button.
+All five slider targets share a 70 px height. Consecutive instruments have
+16 px gaps, including above and below the passband graphic, so Width has
+the same label/track spacing as the other sliders.
+Blanker remains in Advanced alongside De-emphasis, HF Enhance, detailed
+Passband controls, Output and Reset. Audio slider sections use Home's themed
+background and uppercase labels; Voice reads VOICE (RNNOISE). Width uses the
+existing progressive mapping and preserves the filter center and tuned
+frequency. Back retraces Advanced to Audio, including when returning from
+the detailed Passband drawer. Navigation, headings and blank gaps do not
+alter listening settings.
+
+Slider drags retain their last multitouch position on release, even when the
+touch controller's legacy absolute axes are stale. Denoise changes are coalesced
+at 120 ms and send only changed receiver settings. OFF and mute remain prompt.
+
+The optional native Voice dependency can be built on the CM5 with
+`python3 scripts/build-rnnoise.py`. It verifies the official RNNoise 0.2 archive
+and installs under `vendor/rnnoise-install`; SpeexDSP must also be available.
+The build corrects stale Opus header/macro names in the release's ARM NEON
+header without changing the released model or DSP arithmetic.
+
 On the working CM5, direct reference speech/music and the improved SDR
 conversion were accepted by listening; reverting to linear brought back the
 metallic sound. Headphone detection changed 0x26 -> 0x22 on unplug, GPIO13
@@ -130,3 +163,23 @@ configuration's SHA-256 remained unchanged. All 13 repository tests passed on
 the target's Python 3.13. A completely blank OS installation was not rerun for
 this change.
 These are functional checks, not amplifier power, THD, or RF emissions measurements.
+
+Standard native slider tracks use a shared 10 px inset at each end, and
+touch positions map to those same bounds. Slider titles use 14 px and values
+13 px across Audio, Display, fan controls and Passband. The integrated
+Volume/speaker-mute instrument retains its own geometry.
+
+The main Audio AGC/Tone/Notch squares keep the normal dark button surface
+when enabled. AGC and Tone indicate their active mode with green caption text;
+Notch uses a rectangular green lamp. Inactive annunciators are dim. Pressed
+feedback remains transient, and Advanced controls retain their existing style.
+
+This reusable button treatment is named **Smart Button**, exposed by
+`APP_UI_STYLE.smart_button`. Active/selected faces use the normal dark
+surface and a stronger outline; state captions or lamps use the theme’s
+green ready color. Press feedback stays transient. Audio AGC/Tone/Notch,
+mode families, tune steps, passband presets and band choices use this style.
+
+Tone and Notch use the Smart Button indicator-only variation: activity does
+not strengthen the outline, and the lower indicator area is blank when off.
+An enabled Tone profile appears in green; enabled Notch lights the green lamp.

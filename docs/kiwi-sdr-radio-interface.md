@@ -210,7 +210,7 @@ The renderer uses straightforward OpenGL immediate-mode geometry plus textures, 
 - The passband icon in the transparent waterfall control group opens a full-width filter sheet over the waterfall. Filter setup is deliberately not a Home sub-menu or a permanent status readout.
 - The large center strip is direct manipulation: touch nearer the left or right handle and drag horizontally to reshape that filter edge. Its scale automatically tightens around the active passband so the handles remain comfortably separated. The edges cannot cross; they stop at a 50 Hz minimum width.
 - A large `- / preset / +` width stepper provides fast, symmetric changes around the current filter center. Edge dragging produces a `CUSTOM` asymmetric filter; the next `-` or `+` tap deliberately re-centers it around that same center frequency.
-- The cyclic width presets are `CW` (500 Hz), `VOICE NARROW` (1.2 kHz), `VOICE` (2.4 kHz), `VOICE WIDE` (3 kHz), `WIDE 6k`, `WIDE 9k`, and `KIWI MAX` (12 kHz). Fine `-`/`+` changes remain symmetric 100 Hz adjustments around the current center.
+- The cyclic width presets are `CW` (500 Hz), `VOICE NARROW` (1.2 kHz), `VOICE` (2.4 kHz), `VOICE WIDE` (3 kHz), `WIDE 6k`, and `WIDE 12k` (12 kHz). Fine `-`/`+` changes remain symmetric 100 Hz adjustments around the current center.
 - Filter edits update the active KiwiSDR SND connection with real `low_cut` and `high_cut` values. The SND stream also supplies the preferred live S-meter data.
 
 ### Context sheets
@@ -554,3 +554,54 @@ Recommended order for future work:
 | `systemd/kiwi-live-display.service` | Legacy framebuffer service template. |
 | `baselines/kiwi-basic-20260728-235830/` | Preserved direct-framebuffer baseline. |
 | `docs/yx45011a-pi5-display-bringup.md` | Panel driver, physical geometry, touch overlay, and driver rebuild instructions. |
+
+
+### Native mode selector
+
+The AM/FM annunciators open a four-column grid of mode-family squares.
+Each mode and step square is 52 px with 8 px spacing. Eight Kiwi families
+occupy two rows; USB receiver capabilities
+use only the families they support. Taps still cycle the family's demodulator
+variants. The selected variant appears as its short mode code, and full
+family names use the shared font-fitting helper. The synchronous AM family
+shows SYNC on the first line and AM (or the selected sync variant) below it,
+with the primary label centered on the same baseline as the other modes and
+a smaller variant caption underneath. Every mode centers its label and indicator together as one group. Sync and FM use
+their green variant text as the indicator; other modes use a rectangular green lamp. Base names
+are not repeated underneath (AM, CW, USB, LSB, I/Q and DRM). Active FM variants
+use that same alignment. Tune-step controls sit
+below the last mode row as two rows of four squares, with a number above its Hz/kHz unit.
+The former decoder shortcuts are replaced by the live passband viewer and
+Width directly below the viewer and Shift below Width. Decoders remain in
+Digital; Back keeps its position.
+
+The shared Shift/Width sliders in Modes and the detailed Passband drawer use
+14 px titles and 13 px values, matching Audio slider typography; Center Lock
+is a normal value label rather than a larger status heading.
+
+The frequency-entry rail uses larger 72 px digits with the selected frequency
+font, without changing the main instrument readout. Frequency and Modes share eight step
+choices (1 Hz, 10 Hz, 100 Hz, 1 kHz, 5 kHz, 10 kHz, 20 kHz and 100 kHz), in two rows of four
+52 px squares, with the number above Hz/kHz. The keypad
+and directional buttons retain their existing geometry. Keypad digits use
+26 px labels, commands 20 px and Up/Down 18 px, with the shared font and colors.
+
+The detailed Passband drawer presents its six width presets in two rows of
+three 64 px squares with 16 px gaps. Short captions (CW, NAR, VOICE and WIDE)
+sit above the actual width. The last preset selects 12 kHz directly; it no
+longer cycles between 9 and 12 kHz. Width, Shift and Back retain their positions. The same six preset squares also
+appear below Shift in Modes, with the same widths and selection behavior.
+
+Modes uses a compact 32 px, left-aligned heading and a 103 px passband
+graphic. Extra space above and below the Tune Step heading keeps it clear
+of both button grids. A 16 px gap separates Shift from the presets. Slider
+and preset button sizes are retained, and the preset grid stays clear of Back.
+
+The waterfall listening controls include a square BAND tile in the third row,
+right-aligned below SCAN. Its lower line shows the current frequency-derived
+band. It opens the band chooser; broadcast tiles show parenthesized Smart Scan
+counts only for the current receiver and measurements younger than two hours.
+Unmeasured/expired counts are blank rather than zero. Opening or dismissing
+the chooser does not start scanning or retune. Selecting a supported band
+tunes its listening center and chooses AM for broadcast or the normal sideband
+for amateur bands. Unsupported destinations are dimmed and cannot retune.

@@ -57,12 +57,15 @@ class DecoderStyle:
         self.actions.append((box,action))
 
     def draw_status(self, cache, message, detail='', *, full_width=False):
-        """Use HOME's two rows, font, colors and UTC clock position."""
+        """Use HOME's two rows, font, colors and paired-clock position."""
         offset = 256 if full_width and theme_system.runtime_theme['sidebar']=='left' else 0
         ui=self.ui
         ui.draw_logical_rect(offset,STATUS_TOP,offset+CANVAS_WIDTH,800,self.color('footer_background'))
         message=ui.fit_station_text(cache,str(message),988,STATUS_FONT_SIZE,True,False,STATUS_FONT)
         ui.draw_text(cache,offset+18,STATUS_FIRST_Y,message,self.color('footer_primary'),STATUS_FONT_SIZE,True,False,'lm',family=STATUS_FONT)
-        draw_status_clock(ui,cache,offset+18)
-        detail=ui.fit_station_text(cache,str(detail),666,STATUS_FONT_SIZE,False,False,STATUS_FONT)
-        ui.draw_text(cache,offset+340,STATUS_CLOCK_Y,detail,self.color('footer_primary'),STATUS_FONT_SIZE,False,False,'lm',family=STATUS_FONT)
+        clock = draw_status_clock(ui,cache,offset+18)
+        dimensions = cache.font(STATUS_FONT_SIZE,family=STATUS_FONT).size(clock) if cache is not None else None
+        clock_width = dimensions[0] if isinstance(dimensions, (tuple, list)) else len(clock)*STATUS_FONT_SIZE*.6
+        detail_x = max(340,18+clock_width+24)
+        detail=ui.fit_station_text(cache,str(detail),max(0,CANVAS_WIDTH-detail_x-18),STATUS_FONT_SIZE,False,False,STATUS_FONT)
+        ui.draw_text(cache,offset+detail_x,STATUS_CLOCK_Y,detail,self.color('footer_primary'),STATUS_FONT_SIZE,False,False,'lm',family=STATUS_FONT)

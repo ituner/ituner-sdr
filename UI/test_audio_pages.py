@@ -1,0 +1,120 @@
+import unittest
+from unittest.mock import patch
+
+import kiwi_gl_display as ui
+
+
+class AudioPageTests(unittest.TestCase):
+    def setUp(self):
+        ui.configure_output(True)
+        ui.set_audio_page(False)
+        self.addCleanup(ui.set_audio_page, False)
+        self.state = ui.SharedState('http://kiwi.test', 7075, 8, -95, 142, 245, 3, 'am', True)
+
+    def test_advanced_and_back_leave_audio_settings_and_frequency_unchanged(self):
+        self.state.set_audio_controls(voice_clean_level=.74, tone_profile=2, squelch_level=12)
+        audio = self.state.audio_controls_snapshot()
+        frequency = self.state.snapshot()
+        self.assertTrue(ui.audio_page_action('advanced'))
+        self.assertTrue(ui.AUDIO_ADVANCED_OPEN)
+        self.assertTrue(ui.audio_page_action('close'))
+        self.assertFalse(ui.AUDIO_ADVANCED_OPEN)
+        self.assertFalse(ui.audio_page_action('close'))
+        self.assertEqual(self.state.audio_controls_snapshot(), audio)
+        self.assertEqual(self.state.snapshot(), frequency)
+
+    def test_header_is_quiet_and_slider_gaps_are_not_other_buttons(self):
+        self.assertEqual(ui.AUDIO_HEADER_H, 32)
+        self.assertIsNone(ui.audio_option_at(ui.LCD_NAV_X0 + 128, 17))
+        self.assertIn('audio_header', ui.TOOLBOX_CONTINUOUS_GESTURES)
+        sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
+                   ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_PASSBAND_BOX)
+        self.assertEqual(len({box[3]-box[1] for box in sliders}),1)
+        instruments=(*sliders[:-1],ui.AUDIO_PASSBAND_GRAPH_BOX,sliders[-1])
+        for a, b in zip(instruments, instruments[1:]):
+            self.assertEqual(b[1] - a[3], 16)
+            self.assertIsNone(ui.audio_option_at(a[0] + 20, (a[3]+b[1])/2))
+
+    def test_combined_volume_reserves_speaker_taps_and_slider_range(self):
+        mute = ui.volume_mute_box(ui.AUDIO_VOLUME_BOX)
+        track = ui.volume_track_box(ui.AUDIO_VOLUME_BOX)
+        self.assertEqual(ui.audio_option_at((mute[0]+mute[2])/2, (mute[1]+mute[3])/2), 'mute')
+        self.assertIsNone(ui.audio_option_at(track[0], (track[1]+track[3])/2))
+        self.assertEqual(ui.audio_volume_at_x(track[0]), 0)
+        self.assertEqual(ui.audio_volume_at_x(track[2]), 1)
+        self.assertLess(ui.AUDIO_MUTE_BOX[0], 0)
+        self.assertLess(ui.AUDIO_BLANKER_BOX[0], 0)
+        ui.set_audio_page(True)
+        self.assertGreater(ui.AUDIO_BLANKER_BOX[0], 0)
+
+    def test_passband_slider_changes_width_without_tuning_or_moving_center(self):
+        self.state.set_filter(-1500, 3500)
+        frequency = self.state.snapshot()[1]
+        x0,x1 = ui.slider_track_bounds(ui.AUDIO_PASSBAND_BOX)
+        for fraction in (0, .2, .5, .75, 1):
+            ui.apply_audio_slider(self.state, 'audio_passband', x0 + (x1-x0)*fraction)
+            _, low, high, _ = self.state.radio_snapshot()
+            self.assertAlmostEqual((low + high)/2, 1000, delta=25)
+            self.assertAlmostEqual(high-low, ui.filter_width_from_slider_fraction(fraction), delta=100)
+            self.assertEqual(self.state.snapshot()[1], frequency)
+        self.assertIn('audio_passband', ui.VALUE_SLIDER_GESTURES)
+        self.assertIn('audio_passband', ui.TOOLBOX_CONTINUOUS_GESTURES)
+
+    def test_main_and_advanced_render_only_their_own_controls(self):
+        controls, _ = self.state.audio_controls_snapshot()
+        for advanced in (False, True):
+            ui.set_audio_page(advanced)
+            with patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_text'), patch.object(ui, 'draw_section_divider'), \
+                 patch.object(ui, 'draw_radio_close_button'), \
+                 patch.object(ui, 'draw_lcd_home_volume_slider') as volume, \
+                 patch.object(ui, 'draw_lcd_home_bandwidth') as passband, \
+                 patch.object(ui, 'draw_lcd_audio_slider_tile') as sliders, \
+                 patch.object(ui, 'draw_lcd_audio_tile') as tiles, \
+                 patch.object(ui, 'draw_lcd_audio_annunciator') as annunciators, \
+                 patch.object(ui, 'draw_styled_text_button') as buttons:
+                ui.draw_lcd_audio_drawer(object(), .5, controls, -400, 400, True, 'am', 'alsa')
+            if advanced:
+                self.assertFalse(annunciators.called)
+                self.assertFalse(sliders.called)
+                self.assertFalse(volume.called)
+                self.assertFalse(passband.called)
+                self.assertEqual({c.args[2] for c in tiles.call_args_list},
+                                 {'DE-EMPH', 'HF ENH', 'BLANKER', 'PASSBAND', 'OUTPUT', 'RESET'})
+            else:
+                self.assertEqual({c.args[2] for c in sliders.call_args_list},
+                                 {'DENOISE', 'VOICE (RNNOISE)', 'SQUELCH', 'WIDTH'})
+                self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
+                self.assertEqual(volume.call_args.kwargs['box'], ui.AUDIO_VOLUME_BOX)
+                self.assertEqual(passband.call_args.kwargs['box'], ui.AUDIO_PASSBAND_GRAPH_BOX)
+                self.assertFalse(tiles.called)
+                self.assertEqual([c.args[2] for c in annunciators.call_args_list], ['AGC', 'TONE', 'NOTCH'])
+                self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
+
+    def test_main_audio_states_use_annunciators_without_latched_fill(self):
+        for active in (False, True):
+            for binary in (False, True):
+                with patch.object(ui,'draw_styled_two_line_button') as button, \
+                     patch.object(ui,'draw_radio_mode_indicator') as indicator:
+                    ui.draw_lcd_audio_annunciator(None,ui.AUDIO_AGC_BOX,'TEST','AUTO',active,binary=binary)
+                self.assertEqual(button.call_args.kwargs['active'],active)
+                style=button.call_args.kwargs['style']
+                self.assertEqual(style.variant,'smart')
+                self.assertEqual(style.resolve(active=active).fill,style.resolve().fill)
+                self.assertEqual(indicator.call_args.args[2:],('' if binary else 'AUTO',active))
+                self.assertEqual(indicator.call_args.kwargs['lamp'],binary)
+
+    def test_tone_and_notch_activity_does_not_select_frame_and_off_is_blank(self):
+        for active in (False, True):
+            for title,binary in (('TONE',False),('NOTCH',True)):
+                with patch.object(ui,'draw_styled_two_line_button') as button, \
+                     patch.object(ui,'draw_radio_mode_indicator') as indicator:
+                    ui.draw_lcd_audio_annunciator(None,ui.AUDIO_TONE_BOX,title,'SW',active,
+                                                  binary=binary,indicator_only=True)
+                self.assertFalse(button.call_args.kwargs['active'])
+                self.assertEqual(indicator.called,active)
+                if active:self.assertTrue(indicator.call_args.args[3])
+
+
+if __name__ == '__main__':
+    unittest.main()

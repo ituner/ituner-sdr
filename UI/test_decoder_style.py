@@ -90,7 +90,7 @@ class DecoderThemeTests(unittest.TestCase):
         self.assertEqual(w.MAP,(0,0,1280,712))
         # A left-side physical BACK hit must map to the same HOME rail coordinates.
         self.assertEqual(theme_system.display_to_logical_x(20),1044)
-        clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC (UTC)']
+        clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC   |   12:34:56']
         self.assertEqual(len(clock),1)
         self.assertEqual(clock[0].args[1:3],(274,771))
         self.assertEqual(clock[0].args[5],18)

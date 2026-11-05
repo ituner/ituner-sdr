@@ -109,7 +109,7 @@ class MeterTests(unittest.TestCase):
                 self.assertLessEqual(segment[1], box[1] + .80 * (box[3] - box[1]) + 1e-8)
 
     def test_flex_texture_is_cached_at_final_resolution_without_metal_border(self):
-        for identifier in SKIN_CALIBRATION:
+        for identifier in (key for key in SKIN_CALIBRATION if key in METER_STYLES):
             cache = Mock()
             cache._cached_texture.return_value = None
             cache.surface_texture.return_value = (1, 236, 160)
@@ -331,7 +331,7 @@ class MeterTests(unittest.TestCase):
                     self.assertLessEqual(len(image.getcolors(size[0] * size[1])), 5)
 
     def test_aviation_dial_stays_square_and_needle_uses_printed_scale_geometry(self):
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             self.assertTrue(meter_asset_path(identifier).is_file())
             self.assertEqual(METER_STYLES[identifier].height, 236)
             self.assertEqual(aviation_image_box((1034, 104, 1270, 340), footer=False), (1034, 104, 1270, 340))
@@ -347,7 +347,7 @@ class MeterTests(unittest.TestCase):
 
     def test_aviation_signal_changes_reuse_face_and_hub_but_move_live_needle(self):
         ui.pygame.font.init()
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             cache = Mock(); textures = {}
             cache._cached_texture.side_effect = textures.get
             cache.font.side_effect = lambda size, **kwargs: ui.pygame.font.Font(None, size)
@@ -371,17 +371,17 @@ class MeterTests(unittest.TestCase):
         cache = Mock(); cache._cached_texture.return_value = None
         with patch.object(ui.PILImage, 'open', side_effect=OSError('Missing asset')), \
                 patch.object(ui, 'draw_selected_smeter') as fallback:
-            ui.draw_aviation_smeter(cache, 'heritage', (0, 0, 236, 210), -73, None, Mock())
+            ui.draw_aviation_smeter(cache, 'aviation', (0, 0, 236, 210), -73, None, Mock())
             self.assertEqual(fallback.call_args.kwargs['style_id'], 'precision')
 
     def test_full_width_aviation_keeps_readouts_inside_and_volume_touch_targets_clear(self):
         ui.configure_output(True)
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             theme = new_theme(); theme.update(smeter_style=identifier, text_scale_percent=120)
             apply_theme(theme)
             box = ui.lcd_compact_smeter_box()
             self.assertEqual(aviation_image_box(box, footer=False), box)
-            self.assertEqual((box[2]-box[0], box[3]-box[1]), (236, 236))
+            self.assertEqual((box[2]-box[0], box[3]-box[1]), (208, 208))
             modes = list(ui.lcd_home_mode_boxes(True))
             volume, mute, track = (fn(True) for fn in (ui.lcd_home_volume_box, ui.lcd_home_volume_mute_box, ui.lcd_home_volume_track_box))
             self.assertLess(box[3], min(bounds[1] for _, bounds in modes))
@@ -400,7 +400,7 @@ class MeterTests(unittest.TestCase):
                 for call in labels.call_args_list:
                     x, y = call.args[:2]
                     self.assertEqual(x, (box[0]+box[2])/2)
-                    self.assertGreater(y, box[1]+236*.68)
+                    self.assertGreater(y, box[1]+(box[3]-box[1])*.68)
                     self.assertLess(y, box[1]+236*.82)
 
     def test_bakelite_reference_photos_keep_transparency_and_scales_on_paper(self):
@@ -563,9 +563,9 @@ class MeterTests(unittest.TestCase):
                     self.assertLess(volume[3], ui.lcd_nav_top())
                     if compact:
                         mute = ui.lcd_home_volume_mute_box(compact)
-                        self.assertGreaterEqual(mute[1], volume[1] + 21)
+                        self.assertGreaterEqual(mute[1], volume[1] + 12)
                         meter = ui.lcd_compact_smeter_box()
-                        self.assertEqual(meter[3] - meter[1], style.height)
+                        self.assertEqual(meter[3] - meter[1], ui.LCD_COMPACT_SMETER_HEIGHT + ui.smeter_rail_extra_height() + (20 if identifier in ("bakelite_square", "bakelite_round") else 0))
                         self.assertLess(meter[3], min(box[1] for _, box in modes))
                     elif style.height > 80:
                         meter_top = ui.lcd_home_bandwidth_box(False)[1]
