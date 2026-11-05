@@ -144,6 +144,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_big_frequency"), \
                 patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_radio_tune_step"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_frequency_drawer(None, 7075, 100, "Oxanium")
@@ -461,6 +462,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_text"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \
+                patch.object(ui, "draw_lcd_audio_annunciator"), \
                 patch.object(ui, "draw_lcd_audio_slider_tile"), \
                 patch.object(ui, "draw_sidebar_header"), \
                 patch.object(ui, "draw_styled_text_button"), \

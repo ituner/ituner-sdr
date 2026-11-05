@@ -412,6 +412,7 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_text'), \
              patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_lcd_audio_tile'), \
+             patch.object(ui, 'draw_lcd_audio_annunciator'), \
              patch.object(ui, 'draw_lcd_audio_slider_tile'), \
              patch.object(ui, 'draw_sidebar_header'), \
              patch.object(ui, 'draw_lcd_home_bandwidth'), \

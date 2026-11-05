@@ -168,3 +168,14 @@ Standard native slider tracks use a shared 10 px inset at each end, and
 touch positions map to those same bounds. Slider titles use 14 px and values
 13 px across Audio, Display, fan controls and Passband. The integrated
 Volume/speaker-mute instrument retains its own geometry.
+
+The main Audio AGC/Tone/Notch squares keep the normal dark button surface
+when enabled. AGC and Tone indicate their active mode with green caption text;
+Notch uses a rectangular green lamp. Inactive annunciators are dim. Pressed
+feedback remains transient, and Advanced controls retain their existing style.
+
+This reusable button treatment is named **Smart Button**, exposed by
+`APP_UI_STYLE.smart_button`. Active/selected faces use the normal dark
+surface and a stronger outline; state captions or lamps use the theme’s
+green ready color. Press feedback stays transient. Audio AGC/Tone/Notch,
+mode families, tune steps, passband presets and band choices use this style.

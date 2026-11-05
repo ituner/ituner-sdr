@@ -1235,7 +1235,7 @@ def draw_radio_tune_step(text_cache,box,step_hz,active=False):
     if box[3]-box[1] <= FREQUENCY_SMALL_BUTTON_H:
         return draw_picker_button(text_cache,box,format_small_tune_step(step_hz),15,active)
     value,unit=(f"{step_hz/1000:g}","kHz") if step_hz>=1000 else (str(step_hz),"Hz")
-    return draw_styled_two_line_button(text_cache,box,value,unit,active=active)
+    return draw_styled_two_line_button(text_cache,box,value,unit,active=active,style=APP_UI_STYLE.smart_button)
 
 
 def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
@@ -8713,7 +8713,7 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
         center_y = (y0 + y1) / 2 + content_offset_y
         draw_line(title, center_y - 12, text_color, style.title_size)
         draw_line(subtitle, center_y + 12,
-                  text_color if pressed or not enabled else style.subtitle_color, style.subtitle_size,
+                  text_color if pressed or not enabled else (style.palette.ready if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
                   fit_full=fit_full_subtitle)
     else:
         draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, style.title_size)
@@ -9694,7 +9694,7 @@ def draw_radio_close_button(text_cache, box):
     draw_shared_back_button(text_cache, box)
 
 
-def draw_radio_mode_indicator(text_cache, box, caption, active, *, lamp=True):
+def draw_radio_mode_indicator(text_cache, box, caption, active, *, lamp=True, size=11):
     """Variant text is an annunciator; other modes use a wide status lamp."""
     style = APP_UI_STYLE.button
     ready = APP_UI_STYLE.palette.ready
@@ -9702,11 +9702,11 @@ def draw_radio_mode_indicator(text_cache, box, caption, active, *, lamp=True):
     center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15 + LCD_RADIO_MODE_CONTENT_OFFSET_Y
     led_width, led_height, gap = (15, 5, 4) if lamp else (0, 0, 0)
     if caption:
-        texture_width = text_cache.texture(caption, 11, color, bold=True, family=style.font_family)[1]
+        texture_width = text_cache.texture(caption, size, color, bold=True, family=style.font_family)[1]
         width = min(texture_width, box[2] - box[0] - 8 - led_width - gap)
         left = center_x - (led_width + gap + width) / 2
         draw_text_scaled_x(text_cache, left + led_width + gap + width / 2, center_y,
-                           caption, color, 11, min(1., width / max(1, texture_width)),
+                           caption, color, size, min(1., width / max(1, texture_width)),
                            True, False, "cm", family=style.font_family)
     else:
         left = center_x - led_width / 2
@@ -9718,7 +9718,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     """Keep mode labels aligned, with a lamp and only useful variant detail."""
     active = active_mode in modes
     detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
-    style = APP_UI_STYLE.button
+    style = APP_UI_STYLE.smart_button
     title = family
     if LCD_800_MODE:
         detail = str(active_mode).upper() if active else ""
@@ -11731,6 +11731,16 @@ def lcd_audio_drawer_close_box():
     return lcd_drawer_back_box()
 
 
+def draw_lcd_audio_annunciator(text_cache, box, title, detail, active, *, binary=False):
+    """Audio state lives in the green annunciator, not a latched button fill."""
+    style = replace(APP_UI_STYLE.smart_button,
+                    title_size=navigation_label_size(text_cache,title,box[2]-box[0]-8,APP_UI_STYLE.button.title_size))
+    draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style,
+                               content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+    draw_radio_mode_indicator(text_cache, box, "" if binary else detail, active,
+                              lamp=binary, size=13)
+
+
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
                         title_size=None, detail_size=None):
     """Compact two-line control tile with the shared theme typography."""
@@ -11889,7 +11899,7 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
             (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
             (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
         ):
-            draw_lcd_audio_tile(text_cache, box, title, detail, active)
+            draw_lcd_audio_annunciator(text_cache, box, title, detail, active, binary=title == "NOTCH")
         draw_styled_text_button(text_cache, AUDIO_ADVANCED_BOX, "ADVANCED")
     else:
         for box, title, detail, active in (
@@ -16108,7 +16118,7 @@ def draw_band_navigation(text_cache, freq_khz, mode, band_counts=None, tuning_bo
         enabled = tuning_bounds is None or tuning_bounds[0] <= target_khz <= tuning_bounds[1]
         draw_styled_two_line_button(text_cache, box, label, detail,
             active=label.replace(" H", "") in context, enabled=enabled,
-            style=replace(APP_UI_STYLE.button, title_size=20, subtitle_size=13))
+            style=replace(APP_UI_STYLE.smart_button, title_size=20, subtitle_size=13))
 
 
 def draw_band_waterfall_button(text_cache, freq_khz, mode):
@@ -17064,7 +17074,7 @@ def draw_filter_width_presets(text_cache, presets, width_hz):
              "WIDE 6k": "WIDE", "WIDE 12k": "WIDE"}.get(name, name),
             (f"{preset_width_hz / 1000:g} kHz" if preset_width_hz >= 1000 else f"{preset_width_hz} Hz"),
             active=abs(width_hz - preset_width_hz) <= FILTER_SNAP_HZ / 2,
-            fit_full_subtitle=True,
+            fit_full_subtitle=True, style=APP_UI_STYLE.smart_button,
         )
 
 

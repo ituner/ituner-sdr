@@ -1836,6 +1836,18 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual(pressed.border, (0, 229, 255, 255))
         self.assertEqual(pressed.text, (0, 0, 0))
 
+    def test_annunciator_style_keeps_active_and_selected_faces_dark(self):
+        style=ui.APP_UI_STYLE.smart_button
+        for state in ({'active':True},{'selected':True}):
+            visual=style.resolve(**state)
+            self.assertEqual(visual.fill,style.resolve().fill)
+            self.assertEqual(visual.border_width,2)
+        self.assertEqual(style.resolve(pressed=True),ui.APP_UI_STYLE.button.resolve(pressed=True))
+        with mock.patch.object(ui,'draw_styled_button_frame',return_value=style.resolve(active=True)), \
+             mock.patch.object(ui,'draw_text') as text:
+            ui.draw_styled_two_line_button(None,(0,0,64,64),'CW','500 Hz',active=True,style=style)
+        self.assertEqual(text.call_args_list[-1].args[4],style.palette.ready)
+
     def test_pressed_two_line_button_uses_black_title_and_subtitle(self):
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
         with mock.patch.object(ui, "ui_button_pressed", return_value=True), \

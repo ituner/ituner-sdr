@@ -71,9 +71,11 @@ class AudioPageTests(unittest.TestCase):
                  patch.object(ui, 'draw_lcd_home_bandwidth') as passband, \
                  patch.object(ui, 'draw_lcd_audio_slider_tile') as sliders, \
                  patch.object(ui, 'draw_lcd_audio_tile') as tiles, \
+                 patch.object(ui, 'draw_lcd_audio_annunciator') as annunciators, \
                  patch.object(ui, 'draw_styled_text_button') as buttons:
                 ui.draw_lcd_audio_drawer(object(), .5, controls, -400, 400, True, 'am', 'alsa')
             if advanced:
+                self.assertFalse(annunciators.called)
                 self.assertFalse(sliders.called)
                 self.assertFalse(volume.called)
                 self.assertFalse(passband.called)
@@ -85,8 +87,22 @@ class AudioPageTests(unittest.TestCase):
                 self.assertTrue(all(c.kwargs['roomy'] for c in sliders.call_args_list))
                 self.assertEqual(volume.call_args.kwargs['box'], ui.AUDIO_VOLUME_BOX)
                 self.assertEqual(passband.call_args.kwargs['box'], ui.AUDIO_PASSBAND_GRAPH_BOX)
-                self.assertEqual([c.args[2] for c in tiles.call_args_list], ['AGC', 'TONE', 'NOTCH'])
+                self.assertFalse(tiles.called)
+                self.assertEqual([c.args[2] for c in annunciators.call_args_list], ['AGC', 'TONE', 'NOTCH'])
                 self.assertEqual([c.args[2] for c in buttons.call_args_list], ['ADVANCED'])
+
+    def test_main_audio_states_use_annunciators_without_latched_fill(self):
+        for active in (False, True):
+            for binary in (False, True):
+                with patch.object(ui,'draw_styled_two_line_button') as button, \
+                     patch.object(ui,'draw_radio_mode_indicator') as indicator:
+                    ui.draw_lcd_audio_annunciator(None,ui.AUDIO_AGC_BOX,'TEST','AUTO',active,binary=binary)
+                self.assertEqual(button.call_args.kwargs['active'],active)
+                style=button.call_args.kwargs['style']
+                self.assertEqual(style.variant,'smart')
+                self.assertEqual(style.resolve(active=active).fill,style.resolve().fill)
+                self.assertEqual(indicator.call_args.args[2:],('' if binary else 'AUTO',active))
+                self.assertEqual(indicator.call_args.kwargs['lamp'],binary)
 
 
 if __name__ == '__main__':
