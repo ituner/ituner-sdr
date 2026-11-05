@@ -11850,8 +11850,9 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     if roomy:
         draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
         draw_section_divider(x0, y0, x1)
-    draw_text(text_cache, x0 + 10, y0 + 20, title, APP_UI_STYLE.palette.section_heading if roomy else themed_instrument_color("footer_primary", (230, 246, 247)), LCD_SLIDER_TITLE_SIZE if LCD_800_MODE else (14 if roomy or len(title) <= 8 else 12), True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, y0 + 20, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
+    label_y = y0 + (13 if LCD_800_MODE and roomy else 20)  # Match the Audio Volume header inset.
+    draw_text(text_cache, x0 + 10, label_y, title, APP_UI_STYLE.palette.section_heading if roomy else themed_instrument_color("footer_primary", (230, 246, 247)), LCD_SLIDER_TITLE_SIZE if LCD_800_MODE else (14 if roomy or len(title) <= 8 else 12), True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
     track_x0, track_x1 = slider_track_bounds(box) if LCD_800_MODE or not full_width else (x0,x1)
     track_y = y1 - (28 if roomy else 15)
