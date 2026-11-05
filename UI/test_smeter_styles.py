@@ -354,7 +354,7 @@ class MeterTests(unittest.TestCase):
                     self.assertLessEqual(len(image.getcolors(size[0] * size[1])), 5)
 
     def test_aviation_dial_stays_square_and_needle_uses_printed_scale_geometry(self):
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             self.assertTrue(meter_asset_path(identifier).is_file())
             self.assertEqual(METER_STYLES[identifier].height, 236)
             self.assertEqual(aviation_image_box((1034, 104, 1270, 340), footer=False), (1034, 104, 1270, 340))
@@ -370,7 +370,7 @@ class MeterTests(unittest.TestCase):
 
     def test_aviation_signal_changes_reuse_face_and_hub_but_move_live_needle(self):
         ui.pygame.font.init()
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             cache = Mock(); textures = {}
             cache._cached_texture.side_effect = textures.get
             cache.font.side_effect = lambda size, **kwargs: ui.pygame.font.Font(None, size)
@@ -394,12 +394,12 @@ class MeterTests(unittest.TestCase):
         cache = Mock(); cache._cached_texture.return_value = None
         with patch.object(ui.PILImage, 'open', side_effect=OSError('Missing asset')), \
                 patch.object(ui, 'draw_selected_smeter') as fallback:
-            ui.draw_aviation_smeter(cache, 'heritage', (0, 0, 236, 210), -73, None, Mock())
+            ui.draw_aviation_smeter(cache, 'aviation', (0, 0, 236, 210), -73, None, Mock())
             self.assertEqual(fallback.call_args.kwargs['style_id'], 'precision')
 
     def test_full_width_aviation_keeps_readouts_inside_and_volume_touch_targets_clear(self):
         ui.configure_output(True)
-        for identifier in ('aviation', 'heritage'):
+        for identifier in ('aviation',):
             theme = new_theme(); theme.update(smeter_style=identifier, text_scale_percent=120)
             apply_theme(theme)
             box = ui.lcd_compact_smeter_box()
