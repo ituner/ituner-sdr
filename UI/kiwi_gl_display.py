@@ -4123,6 +4123,8 @@ def frequency_entry_action_at(x, y):
 
 
 FREQUENCY_DRAWER_READOUT_SIZE = 72
+FREQUENCY_KEY_DIGIT_SIZE = 26
+FREQUENCY_KEY_COMMAND_SIZE = 20
 FREQUENCY_SMALL_BUTTON_W = 55
 FREQUENCY_SMALL_BUTTON_H = 31
 FREQUENCY_SMALL_BUTTON_GAP = 4
@@ -17757,10 +17759,13 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
         display_text=(entry_value or "0") if not entry_replace_on_digit else None,
     )
 
-    draw_styled_text_button(text_cache, boxes["down"], "DOWN", active=pressed == "down")
-    draw_styled_text_button(text_cache, boxes["up"], "UP", active=pressed == "up")
+    arrow_style = replace(APP_UI_STYLE.button, label_size=18)
+    draw_styled_text_button(text_cache, boxes["down"], "DOWN", active=pressed == "down", style=arrow_style)
+    draw_styled_text_button(text_cache, boxes["up"], "UP", active=pressed == "up", style=arrow_style)
     for label, key_box in frequency_drawer_key_boxes():
-        draw_styled_text_button(text_cache, key_box, label,
+        key_style = replace(APP_UI_STYLE.button, label_size=(FREQUENCY_KEY_DIGIT_SIZE
+                            if label.isdigit() or label == "." else FREQUENCY_KEY_COMMAND_SIZE))
+        draw_styled_text_button(text_cache, key_box, label, style=key_style,
                                 active=pressed == f"key_{label}")
     # The tune steps are listed here and selected in place. They no longer
     # link away to the Radio drawer's separate step screen.

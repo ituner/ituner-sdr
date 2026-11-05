@@ -583,7 +583,8 @@ The frequency-entry rail uses larger 72 px digits with the selected frequency
 font, without changing the main instrument readout. Frequency and Modes share eight step
 choices (1 Hz, 10 Hz, 100 Hz, 1 kHz, 5 kHz, 10 kHz, 20 kHz and 100 kHz), in two rows of four
 52 px squares, with the number above Hz/kHz. The keypad
-and directional buttons retain their existing geometry.
+and directional buttons retain their existing geometry. Keypad digits use
+26 px labels, commands 20 px and Up/Down 18 px, with the shared font and colors.
 
 The detailed Passband drawer presents its six width presets in two rows of
 three 64 px squares with 16 px gaps. Short captions (CW, NAR, VOICE and WIDE)
