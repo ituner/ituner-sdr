@@ -4412,7 +4412,7 @@ def configure_output(desktop=False):
     control_bottom = content_bottom - LCD_CONTROL_GAP
     # Leave a full finger's clearance above the status bar. Drawing and
     # touch routing share these boxes, so the old lower position stays inert.
-    zoom_bottom = control_bottom - 80
+    zoom_bottom = control_bottom - 55
     # The wide LCD keeps Zoom anchored to the canvas's left edge. Passband
     # editing lives in the Home drawer, outside the live RF surface.
     # Do not inherit the old 960 px coordinate positions here: the live radio
