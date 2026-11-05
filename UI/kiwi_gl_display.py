@@ -29,7 +29,7 @@ import threading
 import time
 from caption_reveal import CaptionReveal
 from main_volume_control import MainVolumeControl
-from ui_chrome import draw_status_clock, RAIL_BACK_BOX, STATUS_TOP
+from ui_chrome import draw_status_clock, format_clock_pair, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
 import html
@@ -4627,16 +4627,6 @@ def favorite_waterfall_box():
     return x0 - 82, y0, x0 - 10, y1
 
 
-def audio_jitter_status_box():
-    """Touch target for the left-lane ``BUFFER Q…/T…`` annunciator.
-
-    The label follows the UTC clock in the second status row. Its former
-    middle-of-bar hitbox not only missed the visible text but overlapped the
-    CPU control, making the transport graph effectively unreachable.
-    """
-    return 0, LOGICAL_H - BOTTOM_STATUS_H, CPU_ANNUNCIATOR_BOX[0] - 14, LOGICAL_H
-
-
 def monitoring_graph_box(waterfall_y0, waterfall_y1, anchor):
     """Return a compact movable diagnostic pane beside live ASR overlays."""
     top, bottom = overlay_lane_bounds(waterfall_y0, waterfall_y1)
@@ -9231,13 +9221,12 @@ def draw_home_button(text_cache, alpha=1.0):
 
 
 def draw_utc_clock(text_cache):
-    """Draw the system's synchronized UTC clock in the open top-left lane."""
-    timestamp = time.strftime("%H:%M:%S", time.gmtime())
+    """Draw synchronized UTC and local time in the open top-left lane."""
     draw_text(
         text_cache,
         8,
         12,
-        f"{timestamp} UTC ({TIME_SOURCE_LABEL})",
+        format_clock_pair(source=TIME_SOURCE_LABEL),
         APP_UI_STYLE.palette.frequency,
         16,
         True,
@@ -15408,19 +15397,21 @@ def draw_frequency_identity_osd(text_cache, frequency_khz, candidates, receiver_
     source_key = "shortwave_live" if source_label == "SHORTWAVE.LIVE" else "shortwave_db"
     source_policy = BROADCAST_IDENTIFICATION_POLICY["sources"].get(source_key, {})
     schedule_label = "UTC ACTIVE" if source_policy.get("active_schedule_required") else "UTC SCHEDULE"
-    utc_label = time.strftime("%H:%M UTC", time.gmtime())
+    utc_label = format_clock_pair(seconds=False)
     context = receiver_context or {}
     receiver_label = str(context.get("label") or "SELECTED RECEIVER").upper()
     receiver_source = str(context.get("source") or "RECEIVER GPS ?").upper()
     receiver_coordinates = context.get("coordinates")
     draw_text(text_cache, x0 + 16, y0 + 23, title, (224, 248, 253), 24, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 16, y0 + 23, f"SCHEDULE {scheduled_frequency_khz / 1000.0:.3f} MHz", (150, 232, 249), 20, True, False, "rm", family="Liberation Sans")
+    source_clock = f"{receiver_source} · {utc_label}"
+    source_clock_width = text_cache.font(15, bold=True, family="Liberation Sans").size(source_clock)[0]
     receiver_detail = fit_station_text(
-        text_cache, f"RX {receiver_label}", x1 - x0 - 250, 15, False, False,
+        text_cache, f"RX {receiver_label}", max(80, x1 - x0 - source_clock_width - 48), 15, False, False,
         family="Liberation Sans",
     )
     draw_text(text_cache, x0 + 16, y0 + 49, receiver_detail, (166, 211, 220), 15, False, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 16, y0 + 49, f"{receiver_source} · {utc_label}", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 16, y0 + 49, source_clock, (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
     draw_text(text_cache, x0 + 16, y0 + 70, f"{source_label} · {schedule_label}", (116, 187, 202), 14, True, False, "lm", family="Liberation Sans")
     draw_text(text_cache, x1 - 16, y0 + 70, "DIST / PWR", (150, 185, 196), 15, True, False, "rm", family="Liberation Sans")
     for index, candidate in enumerate(candidates[:max_rows]):
@@ -18845,12 +18836,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
             draw_text(text_cache, capacity_x, first_y, capacity_label,
                       APP_UI_STYLE.palette.footer_live, size, True, False,
                       "lm", alpha, family="Liberation Sans")
-        clock_label = draw_status_clock(sys.modules[__name__], text_cache, 18, second_y, alpha)
-        clock_width = text_cache.font(size, family="Liberation Sans").size(clock_label)[0]
-        buffer_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-        draw_text(text_cache, 18 + clock_width + 16, second_y, buffer_label,
-                  APP_UI_STYLE.palette.footer_live, size, False, False, "lm", alpha,
-                  family="Liberation Sans")
+        draw_status_clock(sys.modules[__name__], text_cache, 18, second_y, alpha)
         temp_label = f"TEMP {theme_system.display_temperature(temp_c)}" if temp_c is not None else "TEMP --"
         draw_text(text_cache, status_x1 - 18, first_y, system_label,
                   APP_UI_STYLE.palette.footer_primary, size, True, False, "rm", alpha,
@@ -18901,14 +18887,10 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
         # Center this calm numeric readout in the permanent lane between the
         # 40%-wide station title and the CPU/decoder status on the right.
         draw_text(text_cache, 486, status_mid_y, format_smeter_readout(smeter_readout_dbm), themed_instrument_color("footer_primary", (163, 181, 185)), size, False, False, "cm", alpha, family="Cantarell")
-    # Temporary operator diagnostic: this will be removed once public Kiwi
-    # receiver jitter has been characterized across a few stations.
-    # Queue depth may legitimately sit above the target while incoming Kiwi
-    # packets arrive in a burst. Label both values explicitly so ``15/12`` is
-    # not mistaken for an invalid min/max reading.
-    jitter_label = f"BUFFER Q{audio_jitter_depth}/T{audio_jitter_target}"
-    jitter_color = themed_instrument_color("footer_live", (113, 226, 172)) if audio_jitter_target <= SDR_AUDIO_JITTER_TARGET_PACKETS else APP_UI_STYLE.palette.waiting[:3]
-    draw_text(text_cache, 18 if two_row else 560, secondary_y if two_row else status_mid_y, jitter_label, jitter_color, 12 if compact else (16 if two_row else 14), True, False, "lm" if two_row else "rm", alpha, family="Cantarell")
+    clock_label = format_clock_pair()
+    draw_text(text_cache, 18 if two_row else 560, secondary_y if two_row else status_mid_y,
+              clock_label, APP_UI_STYLE.palette.footer_live, 12 if compact else (16 if two_row else 14),
+              False, False, "lm" if two_row else "rm", alpha, family="Cantarell")
     if two_row:
         # Subtle dividers make the live status hierarchy scan as distinct
         # information lanes rather than a cluster of unrelated overlays.
@@ -27504,7 +27486,6 @@ def main():
                                 # even while the rest of the waterfall is in
                                 # its quiet, wake-on-touch presentation.
                                 or contains(CPU_ANNUNCIATOR_BOX, x, y)
-                                or contains(audio_jitter_status_box(), x, y)
                                 or (
                                     frequency_identity_candidates
                                     and time.monotonic() < frequency_identity_osd_until
@@ -27763,8 +27744,6 @@ def main():
                                 gesture = "frequency_drawer_open"
                             elif contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
-                            elif contains(audio_jitter_status_box(), x, y):
-                                gesture = "audio_transport_graph"
                             elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, AUDIO_PANEL_BOX[3]), x, y):
                                 # The drawer owns the top-right rail while it
                                 # is open; do not leak touches to the covered
