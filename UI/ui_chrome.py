@@ -18,7 +18,8 @@ def format_clock_pair(stamp=None, *, seconds=True, source=None):
     utc = time.strftime(pattern, time.gmtime(stamp)) + ' UTC'
     if source and str(source).strip().upper() != 'UTC':
         utc += f' ({source})'
-    local = time.strftime(pattern, time.localtime(stamp)) + ' LOCAL'
+    local_clock = time.localtime(stamp)
+    local = time.strftime(pattern + ', %Z', local_clock)
     return f'{utc} · {local}'
 
 
