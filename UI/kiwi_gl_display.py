@@ -1298,7 +1298,7 @@ DISPLAY_SPEED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_OPEN = False
 SPECTRUM_STYLE_OPTIONS = (("fill", "FILL"), ("dark", "DARK"), ("peak", "PEAK"))
-SPECTRUM_STYLE = "peak"
+SPECTRUM_STYLE = "fill"
 DISPLAY_SPECTRUM_STYLE_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
@@ -9906,7 +9906,7 @@ def set_spectrum_style(style):
     global SPECTRUM_STYLE
     if style == "icom":  # Preserve saved selections from the former label.
         style = "fill"
-    SPECTRUM_STYLE = style if isinstance(style, str) and style in dict(SPECTRUM_STYLE_OPTIONS) else "peak"
+    SPECTRUM_STYLE = style if isinstance(style, str) and style in dict(SPECTRUM_STYLE_OPTIONS) else "fill"
     return SPECTRUM_STYLE
 
 
@@ -9989,7 +9989,7 @@ def restore_waterfall_preferences(state, preferences):
 
 def reset_display_view(state):
     """Restore Display defaults while retaining the waterfall image."""
-    set_spectrum_style("peak")
+    set_spectrum_style("fill")
     waterfall = state.set_waterfall(
         floor=WATERFALL_DEFAULT_FLOOR,
         ceil=WATERFALL_DEFAULT_CEIL,
