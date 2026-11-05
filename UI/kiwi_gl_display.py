@@ -1214,9 +1214,26 @@ def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
     top = lcd_radio_step_y0(mode_family_count) + 32
     return tuple(
         (step_hz, (left + index * (width + gap), top,
-                   left + index * (width + gap) + width, top + FREQUENCY_SMALL_BUTTON_H))
+                   left + index * (width + gap) + width,
+                   top + (FREQUENCY_SMALL_BUTTON_H if receiver_worker_protocol(receiver_type)=="fmdx" else width)))
         for index, step_hz in enumerate(steps)
     )
+
+
+def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
+    steps=lcd_radio_step_boxes(receiver_type,mode_family_count)
+    top=max(box[3] for _,box in steps)+16
+    x0,x1=LCD_NAV_X0+10,LOGICAL_W-10
+    return {"viewer":(x0,top,x1,top+89),
+            "shift":(x0,top+105,x1,top+169),
+            "width":(x0,top+185,x1,top+249)}
+
+
+def draw_radio_tune_step(text_cache,box,step_hz,active=False):
+    if box[3]-box[1] <= FREQUENCY_SMALL_BUTTON_H:
+        return draw_picker_button(text_cache,box,format_small_tune_step(step_hz),15,active)
+    value,unit=(f"{step_hz/1000:g}","kHz") if step_hz>=1000 else (str(step_hz),"Hz")
+    return draw_styled_two_line_button(text_cache,box,value,unit,active=active)
 
 
 def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
@@ -9604,10 +9621,10 @@ def radio_option_at(
         for _family, modes, box in radio_mode_layout(mode_families):
             if contains(box, x, y):
                 return "mode_cycle", modes
-        if LCD_800_MODE and receiver_worker_protocol(receiver_type) == "kiwi":
-            for workspace, box in radio_decoder_boxes():
-                if contains(box, x, y):
-                    return "workspace", workspace
+        if LCD_800_MODE:
+            for action,box in radio_passband_boxes(receiver_type,len(mode_families)).items():
+                if action!="viewer" and contains(box,x,y):
+                    return "filter_"+action,None
     else:
         for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active, fmdx_shared_control):
             if contains(box, x, y):
@@ -9652,12 +9669,16 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
     active = active_mode in modes
     detail = KIWI_MODE_LABELS.get(active_mode, active_mode) if active else ""
     style = APP_UI_STYLE.button
+    title = family
     if LCD_800_MODE:
         # Compact native squares retain full family names; the live variant
         # uses the same short demodulator code as the radio state.
         detail = str(active_mode).upper() if active else ""
-        style = replace(style, title_size=navigation_label_size(text_cache, family, box[2]-box[0]-8, style.title_size))
-    draw_styled_two_line_button(text_cache, box, family, detail, active=active, style=style)
+        if family == "SYNC AM":
+            title = "SYNC"
+            detail = {"SAM": "AM", "SAU": "USB", "SAL": "LSB", "SAS": "STEREO", "QAM": "QAM"}.get(str(active_mode).upper(), "AM") if active else "AM"
+        style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size))
+    draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style)
 
 
 def draw_radio_variant_option(text_cache, box, mode, active):
@@ -9698,15 +9719,14 @@ def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
             draw_lcd_drawer_heading(text_cache, left + 4, lcd_radio_step_y0() + 12, "TUNE STEP")
         for option_hz, option_box in step_boxes:
             if reveal_y >= option_box[3]:
-                draw_picker_button(text_cache, option_box, format_small_tune_step(option_hz), 15,
-                                   option_hz == step_hz)
+                draw_radio_tune_step(text_cache, option_box, option_hz, option_hz == step_hz)
 
 
 def draw_radio_setup_panel(
     text_cache, mode, digital, step_hz, family_open=None,
     mode_families=KIWI_MODE_FAMILIES,
     receiver_type="kiwi", fmdx_status=None, fmdx_stations=(), fmdx_scan_active=False,
-    fmdx_shared_control=True, fmdx_shared_prompt=False,
+    fmdx_shared_control=True, fmdx_shared_prompt=False, filter_bounds=None,
 ):
     x0, y0, x1, y1 = radio_panel_box()
     # On the 800×1280 target this is a compact drawer in the permanent right
@@ -9743,13 +9763,15 @@ def draw_radio_setup_panel(
                                     "TUNE STEP")
         for option_hz, option_box in step_boxes:
             if reveal_y >= option_box[3]:
-                draw_picker_button(text_cache, option_box, format_small_tune_step(option_hz), 15,
-                                   option_hz == step_hz)
-        if receiver_worker_protocol(receiver_type) == "kiwi":
-            labels = {"wspr": "WSPR", "sstv": "SSTV", "hell": "HELL RX", "qrss": "QRSS", "cw": "CW"}
-            for workspace, box in radio_decoder_boxes():
-                if reveal_y >= box[3]:
-                    draw_radio_option(text_cache, box, labels[workspace], False)
+                draw_radio_tune_step(text_cache,option_box,option_hz,option_hz==step_hz)
+        boxes=radio_passband_boxes(receiver_type,len(mode_families))
+        low_cut,high_cut = filter_bounds if filter_bounds is not None else KIWI_MODE_FILTERS.get(str(active_mode).lower(),(-1200,1200))
+        if reveal_y >= boxes["viewer"][3]:
+            draw_lcd_home_bandwidth(text_cache,low_cut,high_cut,box=boxes["viewer"])
+        if reveal_y >= boxes["shift"][3]:
+            draw_lcd_filter_shift_slider(text_cache,boxes["shift"],low_cut,high_cut)
+        if reveal_y >= boxes["width"][3]:
+            draw_lcd_filter_width_slider(text_cache,boxes["width"],low_cut,high_cut)
         return
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
@@ -11593,11 +11615,13 @@ def set_audio_page(advanced=False):
         for name, top in (("HF_ENHANCE", 152), ("FILTER", 240), ("BACKEND", 328), ("RESET", 432)):
             boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 64)
     else:
-        for name, top in (("VOLUME", 48), ("SQUELCH", 140),
-                          ("DENOISE", 232), ("VOICE_CLEAN", 324)):
-            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + 76)
-        boxes["AUDIO_PASSBAND_GRAPH_BOX"] = (x0, 416, x1, 505)
-        boxes["AUDIO_PASSBAND_BOX"] = (x0, 505, x1, 569)
+        top, slider_height, gap = 48, 70, 16
+        for name in ("VOLUME", "SQUELCH", "DENOISE", "VOICE_CLEAN"):
+            boxes["AUDIO_" + name + "_BOX"] = (x0, top, x1, top + slider_height)
+            top += slider_height + gap
+        boxes["AUDIO_PASSBAND_GRAPH_BOX"] = (x0, top, x1, top + 89)
+        top += 89 + gap
+        boxes["AUDIO_PASSBAND_BOX"] = (x0, top, x1, top + slider_height)
         for col, name in enumerate(("AGC", "TONE", "NOTCH")):
             left = x0 + 6 + col * 80
             boxes["AUDIO_" + name + "_BOX"] = (left, 581, left + 64, 645)
@@ -21080,7 +21104,7 @@ VALUE_SLIDER_GESTURES = frozenset((
     "audio_volume", "home_volume", "audio_squelch_level", "audio_denoise_level",
     "audio_voice_level", "audio_passband", "display_floor_slider", "display_ceiling_slider",
     "fan_start_slider", "fan_full_slider", "fan_minimum_slider",
-    "lcd_filter_shift", "lcd_filter_width",
+    "lcd_filter_shift", "lcd_filter_width", "radio_filter_shift", "radio_filter_width",
 ))
 TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "display_readonly",  # Auto/Off level instruments never act on touches.
@@ -21099,6 +21123,7 @@ TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "fan_minimum_slider",
     "lcd_filter_shift",
     "lcd_filter_width",
+    "radio_filter_shift", "radio_filter_width",
     "scope_hold_drag",
     # Dual owns a mixture of buttons and continuous tuning instruments. Its
     # confirmation language can be designed separately from the Home rail.
@@ -26183,11 +26208,10 @@ def main():
             state.set_filter(low_cut=low_cut, high_cut=cut_hz)
         filter_custom_width = True
 
-    def set_lcd_filter_shift(x):
+    def set_lcd_filter_shift(x, slider=None):
         """Move both filter edges together while preserving bandwidth."""
         nonlocal filter_custom_width, filter_drawer_width_hz
-        boxes = lcd_filter_drawer_boxes()
-        slider = boxes["shift"]
+        slider = lcd_filter_drawer_boxes()["shift"] if slider is None else slider
         _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
         width_hz = max(
             FILTER_SNAP_HZ,
@@ -26223,17 +26247,39 @@ def main():
         filter_drawer_width_hz = actual_high - actual_low
         filter_custom_width = True
 
-    def set_lcd_filter_width(x):
+    def set_lcd_filter_width(x, slider=None):
         """Resize symmetrically about the current passband center."""
         nonlocal filter_custom_width, filter_drawer_width_hz
-        boxes = lcd_filter_drawer_boxes()
-        slider = boxes["width"]
+        slider = lcd_filter_drawer_boxes()["width"] if slider is None else slider
         fraction = clamp((x - (slider[0] + 10)) / max(1.0, slider[2] - slider[0] - 20), 0.0, 1.0)
         width_hz = filter_width_from_slider_fraction(fraction)
         _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
         actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, width_hz))
         filter_drawer_width_hz = actual_high - actual_low
         filter_custom_width = True
+
+    def mode_filter_boxes():
+        families=rtl_lab.mode_families() if rtl_lab.is_running() else KIWI_MODE_FAMILIES
+        return radio_passband_boxes(state.receiver_type_snapshot(),len(families))
+
+    def start_mode_filter_gesture(x,y):
+        nonlocal filter_drawer_width_hz
+        if LCD_800_MODE and receiver_worker_protocol(state.receiver_type_snapshot())!="fmdx":
+            boxes=mode_filter_boxes()
+            if contains(boxes["shift"],x,y):
+                _m,low,high,_g=state.radio_snapshot()
+                filter_drawer_width_hz=high-low
+                return "radio_filter_shift"
+            if contains(boxes["width"],x,y):
+                return "radio_filter_width"
+        return "radio_setup"
+
+    def apply_mode_filter_slider(gesture,x):
+        boxes=mode_filter_boxes()
+        if gesture=="radio_filter_shift":
+            set_lcd_filter_shift(x,boxes["shift"])
+        else:
+            set_lcd_filter_width(x,boxes["width"])
 
     def open_lcd_filter_drawer():
         """Capture the width once so Shift is a true center-only control."""
@@ -27455,7 +27501,7 @@ def main():
                                 # Once open, this area belongs to the drawer;
                                 # do not let the now-covered annunciator
                                 # button toggle it underneath the operator.
-                                gesture = "radio_setup"
+                                gesture = start_mode_filter_gesture(x,y)
                             elif display_setup_open and LCD_800_MODE and contains(DISPLAY_PANEL_BOX, x, y):
                                 # Display is also a non-modal rail drawer.
                                 # Its controls own the rail, not the waterfall.
@@ -27581,7 +27627,7 @@ def main():
                             elif filter_panel_open:
                                 gesture = "filter_edit_outside"
                             elif radio_setup_open and contains(radio_panel_box(), x, y):
-                                gesture = "radio_setup"
+                                gesture = start_mode_filter_gesture(x,y)
                             elif radio_setup_open:
                                 gesture = "radio_setup_outside"
                             elif display_setup_open and contains(DISPLAY_PANEL_BOX, x, y):
@@ -27628,6 +27674,8 @@ def main():
                                 gesture = "none"
                             if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level", "audio_passband"):
                                 apply_audio_slider(state, gesture, x)
+                            elif gesture in ("radio_filter_shift","radio_filter_width"):
+                                apply_mode_filter_slider(gesture,x)
                         elif scope_drag_eligible and (
                             gesture == "scope_hold_drag"
                             or (
@@ -27711,6 +27759,8 @@ def main():
                         elif gesture == "audio_passband":
                             apply_audio_slider(state, gesture, x)
                             filter_custom_width = True
+                        elif gesture in ("radio_filter_shift","radio_filter_width"):
+                            apply_mode_filter_slider(gesture,x)
                         elif gesture == "lcd_filter_shift":
                             set_lcd_filter_shift(x)
                         elif gesture == "lcd_filter_width":
@@ -29189,6 +29239,9 @@ def main():
                             if moved <= args.tap_px:
                                 open_lcd_filter_drawer()
                                 menu_open = filter_panel_open = radio_setup_open = display_setup_open = audio_panel_open = tests_panel_open = dj_tune_open = False
+                            wake_controls()
+                        elif touch_started and gesture in ("radio_filter_shift","radio_filter_width"):
+                            apply_mode_filter_slider(gesture,x)
                             wake_controls()
                         elif touch_started and gesture == "lcd_filter_shift":
                             # Drag updates continuously above; apply the final
@@ -31071,6 +31124,7 @@ def main():
                     fmdx_scan_active=state.fmdx_scan_request_snapshot()[0],
                     fmdx_shared_control=fmdx_shared_control_acknowledged(state.snapshot()[0]),
                     fmdx_shared_prompt=fmdx_shared_prompt_open,
+                    filter_bounds=(low_cut,high_cut),
                 )
             if display_setup_open:
                 wf_floor, wf_ceil, wf_speed, wf_auto, wf_palette, _wf_generation = state.waterfall_snapshot()

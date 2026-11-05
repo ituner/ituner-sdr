@@ -129,6 +129,9 @@ The main Audio page reuses Home's combined Volume/speaker-mute instrument,
 followed by Squelch, Denoise and Voice (RNNoise). The standalone Mute tile is
 removed. The same Home passband graphic sits above a direct Width slider,
 then square AGC, Tone and Notch buttons, Advanced, and the fixed Back button.
+All five slider targets share a 70 px height. Consecutive instruments have
+16 px gaps, including above and below the passband graphic, so Width has
+the same label/track spacing as the other sliders.
 Blanker remains in Advanced alongside De-emphasis, HF Enhance, detailed
 Passband controls, Output and Reset. Audio slider sections use Home's themed
 background and uppercase labels; Voice reads VOICE (RNNOISE). Width uses the

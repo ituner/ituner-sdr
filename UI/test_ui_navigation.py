@@ -719,7 +719,7 @@ class DrawerGeometryTests(unittest.TestCase):
             ui.lcd_drawer_back_box(),
         )
 
-    def test_modes_drawer_contains_families_wspr_and_back_without_overlap(self):
+    def test_modes_drawer_contains_families_passband_and_back_without_overlap(self):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         mode_boxes = [box for _family, _modes, box in ui.radio_mode_layout()]
         step_boxes = [box for _step, box in ui.radio_step_options("kiwi")]
@@ -740,7 +740,7 @@ class DrawerGeometryTests(unittest.TestCase):
         for (step, box), frequency_box in zip(ui.radio_step_options("kiwi"), frequency_boxes):
             self.assertEqual(ui.radio_option_at(*self._center(box)), ("step", step))
             self.assertEqual((box[0], box[2], box[3] - box[1]),
-                             (frequency_box[0], frequency_box[2], 31))
+                             (frequency_box[0], frequency_box[2], frequency_box[2]-frequency_box[0]))
         self.assertEqual(len({box[1] for box in step_boxes}), 1)
         self.assertIsNone(ui.radio_option_at(step_boxes[0][0] + 4, step_boxes[0][1] - 18))
         self.assertEqual(ui.radio_option_at(*self._center(
@@ -749,16 +749,24 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertIsNone(ui.radio_option_at(*self._center(
             next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
         ), receiver_type="fmdx", fmdx_shared_control=False))
-        decoders = ui.radio_decoder_boxes()
-        self.assertEqual({kind for kind, _ in decoders}, {"wspr", "sstv", "hell", "qrss", "cw"})
-        overlaps = lambda a, b: a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
-        for index, (kind, box) in enumerate(decoders):
-            for other in (*mode_boxes, *step_boxes, back_box, *(b for _, b in decoders[index+1:])):
-                self.assertFalse(overlaps(box, other), kind)
-            x, y = (box[0]+box[2])/2, (box[1]+box[3])/2
-            self.assertEqual(ui.radio_option_at(x, y), ("workspace", kind))
-            self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="openwebrx"), ("workspace", kind))
-            self.assertNotEqual(ui.radio_option_at(x, y, receiver_type="fmdx"), ("workspace", kind))
+        passband=ui.radio_passband_boxes()
+        boxes=(*mode_boxes,*step_boxes,*passband.values(),back_box)
+        overlaps=lambda a,b:a[0]<b[2] and b[0]<a[2] and a[1]<b[3] and b[1]<a[3]
+        for i,box in enumerate(boxes):
+            for other in boxes[i+1:]:self.assertFalse(overlaps(box,other))
+        for name in ('shift','width'):
+            self.assertEqual(ui.radio_option_at(*self._center(passband[name])),('filter_'+name,None))
+        for kind,box in ui.radio_decoder_boxes():
+            self.assertNotEqual(ui.radio_option_at(*self._center(box)),('workspace',kind))
+
+    def test_sync_mode_label_uses_two_readable_lines(self):
+        ui.configure_output(True)
+        family,modes,box=next(item for item in ui.radio_mode_layout() if item[0]=='SYNC AM')
+        for mode,wanted in (('AM','AM'),('SAM','AM'),('SAU','USB'),('SAL','LSB'),('SAS','STEREO'),('QAM','QAM')):
+            with mock.patch.object(ui,'draw_styled_two_line_button') as draw:
+                ui.draw_radio_family_option(None,box,family,modes,mode)
+            self.assertEqual(draw.call_args.args[2:4],('SYNC',wanted))
+            self.assertEqual(draw.call_args.kwargs['style'].title_size,ui.APP_UI_STYLE.button.title_size)
 
     def test_modes_drawer_highlights_the_selected_step_in_four_button_row(self):
         ui.configure_output(True)
@@ -772,15 +780,28 @@ class DrawerGeometryTests(unittest.TestCase):
                  mock.patch.object(ui, 'draw_radio_family_option'), \
                  mock.patch.object(ui, 'draw_lcd_drawer_heading'), \
                  mock.patch.object(ui, 'draw_radio_option'), \
-                 mock.patch.object(ui, 'draw_picker_button') as buttons:
+                 mock.patch.object(ui, 'draw_lcd_home_bandwidth'), \
+                 mock.patch.object(ui, 'draw_lcd_filter_shift_slider'), \
+                 mock.patch.object(ui, 'draw_lcd_filter_width_slider'), \
+                 mock.patch.object(ui, 'draw_radio_tune_step') as buttons:
                 ui.draw_radio_setup_panel(None, 'AM', 'DIG', 100,
                                           receiver_type='kiwi')
         finally:
             ui.LCD_RADIO_DRAWER_PROGRESS = previous_progress
         self.assertEqual([entry.args[2] for entry in buttons.call_args_list],
-                         ['10 Hz', '100 Hz', '1 kHz', '5 kHz'])
-        self.assertEqual([entry.args[4] for entry in buttons.call_args_list],
+                         [10,100,1000,5000])
+        self.assertEqual([entry.args[3] for entry in buttons.call_args_list],
                          [False, True, False, False])
+
+    def test_square_mode_steps_separate_number_from_unit(self):
+        ui.configure_output(True)
+        for hz,box in ui.radio_step_options('kiwi'):
+            self.assertEqual(box[2]-box[0],box[3]-box[1])
+            with mock.patch.object(ui,'draw_styled_two_line_button') as draw:
+                ui.draw_radio_tune_step(None,box,hz,True)
+            expected=(str(hz),'Hz') if hz<1000 else (str(hz//1000),'kHz')
+            self.assertEqual(draw.call_args.args[2:4],expected)
+            self.assertTrue(draw.call_args.kwargs['active'])
 
     def test_stats_close_target_is_inside_graph_header(self):
         graph = (120, 90, 900, 420)

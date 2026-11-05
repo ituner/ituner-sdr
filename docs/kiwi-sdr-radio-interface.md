@@ -563,5 +563,9 @@ Each square uses the same 64 px size and 16 px spacing as Audio's compact
 controls. Eight Kiwi families occupy three rows; USB receiver capabilities
 use only the families they support. Taps still cycle the family's demodulator
 variants. The selected variant appears as its short mode code, and full
-family names use the shared font-fitting helper. Tune-step controls sit
-below the last mode row; decoder launchers and Back keep their positions.
+family names use the shared font-fitting helper. The synchronous AM family
+shows SYNC on the first line and AM (or the selected sync variant) below it,
+at the normal shared font size. Tune-step controls sit
+below the last mode row as four squares, with a number above its Hz/kHz unit.
+The former decoder shortcuts are replaced by the live passband viewer and
+Shift and Width sliders. Decoders remain in Digital; Back keeps its position.

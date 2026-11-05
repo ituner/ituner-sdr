@@ -29,8 +29,10 @@ class AudioPageTests(unittest.TestCase):
         self.assertIn('audio_header', ui.TOOLBOX_CONTINUOUS_GESTURES)
         sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_PASSBAND_BOX)
-        for a, b in zip(sliders, sliders[1:]):
-            self.assertGreaterEqual(b[1] - a[3], 16)
+        self.assertEqual(len({box[3]-box[1] for box in sliders}),1)
+        instruments=(*sliders[:-1],ui.AUDIO_PASSBAND_GRAPH_BOX,sliders[-1])
+        for a, b in zip(instruments, instruments[1:]):
+            self.assertEqual(b[1] - a[3], 16)
             self.assertIsNone(ui.audio_option_at(a[0] + 20, (a[3]+b[1])/2))
 
     def test_combined_volume_reserves_speaker_taps_and_slider_range(self):
