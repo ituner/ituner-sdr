@@ -2103,7 +2103,7 @@ def dual_vfo_layout():
 def dual_vfo_mode_boxes(vfo):
     """Place the exact Home mode grid in either Dual rail half."""
     mode_box = dual_vfo_layout()[f"mode_{vfo.lower()}"]
-    home_modes = tuple(lcd_home_mode_boxes(True))
+    home_modes = tuple(lcd_home_mode_boxes(True,trial=False))
     home_top = min(box[1] for _label, box in home_modes)
     offset_y = mode_box[1] - home_top
     return tuple(
@@ -15803,10 +15803,11 @@ LCD_HOME_PASSBAND_HEIGHT = 89
 # Compact Home must fit VFO, S-meter, modes, passband and the complete Volume
 # control before the navigation grid. These constants keep that stack explicit
 # instead of allowing the final block to be silently squeezed.
-LCD_COMPACT_SMETER_TOP = 104
+HOME_MODE_SELECTOR_TRIAL = True  # Reversible front-panel layout trial.
+LCD_COMPACT_SMETER_TOP = 76 if HOME_MODE_SELECTOR_TRIAL else 104
 LCD_COMPACT_SMETER_HEIGHT = 80
-LCD_COMPACT_MODE_GRID_TOP = 203
-LCD_COMPACT_INSTRUMENT_PAD = 20
+LCD_COMPACT_MODE_GRID_TOP = 167 if HOME_MODE_SELECTOR_TRIAL else 203
+LCD_COMPACT_INSTRUMENT_PAD = 12 if HOME_MODE_SELECTOR_TRIAL else 20
 # The auxiliary VFO readout sits directly above the mode matrix in the LCD's
 # right rail. It is intentionally separate from (and does not replace) the
 # main frequency display in the top instrument strip.
@@ -15908,7 +15909,7 @@ def lcd_nav_top(item_count=None, has_back=False):
     return max(LCD_NAV_TOP_MIN, bottom - tiles_h)
 
 
-def lcd_home_mode_grid_geometry(show_compact_readouts=True):
+def lcd_home_mode_grid_geometry(show_compact_readouts=True, trial=None):
     """Return the fixed-size Home mode grid within its reserved rail area.
 
     Expanded presentation removes the duplicate compact VFO instruments.  It
@@ -15916,31 +15917,36 @@ def lcd_home_mode_grid_geometry(show_compact_readouts=True):
     two-row mode grid height in both presentations and simply top-align it.
     """
     _x0, y0, _x1, y1 = LCD_ANNUNCIATOR_BOX
-    # These are status annunciators, not primary action buttons. A restrained
-    # 15% reduction keeps the group calm without making the labels fussy.
-    gap = 4
-    compact_cell_h = 31
+    # Trial uses the shared Modes squares; retain the former geometry for rollback.
+    trial = HOME_MODE_SELECTOR_TRIAL if trial is None else trial
+    gap = LCD_RADIO_SQUARE_GAP if trial else 4
+    compact_cell_h = LCD_RADIO_SQUARE_SIZE if trial else 31
     grid_y0 = (LCD_COMPACT_MODE_GRID_TOP + smeter_rail_extra_height()
                if show_compact_readouts else 28)
     if show_compact_readouts and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
         # Full-width square housings fit by reclaiming surplus gaps, preserving
         # the same touch targets and the complete Volume block below them.
-        grid_y0 = LCD_COMPACT_SMETER_TOP + METER_STYLES[theme_system.runtime_theme["smeter_style"]].height + 4
+        grid_y0 = LCD_COMPACT_SMETER_TOP + LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height() + 4
     return grid_y0, compact_cell_h, gap
 
 
-def home_mode_labels(mode=None):
-    """Use the same mode-button labels for every receiver and screen."""
+def home_mode_labels(mode=None, trial=None):
+    """Home trial follows the Modes family order; Dual retains its own layout."""
+    trial = HOME_MODE_SELECTOR_TRIAL if trial is None else trial
+    if trial:
+        return tuple({"SYNC AM":"SAM","I/Q":"IQ"}.get(family,family)
+                     for family,_modes in KIWI_MODE_FAMILIES)
     return DESKTOP_1280_MODE_ANNUNCIATORS
 
 
-def lcd_home_mode_boxes(show_compact_readouts=True, mode=None):
+def lcd_home_mode_boxes(show_compact_readouts=True, mode=None, trial=None):
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
-    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts)
-    grid_w = 4 * 55 + 3 * gap
+    trial = HOME_MODE_SELECTOR_TRIAL if trial is None else trial
+    grid_y0, cell_h, gap = lcd_home_mode_grid_geometry(show_compact_readouts,trial)
+    cell_w = LCD_RADIO_SQUARE_SIZE if trial else 55
+    grid_w = 4 * cell_w + 3 * gap
     grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
-    cell_w = 55
-    for index, label in enumerate(home_mode_labels(mode)):
+    for index, label in enumerate(home_mode_labels(mode,trial)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
         top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
         yield label, (left, top, left + cell_w, top + cell_h)
@@ -16201,7 +16207,10 @@ def draw_compact_font_review(text_cache, freq_khz, family, index, families, like
 
 
 def smeter_rail_extra_height():
-    return METER_STYLES[theme_system.runtime_theme["smeter_style"]].height - LCD_COMPACT_SMETER_HEIGHT
+    height = METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
+    if HOME_MODE_SELECTOR_TRIAL and height >= 236:
+        height -= 28
+    return height - LCD_COMPACT_SMETER_HEIGHT
 
 
 def smeter_supports_top_instrument_strip(style_id=None):
@@ -16757,7 +16766,11 @@ def lcd_compact_smeter_box():
     """Short S-meter strip that leaves room for the full Home Volume block."""
     x0, y0, x1, _y1 = LCD_ANNUNCIATOR_BOX
     top = y0 + LCD_COMPACT_SMETER_TOP
-    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height()
+    height = LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height()
+    if HOME_MODE_SELECTOR_TRIAL and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
+        left = (LCD_NAV_X0 + LOGICAL_W - height) / 2
+        return left, top, left + height, top + height
+    return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + height
 
 
 def left_smeter_trace_x(text_cache, freq_khz, font_family=None):
@@ -17283,9 +17296,20 @@ def draw_lcd_compact_smeter(text_cache, box, smeter_dbm, peak_dbm=None):
     draw_selected_smeter(text_cache, box, smeter_dbm, peak_dbm)
 
 
-def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=False):
+def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=False, family_selector=False):
     """Keep HOME and each Dual VFO's mode buttons visually identical."""
     exact_mode = str(mode).upper()
+    if family_selector:
+        families={"SAM" if family=="SYNC AM" else "IQ" if family=="I/Q" else family:(family,modes)
+                  for family,modes in KIWI_MODE_FAMILIES}
+        for label,box in buttons:
+            family,modes=families[label]
+            if home_mode_enabled(label,usb_receiver):
+                draw_radio_family_option(text_cache,box,family,modes,exact_mode)
+            else:
+                draw_styled_two_line_button(text_cache,box,"SYNC" if label=="SAM" else family,"",
+                                           enabled=False,style=APP_UI_STYLE.smart_button)
+        return
     active_mode = KIWI_MODE_FAMILY.get(exact_mode, exact_mode)
     for label, box in buttons:
         enabled = home_mode_enabled(label, usb_receiver)
@@ -17324,12 +17348,10 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
             236, family=compact_frequency_font_family, fit_text="30.000.000",
             size=COMPACT_FREQUENCY_SIZE, anchor="cm",
         )
-        # This narrow, persistent context line answers the basic operating
-        # question at a glance and doubles as the entry point to the large
-        # band navigator. It deliberately sits outside the frequency tap box.
-        draw_band_context_chip(
-            text_cache, compact_band_context_touch_box(), freq_khz, mode, compact=True
-        )
+        if not HOME_MODE_SELECTOR_TRIAL:
+            draw_band_context_chip(
+                text_cache, compact_band_context_touch_box(), freq_khz, mode, compact=True
+            )
 
     if show_compact_readouts:
         # Give the Home meter enough physical weight to read as an instrument,
@@ -17338,7 +17360,8 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # instrument rather than touching either the band tag or mode grid.
         draw_lcd_compact_smeter(text_cache, lcd_compact_smeter_box(), smeter_dbm, peak_dbm)
 
-    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital, usb_receiver)
+    draw_home_mode_buttons(text_cache, lcd_home_mode_boxes(show_compact_readouts, mode), mode, digital, usb_receiver,
+                           family_selector=HOME_MODE_SELECTOR_TRIAL)
 
 
 def draw_picker_button(text_cache, box, label, size=16, selected=False):
@@ -27458,7 +27481,7 @@ def main():
                             elif (
                                 LCD_800_MODE
                                 and (
-                                    (instrument_layout == "right" and not home_sidebar_open
+                                    (instrument_layout == "right" and not HOME_MODE_SELECTOR_TRIAL and not home_sidebar_open
                                      and contains(compact_band_context_touch_box(), x, y))
                                     or (
                                         instrument_layout != "right"
