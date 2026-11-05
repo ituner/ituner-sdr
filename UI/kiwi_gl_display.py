@@ -17053,9 +17053,21 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     edge = APP_UI_STYLE.palette.home_passband_border
     grid = themed_instrument_color("section_border", (87, 125, 138, 132))
     quiet = APP_UI_STYLE.palette.section_heading
+    centered = abs((low_cut + high_cut) / 2) < FILTER_SNAP_HZ
+    center_notice = centered and time.monotonic() < passband_center_notice_until
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
     draw_section_divider(x0, y0, x1)
     draw_text(text_cache, x0 + 4, y0 + 14, title, quiet, 13, True, False, "lm", family="Liberation Sans")
+    # Center the value in the free header space, rather than over the plot's
+    # midpoint, so larger text cannot collide with PASSBAND or the scale label.
+    header_font = text_cache.font(13, bold=True, family="Liberation Sans")
+    value_left = x0 + 4 + header_font.size(title)[0] + 6
+    value_right = x1 - 4 - header_font.size("10 kHz")[0] - 6
+    value = "CENTER" if center_notice else f"{width_hz / 1000.0:.1f} kHz"
+    value_scale = min(1.0, max(1.0, value_right - value_left) / max(1, header_font.size(value)[0]))
+    draw_text_scaled_x(text_cache, (value_left + value_right) / 2, y0 + 14, value,
+                       APP_UI_STYLE.palette.ready if center_notice else APP_UI_STYLE.palette.text,
+                       13, value_scale, True, False, "cm", family="Liberation Sans")
     draw_text(text_cache, x1 - 4, y0 + 14, "10 kHz", themed_instrument_color("secondary_text", (180, 214, 220)), 13, True, False, "rm", family="Liberation Sans")
     # Delicate 1 kHz graduations make the scale useful without imitating the
     # crude single-outline ICOM glyph. The 0-Hz reference remains dominant.
@@ -17065,10 +17077,9 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
         tick_h = 10 if major else 5
         draw_logical_line(x, plot_y, x, plot_y - tick_h, (grid[0], grid[1], grid[2], 206 if major else 126), 1 if not major else 1.5)
     draw_logical_line(plot_x0, plot_y, plot_x1, plot_y, themed_instrument_color("section_border", (107, 151, 162, 188)), 1)
-    # Raise the trace from 23 to 29 logical pixels above its baseline: a
-    # 25% taller passband silhouette without changing the panel or labels.
-    top_y = y0 + 32
-    shoulder_y = y0 + 38
+    # One aligned header frees six more pixels for the passband silhouette.
+    top_y = y0 + 26
+    shoulder_y = y0 + 32
     # Keep the sides almost vertical. Wide filters retain a slight analog
     # taper, while CW/narrow widths must not collapse into a camel-shaped
     # hump just because the graphical shoulders are wider than the passband.
@@ -17083,31 +17094,12 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    centered = abs((low_cut + high_cut) / 2) < FILTER_SNAP_HZ
     center_color = APP_UI_STYLE.palette.ready if centered else APP_UI_STYLE.palette.home_passband_center
-    draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, center_color, 1.5)
+    draw_logical_line(center_x, top_y - 2, center_x, plot_y + 4, center_color, 1.5)
     draw_logical_polyline(((center_x - 4, plot_y + 4), (center_x, plot_y + 8),
                            (center_x + 4, plot_y + 4)), center_color, 1.5)
-    if centered and time.monotonic() < passband_center_notice_until:
-        notice_y = (top_y + plot_y) / 2
-        draw_logical_rect(center_x - 30, notice_y - 10, center_x + 30, notice_y + 10,
-                          APP_UI_STYLE.palette.section_surface)
-        draw_text(text_cache, center_x, notice_y, "CENTER", APP_UI_STYLE.palette.ready,
-                  12, True, False, "cm", family="Liberation Sans")
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
-    draw_text(
-        text_cache,
-        center_x,
-        y0 + 21,
-        f"{width_hz / 1000.0:.1f} kHz",
-        themed_instrument_color("text", (214, 240, 242)),
-        14,
-        True,
-        False,
-        "cm",
-        family="Liberation Sans",
-    )
 
 
 def passband_graph_shift_bounds(low_cut, high_cut, start_x, x, box):
