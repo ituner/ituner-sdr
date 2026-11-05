@@ -20,7 +20,7 @@ def format_clock_pair(stamp=None, *, seconds=True, source=None):
         utc += f' ({source})'
     local_clock = time.localtime(stamp)
     local = time.strftime(pattern + ', %Z', local_clock)
-    return f'{utc} · {local}'
+    return f'{utc}  |  {local}'
 
 
 def draw_status_clock(ui, cache, x=18, y=STATUS_CLOCK_Y, alpha=1.0):
