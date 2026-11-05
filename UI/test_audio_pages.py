@@ -50,7 +50,7 @@ class AudioPageTests(unittest.TestCase):
     def test_passband_slider_changes_width_without_tuning_or_moving_center(self):
         self.state.set_filter(-1500, 3500)
         frequency = self.state.snapshot()[1]
-        x0, _, x1, _ = ui.AUDIO_PASSBAND_BOX
+        x0,x1 = ui.slider_track_bounds(ui.AUDIO_PASSBAND_BOX)
         for fraction in (0, .2, .5, .75, 1):
             ui.apply_audio_slider(self.state, 'audio_passband', x0 + (x1-x0)*fraction)
             _, low, high, _ = self.state.radio_snapshot()

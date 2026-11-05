@@ -21,7 +21,7 @@ class AudioSliderTests(unittest.TestCase):
         state = ui.SharedState('http://kiwi.test', 7075, 8, -95, 142, 245, 3, 'am', True)
         state.set_audio_controls(voice_clean_level=1.2)
         ui.configure_output(True)
-        a, _, b, _ = ui.AUDIO_DENOISE_BOX
+        a,b=ui.slider_track_bounds(ui.AUDIO_DENOISE_BOX)
         ui.apply_audio_slider(state, 'audio_denoise_level', a + (b - a) * .37)
         controls, _ = state.audio_controls_snapshot()
         self.assertAlmostEqual(controls['denoise_level'], 1.85)

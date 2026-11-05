@@ -163,3 +163,8 @@ configuration's SHA-256 remained unchanged. All 13 repository tests passed on
 the target's Python 3.13. A completely blank OS installation was not rerun for
 this change.
 These are functional checks, not amplifier power, THD, or RF emissions measurements.
+
+Standard native slider tracks use a shared 10 px inset at each end, and
+touch positions map to those same bounds. Slider titles use 14 px and values
+13 px across Audio, Display, fan controls and Passband. The integrated
+Volume/speaker-mute instrument retains its own geometry.

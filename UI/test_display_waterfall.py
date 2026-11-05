@@ -85,13 +85,13 @@ class DisplayWaterfallTests(unittest.TestCase):
         ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
         state=self.state();state.set_waterfall(floor=80,ceil=190,auto=False)
         floor_box,ceil_box=ui.DISPLAY_FLOOR_MINUS_BOX,ui.DISPLAY_CEIL_MINUS_BOX
-        x=floor_box[0]+4+(floor_box[2]-floor_box[0]-8)*.8
+        x=floor_box[0]+10+(floor_box[2]-floor_box[0]-20)*.8
         state.set_waterfall(floor=ui.waterfall_floor_at_x(x,190),auto=False)
         self.assertEqual(state.waterfall_snapshot()[1],190)
         self.assertEqual(state.waterfall_snapshot()[0],160)
         self.assertEqual(ui.waterfall_floor_at_x(x,240),184)
         # The same pointer position maps to the same level until gap-clamped.
-        x=ceil_box[0]+4+(ceil_box[2]-ceil_box[0]-8)*.8
+        x=ceil_box[0]+10+(ceil_box[2]-ceil_box[0]-20)*.8
         self.assertEqual(ui.waterfall_ceiling_at_x(x,80),ui.waterfall_ceiling_at_x(x,150))
         state.set_waterfall(ceil=ui.waterfall_ceiling_at_x(ceil_box[0],160),auto=False)
         self.assertEqual(state.waterfall_snapshot()[:2],(160,190))

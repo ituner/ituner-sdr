@@ -402,7 +402,7 @@ class BoardLayoutTests(unittest.TestCase):
                 ui.draw_lcd_audio_slider_tile(object(), box, 'LEVEL', 0, 10,
                                               'OFF', full_width=True)
             track_y = box[3] - 15
-            self.assertIn((box[0], track_y - 3, box[2], track_y + 3),
+            self.assertIn((box[0]+10, track_y - 3, box[2]-10, track_y + 3),
                           [entry.args[:4] for entry in rectangles.call_args_list])
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[0]), 0)
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[2]),

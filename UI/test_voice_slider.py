@@ -37,6 +37,7 @@ class VoiceSliderTests(unittest.TestCase):
         for desktop in (False, True):
             ui.configure_output(desktop)
             x0, _, x1, _ = ui.AUDIO_VOICE_CLEAN_BOX
+            if ui.LCD_800_MODE:x0,x1=ui.slider_track_bounds(ui.AUDIO_VOICE_CLEAN_BOX)
             levels = [ui.audio_voice_level_at_x(x0 + (x1 - x0) * i / 100)
                       for i in range(101)]
             self.assertEqual((levels[0], levels[-1]), (0, 2))

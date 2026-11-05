@@ -1361,6 +1361,9 @@ AUDIO_PASSBAND_BOX = (-1, -1, -1, -1)
 AUDIO_PASSBAND_GRAPH_BOX = (-1, -1, -1, -1)
 AUDIO_ADVANCED_OPEN = False
 AUDIO_HEADER_H = 32
+LCD_SLIDER_TRACK_INSET = 10
+LCD_SLIDER_TITLE_SIZE = 14
+LCD_SLIDER_VALUE_SIZE = 13
 # Interpolate the legacy preset anchors across a continuous touch track.
 # A clear, no-extra-controls loudness recovery curve. It reaches the requested
 # 0..12 dB range only at maximum cleanup and is applied after Kiwi's DSP.
@@ -9970,18 +9973,29 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_styled_text_button(text_cache, box, label, active=active)
 
 
+def slider_track_bounds(box):
+    """Shared native instrument inset, excluding the integrated Volume control."""
+    return box[0] + LCD_SLIDER_TRACK_INSET, box[2] - LCD_SLIDER_TRACK_INSET
+
+
+def slider_fraction_at_x(x, box):
+    left, right = slider_track_bounds(box)
+    return clamp((x-left)/max(1,right-left),0.0,1.0)
+
+
 def draw_display_slider_section(text_cache, box, title, value, maximum, detail, active):
     """Full-width Display instrument with the same visible 236 px bounds as BACK."""
     x0, y0, x1, y1 = box
     palette = APP_UI_STYLE.palette
     draw_logical_rect(x0, y0, x1, y1, palette.section_surface)
-    draw_text(text_cache, x0 + 4, y0 + 14, title, palette.section_heading if active else palette.secondary_text,
-              13, True, False, "lm", family=APP_UI_STYLE.button.font_family)
-    draw_text(text_cache, x1 - 4, y0 + 14, detail,
+    draw_text(text_cache, x0 + 10, y0 + 14, title, palette.section_heading if active else palette.secondary_text,
+              LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, y0 + 14, detail,
               palette.ready[:3] if active else palette.secondary_text,
-              13, True, False, "rm", family=APP_UI_STYLE.button.font_family)
+              LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
-    track_x0, track_x1, track_y = x0 + 4, x1 - 4, y1 - 13
+    track_x0, track_x1 = slider_track_bounds(box)
+    track_y = y1 - 13
     draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3,
                       themed_instrument_color("slider_track", (27, 45, 52, 255)))
     current_x = track_x0 + (track_x1 - track_x0) * fraction
@@ -10019,14 +10033,13 @@ def squelch_maximum(radio_mode):
 
 
 def audio_squelch_at_x(x, maximum=99):
-    x0, _y0, x1, _y1 = AUDIO_SQUELCH_BOX
-    return int(round(clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0) * maximum))
+    fraction = slider_fraction_at_x(x,AUDIO_SQUELCH_BOX) if LCD_800_MODE else volume_at_x(x,AUDIO_SQUELCH_BOX)
+    return int(round(fraction * maximum))
 
 
 def waterfall_slider_fraction(x, box):
     """Map a touch to the visible portion of an LCD waterfall slider."""
-    x0, _y0, x1, _y1 = box
-    return clamp((x - (x0 + 4)) / max(1, (x1 - 4) - (x0 + 4)), 0.0, 1.0)
+    return slider_fraction_at_x(x,box)
 
 
 def waterfall_floor_at_x(x, ceiling):
@@ -10040,8 +10053,8 @@ def waterfall_ceiling_at_x(x, floor):
 
 
 def audio_denoise_level_at_x(x):
-    x0, _y0, x1, _y1 = AUDIO_DENOISE_BOX
-    return kiwi.denoise_level((x - x0) / max(1, x1 - x0) * kiwi.DENOISE_MAX)
+    fraction = slider_fraction_at_x(x,AUDIO_DENOISE_BOX) if LCD_800_MODE else volume_at_x(x,AUDIO_DENOISE_BOX)
+    return kiwi.denoise_level(fraction * kiwi.DENOISE_MAX)
 
 
 def denoise_label(level):
@@ -10052,8 +10065,7 @@ def denoise_label(level):
 
 def apply_audio_slider(state, gesture, x):
     if gesture == "audio_passband":
-        x0, _y0, x1, _y1 = AUDIO_PASSBAND_BOX
-        fraction = clamp((x - x0) / max(1, x1 - x0), 0.0, 1.0)
+        fraction = slider_fraction_at_x(x,AUDIO_PASSBAND_BOX)
         width = filter_width_from_slider_fraction(fraction)
         _mode, low, high, _generation = state.radio_snapshot()
         return state.set_filter(*symmetric_filter_bounds(low, high, width))
@@ -10094,9 +10106,8 @@ def voice_clean_label(level):
 
 
 def audio_voice_level_at_x(x):
-    x0, _y0, x1, _y1 = AUDIO_VOICE_CLEAN_BOX
-    # Match the full-width track drawn in both the rail and desktop panel.
-    return normalize_voice_clean_level((x - x0) / max(1, x1 - x0) * VOICE_CLEAN_MAX)
+    fraction = slider_fraction_at_x(x,AUDIO_VOICE_CLEAN_BOX) if LCD_800_MODE else volume_at_x(x,AUDIO_VOICE_CLEAN_BOX)
+    return normalize_voice_clean_level(fraction * VOICE_CLEAN_MAX)
 
 
 def restore_voice_clean_profile(controls, profile):
@@ -11764,10 +11775,10 @@ def draw_lcd_audio_slider_tile(text_cache, box, title, value, maximum, detail, a
     if roomy:
         draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.section_surface)
         draw_section_divider(x0, y0, x1)
-    draw_text(text_cache, x0 + 10, y0 + 20, title, APP_UI_STYLE.palette.section_heading if roomy else themed_instrument_color("footer_primary", (230, 246, 247)), 14 if roomy or len(title) <= 8 else 12, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, y0 + 20, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, y0 + 20, title, APP_UI_STYLE.palette.section_heading if roomy else themed_instrument_color("footer_primary", (230, 246, 247)), LCD_SLIDER_TITLE_SIZE if LCD_800_MODE else (14 if roomy or len(title) <= 8 else 12), True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, y0 + 20, detail, themed_instrument_color("slider_fill", (112, 223, 169))[:3] if active else APP_UI_STYLE.palette.secondary_text, LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
     fraction = clamp(value / max(1, maximum), 0.0, 1.0)
-    track_x0, track_x1 = (x0, x1) if full_width else (x0 + 10, x1 - 10)
+    track_x0, track_x1 = slider_track_bounds(box) if LCD_800_MODE or not full_width else (x0,x1)
     track_y = y1 - (28 if roomy else 15)
     draw_logical_rect(track_x0, track_y - 3, track_x1, track_y + 3, themed_instrument_color("slider_track", (27, 45, 52, 255)))
     current_x = track_x0 + (track_x1 - track_x0) * fraction
@@ -17060,13 +17071,13 @@ def draw_lcd_filter_shift_slider(text_cache, box, low_cut, high_cut):
     # Fixed ±12 kHz position scale: changing Width must not make the Shift
     # thumb appear to slide when its actual center frequency is unchanged.
     fraction = filter_shift_slider_fraction(center_hz, high_cut - low_cut)
-    track_x0, track_x1 = x0 + 10, x1 - 10
+    track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
     shift_label = "CENTER LOCK" if abs(center_hz) < FILTER_SNAP_HZ else format_filter_cut(center_hz)
-    draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, label_y, "SHIFT", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, shift_label, themed_instrument_color("slider_fill", (113, 236, 190))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
     zero_x = (track_x0 + track_x1) / 2
     draw_logical_line(zero_x, track_y - 16, zero_x, track_y + 16, themed_instrument_color("slider_marker", (241, 193, 82, 248)), 2)
@@ -17080,12 +17091,12 @@ def draw_lcd_filter_width_slider(text_cache, box, low_cut, high_cut):
     x0, y0, x1, y1 = box
     width_hz = clamp(high_cut - low_cut, FILTER_SNAP_HZ, FILTER_LIMIT_HZ)
     fraction = filter_width_slider_fraction(width_hz)
-    track_x0, track_x1 = x0 + 10, x1 - 10
+    track_x0, track_x1 = slider_track_bounds(box)
     track_y = y1 - 14
     label_y = track_y - 27
     knob_x = track_x0 + (track_x1 - track_x0) * fraction
-    draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), 14, True, False, "lm", family="Liberation Sans")
-    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], 13, True, False, "rm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 10, label_y, "WIDTH", themed_instrument_color("section_heading", (221, 241, 243)), LCD_SLIDER_TITLE_SIZE, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x1 - 10, label_y, format_filter_width(width_hz), themed_instrument_color("slider_fill", (110, 222, 242))[:3], LCD_SLIDER_VALUE_SIZE, True, False, "rm", family="Liberation Sans")
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, track_x1, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_track", (22, 39, 47, 248)))
     draw_logical_rect(track_x0, track_y - SLIDER_STEM_HALF_HEIGHT, knob_x, track_y + SLIDER_STEM_HALF_HEIGHT, themed_instrument_color("slider_fill", (84, 188, 226, 184)))
     for fraction_mark in (0.0, 0.25, 0.5, 0.75, 1.0):
@@ -26221,7 +26232,7 @@ def main():
         )
         half_width = width_hz / 2.0
         maximum_shift = max(FILTER_SNAP_HZ, FILTER_LIMIT_HZ - half_width)
-        track_x0, track_x1 = slider[0] + 10, slider[2] - 10
+        track_x0, track_x1 = slider_track_bounds(slider)
         zero_x = (track_x0 + track_x1) / 2.0
         # A touch panel has no tactile center click. Give the center notch a
         # deliberate magnetic capture zone so a normal finger drag reliably
@@ -26251,7 +26262,7 @@ def main():
         """Resize symmetrically about the current passband center."""
         nonlocal filter_custom_width, filter_drawer_width_hz
         slider = lcd_filter_drawer_boxes()["width"] if slider is None else slider
-        fraction = clamp((x - (slider[0] + 10)) / max(1.0, slider[2] - slider[0] - 20), 0.0, 1.0)
+        fraction = slider_fraction_at_x(x,slider)
         width_hz = filter_width_from_slider_fraction(fraction)
         _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
         actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, width_hz))
