@@ -992,8 +992,8 @@ KIWI_MODE_FAMILIES = (
     ("LSB", ("LSB", "LSN")),
     ("CW", ("CW", "CWN")),
     ("FM", ("NBFM", "NNFM")),
-    ("I/Q", ("IQ",)),
     ("DRM", ("DRM",)),
+    ("I/Q", ("IQ",)),
 )
 KIWI_RADIO_MODES = frozenset(mode for _family, modes in KIWI_MODE_FAMILIES for mode in modes)
 KIWI_MODE_LABELS = {
