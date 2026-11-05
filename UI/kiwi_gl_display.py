@@ -17514,10 +17514,11 @@ NETWORK_PAGE_SIZE = 6
 
 
 def network_panel_boxes():
-    panel = (28, 32, LCD_NAV_X0 - 16, LOGICAL_H - 28)
+    panel = (28, 24, LOGICAL_W - 28, STATUS_TOP)
     x0, y0, x1, y1 = panel
+    back = (10, 728, 246, 792) if theme_system.runtime_theme["sidebar"] == "left" else RAIL_BACK_BOX
     return {
-        "panel": panel, "back": lcd_drawer_back_box(),
+        "panel": panel, "back": back,
         "country": (x1 - 274, y0 + 10, x1 - 20, y0 + 66),
         "rescan": (x0 + 20, y1 - 66, x0 + 188, y1 - 10),
         "previous": (x1 - 300, y1 - 66, x1 - 168, y1 - 10),
@@ -17550,7 +17551,7 @@ def network_selection_action(network):
 
 def network_action_boxes():
     x0, y0, x1, y1 = network_panel_boxes()["panel"]
-    left, right = x0 + 100, x1 - 100
+    left, right = (x0 + x1) / 2 - 280, (x0 + x1) / 2 + 280
     return {"primary": (left, y0 + 300, right, y0 + 364),
             "forget": (left, y0 + 382, right, y0 + 446),
             "cancel": (left, y0 + 464, right, y0 + 528)}
@@ -17560,7 +17561,7 @@ def draw_network_actions(text_cache, network):
     x0, y0, x1, y1 = network_panel_boxes()["panel"]
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNET", "BACK TO Wi-Fi / ETHERNET")
+    draw_network_footer(text_cache)
     confirm = network.get("confirm_forget")
     title = "Forget this network?" if confirm else "Wi-Fi network"
     draw_text(text_cache, x0 + 30, y0 + 38, title, color("text"), 30, True, False, "lm")
@@ -17675,6 +17676,29 @@ def draw_network_status_card(text_cache, box, label, device, wifi=False):
                   color("text") if active else color("secondary_text"), size, False, False, "lm")
 
 
+def draw_network_footer(text_cache):
+    """Full-width network views own navigation, including left-side themes."""
+    palette = APP_UI_STYLE.palette
+    draw_logical_rect(0, STATUS_TOP, LOGICAL_W, LOGICAL_H, palette.footer_background)
+    draw_shared_back_button(text_cache, network_panel_boxes()["back"])
+    clock_x = 274 if theme_system.runtime_theme["sidebar"] == "left" else 18
+    draw_status_clock(sys.modules[__name__], text_cache, x=clock_x)
+
+
+def draw_network_signal_bars(right, center_y, signal, active=False):
+    """Show NetworkManager's relative strength as five ascending bars."""
+    palette = APP_UI_STYLE.palette
+    strength = clamp(float(signal or 0), 0, 100)
+    lit = math.ceil(strength / 20)
+    base_y = center_y + 10
+    left = right - 36
+    for index in range(5):
+        height = 5 + index * 4
+        shade = (palette.ready if active else palette.text) if index < lit else palette.slider_track
+        draw_logical_rect(left + index * 8, base_y - height,
+                          left + index * 8 + 4, base_y, shade)
+
+
 def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, country_open=False):
     boxes = network_panel_boxes()
     x0, y0, x1, y1 = boxes["panel"]
@@ -17683,7 +17707,7 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
     color = lambda name: getattr(APP_UI_STYLE.palette, name)
     draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, color("background"))
     draw_logical_rect(x0, y0, x1, y1, color("section_surface"))
-    draw_settings_leaf_sidebar(text_cache, "Wi-Fi / ETHERNET", "BACK TO SETTINGS")
+    draw_network_footer(text_cache)
     draw_text(text_cache, x0 + 20, y0 + 30, "Wi-Fi / ETHERNET", color("text"), 30, True, False, "lm")
     draw_network_status_card(text_cache, boxes["ethernet"], "Ethernet", devices.get("eth0"))
     draw_network_status_card(text_cache, boxes["wifi"], "Wi-Fi", devices.get("wlan0"), wifi=True)
@@ -17711,9 +17735,11 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
         draw_text(text_cache, bx0 + 12, (by0 + by1) / 2, ssid, visual.text, 24, True, False, "lm")
         detail = "Connected" if active else ("Saved" if network.get("saved_uuid") else
                   ("Open" if not network.get("security") or network.get("security") == "--" else "Secured"))
-        draw_text(text_cache, bx1 - 12, (by0 + by1) / 2,
-                  (("Current · " if active else "") + network["code"]) if country_open else f"{detail}   {network.get('signal', 0):.0f}%",
+        draw_text(text_cache, bx1 - (12 if country_open else 68), (by0 + by1) / 2,
+                  (("Current · " if active else "") + network["code"]) if country_open else detail,
                   color("ready") if active else color("secondary_text"), 19, False, False, "rm")
+        if not country_open:
+            draw_network_signal_bars(bx1 - 12, (by0 + by1) / 2, network.get("signal"), active)
         draw_section_divider(bx0, by1, bx1)
     if not networks:
         draw_text(text_cache, (x0 + x1) / 2, y0 + 310,
@@ -26730,7 +26756,7 @@ def main():
             not theme_editor.open
             # These screens position BACK themselves and span the whole canvas.
             # Moving the last 256 pixels would slice their charts and controls.
-            and not (seek_view.open or audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
+            and not (network_panel_open or seek_view.open or audio_test_workspace.open or adsb_workspace.open or station_workspace.open or usb_radios_workspace.open
                      or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
                      or (vhf_workspace.open and (vhf_workspace.mode == 'spectrum' or vhf_workspace.dongles.open)))
             and not ((wspr_panel_open and not (wspr_expanded_waterfall_open or wspr_expanded_graph_open)) or font_lab_open or rtl_lab_open
