@@ -14,22 +14,26 @@ Use **LED / Slider** for the original **LED Bar**, Analog for needles, or Magic
 Eye for valve designs. Meter choice is saved separately from themes, and theme
 switching preserves it. See [Themes](themes.md) for the complete flow.
 
-The original six vector faces are LED Bar, Sliding Pointer (a vertical pointer
-moving horizontally), Classic Ivory, Precision Dark, Aviation Black and Aviation
-Brass. The aviation designs use round dials inside rectangular metal housings.
+The original vector choices are LED Bar, Sliding Pointer (a vertical pointer
+moving horizontally), Classic Ivory, Precision Dark and Aviation Black.
+Aviation Black uses a round dial inside a rectangular metal housing.
 Gallery thumbnails use a demonstration signal, independent of the receiver.
 LED Bar retains its original flat Home-rail background and wide segment track,
 without a metal frame or inset bezel. LED and sliding-pointer scales follow the theme palette; analog faces retain
 their cream, dark or brass instrument colours.
 
-The gallery has 29 designs, up to four thumbnails per page. Next and Previous
+Flex Dark, Flex Neon and Aviation Brass have been removed from both meter
+pickers. Saved selections of these designs fall back to LED Bar.
+
+The gallery has 26 designs, up to four thumbnails per page. Next and Previous
 browse pages, and tapping a thumbnail previews it in the real Home layout.
 Category filters retain a selected meter that belongs to that category;
 otherwise they preview its first design. These actions do not save settings or
 modify themes. The live meter in Home uses actual receiver readings; thumbnail
 signals are illustrative.
-Eight entries use the actual PNG backgrounds from the Flexible S-Meter download
-bundles: DX101, ICOM, Orange, Dark, Neon, Transparent, Vintage HD White and Vintage HD Orange. Their background files are retained
+Five selectable entries use the actual PNG backgrounds from the Flexible S-Meter
+download bundles: DX101, ICOM, Orange, Vintage HD White and Vintage HD Orange.
+Their background files are retained
 unchanged and credited in `UI/assets/smeters/flexible/SOURCE.md` and the third-party
 notices. Original printed PO, SWR, COMP and TEMP scales are face artwork; iTuner
 drives the S scale, rather than inventing readings for those transmit functions.

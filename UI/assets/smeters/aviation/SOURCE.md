@@ -22,7 +22,8 @@ dBm and RMS microvolts at 50 ohms. Printed marks and pointer use the same
 receiver signal mapping and -130° to +130° sweep. Dial images are kept square
 in every preview size. Static print and housing are cached at native dimensions;
 changing RSSI only moves the pointer and updates the readout. Existing saved
-`aviation` and `heritage` selections automatically use the replacement faces.
+`aviation` selections use the Aviation Black face. Aviation Brass is no longer
+selectable; saved `heritage` selections fall back to LED Bar.
 
 The Home versions now occupy the entire 236-pixel rail width, with square
 236 × 236 housings and readouts inside the lower dial window. The surplus gaps
