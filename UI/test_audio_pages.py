@@ -104,6 +104,17 @@ class AudioPageTests(unittest.TestCase):
                 self.assertEqual(indicator.call_args.args[2:],('' if binary else 'AUTO',active))
                 self.assertEqual(indicator.call_args.kwargs['lamp'],binary)
 
+    def test_tone_and_notch_activity_does_not_select_frame_and_off_is_blank(self):
+        for active in (False, True):
+            for title,binary in (('TONE',False),('NOTCH',True)):
+                with patch.object(ui,'draw_styled_two_line_button') as button, \
+                     patch.object(ui,'draw_radio_mode_indicator') as indicator:
+                    ui.draw_lcd_audio_annunciator(None,ui.AUDIO_TONE_BOX,title,'SW',active,
+                                                  binary=binary,indicator_only=True)
+                self.assertFalse(button.call_args.kwargs['active'])
+                self.assertEqual(indicator.called,active)
+                if active:self.assertTrue(indicator.call_args.args[3])
+
 
 if __name__ == '__main__':
     unittest.main()

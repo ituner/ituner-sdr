@@ -11731,14 +11731,15 @@ def lcd_audio_drawer_close_box():
     return lcd_drawer_back_box()
 
 
-def draw_lcd_audio_annunciator(text_cache, box, title, detail, active, *, binary=False):
+def draw_lcd_audio_annunciator(text_cache, box, title, detail, active, *, binary=False, indicator_only=False):
     """Audio state lives in the green annunciator, not a latched button fill."""
     style = replace(APP_UI_STYLE.smart_button,
                     title_size=navigation_label_size(text_cache,title,box[2]-box[0]-8,APP_UI_STYLE.button.title_size))
-    draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style,
+    draw_styled_two_line_button(text_cache, box, title, "", active=active and not indicator_only, style=style,
                                content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
-    draw_radio_mode_indicator(text_cache, box, "" if binary else detail, active,
-                              lamp=binary, size=13)
+    if active or not indicator_only:
+        draw_radio_mode_indicator(text_cache, box, "" if binary else detail, active,
+                                  lamp=binary, size=13)
 
 
 def draw_lcd_audio_tile(text_cache, box, title, detail, active=False, accent=(92, 229, 174, 220),
@@ -11899,7 +11900,8 @@ def draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, outpu
             (AUDIO_TONE_BOX, "TONE", TONE_PRESETS[tone_profile], tone_profile > 0),
             (AUDIO_NOTCH_BOX, "NOTCH", "ON" if controls["autonotch"] else "OFF", controls["autonotch"]),
         ):
-            draw_lcd_audio_annunciator(text_cache, box, title, detail, active, binary=title == "NOTCH")
+            draw_lcd_audio_annunciator(text_cache, box, title, detail, active, binary=title == "NOTCH",
+                                       indicator_only=title in ("TONE", "NOTCH"))
         draw_styled_text_button(text_cache, AUDIO_ADVANCED_BOX, "ADVANCED")
     else:
         for box, title, detail, active in (

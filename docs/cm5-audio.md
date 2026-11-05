@@ -179,3 +179,7 @@ This reusable button treatment is named **Smart Button**, exposed by
 surface and a stronger outline; state captions or lamps use the theme’s
 green ready color. Press feedback stays transient. Audio AGC/Tone/Notch,
 mode families, tune steps, passband presets and band choices use this style.
+
+Tone and Notch use the Smart Button indicator-only variation: activity does
+not strengthen the outline, and the lower indicator area is blank when off.
+An enabled Tone profile appears in green; enabled Notch lights the green lamp.
