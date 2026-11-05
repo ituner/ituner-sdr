@@ -16,7 +16,7 @@ def format_clock_pair(stamp=None, *, seconds=True, source=None):
     stamp = time.time() if stamp is None else stamp
     pattern = '%H:%M:%S' if seconds else '%H:%M'
     utc = time.strftime(pattern, time.gmtime(stamp)) + ' UTC'
-    if source:
+    if source and str(source).strip().upper() != 'UTC':
         utc += f' ({source})'
     local = time.strftime(pattern, time.localtime(stamp)) + ' LOCAL'
     return f'{utc} · {local}'
