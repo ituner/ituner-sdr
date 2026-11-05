@@ -17094,21 +17094,18 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    center_color = (*edge[:3], 150 if centered else 100)
+    center_color = (*edge[:3], 130)
     draw_logical_line(center_x, top_y - 2, center_x, plot_y + 4, center_color, 1)
-    # Attach a small vertical grip to the moving passband center. A short guide
-    # suggests horizontal motion without pretending to be a second full scale.
-    rail_y = plot_y
-    track_color = (*APP_UI_STYLE.palette.slider_track[:3], 150)
-    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 7, plot_x1 - 7)
-    draw_logical_rounded_rect(max(plot_x0, handle_x - 22), rail_y - 1,
-                              min(plot_x1, handle_x + 22), rail_y + 1, 1, track_color)
-    handle_color = (*edge[:3], 230 if centered else 190)
-    draw_logical_line(handle_x, top_y + 3, handle_x, rail_y, handle_color, 1)
-    draw_logical_rounded_rect(handle_x - 7, rail_y - 11, handle_x + 7, rail_y + 11, 2, handle_color)
-    for grip_y in (rail_y - 5, rail_y, rail_y + 5):
-        draw_logical_rect(handle_x - 6, grip_y - 1, handle_x + 6, grip_y + 1,
-                          APP_UI_STYLE.palette.sidebar)
+    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 22, plot_x1 - 22)
+    handle_y = (top_y + plot_y) / 2
+    draw_logical_line(handle_x, top_y + 2, handle_x, plot_y, (*edge[:3], 170), 1)
+    draw_logical_rounded_rect(handle_x - 21, handle_y - 10, handle_x + 21, handle_y + 10,
+                              10, (*APP_UI_STYLE.palette.section_surface[:3], 100), (*edge[:3], 220), 1)
+    draw_logical_line(handle_x - 10, handle_y, handle_x + 10, handle_y, edge, 1.5)
+    draw_logical_polyline(((handle_x - 6, handle_y - 4), (handle_x - 10, handle_y),
+                           (handle_x - 6, handle_y + 4)), edge, 1.5)
+    draw_logical_polyline(((handle_x + 6, handle_y - 4), (handle_x + 10, handle_y),
+                           (handle_x + 6, handle_y + 4)), edge, 1.5)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
 
