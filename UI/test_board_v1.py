@@ -978,7 +978,9 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertNotIn('ENTER FREQUENCY', texts)
         self.assertIn('OK', texts)
         for step_hz in ui.frequency_tune_steps('kiwi'):
-            self.assertIn(ui.format_tune_step(step_hz).upper(), texts)
+            value=f'{step_hz/1000:g}' if step_hz>=1000 else str(step_hz)
+            self.assertIn(value,texts)
+            self.assertIn('KHZ' if step_hz>=1000 else 'HZ',texts)
 
     def test_home_instruments_sit_under_the_mode_buttons(self):
         # The passband and volume are painted after the mode surface, so in

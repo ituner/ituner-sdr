@@ -734,14 +734,14 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertEqual(ui.radio_option_at(*self._center(box)),('mode_cycle',ui.KIWI_MODE_FAMILIES[i][1]))
         self.assertGreater(min(box[1] for box in step_boxes),max(box[3] for box in mode_boxes))
         self.assertEqual([step for step, _box in ui.radio_step_options("kiwi")],
-                         [10, 100, 1000, 5000])
-        self.assertEqual(len(step_boxes), 4)
+                         [1, 10, 100, 1000, 5000, 10000])
+        self.assertEqual(len(step_boxes), 6)
         frequency_boxes = [box for _step, box in ui.frequency_drawer_step_boxes("kiwi")]
         for (step, box), frequency_box in zip(ui.radio_step_options("kiwi"), frequency_boxes):
             self.assertEqual(ui.radio_option_at(*self._center(box)), ("step", step))
             self.assertEqual((box[0], box[2], box[3] - box[1]),
                              (frequency_box[0], frequency_box[2], frequency_box[2]-frequency_box[0]))
-        self.assertEqual(len({box[1] for box in step_boxes}), 1)
+        self.assertEqual(len({box[1] for box in step_boxes}), 2)
         self.assertIsNone(ui.radio_option_at(step_boxes[0][0] + 4, step_boxes[0][1] - 18))
         self.assertEqual(ui.radio_option_at(*self._center(
             next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
@@ -770,7 +770,7 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertEqual(draw.call_args.args[2:4],('SYNC',wanted))
             self.assertEqual(draw.call_args.kwargs['style'].title_size,ui.APP_UI_STYLE.button.title_size)
 
-    def test_modes_drawer_highlights_the_selected_step_in_four_button_row(self):
+    def test_modes_drawer_highlights_the_selected_step_in_six_button_grid(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
         previous_progress = ui.LCD_RADIO_DRAWER_PROGRESS
@@ -791,9 +791,9 @@ class DrawerGeometryTests(unittest.TestCase):
         finally:
             ui.LCD_RADIO_DRAWER_PROGRESS = previous_progress
         self.assertEqual([entry.args[2] for entry in buttons.call_args_list],
-                         [10,100,1000,5000])
+                         [1,10,100,1000,5000,10000])
         self.assertEqual([entry.args[3] for entry in buttons.call_args_list],
-                         [False, True, False, False])
+                         [False, False, True, False, False, False])
 
     def test_square_mode_steps_separate_number_from_unit(self):
         ui.configure_output(True)
@@ -884,8 +884,8 @@ class DrawerGeometryTests(unittest.TestCase):
                 ui.frequency_drawer_action_at(*center, receiver_type="fmdx" if step in ui.FMDX_TUNE_STEPS_HZ else "kiwi"),
                 f"step_{int(step)}",
             )
-        self.assertEqual(len({box[1] for _step, box in kiwi}), 1)
-        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (55, 31)
+        self.assertEqual(len({box[1] for _step, box in kiwi}), 2)
+        self.assertTrue(all((box[2] - box[0], box[3] - box[1]) == (64, 64)
                             for _step, box in kiwi))
         keys = ui.frequency_drawer_key_boxes()
         self.assertEqual(len(keys), 15)
@@ -898,6 +898,11 @@ class DrawerGeometryTests(unittest.TestCase):
             self.assertEqual(ui.frequency_drawer_action_at(*self._center(box)), f"key_{key}")
 
     def test_frequency_step_uses_hz_increment_and_receiver_bounds(self):
+        self.assertEqual(ui.frequency_step_target(7320, 1, 1, 0, 30000), 7320.001)
+        self.assertEqual(ui.frequency_step_target(7320.001, -1, 1, 0, 30000), 7320)
+        self.assertEqual(ui.frequency_step_target(7320, 1, 10000, 0, 30000), 7330)
+        self.assertEqual(ui.frequency_step_target(7330, -1, 10000, 0, 30000), 7320)
+        self.assertEqual(ui.frequency_step_target(7325, 1, 10000, 0, 30000), 7330)
         self.assertEqual(ui.frequency_step_target(7075.0, 1, 100, 0, 30000), 7075.1)
         self.assertEqual(ui.frequency_step_target(10.0, -1, 100_000, 0, 108000), 0.0)
         self.assertEqual(ui.frequency_step_target(7075.05, 1, 100, 0, 30000), 7075.1)
@@ -920,8 +925,8 @@ class DrawerGeometryTests(unittest.TestCase):
         self.assertEqual(ui.frequency_entry_preview_khz("", 7075.0, False), 0.0)
         self.assertEqual(ui.frequency_entry_preview_khz("7.125", 7075.0, True), 7075.0)
         self.assertEqual(
-            [ui.next_radio_tune_step(step) for step in (10, 100, 1000, 5000)],
-            [100, 1000, 5000, 10],
+            [ui.next_radio_tune_step(step) for step in (1,10,100,1000,5000,10000)],
+            [10,100,1000,5000,10000,1],
         )
 
     def test_frequency_arrow_hold_accelerates_and_cancels_cleanly(self):
@@ -1352,7 +1357,7 @@ class BigFrequencyStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "draw_logical_rounded_rect"), \
                 mock.patch.object(ui, "draw_sidebar_header"), \
                 mock.patch.object(ui, "draw_text"), \
-                mock.patch.object(ui, "draw_picker_button"), \
+                mock.patch.object(ui, "draw_radio_tune_step"), \
                 mock.patch.object(ui, "draw_radio_close_button"), \
                 mock.patch.object(ui, "frequency_chevron_texture", return_value=(0, 10, 10)), \
                 mock.patch.object(ui, "draw_textured_quad"):
@@ -1377,6 +1382,7 @@ class BigFrequencyStyleTests(unittest.TestCase):
         args, kwargs = calls[0]
         self.assertEqual(args[1], 7075.794)
         self.assertEqual(kwargs.get("family"), "Oxanium")
+        self.assertEqual(kwargs.get("size"), ui.FREQUENCY_DRAWER_READOUT_SIZE)
         self.assertEqual(calls[1][0][1], 7125.0)
         self.assertEqual(calls[1][1]["display_text"], "7.125")
         self.assertEqual(calls[2][0][1], 0.0)

@@ -1134,11 +1134,9 @@ RADIO_VARIANT_MENU_W = 420
 RADIO_VARIANT_BUTTON_H = 52
 RADIO_VARIANT_BUTTON_GAP = 8
 RADIO_VARIANT_COLS = 2
-RADIO_STEP_OPTIONS = (
-    (10, (590, 74, 670, 100)),
-    (100, (678, 74, 758, 100)),
-    (1000, (766, 74, 846, 100)),
-    (5000, (854, 74, 934, 100)),
+RADIO_STEP_OPTIONS = tuple(
+    (step,(590+i*58,74,642+i*58,100))
+    for i,step in enumerate((1,10,100,1000,5000,10000))
 )
 
 
@@ -1204,29 +1202,24 @@ def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
 
 
 def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
-    """Use the Frequency rail's small-button geometry for the Modes steps."""
-    steps = FMDX_TUNE_STEPS_HZ if receiver_worker_protocol(receiver_type) == "fmdx" else tuple(
-        step_hz for step_hz, _box in RADIO_STEP_OPTIONS
-    )
-    width = FREQUENCY_SMALL_BUTTON_W
-    gap = FREQUENCY_SMALL_BUTTON_GAP
-    left = (LCD_NAV_X0 + LOGICAL_W - (len(steps) * width + (len(steps) - 1) * gap)) / 2
-    top = lcd_radio_step_y0(mode_family_count) + 32
-    return tuple(
-        (step_hz, (left + index * (width + gap), top,
-                   left + index * (width + gap) + width,
-                   top + (FREQUENCY_SMALL_BUTTON_H if receiver_worker_protocol(receiver_type)=="fmdx" else width)))
-        for index, step_hz in enumerate(steps)
-    )
+    """Shared square step grid, retaining the dedicated shared-FM layout."""
+    if receiver_worker_protocol(receiver_type)!="fmdx":
+        return tune_step_square_boxes(receiver_type,lcd_radio_step_y0(mode_family_count)+24)
+    steps=FMDX_TUNE_STEPS_HZ
+    width,gap=FREQUENCY_SMALL_BUTTON_W,FREQUENCY_SMALL_BUTTON_GAP
+    left=(LCD_NAV_X0+LOGICAL_W-(len(steps)*width+(len(steps)-1)*gap))/2
+    top=lcd_radio_step_y0(mode_family_count)+32
+    return tuple((step,(left+i*(width+gap),top,left+i*(width+gap)+width,top+FREQUENCY_SMALL_BUTTON_H))
+                 for i,step in enumerate(steps))
 
 
 def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
     steps=lcd_radio_step_boxes(receiver_type,mode_family_count)
-    top=max(box[3] for _,box in steps)+16
+    top=max(box[3] for _,box in steps)+8
     x0,x1=LCD_NAV_X0+10,LOGICAL_W-10
-    return {"viewer":(x0,top,x1,top+89),
-            "width":(x0,top+105,x1,top+169),
-            "shift":(x0,top+185,x1,top+249)}
+    return {"viewer":(x0,top,x1,top+79),
+            "width":(x0,top+87,x1,top+143),
+            "shift":(x0,top+151,x1,top+207)}
 
 
 def draw_radio_tune_step(text_cache,box,step_hz,active=False):
@@ -4121,6 +4114,7 @@ def frequency_entry_action_at(x, y):
     return None
 
 
+FREQUENCY_DRAWER_READOUT_SIZE = 72
 FREQUENCY_SMALL_BUTTON_W = 55
 FREQUENCY_SMALL_BUTTON_H = 31
 FREQUENCY_SMALL_BUTTON_GAP = 4
@@ -4155,7 +4149,7 @@ def frequency_drawer_boxes():
         "readout": (left, 76, right, readout_bottom),
         "down": (left, arrow_top, left + arrow, arrow_bottom),
         "up": (right - arrow, arrow_top, right, arrow_bottom),
-        "step_heading": (left, step_heading_top, right, step_heading_top + 32),
+        "step_heading": (left, step_heading_top, right, step_heading_top + 24),
         "close": lcd_drawer_back_box(),
     }
 
@@ -4167,18 +4161,17 @@ def frequency_tune_steps(receiver_type="kiwi"):
     return tuple(step_hz for step_hz, _box in RADIO_STEP_OPTIONS)
 
 
+def tune_step_square_boxes(receiver_type,top):
+    """Identical three-column step squares in Frequency and Modes."""
+    width,gap,cols=64,16,3
+    left=(LCD_NAV_X0+LOGICAL_W-(cols*width+(cols-1)*gap))/2
+    return tuple((step,(left+(i%cols)*(width+gap),top+(i//cols)*(width+gap),
+                       left+(i%cols)*(width+gap)+width,top+(i//cols)*(width+gap)+width))
+                 for i,step in enumerate(frequency_tune_steps(receiver_type)))
+
+
 def frequency_drawer_step_boxes(receiver_type="kiwi"):
-    """Four Home-mode-sized tune choices on one row of the frequency rail."""
-    steps = frequency_tune_steps(receiver_type)
-    width = FREQUENCY_SMALL_BUTTON_W
-    gap = FREQUENCY_SMALL_BUTTON_GAP
-    left = (LCD_NAV_X0 + LOGICAL_W - (len(steps) * width + (len(steps) - 1) * gap)) / 2
-    y0 = frequency_drawer_boxes()["step_heading"][3] + 8
-    boxes = []
-    for index, step_hz in enumerate(steps):
-        x = left + index * (width + gap)
-        boxes.append((step_hz, (x, y0, x + width, y0 + FREQUENCY_SMALL_BUTTON_H)))
-    return tuple(boxes)
+    return tune_step_square_boxes(receiver_type,frequency_drawer_boxes()["step_heading"][3]+8)
 
 
 def frequency_drawer_key_boxes():
@@ -17718,15 +17711,15 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
         APP_UI_STYLE.palette.danger if entry_invalid
         else APP_UI_STYLE.palette.top_instrument_band,
     )
-    # The rail readout uses the same big-frequency face/size/colour as the top
-    # instrument strip, so the instrument looks identical wherever it appears.
+    # Retain the shared frequency face/color, with larger digits in the
+    # keypad rail where the operator is reviewing an entered frequency.
     readout_khz = frequency_entry_preview_khz(
         entry_value, freq_khz, entry_replace_on_digit, max_frequency_khz,
     )
     draw_big_frequency(
         text_cache, readout_khz,
         rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
-        family=font_family,
+        family=font_family, size=FREQUENCY_DRAWER_READOUT_SIZE,
         display_text=(entry_value or "0") if not entry_replace_on_digit else None,
     )
 
@@ -17744,12 +17737,12 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     )
     for option_hz, option_box in frequency_drawer_step_boxes(receiver_type):
         active = int(option_hz) == int(step_hz)
-        draw_picker_button(
-            text_cache, option_box, format_small_tune_step(option_hz), 15,
-            active or pressed == f"step_{int(option_hz)}",
+        draw_radio_tune_step(
+            text_cache, option_box, option_hz, active or pressed == f"step_{int(option_hz)}",
         )
     if not tuning_allowed:
-        draw_text(text_cache, (x0 + x1) / 2, 618,
+        notice_y=max(box[3] for _,box in frequency_drawer_step_boxes(receiver_type))+20
+        draw_text(text_cache, (x0 + x1) / 2, notice_y,
                   "ENABLE CONTROL IN MODES", APP_UI_STYLE.button.subtitle_color,
                   13, True, False, "cm", family=APP_UI_STYLE.button.font_family)
     draw_radio_close_button(text_cache, boxes["close"])
