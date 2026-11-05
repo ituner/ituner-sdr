@@ -1922,5 +1922,89 @@ class OpenWebRxScopeTests(unittest.TestCase):
         self.assertIsNone(state.update)
 
 
+class SidebarTouchSafetyTests(unittest.TestCase):
+    def setUp(self):
+        ui.configure_output(True)
+        ui.configure_popup_layout()
+        self.old_progress = ui.LCD_RADIO_DRAWER_PROGRESS
+        ui.LCD_RADIO_DRAWER_PROGRESS = 1
+        self.addCleanup(setattr, ui, 'LCD_RADIO_DRAWER_PROGRESS', self.old_progress)
+        ui.set_audio_page(False)
+        ui.set_display_page(False)
+
+    def test_headers_and_outer_rail_margins_are_not_controls(self):
+        actions = {
+            'HOME': lambda x,y: ui.lcd_nav_item_at(x,y,ui.MENU_ITEMS),
+            'SYSTEM': lambda x,y: ui.lcd_nav_item_at(x,y,ui.SETTINGS_MENU_ITEMS),
+            'DIGITAL': lambda x,y: ui.lcd_nav_item_at(x,y,ui.DIGITAL_MENU_ITEMS),
+            'AUDIO': ui.audio_option_at,
+            'DISPLAY': ui.display_option_at,
+            'MODES': ui.radio_option_at,
+            'APPS': ui.tests_option_at,
+            'USB RECEIVER': ui.rtl_lab_option_at,
+            'CAPTIONS': ui.asr_option_at,
+        }
+        for name, action in actions.items():
+            for point in ((1152,16),(1025,100),(1279,100),(1025,740),(1279,740)):
+                with self.subTest(screen=name,point=point):
+                    self.assertIsNone(action(*point))
+
+    def test_both_physical_sidebar_positions_normalize_to_inert_header_and_edges(self):
+        for sidebar in ('left', 'right'):
+            theme = dict(ui.theme_system.runtime_theme, sidebar=sidebar)
+            for rail_x in (0, 1, 128, 255):
+                physical_x = rail_x if sidebar == 'left' else 1024 + rail_x
+                logical_x = ui.theme_system.display_to_logical_x(physical_x, theme=theme)
+                with self.subTest(sidebar=sidebar, physical_x=physical_x):
+                    self.assertEqual(ui.inert_sidebar_gesture('display_setup_outside',logical_x,16),'none')
+                    self.assertIsNone(ui.display_option_at(logical_x,16))
+                    self.assertEqual(ui.inert_sidebar_gesture('display_setup_outside',logical_x,750),'none')
+            physical_canvas_x = 500 if sidebar == 'left' else 100
+            logical_canvas_x = ui.theme_system.display_to_logical_x(physical_canvas_x, theme=theme)
+            self.assertEqual(ui.inert_sidebar_gesture('display_setup_outside',logical_canvas_x,200),
+                             'display_setup_outside')
+
+    def test_blank_down_then_back_release_does_not_activate(self):
+        cases = (
+            ('AUDIO', ui.audio_option_at, ui.lcd_audio_drawer_close_box()),
+            ('DISPLAY', ui.display_option_at, ui.lcd_display_drawer_close_box()),
+            ('MODES', ui.radio_option_at, ui.lcd_radio_drawer_close_box()),
+            ('APPS', ui.tests_option_at, ui.TEST_BACK_BOX),
+            ('USB RECEIVER', ui.rtl_lab_option_at, ui.RTL_LAB_BACK_BOX),
+        )
+        for name, action, box in cases:
+            x,y=(box[0]+box[2])/2,box[1]+2
+            with self.subTest(screen=name):
+                self.assertIsNone(ui.confirmed_tap_action(action,x,box[1]-2,x,y))
+                self.assertEqual(ui.confirmed_tap_action(action,x,y,x,y), action(x,y))
+                self.assertIsNone(ui.confirmed_tap_action(action,x,y,x,box[1]-2))
+
+    def test_sidebar_outside_routes_are_inert_but_live_canvas_behavior_remains(self):
+        for gesture in ('audio_panel_outside','display_setup_outside','radio_setup_outside',
+                        'rtl_lab_outside','tests_panel_outside','dj_tune_outside',
+                        'wspr_workspace_outside','wspr_identity_outside','wspr_add_outside',
+                        'frequency_entry_outside','deepgram_setup_outside','menu_outside',
+                        'filter_edit_outside'):
+            for point in ((1025,16),(1279,799),(1152,250)):
+                self.assertEqual(ui.inert_sidebar_gesture(gesture,*point),'none')
+            self.assertEqual(ui.inert_sidebar_gesture(gesture,100,200),gesture)
+        self.assertEqual(ui.inert_sidebar_gesture('radio_setup',1152,750),'radio_setup')
+
+    def test_info_fan_network_and_filter_back_require_press_in_visible_button(self):
+        for box in (ui.receiver_home_drawer_boxes()['close'],ui.fan_curve_drawer_boxes()['close'],
+                    ui.network_panel_boxes()['back'],ui.lcd_filter_drawer_boxes()['close']):
+            x,y=(box[0]+box[2])/2,box[1]+1
+            self.assertFalse(ui.confirmed_box_tap(box,x,box[1]-1,x,y))
+            self.assertTrue(ui.confirmed_box_tap(box,x,y,x,y))
+
+    def test_dual_mode_popup_header_is_inert_and_explicit_back_works(self):
+        boxes=ui.dual_vfo_mode_picker_boxes()
+        x0,y0,x1,y1=boxes['panel']
+        self.assertEqual(ui.dual_vfo_mode_picker_action_at(x0+12,y0+12),('idle',None))
+        box=boxes['close'];x,y=(box[0]+box[2])/2,(box[1]+box[3])/2
+        self.assertEqual(ui.confirmed_tap_action(ui.dual_vfo_mode_picker_action_at,x,y,x,y),('close',None))
+        self.assertIsNone(ui.confirmed_tap_action(ui.dual_vfo_mode_picker_action_at,x,box[1]-2,x,box[1]+2))
+
+
 if __name__ == "__main__":
     unittest.main()

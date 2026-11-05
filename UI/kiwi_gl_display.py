@@ -2395,7 +2395,7 @@ def dual_vfo_mode_picker_action_at(x, y):
     for _family, mode, box in boxes["buttons"]:
         if contains(box, x, y):
             return "mode", mode
-    return "outside", None
+    return ("idle", None) if contains(boxes["panel"], x, y) else ("outside", None)
 
 
 def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
@@ -16989,6 +16989,25 @@ def stats_keeps_settings_sidebar(parent):
     return navigation_back_surface(parent) == "settings"
 
 
+def confirmed_tap_action(action_at, start_x, start_y, x, y, *args, **kwargs):
+    """A release activates only the same visible target touched on press."""
+    started = action_at(start_x, start_y, *args, **kwargs)
+    ended = action_at(x, y, *args, **kwargs)
+    return ended if started is not None and started == ended else None
+
+
+def confirmed_box_tap(box, start_x, start_y, x, y):
+    return contains(box, start_x, start_y) and contains(box, x, y)
+
+
+def inert_sidebar_gesture(gesture, x, y):
+    """Rail margins and headers never serve as implicit dismissal controls."""
+    if LCD_800_MODE and LCD_NAV_X0 <= x < LOGICAL_W and 0 <= y < LOGICAL_H:
+        if gesture.endswith("_outside"):
+            return "none"
+    return gesture
+
+
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
     if not LCD_800_MODE:
         return None
@@ -27785,9 +27804,9 @@ def main():
                                 # target. Compact typography review remains a
                                 # Settings tool and must never steal this tap.
                                 gesture = "frequency_drawer_open"
-                            elif contains(CPU_ANNUNCIATOR_BOX, x, y):
+                            elif (not LCD_800_MODE or x < LCD_NAV_X0) and contains(CPU_ANNUNCIATOR_BOX, x, y):
                                 gesture = "cpu_utilization_graph"
-                            elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, AUDIO_PANEL_BOX[3]), x, y):
+                            elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 # The drawer owns the top-right rail while it
                                 # is open; do not leak touches to the covered
                                 # mode annunciators.
@@ -27810,9 +27829,9 @@ def main():
                                     gesture = "audio_denoise_level"
                                 else:
                                     gesture = "audio_control" if audio_option_at(x, y) is not None else "audio_header"
-                            elif receiver_home_panel_open and LCD_800_MODE and contains(receiver_home_drawer_boxes()["panel"], x, y):
+                            elif receiver_home_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 gesture = "receiver_home"
-                            elif fan_curve_panel_open and LCD_800_MODE and contains(fan_curve_drawer_boxes()["panel"], x, y):
+                            elif fan_curve_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 fan_boxes = fan_curve_drawer_boxes()
                                 if contains(fan_boxes["start"], x, y):
                                     gesture = "fan_start_slider"
@@ -27967,6 +27986,8 @@ def main():
                                 gesture = "menu"
                             elif menu_open:
                                 gesture = "menu_outside"
+                            elif LCD_800_MODE and home_sidebar_open and LCD_NAV_X0 <= x < LOGICAL_W:
+                                gesture = "none"
                             elif not picker_open and not settings_menu_open and not digital_menu_open and (nav_items := lcd_nav_items(settings_menu_open, digital_menu_open)) and (nav_index := lcd_nav_item_at(x, y, nav_items)) is not None:
                                 # Network must be dependable even on touch
                                 # controllers that occasionally lose the UP
@@ -27999,6 +28020,7 @@ def main():
                                 gesture = "waterfall"
                             else:
                                 gesture = "none"
+                            gesture = inert_sidebar_gesture(gesture, x, y)
                             if gesture in ("audio_squelch_level", "audio_denoise_level", "audio_voice_level", "audio_passband"):
                                 apply_audio_slider(state, gesture, x)
                             elif gesture in ("radio_filter_shift","radio_filter_width"):
@@ -28280,7 +28302,7 @@ def main():
                         if touch_started and gesture == "dual_vfo_mode":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action, selected_mode = dual_vfo_mode_picker_action_at(x, y)
+                                action, selected_mode = confirmed_tap_action(dual_vfo_mode_picker_action_at, start_x, start_y, x, y) or (None, None)
                                 if action in ("close", "outside"):
                                     dual_vfo_mode_open = False
                                 elif action == "mode" and selected_mode:
@@ -28351,7 +28373,7 @@ def main():
                         elif touch_started and gesture == "dual_vfo":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = dual_vfo_action_at(x, y)
+                                action = confirmed_tap_action(dual_vfo_action_at, start_x, start_y, x, y)
                                 if action == "home":
                                     dual_vfo_open = False
                                     stop_dual_vfo_clients()
@@ -28416,8 +28438,8 @@ def main():
                         elif touch_started and gesture == "band_navigation":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = band_navigation_action_at(x, y)
-                                if action == "close" or action is None:
+                                action = confirmed_tap_action(band_navigation_action_at, start_x, start_y, x, y)
+                                if action == "close":
                                     band_navigation_open = False
                                 elif isinstance(action, int):
                                     _label, target_khz, _kind = BAND_NAV_PRESETS[action]
@@ -28449,7 +28471,7 @@ def main():
                         elif touch_started and gesture == "frequency_entry":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = frequency_entry_action_at(x, y)
+                                action = confirmed_tap_action(frequency_entry_action_at, start_x, start_y, x, y)
                                 if action == "BACK":
                                     frequency_entry_value = frequency_entry_value[:-1]
                                     frequency_entry_invalid = False
@@ -28593,7 +28615,7 @@ def main():
                         elif touch_started and gesture == "compact_font_review":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = compact_font_review_action_at(x, y)
+                                action = confirmed_tap_action(compact_font_review_action_at, start_x, start_y, x, y)
                                 if action == "previous":
                                     compact_frequency_font_index = (
                                         compact_frequency_font_index - 1
@@ -28724,7 +28746,7 @@ def main():
                         elif touch_started and gesture == "audio_control":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = audio_option_at(x, y)
+                                choice = confirmed_tap_action(audio_option_at, start_x, start_y, x, y)
                                 controls, _audio_generation = state.audio_controls_snapshot()
                                 if audio_page_action(choice):
                                     pass
@@ -28822,7 +28844,7 @@ def main():
                         elif touch_started and gesture == "wspr_identity":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_identity_action_at(x, y, wspr_identity_keyboard_mode)
+                                choice = confirmed_tap_action(wspr_identity_action_at, start_x, start_y, x, y, wspr_identity_keyboard_mode)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "field":
@@ -28879,7 +28901,7 @@ def main():
                         elif touch_started and gesture == "wspr_decoder_settings":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice, value = wspr_decoder_settings_action_at(x, y)
+                                choice, value = confirmed_tap_action(wspr_decoder_settings_action_at, start_x, start_y, x, y) or (None, None)
                                 if choice == "profile":
                                     wspr_decoder_profile, wspr_decoder_osd_depth = wspr_decoder_settings.update(profile=value)
                                     preferences_dirty = True
@@ -28992,7 +29014,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choices = wspr_receiver_choices()
-                                choice = wspr_add_action_at(x, y, choices, wspr_add_station_page)
+                                choice = confirmed_tap_action(wspr_add_action_at, start_x, start_y, x, y, choices, wspr_add_station_page)
                                 if choice is not None:
                                     kind, value = choice
                                     if kind == "band":
@@ -29103,10 +29125,10 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choices = wspr_receiver_choices()
-                                choice, value = wspr_tile_settings_action_at(
-                                    x, y, choices, wspr_tile_receiver_page,
+                                choice, value = confirmed_tap_action(
+                                    wspr_tile_settings_action_at, start_x, start_y, x, y, choices, wspr_tile_receiver_page,
                                     wspr_tile_receiver_open, wspr_tile_band_open,
-                                )
+                                ) or (None, None)
                                 if choice == "close":
                                     wspr_tile_settings_open = False
                                     wspr_tile_settings_id = ""
@@ -29241,7 +29263,7 @@ def main():
                         elif touch_started and gesture == "wspr_workspace":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = wspr_workspace_action_at(x, y, wspr_tiles, wspr_workspace_scroll)
+                                choice = confirmed_tap_action(wspr_workspace_action_at, start_x, start_y, x, y, wspr_tiles, wspr_workspace_scroll)
                                 if choice is not None:
                                     kind, _value = choice
                                     if kind == "back":
@@ -29357,7 +29379,7 @@ def main():
                         elif touch_started and gesture == "tests_panel":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = tests_option_at(x, y)
+                                choice = confirmed_tap_action(tests_option_at, start_x, start_y, x, y)
                                 if choice == "back":
                                     tests_panel_open = False
                                     restore_navigation_parent(tests_parent)
@@ -29394,7 +29416,7 @@ def main():
                         elif touch_started and gesture == "font_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = font_lab_option_at(x, y)
+                                choice = confirmed_tap_action(font_lab_option_at, start_x, start_y, x, y)
                                 if choice == "back":
                                     font_lab_open = False
                                     tests_panel_open = True
@@ -29406,7 +29428,7 @@ def main():
                         elif touch_started and gesture == "rtl_lab":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = rtl_lab_option_at(x, y)
+                                choice = confirmed_tap_action(rtl_lab_option_at, start_x, start_y, x, y)
                                 if choice == "source":
                                     rtl_lab.cycle_source()
                                     rtl_lab.probe()
@@ -29470,23 +29492,15 @@ def main():
                                     wake_controls()
                             elif moved <= args.tap_px:
                                 active_mode_families = rtl_lab.mode_families() if rtl_lab.is_running() else KIWI_MODE_FAMILIES
-                                choice = radio_option_at(
-                                    x, y, radio_family_open,
+                                choice = confirmed_tap_action(
+                                    radio_option_at, start_x, start_y, x, y, radio_family_open,
                                     mode_families=active_mode_families,
                                     receiver_type=state.receiver_type_snapshot(),
                                     fmdx_stations=state.fmdx_stations_snapshot(),
                                     fmdx_scan_active=state.fmdx_scan_request_snapshot()[0],
                                     fmdx_shared_control=fmdx_shared_control_acknowledged(state.snapshot()[0]),
                                 )
-                                if choice is None:
-                                    # The drawer is intentionally modal only
-                                    # inside its own rail: a blank tap is the
-                                    # quickest, least surprising close action.
-                                    radio_setup_open = False
-                                    radio_family_open = None
-                                    fmdx_shared_prompt_open = False
-                                    wake_controls()
-                                else:
+                                if choice is not None:
                                     kind, value = choice
                                     if kind == "close":
                                         radio_setup_open = False
@@ -29602,7 +29616,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 filter_boxes = lcd_filter_drawer_boxes()
-                                if contains(filter_boxes["close"], x, y):
+                                if confirmed_box_tap(filter_boxes["close"], start_x, start_y, x, y):
                                     filter_drawer_open = False
                                     filter_drawer_width_hz = None
                                     if filter_drawer_return_to_audio:
@@ -29610,7 +29624,7 @@ def main():
                                         filter_drawer_return_to_audio = False
                                 else:
                                     for _name, preset_width_hz, preset_box in filter_boxes["presets"]:
-                                        if contains(preset_box, x, y):
+                                        if confirmed_box_tap(preset_box, start_x, start_y, x, y):
                                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
                                             target_width_hz = preset_width_hz
                                             actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, target_width_hz))
@@ -29656,14 +29670,8 @@ def main():
                         elif touch_started and gesture == "display_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                choice = display_option_at(x, y)
-                                if choice is None and LCD_800_MODE:
-                                    # Match the other rail drawers: a blank
-                                    # rail tap is an easy, unambiguous close.
-                                    display_setup_open = False
-                                    restore_navigation_parent(display_parent)
-                                    wake_controls()
-                                elif choice is not None:
+                                choice = confirmed_tap_action(display_option_at, start_x, start_y, x, y)
+                                if choice is not None:
                                     kind, value = choice
                                     if display_page_action(kind):
                                         pass
@@ -29743,36 +29751,33 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 home_boxes = receiver_home_drawer_boxes()
-                                if contains(home_boxes["close"], x, y):
+                                if confirmed_box_tap(home_boxes["close"], start_x, start_y, x, y):
                                     receiver_home_panel_open = False
                                     restore_navigation_parent(receiver_home_parent)
-                                elif contains(home_boxes["usb_radios"], x, y):
+                                elif confirmed_box_tap(home_boxes["usb_radios"], start_x, start_y, x, y):
                                     receiver_home_panel_open=False;usb_radios_parent="info";usb_radios_workspace.show()
-                                elif contains(home_boxes["fan"], x, y):
+                                elif confirmed_box_tap(home_boxes["fan"], start_x, start_y, x, y):
                                     receiver_home_panel_open = False
                                     fan_curve_panel_open = True
                                     fan_curve_parent = navigation_previous_surface("fan_curve", receiver_home_parent)
-                                elif contains(home_boxes["locate"],x,y) and peek_station():
+                                elif confirmed_box_tap(home_boxes["locate"],start_x,start_y,x,y) and peek_station():
                                     station_workspace.show();receiver_home_panel_open=False
-                                elif contains(home_boxes["fallback"], x, y) and not peek_station():
+                                elif confirmed_box_tap(home_boxes["fallback"], start_x, start_y, x, y) and not peek_station():
                                     receiver_home_profile = dict(RECEIVER_HOME_FALLBACK)
                                     save_receiver_home_profile(receiver_home_profile)
                                     receiver_home_locating = False
-                                elif contains(home_boxes["locate"], x, y) and not receiver_home_locating:
+                                elif confirmed_box_tap(home_boxes["locate"], start_x, start_y, x, y) and not receiver_home_locating:
                                     receiver_home_locating = True
                                     threading.Thread(
                                         target=detect_receiver_home,
                                         args=(receiver_home_result_queue,), daemon=True,
                                     ).start()
-                                else:
-                                    receiver_home_panel_open = False
-                                    restore_navigation_parent(receiver_home_parent)
                                 wake_controls()
                         elif touch_started and gesture == "fan_curve":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 fan_boxes = fan_curve_drawer_boxes()
-                                if contains(fan_boxes["close"], x, y):
+                                if confirmed_box_tap(fan_boxes["close"], start_x, start_y, x, y):
                                     fan_curve_panel_open = False
                                     restore_navigation_parent(fan_curve_parent)
                                 wake_controls()
@@ -29852,7 +29857,7 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 nav_items = lcd_nav_items(settings_menu_open, digital_menu_open)
-                                idx = lcd_nav_item_at(x, y, nav_items)
+                                idx = confirmed_tap_action(lcd_nav_item_at, start_x, start_y, x, y, nav_items)
                                 if idx is not None:
                                     activate_navigation_item(idx, nav_items)
                         elif touch_started and gesture in ("menu_close", "menu_outside"):
@@ -29954,7 +29959,7 @@ def main():
                         elif touch_started and gesture == "deepgram_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                action = deepgram_setup_action_at(x, y, deepgram_key_mode)
+                                action = confirmed_tap_action(deepgram_setup_action_at, start_x, start_y, x, y, deepgram_key_mode)
                                 if action in ("MODE", "CAPS"):
                                     deepgram_key_mode = touch_keyboard_next_mode(deepgram_key_mode, action)
                                 elif action == "SPACE" and len(deepgram_key_value) < 512:
@@ -30059,40 +30064,40 @@ def main():
                                 networks = (snapshot.get("countries") if network_country_open else snapshot.get("networks")) or []
                                 if network_action is not None:
                                     action_boxes = network_action_boxes()
-                                    if contains(boxes["back"], x, y) or contains(action_boxes["cancel"], x, y):
+                                    if confirmed_box_tap(boxes["back"], start_x, start_y, x, y) or confirmed_box_tap(action_boxes["cancel"], start_x, start_y, x, y):
                                         network_action = None
                                     elif not busy:
-                                        if contains(action_boxes["forget"], x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
+                                        if confirmed_box_tap(action_boxes["forget"], start_x, start_y, x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
                                             network_action = dict(network_action, confirm_forget=True)
-                                        elif contains(action_boxes["primary"], x, y):
+                                        elif confirmed_box_tap(action_boxes["primary"], start_x, start_y, x, y):
                                             operation = "forget" if network_action.get("confirm_forget") else ("disconnect" if network_action.get("active") else "connect")
                                             if network_bridge.request(operation, network_action):
                                                 network_connect_pending = operation == "connect"
                                                 network_notice = ""
                                                 network_action = None
                                                 network_next_refresh = time.monotonic() + 12.0
-                                elif contains(boxes["back"], x, y):
+                                elif confirmed_box_tap(boxes["back"], start_x, start_y, x, y):
                                     network_panel_open = False
                                     network_selected_ssid = ""
                                     settings_menu_open = True
                                     digital_menu_open = False
-                                elif contains(boxes["country"], x, y) and not busy:
+                                elif confirmed_box_tap(boxes["country"], start_x, start_y, x, y) and not busy:
                                     network_country_open = not network_country_open
                                     network_page = 0
-                                elif contains(boxes["rescan"], x, y):
+                                elif confirmed_box_tap(boxes["rescan"], start_x, start_y, x, y):
                                     if network_country_open:
                                         network_country_open = False
                                         network_page = 0
                                     elif network_bridge.request("scan"):
                                         network_notice = ""
-                                elif contains(boxes["previous"], x, y):
+                                elif confirmed_box_tap(boxes["previous"], start_x, start_y, x, y):
                                     network_page = max(0, network_page - 1)
-                                elif contains(boxes["next"], x, y):
+                                elif confirmed_box_tap(boxes["next"], start_x, start_y, x, y):
                                     network_page = min(max(0, (len(networks) - 1) // NETWORK_PAGE_SIZE), network_page + 1)
                                 elif not busy:
                                     visible = networks[network_page * NETWORK_PAGE_SIZE:(network_page + 1) * NETWORK_PAGE_SIZE]
                                     for network, box in zip(visible, network_scan_boxes(visible)):
-                                        if not contains(box, x, y):
+                                        if not confirmed_box_tap(box, start_x, start_y, x, y):
                                             continue
                                         if network_country_open:
                                             if network_bridge.request("country", {"country": network["code"]}):
@@ -30139,7 +30144,7 @@ def main():
                         elif touch_started and gesture == "asr_select":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                selection = asr_option_at(x, y, asr_moon_language_open)
+                                selection = confirmed_tap_action(asr_option_at, start_x, start_y, x, y, asr_moon_language_open)
                                 selection_kind, selected_value = selection if selection else (None, None)
                                 if selection_kind == "back":
                                     if asr_moon_language_open:

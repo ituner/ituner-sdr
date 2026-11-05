@@ -33,6 +33,29 @@ class HomeThemeTests(unittest.TestCase):
         a,b,c,d = boxes[action]
         self.editor.tap((a+c)/2, (b+d)/2)
 
+    def test_sidebar_headers_and_gaps_do_not_dismiss_theme_views(self):
+        for sidebar in ('left', 'right'):
+            for screen in ('chooser', 'customize', 'colors', 'hidden'):
+                self.editor.show()
+                self.editor.entry_theme['sidebar'] = sidebar
+                self.editor.draft['sidebar'] = sidebar
+                if screen != 'chooser':
+                    self.editor.fullscreen = True
+                if screen == 'colors':
+                    self.tap('colors:text')
+                if screen == 'hidden':
+                    self.tap('hide')
+                before = (deepcopy(self.editor.preview), self.editor.fullscreen,
+                          self.editor.fullscreen_controls, self.editor.overlay)
+                x = 128 if sidebar == 'left' else 1152
+                for y in (16, 48, 96, 224, 400, 620, 716):
+                    with self.subTest(sidebar=sidebar, screen=screen, y=y):
+                        self.editor.tap(x, y)
+                        self.assertTrue(self.editor.open)
+                        self.assertEqual((self.editor.preview, self.editor.fullscreen,
+                                          self.editor.fullscreen_controls, self.editor.overlay), before)
+                self.assertEqual(self.path.read_bytes(), self.before)
+
     def test_preset_tap_enters_full_size_customization_without_saving(self):
         self.tap('theme:green')
         self.assertTrue(self.editor.fullscreen)
