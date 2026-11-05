@@ -750,7 +750,12 @@ class DrawerGeometryTests(unittest.TestCase):
         passband=ui.radio_passband_boxes()
         self.assertLess(passband["viewer"][3],passband["width"][1])
         self.assertLess(passband["width"][3],passband["shift"][1])
-        boxes=(*mode_boxes,*step_boxes,*passband.values(),back_box)
+        presets=ui.radio_filter_preset_boxes()
+        for _name,width,box in presets:
+            self.assertEqual(ui.radio_option_at(*self._center(box)),("filter_preset",width))
+        self.assertEqual([(b[0],b[2],b[3]-b[1]) for _,_,b in presets],
+                         [(b[0],b[2],b[3]-b[1]) for _,_,b in ui.lcd_filter_drawer_boxes()["presets"]])
+        boxes=(*mode_boxes,*step_boxes,*passband.values(),*(b for _,_,b in presets),back_box)
         overlaps=lambda a,b:a[0]<b[2] and b[0]<a[2] and a[1]<b[3] and b[1]<a[3]
         for i,box in enumerate(boxes):
             for other in boxes[i+1:]:self.assertFalse(overlaps(box,other))
@@ -780,6 +785,7 @@ class DrawerGeometryTests(unittest.TestCase):
                     ui.draw_radio_family_option(None,box,family,modes,mode)
                 caption,active=indicator.call_args.args[2:]
                 self.assertTrue(active)
+                self.assertEqual(indicator.call_args.kwargs['lamp'],family not in ('SYNC AM','FM'))
                 if mode.replace('/','')==family.replace('/',''):
                     self.assertEqual(caption,'')
                 elif family=='FM':
@@ -797,6 +803,7 @@ class DrawerGeometryTests(unittest.TestCase):
                  mock.patch.object(ui, 'draw_radio_family_option'), \
                  mock.patch.object(ui, 'draw_lcd_drawer_heading'), \
                  mock.patch.object(ui, 'draw_radio_option'), \
+                 mock.patch.object(ui, 'draw_filter_width_presets'), \
                  mock.patch.object(ui, 'draw_lcd_home_bandwidth'), \
                  mock.patch.object(ui, 'draw_lcd_filter_shift_slider'), \
                  mock.patch.object(ui, 'draw_lcd_filter_width_slider'), \

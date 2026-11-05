@@ -1340,7 +1340,7 @@ FILTER_WIDTH_PRESETS = (
     ("VOICE", 2400),
     ("VOICE WIDE", 3000),
     ("WIDE 6k", 6000),
-    ("WIDE 9/12k", 9000),
+    ("WIDE 12k", 12000),
 )
 AUDIO_PANEL_BOX = (12, 34, 948, 380)
 AUDIO_VOLUME_BOX = (42, 76, 612, 128)
@@ -9631,6 +9631,9 @@ def radio_option_at(
             for action,box in radio_passband_boxes(receiver_type,len(mode_families)).items():
                 if action!="viewer" and contains(box,x,y):
                     return "filter_"+action,None
+            for _name, width, box in radio_filter_preset_boxes(receiver_type, len(mode_families)):
+                if contains(box, x, y):
+                    return "filter_preset", width
     else:
         for action, box in fmdx_control_layout(fmdx_stations, fmdx_scan_active, fmdx_shared_control):
             if contains(box, x, y):
@@ -9670,23 +9673,24 @@ def draw_radio_close_button(text_cache, box):
     draw_shared_back_button(text_cache, box)
 
 
-def draw_radio_mode_indicator(text_cache, box, caption, active):
-    """One status lamp per mode; variant captions share its illuminated color."""
+def draw_radio_mode_indicator(text_cache, box, caption, active, *, lamp=True):
+    """Variant text is an annunciator; other modes use a wide status lamp."""
     style = APP_UI_STYLE.button
     ready = APP_UI_STYLE.palette.ready
     color = ready if active else tuple(round(channel * .2) for channel in ready[:3])
     center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15 + LCD_RADIO_MODE_CONTENT_OFFSET_Y
-    led, gap = 5, 4
+    led_width, led_height, gap = (15, 5, 4) if lamp else (0, 0, 0)
     if caption:
         texture_width = text_cache.texture(caption, 11, color, bold=True, family=style.font_family)[1]
-        width = min(texture_width, box[2] - box[0] - 8 - led - gap)
-        left = center_x - (led + gap + width) / 2
-        draw_text_scaled_x(text_cache, left + led + gap + width / 2, center_y,
+        width = min(texture_width, box[2] - box[0] - 8 - led_width - gap)
+        left = center_x - (led_width + gap + width) / 2
+        draw_text_scaled_x(text_cache, left + led_width + gap + width / 2, center_y,
                            caption, color, 11, min(1., width / max(1, texture_width)),
                            True, False, "cm", family=style.font_family)
     else:
-        left = center_x - led / 2
-    draw_logical_rect(left, center_y - led / 2, left + led, center_y + led / 2, color)
+        left = center_x - led_width / 2
+    if lamp:
+        draw_logical_rect(left, center_y - led_height / 2, left + led_width, center_y + led_height / 2, color)
 
 
 def draw_radio_family_option(text_cache, box, family, modes, active_mode):
@@ -9705,7 +9709,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
         style = replace(style, title_size=navigation_label_size(text_cache, title, box[2]-box[0]-8, style.title_size))
         draw_styled_two_line_button(text_cache, box, title, "", active=active, style=style,
                                    content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
-        draw_radio_mode_indicator(text_cache, box, detail, active)
+        draw_radio_mode_indicator(text_cache, box, detail, active, lamp=family not in ("SYNC AM", "FM"))
         return
     draw_styled_two_line_button(text_cache, box, title, detail, active=active, style=style)
 
@@ -9801,6 +9805,8 @@ def draw_radio_setup_panel(
             draw_lcd_filter_shift_slider(text_cache,boxes["shift"],low_cut,high_cut)
         if reveal_y >= boxes["width"][3]:
             draw_lcd_filter_width_slider(text_cache,boxes["width"],low_cut,high_cut)
+        presets = radio_filter_preset_boxes(receiver_type, len(mode_families))
+        draw_filter_width_presets(text_cache, tuple(p for p in presets if p[2][3] <= reveal_y), high_cut-low_cut)
         return
 
     draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
@@ -17008,20 +17014,36 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
 
 
+def filter_width_preset_boxes(top):
+    """The same six Audio-size squares in every passband surface."""
+    size, gap, cols = 64, 16, 3
+    left = (LCD_NAV_X0 + LOGICAL_W - (cols * size + (cols - 1) * gap)) / 2
+    return tuple((name, width, (left + (i % cols) * (size + gap), top + (i // cols) * (size + gap),
+                                left + (i % cols) * (size + gap) + size, top + (i // cols) * (size + gap) + size))
+                 for i, (name, width) in enumerate(FILTER_WIDTH_PRESETS))
+
+
+def radio_filter_preset_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
+    return filter_width_preset_boxes(radio_passband_boxes(receiver_type, mode_family_count)["shift"][3] + 16)
+
+
+def draw_filter_width_presets(text_cache, presets, width_hz):
+    for name, preset_width_hz, box in presets:
+        draw_styled_two_line_button(
+            text_cache, box,
+            {"VOICE NARROW": "NAR", "VOICE WIDE": "WIDE",
+             "WIDE 6k": "WIDE", "WIDE 12k": "WIDE"}.get(name, name),
+            (f"{preset_width_hz / 1000:g} kHz" if preset_width_hz >= 1000 else f"{preset_width_hz} Hz"),
+            active=abs(width_hz - preset_width_hz) <= FILTER_SNAP_HZ / 2,
+            fit_full_subtitle=True,
+        )
+
+
 def lcd_filter_drawer_boxes():
     """Right-rail geometry for the non-modal LCD passband editor."""
     x0, x1 = LCD_NAV_X0, LOGICAL_W
     inner_x0, inner_x1 = x0 + 10, x1 - 10
-    # Keep choice buttons bottom-aligned immediately above Back. That gives
-    # the two continuous instruments generous, finger-friendly travel.
-    preset_top, preset_h, preset_gap = 493, APP_UI_STYLE.button.height, APP_UI_STYLE.button.gap
-    preset_w = (inner_x1 - inner_x0 - 8) / 2
-    preset_boxes = []
-    for index, (name, width_hz) in enumerate(FILTER_WIDTH_PRESETS):
-        col, row = index % 2, index // 2
-        left = inner_x0 + col * (preset_w + 8)
-        top = preset_top + row * (preset_h + preset_gap)
-        preset_boxes.append((name, width_hz, (left, top, left + preset_w, top + preset_h)))
+    preset_boxes = filter_width_preset_boxes(493)
     return {
         "panel": (x0, LCD_DRAWER_HEADER_H, x1, lcd_rail_bottom()),
         "close": lcd_drawer_back_box(),
@@ -17042,13 +17064,6 @@ def lcd_filter_drawer_action_at(x, y):
     if contains(boxes["shift"], x, y):
         return "shift"
     return "drawer"
-
-
-def next_lcd_filter_preset_width(name, current_width_hz, preset_width_hz):
-    """Return the selected width, including the compact 9/12 kHz cycle."""
-    if name == "WIDE 9/12k":
-        return 12000 if abs(current_width_hz - 9000) <= FILTER_SNAP_HZ / 2 else 9000
-    return preset_width_hz
 
 
 def filter_shift_response_exponent(width_hz):
@@ -17145,21 +17160,7 @@ def draw_lcd_filter_drawer(text_cache, mode, low_cut, high_cut):
     draw_lcd_filter_width_slider(text_cache, boxes["width"], low_cut, high_cut)
     draw_lcd_filter_shift_slider(text_cache, boxes["shift"], low_cut, high_cut)
     draw_text(text_cache, x0 + 12, 475, "WIDTH PRESETS", themed_instrument_color("section_heading", (169, 203, 208)), 13, True, False, "lm", family="Liberation Sans")
-    current_preset = filter_preset_index(width_hz)
-    for index, (name, preset_width_hz, box) in enumerate(boxes["presets"]):
-        active = current_preset == index or (
-            name == "WIDE 9/12k" and abs(width_hz - 12000) <= FILTER_SNAP_HZ / 2
-        )
-        draw_lcd_audio_tile(
-            text_cache,
-            box,
-            name.replace("VOICE ", ""),
-            ("9 / 12 kHz" if name == "WIDE 9/12k" else format_filter_width(preset_width_hz)),
-            active,
-            accent=(104, 234, 180, 228),
-            title_size=13,
-            detail_size=13,
-        )
+    draw_filter_width_presets(text_cache, boxes["presets"], width_hz)
     draw_sidebar_header(text_cache, "PASSBAND")
 
 
@@ -29256,6 +29257,11 @@ def main():
                                                 if rtl_active else radio_mode
                                             )
                                             remember_current_view()
+                                    elif kind == "filter_preset":
+                                        _m, low_cut, high_cut, _g = state.radio_snapshot()
+                                        actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, value))
+                                        filter_drawer_width_hz = actual_high - actual_low
+                                        filter_custom_width = False
                                     elif kind == "step":
                                         if state.receiver_type_snapshot() == "fmdx":
                                             fmdx_tune_step_hz = value
@@ -29303,7 +29309,7 @@ def main():
                                     for _name, preset_width_hz, preset_box in filter_boxes["presets"]:
                                         if contains(preset_box, x, y):
                                             _mode, low_cut, high_cut, _radio_generation = state.radio_snapshot()
-                                            target_width_hz = next_lcd_filter_preset_width(_name, high_cut - low_cut, preset_width_hz)
+                                            target_width_hz = preset_width_hz
                                             actual_low, actual_high, _generation = state.set_filter(*symmetric_filter_bounds(low_cut, high_cut, target_width_hz))
                                             filter_drawer_width_hz = actual_high - actual_low
                                             filter_custom_width = False

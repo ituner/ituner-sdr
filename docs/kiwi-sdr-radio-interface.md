@@ -210,7 +210,7 @@ The renderer uses straightforward OpenGL immediate-mode geometry plus textures, 
 - The passband icon in the transparent waterfall control group opens a full-width filter sheet over the waterfall. Filter setup is deliberately not a Home sub-menu or a permanent status readout.
 - The large center strip is direct manipulation: touch nearer the left or right handle and drag horizontally to reshape that filter edge. Its scale automatically tightens around the active passband so the handles remain comfortably separated. The edges cannot cross; they stop at a 50 Hz minimum width.
 - A large `- / preset / +` width stepper provides fast, symmetric changes around the current filter center. Edge dragging produces a `CUSTOM` asymmetric filter; the next `-` or `+` tap deliberately re-centers it around that same center frequency.
-- The cyclic width presets are `CW` (500 Hz), `VOICE NARROW` (1.2 kHz), `VOICE` (2.4 kHz), `VOICE WIDE` (3 kHz), `WIDE 6k`, `WIDE 9k`, and `KIWI MAX` (12 kHz). Fine `-`/`+` changes remain symmetric 100 Hz adjustments around the current center.
+- The cyclic width presets are `CW` (500 Hz), `VOICE NARROW` (1.2 kHz), `VOICE` (2.4 kHz), `VOICE WIDE` (3 kHz), `WIDE 6k`, and `WIDE 12k` (12 kHz). Fine `-`/`+` changes remain symmetric 100 Hz adjustments around the current center.
 - Filter edits update the active KiwiSDR SND connection with real `low_cut` and `high_cut` values. The SND stream also supplies the preferred live S-meter data.
 
 ### Context sheets
@@ -566,7 +566,8 @@ variants. The selected variant appears as its short mode code, and full
 family names use the shared font-fitting helper. The synchronous AM family
 shows SYNC on the first line and AM (or the selected sync variant) below it,
 with the primary label centered on the same baseline as the other modes and
-a smaller variant caption underneath. Every mode centers its label and square status lamp together as one group; the selected lamp and any variant caption glow green. Base names
+a smaller variant caption underneath. Every mode centers its label and indicator together as one group. Sync and FM use
+their green variant text as the indicator; other modes use a rectangular green lamp. Base names
 are not repeated underneath (AM, CW, USB, LSB, I/Q and DRM). Active FM variants
 use that same alignment. Tune-step controls sit
 below the last mode row as two rows of four squares, with a number above its Hz/kHz unit.
@@ -583,3 +584,9 @@ font, without changing the main instrument readout. Frequency and Modes share ei
 choices (1 Hz, 10 Hz, 100 Hz, 1 kHz, 5 kHz, 10 kHz, 20 kHz and 100 kHz), in two rows of four
 52 px squares, with the number above Hz/kHz. The keypad
 and directional buttons retain their existing geometry.
+
+The detailed Passband drawer presents its six width presets in two rows of
+three 64 px squares with 16 px gaps. Short captions (CW, NAR, VOICE and WIDE)
+sit above the actual width. The last preset selects 12 kHz directly; it no
+longer cycles between 9 and 12 kHz. Width, Shift and Back retain their positions. The same six preset squares also
+appear below Shift in Modes, with the same widths and selection behavior.

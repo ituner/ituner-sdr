@@ -2006,6 +2006,12 @@ class PassbandDrawerInteractionTests(unittest.TestCase):
         self.assertLess(boxes['visual'][3], boxes['width'][1])
         self.assertLess(boxes['width'][3], boxes['shift'][1])
         self.assertLess(boxes['shift'][3], boxes['presets'][0][2][1])
+        presets=boxes['presets']
+        self.assertEqual(len({box[0] for _,_,box in presets}),3)
+        self.assertEqual(len({box[1] for _,_,box in presets}),2)
+        self.assertTrue(all(box[2]-box[0]==box[3]-box[1]==64 for _,_,box in presets))
+        self.assertEqual([width for _,width,_ in presets],[500,1200,2400,3000,6000,12000])
+        self.assertLess(max(box[3] for _,_,box in presets),boxes['close'][1])
 
     def test_entire_visible_shift_and_width_controls_are_interactive(self):
         boxes = ui.lcd_filter_drawer_boxes()
