@@ -1205,13 +1205,13 @@ def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Top of the tuning-step heading, below the mode family grid."""
     rows = max(1, math.ceil(int(mode_family_count) / LCD_RADIO_SQUARE_COLS))
     grid_height = rows * LCD_RADIO_SQUARE_SIZE + (rows - 1) * LCD_RADIO_SQUARE_GAP
-    return lcd_radio_mode_grid_y0() + grid_height + 20
+    return lcd_radio_mode_grid_y0() + grid_height + 16
 
 
 def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Shared square step grid, retaining the dedicated shared-FM layout."""
     if receiver_worker_protocol(receiver_type)!="fmdx":
-        return tune_step_square_boxes(receiver_type,lcd_radio_step_y0(mode_family_count)+36)
+        return tune_step_square_boxes(receiver_type,lcd_radio_step_y0(mode_family_count)+32)
     steps=FMDX_TUNE_STEPS_HZ
     width,gap=FREQUENCY_SMALL_BUTTON_W,FREQUENCY_SMALL_BUTTON_GAP
     left=(LCD_NAV_X0+LOGICAL_W-(len(steps)*width+(len(steps)-1)*gap))/2
@@ -17030,7 +17030,7 @@ def filter_width_preset_boxes(top):
 
 
 def radio_filter_preset_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
-    return filter_width_preset_boxes(radio_passband_boxes(receiver_type, mode_family_count)["shift"][3] + 8)
+    return filter_width_preset_boxes(radio_passband_boxes(receiver_type, mode_family_count)["shift"][3] + 16)
 
 
 def draw_filter_width_presets(text_cache, presets, width_hz):

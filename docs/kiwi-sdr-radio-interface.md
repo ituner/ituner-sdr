@@ -594,4 +594,5 @@ appear below Shift in Modes, with the same widths and selection behavior.
 
 Modes uses a compact 32 px, left-aligned heading and a 103 px passband
 graphic. Extra space above and below the Tune Step heading keeps it clear
-of both button grids. Slider and preset button sizes are retained.
+of both button grids. A 16 px gap separates Shift from the presets. Slider
+and preset button sizes are retained, and the preset grid stays clear of Back.
