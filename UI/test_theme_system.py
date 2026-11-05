@@ -74,6 +74,8 @@ class ThemeSystemTests(unittest.TestCase):
         middle_trace = ui.mirror_smeter_trace_x(675 + (50 if ui.DESKTOP_1280_MODE else 0), 6)
         self.assertLess(middle_trace + ui.SMETER_TRACE_WIDTH, middle_frequency[0])
         self.assertLess(middle_frequency[2], middle_band[0])
+        ui.set_display_page(True)
+        self.addCleanup(ui.set_display_page, False)
         with patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \
@@ -142,6 +144,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_big_frequency"), \
                 patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_picker_button"), \
+                patch.object(ui, "draw_radio_tune_step"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_text") as text:
             ui.draw_frequency_drawer(None, 7075, 100, "Oxanium")
@@ -455,11 +458,14 @@ class ThemeSystemTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect") as rectangles, \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_polyline"), \
+                patch.object(ui, "draw_lcd_home_bandwidth"), \
                 patch.object(ui, "draw_text"), \
                 patch.object(ui, "draw_radio_close_button"), \
                 patch.object(ui, "draw_lcd_audio_tile"), \
+                patch.object(ui, "draw_lcd_audio_annunciator"), \
                 patch.object(ui, "draw_lcd_audio_slider_tile"), \
                 patch.object(ui, "draw_sidebar_header"), \
+                patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_styled_button_frame",
                              return_value=APP_UI_STYLE.button.resolve()):
             ui.draw_lcd_audio_drawer(None, 0.5, controls, -400, 400,

@@ -329,51 +329,79 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_logical_line') as lines, \
              patch.object(ui, 'draw_text'), \
              patch.object(ui, 'draw_styled_button_frame'), \
+             patch.object(ui, 'draw_styled_two_line_button'), \
              patch.object(ui, 'draw_styled_text_button') as close_button:
             ui.draw_band_navigation(text_cache, 7075, 'LSB')
         self.assertEqual(len(lines.call_args_list), 1)
         close_button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
 
-    def test_audio_rail_uses_full_width_sliders_and_bottom_reset_mute_row(self):
+    def test_band_button_is_third_row_right_with_live_context(self):
         ui.configure_output(True)
-        back = ui.lcd_audio_drawer_close_box()
-        full_edges = (back[0], back[2])
-        for box in (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
-                    ui.AUDIO_DENOISE_BOX, ui.AUDIO_BACKEND_BOX):
-            self.assertEqual((box[0], box[2]), full_edges)
-            self.assertEqual(box[2] - box[0], 236)
+        scan=ui.smart_seek_waterfall_box();box=ui.band_waterfall_box()
+        self.assertEqual((box[0],box[2]),(scan[0],scan[2]))
+        self.assertEqual(box[1]-scan[3],10)
+        self.assertEqual(box[2]-box[0],box[3]-box[1])
+        with patch.object(ui,'draw_styled_two_line_button') as draw:
+            ui.draw_band_waterfall_button(None,7265,'AM')
+        self.assertEqual(draw.call_args.args[2:],('BAND','41 m'))
+        for x,y in (((box[0]+box[2])/2,box[1]),(box[0],box[3]),(box[2]+3,box[1]+8)):
+            self.assertTrue(ui.waterfall_band_touch(x,y,True))
+            self.assertFalse(ui.is_waterfall_tune_touch(x,y,band_drawn=True))
+        self.assertFalse(ui.waterfall_band_touch(box[0],box[1],False))
+        self.assertFalse(ui.waterfall_band_touch(box[0],box[1],True,modal_open=True))
 
-        reset, mute = ui.AUDIO_RESET_BOX, ui.AUDIO_MUTE_BOX
-        self.assertEqual((reset[1], reset[3]), (mute[1], mute[3]))
-        self.assertEqual((reset[0], mute[2]), full_edges)
-        self.assertEqual(mute[0] - reset[2], 8)
-        self.assertEqual(ui.AUDIO_BACKEND_BOX[3] + 8, reset[1])
-        self.assertGreaterEqual(back[1] - mute[3], 16)
-        self.assertEqual(ui.AUDIO_DENOISE_BOX[3] + 8,
-                         ui.AUDIO_VOICE_CLEAN_BOX[1])
-        for action, box in (('reset', reset), ('mute', mute),
-                            ('backend', ui.AUDIO_BACKEND_BOX),
-                            ('filter', ui.AUDIO_FILTER_BOX)):
-            self.assertEqual(ui.audio_option_at(
-                (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
-            ), action)
+    def test_band_chooser_displays_only_supplied_broadcast_counts(self):
+        ui.configure_output(True)
+        with patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'), \
+             patch.object(ui,'draw_text'), patch.object(ui,'draw_styled_text_button'), \
+             patch.object(ui,'draw_styled_two_line_button') as tile:
+            ui.draw_band_navigation(None,7265,'AM',{'41 m':13,'MW':0,'40 m':99},(0,30000))
+        details={c.args[2]:c for c in tile.call_args_list}
+        self.assertEqual(details['41 m'].args[3],'(13)')
+        self.assertEqual(details['MW'].args[3],'(0)')
+        self.assertEqual(details['31 m'].args[3],'BROADCAST')
+        self.assertEqual(details['40 m'].args[3],'HAM')
+        self.assertFalse(details['6 m'].kwargs['enabled'])
 
-        controls = (
-            ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX, ui.AUDIO_DENOISE_BOX,
-            ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_HF_ENHANCE_BOX,
-            ui.AUDIO_AGC_BOX, ui.AUDIO_BLANKER_BOX, ui.AUDIO_NOTCH_BOX,
-            ui.AUDIO_DEEMP_BOX, ui.AUDIO_TONE_BOX, ui.AUDIO_FILTER_BOX,
-            ui.AUDIO_BACKEND_BOX, reset, mute,
-        )
-        for index, box in enumerate(controls):
-            for other in controls[index + 1:]:
-                self.assertFalse(
-                    box[0] < other[2] and other[0] < box[2]
-                    and box[1] < other[3] and other[1] < box[3],
-                    (box, other),
-                )
+    def test_audio_pages_keep_visible_controls_separate_and_sliders_roomy(self):
+        ui.configure_output(True)
+        self.addCleanup(ui.set_audio_page, False)
+        for advanced in (False, True):
+            ui.set_audio_page(advanced)
+            back = ui.lcd_audio_drawer_close_box()
+            full_edges = (back[0], back[2])
+            boxes = [getattr(ui, name) for name in (
+                'AUDIO_VOLUME_BOX', 'AUDIO_DENOISE_BOX', 'AUDIO_VOICE_CLEAN_BOX',
+                'AUDIO_SQUELCH_BOX', 'AUDIO_PASSBAND_GRAPH_BOX', 'AUDIO_PASSBAND_BOX', 'AUDIO_MUTE_BOX', 'AUDIO_ADVANCED_BOX',
+                'AUDIO_AGC_BOX', 'AUDIO_BLANKER_BOX', 'AUDIO_NOTCH_BOX',
+                'AUDIO_DEEMP_BOX', 'AUDIO_TONE_BOX', 'AUDIO_FILTER_BOX',
+                'AUDIO_HF_ENHANCE_BOX', 'AUDIO_BACKEND_BOX', 'AUDIO_RESET_BOX')]
+            visible = [box for box in boxes if box[0] >= 0] + [back]
+            for index, box in enumerate(visible):
+                self.assertGreaterEqual(box[1], ui.AUDIO_HEADER_H + 16)
+                self.assertGreaterEqual(box[3] - box[1], 56)
+                for other in visible[index + 1:]:
+                    self.assertFalse(box[0] < other[2] and other[0] < box[2]
+                                     and box[1] < other[3] and other[1] < box[3])
+            if not advanced:
+                sliders = (ui.AUDIO_VOLUME_BOX, ui.AUDIO_SQUELCH_BOX,
+                           ui.AUDIO_DENOISE_BOX, ui.AUDIO_VOICE_CLEAN_BOX, ui.AUDIO_PASSBAND_BOX)
+                for box in sliders:
+                    self.assertEqual((box[0], box[2]), full_edges)
+                    self.assertGreaterEqual(box[3] - box[1], 70)
+                for first, second in zip(sliders, sliders[1:]):
+                    self.assertGreaterEqual(second[1] - first[3], 16)
+                self.assertLess(ui.AUDIO_HF_ENHANCE_BOX[0], 0)
+            else:
+                self.assertLess(ui.AUDIO_DENOISE_BOX[0], 0)
+                for action, box in (('filter', ui.AUDIO_FILTER_BOX),
+                                    ('backend', ui.AUDIO_BACKEND_BOX),
+                                    ('reset', ui.AUDIO_RESET_BOX)):
+                    self.assertEqual(ui.audio_option_at((box[0]+box[2])/2,
+                                                       (box[1]+box[3])/2), action)
+        ui.set_audio_page(False)
 
-    def test_audio_rail_draws_full_width_volume_and_slider_tracks(self):
+    def test_audio_rail_draws_shared_volume_and_full_width_other_tracks(self):
         ui.configure_output(True)
         controls = dict(mute=False, voice_clean_level=0, hf_enhance_level=0,
                         tone_profile=0, squelch_level=0, agc=True,
@@ -384,13 +412,18 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_text'), \
              patch.object(ui, 'draw_radio_close_button'), \
              patch.object(ui, 'draw_lcd_audio_tile'), \
+             patch.object(ui, 'draw_lcd_audio_annunciator'), \
              patch.object(ui, 'draw_lcd_audio_slider_tile'), \
-             patch.object(ui, 'draw_sidebar_header'):
+             patch.object(ui, 'draw_sidebar_header'), \
+             patch.object(ui, 'draw_lcd_home_bandwidth'), \
+             patch.object(ui, 'draw_logical_polyline'), \
+             patch.object(ui, 'draw_styled_button_frame', return_value=ui.APP_UI_STYLE.button.resolve()), \
+             patch.object(ui, 'draw_styled_text_button'):
             ui.draw_lcd_audio_drawer(object(), 0.5, controls, -400, 400,
                                      True, 'am', 'pipewire')
-        volume = ui.AUDIO_VOLUME_BOX
-        track_y = volume[3] - 16
-        self.assertIn((volume[0], track_y - 3, volume[2], track_y + 3),
+        volume = ui.volume_track_box(ui.AUDIO_VOLUME_BOX)
+        track_y = (volume[1] + volume[3]) / 2
+        self.assertIn((volume[0], track_y - ui.SLIDER_STEM_HALF_HEIGHT, volume[2], track_y + ui.SLIDER_STEM_HALF_HEIGHT),
                       [entry.args[:4] for entry in rectangles.call_args_list])
 
         for box in (ui.AUDIO_SQUELCH_BOX, ui.AUDIO_DENOISE_BOX):
@@ -399,11 +432,11 @@ class BoardLayoutTests(unittest.TestCase):
                 ui.draw_lcd_audio_slider_tile(object(), box, 'LEVEL', 0, 10,
                                               'OFF', full_width=True)
             track_y = box[3] - 15
-            self.assertIn((box[0], track_y - 3, box[2], track_y + 3),
+            self.assertIn((box[0]+10, track_y - 3, box[2]-10, track_y + 3),
                           [entry.args[:4] for entry in rectangles.call_args_list])
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[0]), 0)
         self.assertEqual(ui.audio_denoise_level_at_x(ui.AUDIO_DENOISE_BOX[2]),
-                         len(ui.DENOISE_SLIDER_POSITIONS) - 1)
+                         ui.kiwi.DENOISE_MAX)
 
     def test_scope_drag_requires_a_held_vertical_move(self):
         self.assertFalse(ui.scope_hold_drag_ready(0.2, 0, 80, 10))
@@ -691,118 +724,75 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
-    def test_display_reset_sits_directly_above_back(self):
-        ui.configure_output(True)
-        ui.configure_popup_layout()
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
-                         ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
-                         ui.lcd_drawer_back_box()[1])
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        self.assertEqual(ui.DISPLAY_THEME_BOX[2] - ui.DISPLAY_THEME_BOX[0], 236)
-        self.assertEqual(ui.display_option_at(1150, (ui.DISPLAY_THEME_BOX[1] + ui.DISPLAY_THEME_BOX[3]) / 2),
-                         ('theme', None))
+    def test_display_advanced_sits_above_back_and_reset_beside_speed(self):
+        ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
+        self.addCleanup(ui.set_display_page,False)
+        self.assertEqual(ui.DISPLAY_ADVANCED_BOX[3]+ui.LCD_NAV_GAP,ui.lcd_drawer_back_box()[1])
+        self.assertEqual(ui.DISPLAY_RESET_BOX[1::2],ui.DISPLAY_SPEED_BOX[1::2])
+        self.assertGreater(ui.DISPLAY_RESET_BOX[0],ui.DISPLAY_SPEED_BOX[2])
+        ui.set_display_page(True)
+        box=ui.DISPLAY_THEME_BOX
+        self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),('theme',None))
+        self.assertLess(ui.DISPLAY_RESET_BOX[0],0)
 
     def test_display_drawer_draws_layout_and_speed_without_scope(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        seen = []
-        with patch.object(ui, 'draw_lcd_audio_tile',
-                          side_effect=lambda *_a, **_k: seen.append((_a[1], _a[2]))), \
-             patch.object(ui, 'draw_display_slider_section'), \
-             patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
-             patch.object(ui, 'draw_radio_close_button'), \
-             patch.object(ui, 'draw_sidebar_header'), \
-             patch.object(ui, 'draw_display_control') as controls, \
-             patch.object(ui, 'draw_lcd_drawer_heading') as headings:
-            ui.draw_display_setup_panel(None, -95, -20, 1, False, 'kiwi', True)
-        self.assertIn((ui.DISPLAY_RESET_BOX, 'RESET DISPLAY'), seen)
-        self.assertIn((ui.DISPLAY_THEME_BOX, 'THEMES'), seen)
-        self.assertIn('LEFT', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('MIDDLE', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('RIGHT', [entry.args[2] for entry in controls.call_args_list])
-        self.assertNotIn('DRAG', [entry.args[2] for entry in controls.call_args_list])
-        self.assertIn('WATERFALL SPEED', [entry.args[3] for entry in headings.call_args_list])
-        self.assertIn('WATERFALL THEME', [entry.args[3] for entry in headings.call_args_list])
-        self.assertIn('FREQUENCY POSITION', [entry.args[3] for entry in headings.call_args_list])
-        self.assertNotIn('SCOPE', [entry.args[3] for entry in headings.call_args_list])
-        heading_y = {entry.args[3]: entry.args[2] for entry in headings.call_args_list}
-        self.assertEqual(heading_y['WATERFALL THEME'] - 8
-                         - ui.DISPLAY_CEIL_MINUS_BOX[3], 16)
-        self.assertEqual(heading_y['WATERFALL SPEED'] - 8
-                         - ui.DISPLAY_PALETTE_BOXES[0][1][3], 16)
-        self.assertEqual(heading_y['FREQUENCY POSITION'] - 8
-                         - ui.DISPLAY_RATE_BOXES[0][1][3], 16)
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16,
-                         ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(ui.DISPLAY_RESET_BOX[3] + ui.LCD_NAV_GAP,
-                         ui.lcd_drawer_back_box()[1])
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        states = {entry.args[2]: entry.args[3] for entry in controls.call_args_list}
-        self.assertFalse(states['LEFT'])
-        self.assertTrue(states['MIDDLE'])
-        self.assertFalse(states['RIGHT'])
+        self.addCleanup(ui.set_display_page, False)
+        for advanced in (False, True):
+            ui.set_display_page(advanced)
+            with patch.object(ui, 'draw_lcd_audio_tile') as tiles, \
+                 patch.object(ui, 'draw_styled_two_line_button') as cycles, \
+                 patch.object(ui, 'draw_display_slider_section') as sliders, \
+                 patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
+                 patch.object(ui, 'draw_radio_close_button'), patch.object(ui, 'draw_sidebar_header'), \
+                 patch.object(ui, 'draw_display_control') as controls, \
+                 patch.object(ui, 'draw_lcd_drawer_heading'):
+                ui.draw_display_setup_panel(None, 100, 200, 1, False, 'kiwi', True)
+            if advanced:
+                self.assertFalse(cycles.called)
+                self.assertFalse(sliders.called)
+                self.assertIn('THEMES', [c.args[2] for c in tiles.call_args_list])
+                self.assertEqual([c.args[2] for c in controls.call_args_list],
+                                 ['LEFT', 'MIDDLE', 'RIGHT'])
+            else:
+                self.assertEqual([c.args[2:4] for c in cycles.call_args_list],
+                                 [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('RESET','DISPLAY')])
+                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
+                self.assertEqual([c.args[2] for c in controls.call_args_list], ['STD','KIWI','GQRX'])
+                self.assertIn('ADVANCED', [c.args[2] for c in tiles.call_args_list])
 
     def test_display_drawer_options_fit_the_rail(self):
         ui.configure_output(True)
         ui.configure_popup_layout()
-        rail_bottom = ui.lcd_drawer_back_box()[1]
-        self.assertEqual(ui.DISPLAY_THEME_BOX[1] - ui.LCD_DRAWER_HEADER_H, 16)
-        self.assertEqual(ui.DISPLAY_AUTO_BOX[1], ui.DISPLAY_SPECTRUM_BOX[1])
-        boxes = [ui.DISPLAY_THEME_BOX, ui.DISPLAY_RESET_BOX, ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX,
-                 ui.DISPLAY_FLOOR_MINUS_BOX, ui.DISPLAY_CEIL_MINUS_BOX]
-        boxes.extend(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES)
-        boxes.extend(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES)
-        boxes.extend(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES)
-        for box in boxes:
-            self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
-            self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertLess(box[3], rail_bottom, box)
-        for layout, box in ui.DISPLAY_LAYOUT_BOXES:
-            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
-                                                  (box[1] + box[3]) / 2), ('layout', layout))
-        back_x0, rail_bottom, back_x1, _back_bottom = ui.lcd_drawer_back_box()
-        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[::2], (back_x0, back_x1))
-        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[::2], (back_x0, back_x1))
-        for group in (
-            (ui.DISPLAY_SPECTRUM_BOX, ui.DISPLAY_AUTO_BOX),
-            tuple(box for _rate, box, _label in ui.DISPLAY_RATE_BOXES),
-            tuple(box for _name, box, _label in ui.DISPLAY_PALETTE_BOXES),
-            tuple(box for _layout, box in ui.DISPLAY_LAYOUT_BOXES),
-        ):
-            self.assertEqual((group[0][0], group[-1][2]), (back_x0, back_x1))
-        self.assertEqual([box[3] - box[1] for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
-                         [31] * 3)
-        self.assertEqual([position for position, _box in ui.DISPLAY_LAYOUT_BOXES],
-                         ['left', 'middle', 'right'])
-        self.assertEqual(
-            [(box[0], box[2] - box[0], box[3] - box[1])
-             for _position, box in ui.DISPLAY_LAYOUT_BOXES],
-            [(box[0], box[2] - box[0], box[3] - box[1])
-             for _rate, box, _label in ui.DISPLAY_RATE_BOXES],
-        )
-        self.assertEqual([(box[2] - box[0], box[3] - box[1])
-                          for _name, box, _label in ui.DISPLAY_PALETTE_BOXES],
-                         [(box[2] - box[0], box[3] - box[1])
-                          for _rate, box, _label in ui.DISPLAY_RATE_BOXES])
-        self.assertEqual(ui.DISPLAY_FLOOR_MINUS_BOX[1] - ui.DISPLAY_SPECTRUM_BOX[3], 16)
-        self.assertEqual(ui.DISPLAY_CEIL_MINUS_BOX[1] - ui.DISPLAY_FLOOR_MINUS_BOX[3], 16)
-        self.assertEqual(ui.DISPLAY_PALETTE_BOXES[0][1][1] - ui.DISPLAY_CEIL_MINUS_BOX[3], 40)
-        self.assertEqual([name for name, _box, _label in ui.DISPLAY_PALETTE_BOXES],
-                         ['classic', 'kiwi', 'gqrx'])
-        for palette, box, _label in ui.DISPLAY_PALETTE_BOXES:
-            self.assertEqual(ui.display_option_at((box[0] + box[2]) / 2,
-                                                  (box[1] + box[3]) / 2),
-                             ('palette', palette))
-        self.assertEqual(ui.DISPLAY_THEME_BOX[3] + 16, ui.DISPLAY_SPECTRUM_BOX[1])
-        self.assertEqual(rail_bottom - ui.DISPLAY_RESET_BOX[3], ui.LCD_NAV_GAP)
-        self.assertLess(ui.DISPLAY_THEME_BOX[3], ui.DISPLAY_RESET_BOX[1])
-        for earlier in boxes:
-            if earlier != ui.DISPLAY_RESET_BOX:
-                self.assertFalse(earlier[0] < ui.DISPLAY_RESET_BOX[2]
-                                 and ui.DISPLAY_RESET_BOX[0] < earlier[2]
-                                 and earlier[1] < ui.DISPLAY_RESET_BOX[3]
-                                 and ui.DISPLAY_RESET_BOX[1] < earlier[3])
+        self.addCleanup(ui.set_display_page, False)
+        for advanced in (False,True):
+            ui.set_display_page(advanced)
+            boxes=[getattr(ui,'DISPLAY_'+n+'_BOX') for n in
+                   ('THEME','RESET','SPECTRUM','AUTO','WATERFALL','SPEED','ADVANCED','FLOOR_MINUS','CEIL_MINUS')]
+            boxes += [b for _,b in ui.DISPLAY_LAYOUT_BOXES]
+            boxes += [b for _,b,_ in ui.DISPLAY_PALETTE_BOXES]
+            boxes=[b for b in boxes if b[0]>=0]
+            for i,box in enumerate(boxes):
+                self.assertGreaterEqual(box[0],ui.LCD_NAV_X0)
+                self.assertLessEqual(box[2],ui.LOGICAL_W)
+                self.assertGreaterEqual(box[3]-box[1],56)
+                self.assertLess(box[3],ui.lcd_drawer_back_box()[1])
+                for other in boxes[i+1:]:
+                    self.assertFalse(box[0]<other[2] and other[0]<box[2] and box[1]<other[3] and other[1]<box[3])
+            if not advanced:
+                for action,box in (('spectrum_cycle',ui.DISPLAY_SPECTRUM_BOX),('waterfall_cycle',ui.DISPLAY_WATERFALL_BOX),('speed_cycle',ui.DISPLAY_SPEED_BOX)):
+                    self.assertEqual((box[2]-box[0],box[3]-box[1]),(110,56))
+                    self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),(action,None))
+                ui.set_audio_page(False)
+                audio=(ui.AUDIO_AGC_BOX,ui.AUDIO_TONE_BOX,ui.AUDIO_NOTCH_BOX)
+                colors=[b for _,b,_ in ui.DISPLAY_PALETTE_BOXES]
+                self.assertEqual([(b[0],b[2],b[3]-b[1]) for b in colors],
+                                 [(b[0],b[2],b[3]-b[1]) for b in audio])
+                self.assertEqual(ui.DISPLAY_WATERFALL_BOX[0]-ui.DISPLAY_SPECTRUM_BOX[2],
+                                 colors[1][0]-colors[0][2])
+                self.assertFalse(ui.DISPLAY_RATE_BOXES)
+                self.assertFalse(ui.DISPLAY_WATERFALL_MODE_BOXES)
 
     def test_palette_choice_restores_both_contrast_sliders(self):
         state = ui.SharedState(
@@ -1018,7 +1008,9 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertNotIn('ENTER FREQUENCY', texts)
         self.assertIn('OK', texts)
         for step_hz in ui.frequency_tune_steps('kiwi'):
-            self.assertIn(ui.format_tune_step(step_hz).upper(), texts)
+            value=f'{step_hz/1000:g}' if step_hz>=1000 else str(step_hz)
+            self.assertIn(value,texts)
+            self.assertIn('KHZ' if step_hz>=1000 else 'HZ',texts)
 
     def test_home_instruments_sit_under_the_mode_buttons(self):
         # The passband and volume are painted after the mode surface, so in
@@ -2044,6 +2036,12 @@ class PassbandDrawerInteractionTests(unittest.TestCase):
         self.assertLess(boxes['visual'][3], boxes['width'][1])
         self.assertLess(boxes['width'][3], boxes['shift'][1])
         self.assertLess(boxes['shift'][3], boxes['presets'][0][2][1])
+        presets=boxes['presets']
+        self.assertEqual(len({box[0] for _,_,box in presets}),3)
+        self.assertEqual(len({box[1] for _,_,box in presets}),2)
+        self.assertTrue(all(box[2]-box[0]==box[3]-box[1]==64 for _,_,box in presets))
+        self.assertEqual([width for _,width,_ in presets],[500,1200,2400,3000,6000,12000])
+        self.assertLess(max(box[3] for _,_,box in presets),boxes['close'][1])
 
     def test_entire_visible_shift_and_width_controls_are_interactive(self):
         boxes = ui.lcd_filter_drawer_boxes()
@@ -2115,6 +2113,7 @@ class ReceiverBrowserEmptyStateTests(unittest.TestCase):
         with patch.object(ui, "draw_logical_rect"), patch.object(ui, "draw_logical_line"), \
              patch.object(ui, "draw_receiver_action_button"), \
              patch.object(ui, "draw_receiver_filter_button"), \
+             patch.object(ui, "draw_directory_refresh_button"), \
              patch.object(ui, "draw_receiver_sidebar_header"), \
              patch.object(ui, "draw_receiver_back_button"), \
              patch.object(ui, "draw_text",

@@ -5,7 +5,7 @@ semantic colors and state resolver without coupling the design system to
 OpenGL, pygame, or a particular panel layout.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -101,6 +101,7 @@ class ButtonStyle:
     title_size: int = 14
     subtitle_size: int = 12
     font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
+    variant: str = "standard"
 
     @property
     def subtitle_color(self):
@@ -114,12 +115,12 @@ class ButtonStyle:
             )
         if active:
             return ButtonVisualState(
-                self.palette.active_surface, self.palette.active_border,
+                self.palette.surface if self.variant == "smart" else self.palette.active_surface, self.palette.active_border,
                 self.palette.text, 2,
             )
         if selected:
             return ButtonVisualState(
-                self.palette.selected_surface, self.palette.selected_border,
+                self.palette.surface if self.variant == "smart" else self.palette.selected_surface, self.palette.selected_border,
                 self.palette.text, 2,
             )
         if danger:
@@ -137,6 +138,11 @@ class ButtonStyle:
 class AppUIStyle:
     palette: UIPalette = field(default_factory=UIPalette)
     button: ButtonStyle = field(init=False)
+
+    @property
+    def smart_button(self):
+        """Smart Button: dark face, selected outline, green state text or lamp."""
+        return replace(self.button, variant="smart")
 
     def __post_init__(self):
         object.__setattr__(self, "button", ButtonStyle(self.palette))

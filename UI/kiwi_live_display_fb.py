@@ -61,6 +61,30 @@ DENOISE_PRESETS = (
     ("STRONG+", (128, 32, 15, 10)),
     ("MAX", (160, 40, 17, 11)),
 )
+DENOISE_MAX = float(len(DENOISE_PRESETS) - 1)
+VOICE_AUDIO_MODES = frozenset((
+    'am', 'amn', 'amw', 'sam', 'sau', 'sal', 'sas', 'qam',
+    'lsb', 'lsn', 'usb', 'usn', 'nbfm', 'nnfm',
+))
+
+
+def denoise_level(value):
+    try:
+        value = float(value)
+    except (ValueError, TypeError):
+        return 0.0
+    return max(0.0, min(DENOISE_MAX, value)) if math.isfinite(value) else 0.0
+
+
+def denoise_wdsp_params(level):
+    """Interpolate the old presets, with smooth gain/leakage coefficients."""
+    level = denoise_level(level)
+    anchors = ((48, 12, 0, 0),) + tuple(p[1] for p in DENOISE_PRESETS[1:])
+    lower = int(level)
+    upper = min(lower + 1, len(anchors) - 1)
+    fraction = level - lower
+    values = [a + (b - a) * fraction for a, b in zip(anchors[lower], anchors[upper])]
+    return wdsp_noise_params(round(values[0]), round(values[1]), values[2], values[3])
 
 
 def wdsp_noise_params(taps, delay, gain, leakage):
@@ -551,6 +575,7 @@ def send_kiwi_setup(ws, client_type, user):
     # Authentication starts a new receiver-side configuration lifetime, even
     # when a test transport (or future reconnect wrapper) reuses its object.
     vars(ws).pop('_ituner_wf_settings', None)
+    vars(ws).pop('_ituner_snd_settings', None)
     # ``#`` is the Kiwi web client's explicit marker for an empty public
     # listener password.
     ws.send_text(f"SET auth t={client_type} p=#")
@@ -591,9 +616,29 @@ def send_wf_setup(ws, freq_khz, zoom, wf_speed):
 def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
     """Configure a Kiwi SND stream, including optional live listening controls."""
     audio_controls = audio_controls or {}
-    ws.send_text("SET compression=0")
-    ws.send_text(f"SET mod={mode} low_cut={low_cut} high_cut={high_cut} freq={freq_khz:.3f}")
-    ws.send_text(
+    settings = vars(ws).setdefault('_ituner_snd_settings', {})
+
+    def send(command):
+        fields = command.split()
+        family = fields[1].split('=')[0]
+        if family in ('nr', 'nb') and len(fields) > 2:
+            key = tuple(field for field in fields[1:] if field.startswith(('nr', 'nb', 'type=', 'param=')))
+            if ' en=' in command:
+                key += ('enabled',)
+            if ' algo=' in command:
+                key += ('algorithm',)
+        else:
+            key = (family,)
+        if settings.get(key) != command:
+            ws.send_text(command)
+            if ' algo=' in command:
+                for old in list(settings):
+                    if old[0] == family and old != key:
+                        del settings[old]
+            settings[key] = command
+    send("SET compression=0")
+    send(f"SET mod={mode} low_cut={low_cut} high_cut={high_cut} freq={freq_khz:.3f}")
+    send(
         "SET agc={agc} hang={hang} thresh={threshold} slope={slope} decay={decay} manGain={gain}".format(
             agc=int(bool(audio_controls.get("agc", True))),
             hang=int(bool(audio_controls.get("agc_hang", False))),
@@ -606,43 +651,42 @@ def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
     squelch = int(audio_controls.get("squelch_level", 0))
     is_nbfm = str(mode).lower() in ("nbfm", "nnfm")
     squelch_param = 0.0 if is_nbfm else float(audio_controls.get("squelch_tail", 0.25))
-    ws.send_text(f"SET squelch={squelch} param={squelch_param:.2f}")
-    ws.send_text(f"SET mute={int(bool(audio_controls.get('mute', False)))}")
-    ws.send_text(f"SET de_emp={int(audio_controls.get('deemphasis', 0))} nfm={int(is_nbfm)}")
+    send(f"SET squelch={squelch} param={squelch_param:.2f}")
+    send(f"SET mute={int(bool(audio_controls.get('mute', False)))}")
+    send(f"SET de_emp={int(audio_controls.get('deemphasis', 0))} nfm={int(is_nbfm)}")
 
     nb_algo = int(audio_controls.get("nb_algo", 0))
-    ws.send_text(f"SET nb algo={nb_algo}")
+    send(f"SET nb algo={nb_algo}")
     if nb_algo == 1:
-        ws.send_text("SET nb type=0 param=0 pval=100")
-        ws.send_text("SET nb type=0 param=1 pval=50")
+        send("SET nb type=0 param=0 pval=100")
+        send("SET nb type=0 param=1 pval=50")
     elif nb_algo == 2:
-        ws.send_text("SET nb type=0 param=0 pval=0.95")
-        ws.send_text("SET nb type=0 param=1 pval=10")
-        ws.send_text("SET nb type=0 param=2 pval=7")
-    ws.send_text(f"SET nb type=0 en={int(nb_algo > 0)}")
+        send("SET nb type=0 param=0 pval=0.95")
+        send("SET nb type=0 param=1 pval=10")
+        send("SET nb type=0 param=2 pval=7")
+    send(f"SET nb type=0 en={int(nb_algo > 0)}")
 
     nr_algo = int(audio_controls.get("nr_algo", 1))
-    denoise_level = int(audio_controls.get("denoise_level", int(bool(audio_controls.get("denoise", False)))))
-    denoise_level = max(0, min(len(DENOISE_PRESETS) - 1, denoise_level))
+    level = denoise_level(audio_controls.get("denoise_level", int(bool(audio_controls.get("denoise", False)))))
     # Local RNNoise replaces Kiwi's denoiser for an A/B-friendly voice-clean
     # path. Keep the user's selected Kiwi level intact so it returns on toggle.
-    voice_clean_mode = str(mode).lower() in ("am", "sam", "lsb", "usb")
-    denoise = denoise_level > 0 and not (
-        bool(audio_controls.get("voice_clean", False)) and voice_clean_mode
+    voice_clean_mode = str(mode).lower() in VOICE_AUDIO_MODES
+    denoise = level > 0 and not (
+        (bool(audio_controls.get("voice_clean", False))
+         or bool(audio_controls.get("hf_enhance_level", 0))) and voice_clean_mode
     )
     autonotch = bool(audio_controls.get("autonotch", False))
-    ws.send_text(f"SET nr algo={nr_algo}")
+    send(f"SET nr algo={nr_algo}")
     if nr_algo == 1:
-        denoise_preset = DENOISE_PRESETS[denoise_level][1] or DENOISE_PRESETS[2][1]
         params_by_type = (
-            wdsp_noise_params(*denoise_preset),
+            denoise_wdsp_params(level),
             wdsp_noise_params(64, 16, 10, 7),
         )
         for nr_type, params in enumerate(params_by_type):
             for parameter, value in enumerate(params):
-                ws.send_text(f"SET nr type={nr_type} param={parameter} pval={value}")
-    ws.send_text(f"SET nr type=0 en={int(denoise and nr_algo > 0)}")
-    ws.send_text(f"SET nr type=1 en={int(autonotch and nr_algo > 0)}")
+                send(f"SET nr type={nr_type} param={parameter} pval={value}")
+    send(f"SET nr type=0 en={int(denoise and nr_algo > 0)}")
+    send(f"SET nr type=1 en={int(autonotch and nr_algo > 0)}")
 
 
 def parse_msg_params(message):
