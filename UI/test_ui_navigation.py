@@ -750,6 +750,8 @@ class DrawerGeometryTests(unittest.TestCase):
             next(box for step, box in ui.radio_step_options("fmdx") if step == 100_000)
         ), receiver_type="fmdx", fmdx_shared_control=False))
         passband=ui.radio_passband_boxes()
+        self.assertLess(passband["viewer"][3],passband["width"][1])
+        self.assertLess(passband["width"][3],passband["shift"][1])
         boxes=(*mode_boxes,*step_boxes,*passband.values(),back_box)
         overlaps=lambda a,b:a[0]<b[2] and b[0]<a[2] and a[1]<b[3] and b[1]<a[3]
         for i,box in enumerate(boxes):

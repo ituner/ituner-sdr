@@ -1225,8 +1225,8 @@ def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
     top=max(box[3] for _,box in steps)+16
     x0,x1=LCD_NAV_X0+10,LOGICAL_W-10
     return {"viewer":(x0,top,x1,top+89),
-            "shift":(x0,top+105,x1,top+169),
-            "width":(x0,top+185,x1,top+249)}
+            "width":(x0,top+105,x1,top+169),
+            "shift":(x0,top+185,x1,top+249)}
 
 
 def draw_radio_tune_step(text_cache,box,step_hz,active=False):

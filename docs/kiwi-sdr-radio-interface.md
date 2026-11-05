@@ -568,4 +568,5 @@ shows SYNC on the first line and AM (or the selected sync variant) below it,
 at the normal shared font size. Tune-step controls sit
 below the last mode row as four squares, with a number above its Hz/kHz unit.
 The former decoder shortcuts are replaced by the live passband viewer and
-Shift and Width sliders. Decoders remain in Digital; Back keeps its position.
+Width directly below the viewer and Shift below Width. Decoders remain in
+Digital; Back keeps its position.
