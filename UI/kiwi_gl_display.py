@@ -1324,6 +1324,8 @@ FILTER_LIMIT_HZ = 12000
 FILTER_SNAP_HZ = 50
 FILTER_FINE_WIDTH_STEP_HZ = 100
 FILTER_SHIFT_CENTER_DETENT_PX = 6
+PASSBAND_CENTER_NOTICE_SECONDS = 1.0
+passband_center_notice_until = 0.0
 # CW and narrow voice filters benefit from much finer positioning near the
 # carrier. The curve remains linear for ordinary and wide broadcast filters.
 FILTER_NARROW_SHIFT_MAX_HZ = 1200
@@ -17024,6 +17026,13 @@ def draw_lcd_home_smeter(text_cache, smeter_dbm):
         draw_text(text_cache, lx, y1 - 10, label, themed_instrument_color("smeter_dbm", (138, 166, 176)), 10, True, False, "cm", family="Liberation Sans")
 
 
+def note_passband_center_snap(previous_center, center):
+    """Announce entering the zero detent once, rather than on every frame."""
+    global passband_center_notice_until
+    if abs(previous_center) >= FILTER_SNAP_HZ and abs(center) < FILTER_SNAP_HZ:
+        passband_center_notice_until = time.monotonic() + PASSBAND_CENTER_NOTICE_SECONDS
+
+
 def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASSBAND"):
     """Draw a 10 kHz ICOM-inspired, but more informative, passband meter."""
     x0, y0, x1, y1 = box or lcd_home_bandwidth_box()
@@ -17079,6 +17088,12 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     draw_logical_line(center_x, top_y - 6, center_x, plot_y + 4, center_color, 1.5)
     draw_logical_polyline(((center_x - 4, plot_y + 4), (center_x, plot_y + 8),
                            (center_x + 4, plot_y + 4)), center_color, 1.5)
+    if centered and time.monotonic() < passband_center_notice_until:
+        notice_y = (top_y + plot_y) / 2
+        draw_logical_rect(center_x - 30, notice_y - 10, center_x + 30, notice_y + 10,
+                          APP_UI_STYLE.palette.section_surface)
+        draw_text(text_cache, center_x, notice_y, "CENTER", APP_UI_STYLE.palette.ready,
+                  12, True, False, "cm", family="Liberation Sans")
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
     draw_text(
@@ -26378,7 +26393,9 @@ def main():
             return
         drag["moved"] = True
         bounds = passband_graph_shift_bounds(drag["low"], drag["high"], drag["start_x"], x, drag["box"])
+        _mode, previous_low, previous_high, _generation = state.radio_snapshot()
         low, high, _generation = state.set_filter(*bounds)
+        note_passband_center_snap((previous_low + previous_high) / 2, (low + high) / 2)
         filter_drawer_width_hz = high - low
         filter_custom_width = True
 
@@ -26418,6 +26435,7 @@ def main():
         next_low = center_hz - half_width
         next_high = center_hz + half_width
         actual_low, actual_high, _generation = state.set_filter(low_cut=next_low, high_cut=next_high)
+        note_passband_center_snap((low_cut + high_cut) / 2, (actual_low + actual_high) / 2)
         filter_drawer_width_hz = actual_high - actual_low
         filter_custom_width = True
 
