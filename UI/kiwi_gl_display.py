@@ -10056,6 +10056,13 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_styled_text_button(text_cache, box, label, active=active)
 
 
+def draw_display_preset_button(text_cache, box, label, selected):
+    """Both palette rows use the same dark Smart Button and status lamp."""
+    draw_styled_two_line_button(text_cache, box, label, "", active=selected,
+        style=APP_UI_STYLE.smart_button, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+    draw_radio_mode_indicator(text_cache, box, "", selected)
+
+
 def slider_track_bounds(box):
     """Shared native instrument inset, excluding the integrated Volume control."""
     return box[0] + LCD_SLIDER_TRACK_INSET, box[2] - LCD_SLIDER_TRACK_INSET
@@ -14968,10 +14975,11 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             for box, title, detail, active in (
                 (DISPLAY_SPECTRUM_BOX, "SPECTRUM", display_cycle_label(spectrum_enabled, spectrum_auto), spectrum_enabled),
                 (DISPLAY_WATERFALL_BOX, "WATERFALL", display_cycle_label(waterfall_enabled, waterfall_auto), waterfall_enabled),
-                (DISPLAY_SPEED_BOX, "SPEED", {1: "SLOW", 2: "MEDIUM", 4: "FAST"}.get(speed, str(speed)), True),
+                (DISPLAY_SPEED_BOX, "SPEED", {1: "SLOW", 2: "MEDIUM", 4: "FAST"}.get(speed, str(speed)), False),
                 (DISPLAY_RESET_BOX, "RESET", "DISPLAY", False),
             ):
-                draw_styled_two_line_button(text_cache, box, title, detail, active=active)
+                draw_styled_two_line_button(text_cache, box, title, detail, active=active,
+                                           style=APP_UI_STYLE.smart_button)
             draw_display_slider_section(
                 text_cache, DISPLAY_FLOOR_MINUS_BOX, "FLOOR",
                 floor - 40.0, 180.0, f"AUTO {floor:.0f}" if waterfall_auto else f"{floor:.0f}", not waterfall_auto and waterfall_enabled,
@@ -14982,13 +14990,10 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             )
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 416, "WATERFALL COLORS")
             for option, box, label in DISPLAY_PALETTE_BOXES:
-                draw_display_control(text_cache, box, label, option == palette)
+                draw_display_preset_button(text_cache, box, label, option == palette)
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 520, "SPECTRUM STYLE")
             for option, box, label in DISPLAY_SPECTRUM_STYLE_BOXES:
-                selected = option == SPECTRUM_STYLE
-                draw_styled_two_line_button(text_cache, box, label, "", active=selected,
-                    style=APP_UI_STYLE.smart_button, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
-                draw_radio_mode_indicator(text_cache, box, "", selected)
+                draw_display_preset_button(text_cache, box, label, option == SPECTRUM_STYLE)
             draw_lcd_audio_tile(text_cache, DISPLAY_ADVANCED_BOX, "ADVANCED", "SETTINGS")
         draw_sidebar_header(text_cache, "DISPLAY · ADVANCED" if DISPLAY_ADVANCED_OPEN else "DISPLAY")
         return
