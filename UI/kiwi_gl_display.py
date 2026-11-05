@@ -15954,7 +15954,10 @@ def lcd_home_mode_boxes(show_compact_readouts=True, mode=None, trial=None):
     inset_y = 3 if trial else 0  # Shorter Home faces; preserve the grid's reserved space.
     for index, label in enumerate(home_mode_labels(mode,trial)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
-        top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
+        row = index // 4
+        # Keep the original inter-row gap; put the reclaimed height outside
+        # the group, equally above and below, without moving later controls.
+        top = y0 + grid_y0 + row * (cell_h + gap) + (1 - 2 * row) * inset_y
         yield label, (left, top + inset_y, left + cell_w, top + cell_h - inset_y)
 
 
