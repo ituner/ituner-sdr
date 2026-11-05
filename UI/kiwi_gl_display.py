@@ -17700,16 +17700,16 @@ def draw_network_signal_bars(right, center_y, signal, active=False):
 
 
 def draw_network_padlock(center_x, center_y, active=False):
-    """Use a font-independent padlock beside secured networks' signal bars."""
+    """A simple outline lock, without tiny interior details."""
     palette = APP_UI_STYLE.palette
     shade = palette.ready if active else palette.text
-    shackle = [(center_x + 5 * math.cos(math.pi + i * math.pi / 12),
-                center_y - 2 + 5 * math.sin(math.pi + i * math.pi / 12)) for i in range(13)]
+    shackle = [(center_x - 4, center_y - 1)]
+    shackle += [(center_x + 4 * math.cos(math.pi + i * math.pi / 12),
+                 center_y - 5 + 4 * math.sin(math.pi + i * math.pi / 12)) for i in range(13)]
+    shackle.append((center_x + 4, center_y - 1))
     draw_logical_polyline(shackle, shade, 2)
-    draw_logical_rounded_rect(center_x - 7, center_y - 2, center_x + 7, center_y + 10,
-                              2, shade)
-    draw_logical_line(center_x, center_y + 2, center_x, center_y + 6,
-                      palette.background, 2)
+    body = rounded_rect_points(center_x - 7, center_y - 1, center_x + 7, center_y + 9, 2)
+    draw_logical_polyline(body + (body[0],), shade, 2)
 
 
 def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, country_open=False):
@@ -17749,13 +17749,13 @@ def draw_network_manager(text_cache, snapshot, busy, selected_ssid, page=0, coun
         secured = bool(network.get("security") and network.get("security") != "--")
         detail = "Connected" if active else ("Saved" if network.get("saved_uuid") else
                   ("" if secured else "Open"))
-        detail_right = bx1 - (88 if secured else 68)
+        detail_right = bx1 - (108 if secured else 68)
         draw_text(text_cache, bx1 - 12 if country_open else detail_right, (by0 + by1) / 2,
                   (("Current · " if active else "") + network["code"]) if country_open else detail,
                   color("ready") if active else color("secondary_text"), 19, False, False, "rm")
         if not country_open:
             if secured:
-                draw_network_padlock(bx1 - 68, (by0 + by1) / 2, active)
+                draw_network_padlock(bx1 - 72, (by0 + by1) / 2, active)
             draw_network_signal_bars(bx1 - 12, (by0 + by1) / 2, network.get("signal"), active)
         draw_section_divider(bx0, by1, bx1)
     if not networks:
