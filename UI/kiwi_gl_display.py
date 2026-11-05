@@ -17124,11 +17124,12 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     # made the movable passband look like several independent instruments.
     handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 12, plot_x1 - 12)
     handle_y = (top_y + plot_y) / 2
-    draw_logical_line(handle_x - 10, handle_y, handle_x + 10, handle_y, edge, 1.5)
+    arrow_color = (*edge[:3], round(edge[3] * .9))
+    draw_logical_line(handle_x - 10, handle_y, handle_x + 10, handle_y, arrow_color, 1.5)
     draw_logical_polyline(((handle_x - 6, handle_y - 4), (handle_x - 10, handle_y),
-                           (handle_x - 6, handle_y + 4)), edge, 1.5)
+                           (handle_x - 6, handle_y + 4)), arrow_color, 1.5)
     draw_logical_polyline(((handle_x + 6, handle_y - 4), (handle_x + 10, handle_y),
-                           (handle_x + 6, handle_y + 4)), edge, 1.5)
+                           (handle_x + 6, handle_y + 4)), arrow_color, 1.5)
     for label, x in (("−5", plot_x0), ("0", center_x), ("+5", plot_x1)):
         draw_text(text_cache, x, y1 - 8, label, themed_instrument_color("secondary_text", (137, 171, 181)), 12, True, False, "cm", family="Liberation Sans")
 
