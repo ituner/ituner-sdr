@@ -15951,7 +15951,7 @@ def lcd_home_mode_boxes(show_compact_readouts=True, mode=None, trial=None):
     cell_w = LCD_RADIO_SQUARE_SIZE if trial else 55
     grid_w = 4 * cell_w + 3 * gap
     grid_x0 = x0 + ((x1 - x0) - grid_w) / 2
-    inset_y = 2 if trial else 0  # Shorter Home faces; preserve the grid's reserved space.
+    inset_y = 3 if trial else 0  # Shorter Home faces; preserve the grid's reserved space.
     for index, label in enumerate(home_mode_labels(mode,trial)):
         left = grid_x0 + (index % 4) * (cell_w + gap)
         top = y0 + grid_y0 + (index // 4) * (cell_h + gap)
