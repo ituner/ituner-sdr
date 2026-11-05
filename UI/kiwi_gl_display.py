@@ -17094,13 +17094,10 @@ def draw_lcd_home_bandwidth(text_cache, low_cut, high_cut, box=None, title="PASS
     )
     draw_logical_area(passband_points, plot_y, fill)
     draw_logical_polyline(passband_points, edge, 1.8)
-    center_color = (*edge[:3], 130)
-    draw_logical_line(center_x, top_y - 2, center_x, plot_y + 4, center_color, 1)
-    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 22, plot_x1 - 22)
+    # Keep only the horizontal drag cue; extra center lines and button chrome
+    # made the movable passband look like several independent instruments.
+    handle_x = clamp(cut_x((low_cut + high_cut) / 2), plot_x0 + 12, plot_x1 - 12)
     handle_y = (top_y + plot_y) / 2
-    draw_logical_line(handle_x, top_y + 2, handle_x, plot_y, (*edge[:3], 170), 1)
-    draw_logical_rounded_rect(handle_x - 21, handle_y - 10, handle_x + 21, handle_y + 10,
-                              10, (*APP_UI_STYLE.palette.section_surface[:3], 100), (*edge[:3], 220), 1)
     draw_logical_line(handle_x - 10, handle_y, handle_x + 10, handle_y, edge, 1.5)
     draw_logical_polyline(((handle_x - 6, handle_y - 4), (handle_x - 10, handle_y),
                            (handle_x - 6, handle_y + 4)), edge, 1.5)
