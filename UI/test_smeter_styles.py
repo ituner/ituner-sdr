@@ -522,7 +522,7 @@ class MeterTests(unittest.TestCase):
                         bandpass = stack.enter_context(patch.object(ui, 'draw_lcd_home_bandwidth'))
                         ui.draw_ui(cache, 7075, 20, -95, -90, None, 'LSB', 'DIG', 100,
                                    instrument_layout=position)
-                        in_rail = position == 'right'
+                        in_rail = position == 'right' or not ui.smeter_supports_top_instrument_strip()
                         on_top = position != 'right' and slim
                         self.assertEqual(ui.home_rail_has_meter(position), in_rail)
                         self.assertEqual(rail_meter.call_count, int(in_rail))

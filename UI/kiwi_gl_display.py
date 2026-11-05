@@ -1235,9 +1235,10 @@ def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
 
 def draw_radio_tune_step(text_cache,box,step_hz,active=False):
     if box[3]-box[1] <= FREQUENCY_SMALL_BUTTON_H:
-        return draw_picker_button(text_cache,box,format_small_tune_step(step_hz),15,active)
+        return draw_selection_button(text_cache,box,format_small_tune_step(step_hz),active,size=15)
     value,unit=(f"{step_hz/1000:g}","kHz") if step_hz>=1000 else (str(step_hz),"Hz")
-    return draw_styled_two_line_button(text_cache,box,value,unit,active=active,style=APP_UI_STYLE.smart_button)
+    draw_styled_two_line_button(text_cache,box,value,unit,active=active,style=APP_UI_STYLE.smart_button,content_offset_y=-4)
+    draw_selection_indicator(box,active)
 
 
 def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
@@ -2415,7 +2416,9 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
         active = family == current_family
         label = "FM" if family == "FM" else family
         detail = KIWI_MODE_LABELS.get(selected_mode, selected_mode)
-        draw_styled_two_line_button(text_cache, box, label, detail, active=active)
+        draw_styled_two_line_button(text_cache, box, label, detail, active=active,
+                                    style=APP_UI_STYLE.smart_button, content_offset_y=-4)
+        draw_selection_indicator(box, active)
 
 
 def dual_vfo_receiver_picker_boxes():
@@ -4415,9 +4418,9 @@ def configure_output(desktop=False):
     # 480-pixel prototype coordinate.
     content_bottom = LOGICAL_H - BOTTOM_STATUS_H - BOTTOM_RULER_H
     control_bottom = content_bottom - LCD_CONTROL_GAP
-    # Leave a full finger's clearance above the status bar. Drawing and
-    # touch routing share these boxes, so the old lower position stays inert.
-    zoom_bottom = control_bottom - 55
+    # Anchor Home zoom just above the footer/ruler band. Drawing and touch
+    # routing share these boxes, preserving the gap below the controls.
+    zoom_bottom = control_bottom
     # The wide LCD keeps Zoom anchored to the canvas's left edge. Passband
     # editing lives in the Home drawer, outside the live RF surface.
     # Do not inherit the old 960 px coordinate positions here: the live radio
@@ -4583,22 +4586,24 @@ def stream_waterfall_box():
     return x0, y0, x1, y0 + height
 
 
+def waterfall_tuning_row_box(column):
+    """TUNE / SCAN / BAND share a right-aligned row below Favorite/Pause."""
+    _x0, y0, right, y1 = stream_waterfall_box()
+    width = y1 - y0
+    left = right - 3 * width - 20 + column * (width + 10)
+    return left, y1 + 10, left + width, y1 + 10 + width
+
+
 def carrier_waterfall_box():
-    """TUNE occupies the square immediately below Favorite."""
-    x0, y0, x1, y1 = favorite_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+    return waterfall_tuning_row_box(0)
 
 
 def smart_seek_waterfall_box():
-    """SCAN occupies the square immediately below Play/Pause."""
-    x0, y0, x1, y1 = stream_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
+    return waterfall_tuning_row_box(1)
 
 
 def band_waterfall_box():
-    """Third row, aligned with the right-hand Pause and Scan squares."""
-    x0, _y0, x1, y1 = smart_seek_waterfall_box()
-    return x0, y1 + 10, x1, y1 + 10 + (x1-x0)
+    return waterfall_tuning_row_box(2)
 
 
 def waterfall_band_touch(x, y, drawn, modal_open=False):
@@ -8711,7 +8716,7 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     style = style or APP_UI_STYLE.button
     label_size = style.label_size if size is None else size
-    if size is None and str(label).strip() in ('−', '-', '+'):
+    if str(label).strip() in ('−', '-', '+'):
         label_size = round(label_size * 1.5)
     visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
     draw_text(
@@ -8762,7 +8767,8 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
                       text_color if pressed else style.subtitle_color,
                       max(8, style.subtitle_size - 3), fit_full=True, bold=False)
     else:
-        draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, style.title_size)
+        title_size = round(style.title_size * 1.5) if str(title).strip() in ('−', '-', '+') else style.title_size
+        draw_line(title, (y0 + y1) / 2 + content_offset_y, text_color, title_size)
     return visual
 
 
@@ -8850,7 +8856,7 @@ def waterfall_button_fill_alpha(active=False, pressed=False):
     return 216 if active or pressed else 184
 
 
-def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
+def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False, *, symbol_scale=1.5):
     if alpha <= 0:
         return
     x0, y0, x1, y1 = box
@@ -8860,10 +8866,12 @@ def draw_zoom_button(text_cache, box, label, alpha=1.0, active=False):
         fill_alpha=waterfall_button_fill_alpha(active, pressed),
     )
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    half_sign = 16
-    draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, 4)
+    # Match the shared +/− button emphasis without enlarging its touch target.
+    half_sign = 16 * symbol_scale
+    stroke = 4 * symbol_scale
+    draw_logical_line(cx - half_sign, cy, cx + half_sign, cy, visual.text, stroke)
     if label == "+":
-        draw_logical_line(cx, cy - half_sign, cx, cy + half_sign, visual.text, 4)
+        draw_logical_line(cx, cy - half_sign, cx, cy + half_sign, visual.text, stroke)
 
 
 def draw_spectrum_toggle_button(text_cache, enabled, alpha=1.0):
@@ -8946,8 +8954,8 @@ def draw_waterfall_operating_controls(text_cache, spectrum_enabled, alpha=1.0, p
     # Zoom is two standalone bordered + / - tiles; the shared pill background
     # and its centre "ZOOM" label were removed. ``pressed`` names the zoom
     # gesture in progress so a knob or finger press lights the tile.
-    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus")
-    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus")
+    draw_zoom_button(text_cache, ZOOM_PLUS_BOX, "+", alpha, pressed == "zoom_plus", symbol_scale=1.0)
+    draw_zoom_button(text_cache, ZOOM_MINUS_BOX, "-", alpha, pressed == "zoom_minus", symbol_scale=1.0)
     if LCD_800_MODE:
         # The waterfall no longer carries a DISPLAY button. Spectrum on/off
         # lives in the DISPLAY drawer; held vertical resizing works directly
@@ -9056,7 +9064,7 @@ def draw_favorite_waterfall_button(favorited):
         (x0, y0, x1, y1), active=favorited, pressed=pressed,
         fill_alpha=waterfall_button_fill_alpha(favorited, pressed),
     )
-    edge = visual.text
+    edge = APP_UI_STYLE.palette.ready if favorited else visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     draw_favorite_star(cx, cy, 17, edge, filled=favorited)
 
@@ -9783,7 +9791,7 @@ def draw_radio_family_option(text_cache, box, family, modes, active_mode):
 def draw_radio_variant_option(text_cache, box, mode, active):
     """Render one readable option in the compact second-level popover."""
     label = KIWI_MODE_LABELS.get(mode, mode)
-    draw_styled_text_button(text_cache, box, label, active=active)
+    draw_selection_button(text_cache, box, label, active)
 
 
 def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
@@ -9902,7 +9910,7 @@ def draw_radio_setup_panel(
         draw_text(text_cache, radio_popup_x(30), radio_popup_y(300), f"ACTIVE  {KIWI_MODE_CONTEXT.get(active_mode, active_mode)}", (176, 221, 214), 14, True, False, "lm", family="Liberation Sans")
     for option, box in radio_step_options(receiver_type):
         label = f"{option // 1000}k" if option >= 1000 else str(option)
-        draw_radio_option(text_cache, box, label, option == step_hz)
+        draw_selection_button(text_cache, box, label, option == step_hz)
 
 
 def set_display_page(advanced=False):
@@ -9916,8 +9924,10 @@ def set_display_page(advanced=False):
     boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
     palettes, layouts, spectrum_styles = (), (), ()
     if advanced:
-        boxes["DISPLAY_THEME_BOX"] = (x0, 80, x1, 144)
-        layouts = tuple((name, (x0 + i*81, 184, x0 + i*81 + 74, 240))
+        bottom = lcd_drawer_back_box()[1] - LCD_NAV_GAP
+        top = bottom - 160
+        boxes["DISPLAY_THEME_BOX"] = (x0, top, x1, top + 64)
+        layouts = tuple((name, (x0 + i*81, bottom - 56, x0 + i*81 + 74, bottom))
                         for i, name in enumerate(("left", "middle", "right")))
     else:
         for row, pair in enumerate((("SPECTRUM", "WATERFALL"), ("SPEED", "RESET"))):
@@ -10091,11 +10101,26 @@ def draw_display_control(text_cache, box, label, active=False):
     draw_styled_text_button(text_cache, box, label, active=active)
 
 
-def draw_display_preset_button(text_cache, box, label, selected):
-    """Both palette rows use the same dark Smart Button and status lamp."""
+def draw_selection_indicator(box, selected, *, enabled=True):
+    """Theme-ready accent for persistent choices with an existing caption."""
+    ready = APP_UI_STYLE.palette.ready
+    color = ready if selected and enabled else tuple(round(channel * .2) for channel in ready[:3])
+    cx, cy = (box[0] + box[2]) / 2, box[3] - 8
+    draw_logical_rect(cx - 7.5, cy - 2.5, cx + 7.5, cy + 2.5, color)
+
+
+def draw_selection_button(text_cache, box, label, selected, *, size=None, enabled=True):
+    """Persistent options share DISPLAY's theme-aware Smart Button and lamp."""
+    style = APP_UI_STYLE.smart_button
+    if size is not None:
+        style = replace(style, title_size=size)
     draw_styled_two_line_button(text_cache, box, label, "", active=selected,
-        style=APP_UI_STYLE.smart_button, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
-    draw_radio_mode_indicator(text_cache, box, "", selected)
+        enabled=enabled, style=style, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+    draw_radio_mode_indicator(text_cache, box, "", selected and enabled)
+
+
+def draw_display_preset_button(text_cache, box, label, selected):
+    draw_selection_button(text_cache, box, label, selected)
 
 
 def slider_track_bounds(box):
@@ -13661,7 +13686,7 @@ def draw_wspr_expanded_distance_dashboard(text_cache, tiles, history_cache, wind
     draw_text(text_cache, 28, 57, "TAP A GRAPH FOR NEXT SPAN  ·  SWIPE UP OR DOWN FOR MORE RECEIVERS", themed_instrument_color("secondary_text", (139, 205, 201)), 15, True, True, "lm", family="Liberation Sans")
     for index, box in enumerate(wspr_distance_range_boxes()):
         active = index == window_index
-        draw_styled_text_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active=active)
+        draw_selection_button(text_cache, box, WSPR_DISTANCE_WINDOW_LABELS[index], active)
     start = page * WSPR_EXPANDED_GRAPH_PER_PAGE
     visible = tiles[start:start + WSPR_EXPANDED_GRAPH_PER_PAGE]
     for index, box in enumerate(boxes):
@@ -15002,9 +15027,10 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         if DISPLAY_ADVANCED_OPEN:
             draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "STYLE SETTINGS")
-            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 168, "READOUT POSITION")
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14,
+                                   DISPLAY_LAYOUT_BOXES[0][1][1] - 16, "READOUT POSITION")
             for layout, box in DISPLAY_LAYOUT_BOXES:
-                draw_display_control(text_cache, box, layout.upper(),
+                draw_selection_button(text_cache, box, layout.upper(),
                                      layout == visible_frequency_position(instrument_layout))
         else:
             for box, title, detail, active in (
@@ -15123,13 +15149,14 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
     right = clamp(raw_right, 0.0, float(canvas_w))
     if right <= left:
         return
-    # Passband colors live in the shared palette so future app themes can
-    # change them without replacing this RF geometry.
+    # Follow the same live theme accent as selected controls and Favorites.
+    # Retain each overlay layer's opacity so RF detail remains visible.
     palette = APP_UI_STYLE.palette
-    fill = (*palette.passband_fill[:3], int(palette.passband_fill[3] * alpha))
-    edge = (*palette.passband_border[:3], int(palette.passband_border[3] * alpha))
+    accent = palette.ready[:3]
+    fill = (*accent, int(palette.passband_fill[3] * alpha))
+    edge = (*accent, int(palette.passband_border[3] * alpha))
     center_shadow = (2, 7, 11, int(128 * alpha))
-    center = (*palette.passband_center[:3], int(palette.passband_center[3] * alpha))
+    center = (*accent, int(palette.passband_center[3] * alpha))
     if raw_right - raw_left < 10:
         # At wide waterfall spans the real filter can be sub-pixel narrow.
         # Show a compact bracket instead of visually falsifying its width.
@@ -16306,9 +16333,7 @@ def smeter_supports_top_instrument_strip(style_id=None):
 
 
 def instrument_layout_after_theme_save(instrument_layout, style_id=None):
-    """Make a newly saved large meter visible instead of leaving it hidden."""
-    if LCD_800_MODE and not smeter_supports_top_instrument_strip(style_id):
-        return visible_frequency_position("right")
+    """Meter selection must not change the user's frequency position."""
     return instrument_layout
 
 
@@ -16332,8 +16357,8 @@ def smeter_is_slim():
 
 
 def home_rail_has_meter(instrument_layout):
-    """The Home rail meter is present only with the RIGHT frequency layout."""
-    return instrument_layout == "right"
+    """Large meters stay in the rail independently of frequency placement."""
+    return instrument_layout == "right" or not smeter_supports_top_instrument_strip()
 
 
 def is_home_mode_touch(x, y, instrument_layout):
@@ -18490,9 +18515,7 @@ def draw_receiver_action_button(text_cache, box, label, kind, selected=False,
 
 
 def draw_receiver_filter_button(text_cache, box, label, selected=False, theme=RECEIVER_LIST_THEME):
-    draw_styled_text_button(
-        text_cache, box, label, size=theme.label_size, active=selected,
-    )
+    draw_selection_button(text_cache, box, label, selected, size=theme.label_size)
 
 
 def draw_receiver_back_button(text_cache, box, theme=RECEIVER_LIST_THEME):
@@ -19673,12 +19696,6 @@ def draw_ui(
         left_instruments = LCD_800_MODE and instrument_layout == "left"
         mirrored_instruments = mirror_top_instruments()
         frequency_x, frequency_anchor = large_frequency_placement(instrument_layout)
-        if LCD_800_MODE:
-            draw_band_context_chip(
-                text_cache, main_band_context_box(
-                    text_cache, freq_khz, compact_frequency_font_family, instrument_layout,
-                ), freq_khz, mode, compact=left_instruments,
-            )
         draw_big_frequency(
             text_cache, freq_khz,
             frequency_x,
@@ -27710,13 +27727,6 @@ def main():
                                 and (
                                     (instrument_layout == "right" and not HOME_MODE_SELECTOR_TRIAL and not home_sidebar_open
                                      and contains(compact_band_context_touch_box(), x, y))
-                                    or (
-                                        instrument_layout != "right"
-                                        and contains(main_band_context_box(
-                                            text_cache, display_freq,
-                                            compact_frequency_font_family, instrument_layout,
-                                        ), x, y)
-                                    )
                                 )
                             ):
                                 gesture = "band_navigation_toggle"

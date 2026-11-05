@@ -33,6 +33,11 @@ class AirspaceDashboard:
         if enabled:
             self.actions.append((box,action))
 
+    def selection_button(self, cache, box, title, action, selected):
+        """A persistent option uses the same accent lamp as Display presets."""
+        self.ui.draw_selection_button(cache,box,str(title).upper(),selected)
+        self.actions.append((box,action))
+
     @staticmethod
     def instrument_value(value, digits=0):
         if value=='ground':return 'GROUND'
@@ -156,7 +161,7 @@ class AirspaceDashboard:
         choices=(90*86400,86400,43200,21600,10800,3600,1800,900,300)
         for index,value in enumerate(choices):
             x=40+(index%3)*400;y=258+(index//3)*90
-            self.button(cache,(x,y,x+376,y+72),'All recorded' if value>86400 else trail_label(value),('history_choice',value),active=value==self.history_draft)
+            self.selection_button(cache,(x,y,x+376,y+72),'All recorded' if value>86400 else trail_label(value),('history_choice',value),value==self.history_draft)
         self.button(cache,(40,592,616,664),'Cancel',('cancel_history',None))
         self.button(cache,(640,592,1216,664),'Apply',('history_apply',None))
 

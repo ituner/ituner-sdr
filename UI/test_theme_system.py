@@ -82,7 +82,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_lcd_drawer_heading"), \
                 patch.object(ui, "draw_display_slider_section"), \
                 patch.object(ui, "draw_sidebar_header"), \
-                patch.object(ui, "draw_display_control") as control:
+                patch.object(ui, "draw_selection_button") as control:
             ui.draw_display_setup_panel(None, 160, 220, 2, False, "classic", True,
                                         instrument_layout="right")
             active_positions = [item.args[2] for item in control.call_args_list

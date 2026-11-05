@@ -40,6 +40,8 @@ class DecoderStyle:
         x0, y0, x1, y1 = box
         family = style.font_family
         title = str(title).upper() if uppercase else str(title)
+        if not subtitle and title.strip() in ('-', '−', '+'):
+            font_size = int(round(font_size * 1.5))
         title = ui.fit_station_text(cache, title, x1-x0-20, font_size, True, False, family)
         ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2-(10 if subtitle else 0), title,
                      color, font_size, True, False, 'cm', family=family)
