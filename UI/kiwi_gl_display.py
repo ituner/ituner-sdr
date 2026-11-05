@@ -1190,10 +1190,11 @@ def radio_panel_box():
     if LCD_800_MODE:
         # The open drawer replaces the entire annunciator block as well as
         # the Home rail beneath it, preventing duplicate mode information.
-        return LCD_ANNUNCIATOR_BOX[0], LCD_DRAWER_HEADER_H, LCD_ANNUNCIATOR_BOX[2], lcd_rail_bottom()
+        return LCD_ANNUNCIATOR_BOX[0], LCD_RADIO_HEADER_H, LCD_ANNUNCIATOR_BOX[2], lcd_rail_bottom()
     return radio_popup_box(RADIO_PANEL_BOX)
 
 
+LCD_RADIO_HEADER_H = 32
 LCD_RADIO_SQUARE_SIZE = 52
 LCD_RADIO_SQUARE_GAP = 8
 LCD_RADIO_SQUARE_COLS = 4
@@ -1204,7 +1205,7 @@ def lcd_radio_step_y0(mode_family_count=len(KIWI_MODE_FAMILIES)):
     """Top of the tuning-step heading, below the mode family grid."""
     rows = max(1, math.ceil(int(mode_family_count) / LCD_RADIO_SQUARE_COLS))
     grid_height = rows * LCD_RADIO_SQUARE_SIZE + (rows - 1) * LCD_RADIO_SQUARE_GAP
-    return lcd_radio_mode_grid_y0() + grid_height + 16
+    return lcd_radio_mode_grid_y0() + grid_height + 8
 
 
 def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
@@ -1216,7 +1217,7 @@ def lcd_radio_step_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
     left=(LCD_NAV_X0+LOGICAL_W-(len(steps)*width+(len(steps)-1)*gap))/2
     # The dedicated shared-FM drawer has its own instruments above this row.
     rows=max(1,math.ceil(int(mode_family_count)/3))
-    top=lcd_radio_mode_grid_y0()+rows*64+(rows-1)*16+48
+    top=80+rows*64+(rows-1)*16+48
     return tuple((step,(left+i*(width+gap),top,left+i*(width+gap)+width,top+FREQUENCY_SMALL_BUTTON_H))
                  for i,step in enumerate(steps))
 
@@ -1225,9 +1226,9 @@ def radio_passband_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_F
     steps=lcd_radio_step_boxes(receiver_type,mode_family_count)
     top=max(box[3] for _,box in steps)+8
     x0,x1=LCD_NAV_X0+10,LOGICAL_W-10
-    return {"viewer":(x0,top,x1,top+79),
-            "width":(x0,top+87,x1,top+143),
-            "shift":(x0,top+151,x1,top+207)}
+    return {"viewer":(x0,top,x1,top+127),
+            "width":(x0,top+135,x1,top+191),
+            "shift":(x0,top+199,x1,top+255)}
 
 
 def draw_radio_tune_step(text_cache,box,step_hz,active=False):
@@ -1249,9 +1250,8 @@ def next_radio_tune_step(current_step_hz, receiver_type="kiwi"):
 
 def lcd_radio_mode_grid_y0():
     """Top of the four-column LCD mode-family matrix."""
-    # Keep all mode instruments together at the top; the lower area remains
-    # intentionally quiet until the separate Back control at the bottom.
-    return 80
+    # Match the standard 16 px content gap below the compact heading.
+    return LCD_RADIO_HEADER_H + 16
 
 
 def radio_family_button_width():
@@ -9726,7 +9726,7 @@ def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
                          shared_control, reveal_y):
     """FM-DX instruments in the same bounded rail layout as other drawers."""
     left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    mode_box = (left, lcd_radio_mode_grid_y0(), right, lcd_radio_mode_grid_y0() + 62)
+    mode_box = (left, 80, right, 142)
     if reveal_y >= mode_box[3]:
         draw_lcd_audio_tile(text_cache, mode_box, "FMDX", "ON · FM RECEIVER", True)
     frequency = fmdx.status_frequency_khz(status)
@@ -9751,7 +9751,7 @@ def draw_lcd_fmdx_drawer(text_cache, step_hz, status, stations, scan_active,
     if shared_control:
         step_boxes = tuple(radio_step_options("fmdx"))
         if reveal_y >= step_boxes[0][1][1]:
-            draw_lcd_drawer_heading(text_cache, left + 4, lcd_radio_step_y0() + 12, "TUNE STEP")
+            draw_lcd_drawer_heading(text_cache, left + 4, step_boxes[0][1][1] - 20, "TUNE STEP")
         for option_hz, option_box in step_boxes:
             if reveal_y >= option_box[3]:
                 draw_radio_tune_step(text_cache, option_box, option_hz, option_hz == step_hz)
@@ -9773,7 +9773,11 @@ def draw_radio_setup_panel(
         # not draw an enclosing line: the controls should feel connected to
         # the annunciator area directly above.
         draw_logical_rect(LCD_NAV_X0, 0, LOGICAL_W, reveal_y, APP_UI_STYLE.palette.sidebar)
-        draw_sidebar_header(text_cache, "MODES")
+        if receiver_worker_protocol(receiver_type) == "fmdx":
+            draw_sidebar_header(text_cache, "MODES")
+        else:
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, LCD_RADIO_HEADER_H / 2 + 1, "MODES")
+            draw_section_divider(LCD_NAV_X0 + 10, LCD_RADIO_HEADER_H, LOGICAL_W - 10)
         if reveal_y < y0 + 44:
             return
         close_x0, close_y0, close_x1, close_y1 = lcd_radio_drawer_close_box()
@@ -17026,7 +17030,7 @@ def filter_width_preset_boxes(top):
 
 
 def radio_filter_preset_boxes(receiver_type="kiwi", mode_family_count=len(KIWI_MODE_FAMILIES)):
-    return filter_width_preset_boxes(radio_passband_boxes(receiver_type, mode_family_count)["shift"][3] + 16)
+    return filter_width_preset_boxes(radio_passband_boxes(receiver_type, mode_family_count)["shift"][3] + 8)
 
 
 def draw_filter_width_presets(text_cache, presets, width_hz):

@@ -798,6 +798,7 @@ class DrawerGeometryTests(unittest.TestCase):
         ui.LCD_RADIO_DRAWER_PROGRESS = 1.0
         try:
             with mock.patch.object(ui, 'draw_logical_rect'), \
+                 mock.patch.object(ui, 'draw_section_divider'), \
                  mock.patch.object(ui, 'draw_sidebar_header'), \
                  mock.patch.object(ui, 'draw_radio_close_button'), \
                  mock.patch.object(ui, 'draw_radio_family_option'), \

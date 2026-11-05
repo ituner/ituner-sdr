@@ -591,3 +591,7 @@ three 64 px squares with 16 px gaps. Short captions (CW, NAR, VOICE and WIDE)
 sit above the actual width. The last preset selects 12 kHz directly; it no
 longer cycles between 9 and 12 kHz. Width, Shift and Back retain their positions. The same six preset squares also
 appear below Shift in Modes, with the same widths and selection behavior.
+
+Modes uses a compact 32 px, left-aligned heading and a taller 127 px passband
+graphic. The recovered heading space and smaller gaps above Tune Step and
+before the presets make room without shrinking sliders, buttons or touch targets.
