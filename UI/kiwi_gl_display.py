@@ -1297,6 +1297,9 @@ DISPLAY_WATERFALL_BOX = (-1, -1, -1, -1)
 DISPLAY_SPEED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_BOX = (-1, -1, -1, -1)
 DISPLAY_ADVANCED_OPEN = False
+SPECTRUM_STYLE_OPTIONS = (("icom", "ICOM"), ("dark", "DARK"), ("peak", "PEAK"))
+SPECTRUM_STYLE = "icom"
+DISPLAY_SPECTRUM_STYLE_BOXES = ()
 DISPLAY_RATE_BOXES = (
     (1, (126, 220, 238, 270), "SLOW"),
     (2, (250, 220, 362, 270), "MED"),
@@ -9876,7 +9879,7 @@ def set_display_page(advanced=False):
     names = ("SPECTRUM", "AUTO", "WATERFALL", "SPEED", "ADVANCED", "THEME", "RESET",
              "FLOOR_MINUS", "FLOOR_PLUS", "CEIL_MINUS", "CEIL_PLUS")
     boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
-    palettes, layouts = (), ()
+    palettes, layouts, spectrum_styles = (), (), ()
     if advanced:
         boxes["DISPLAY_THEME_BOX"] = (x0, 80, x1, 144)
         layouts = tuple((name, (x0 + i*81, 184, x0 + i*81 + 74, 240))
@@ -9890,9 +9893,19 @@ def set_display_page(advanced=False):
         boxes["DISPLAY_CEIL_MINUS_BOX"] = (x0, 316, x1, 392)
         palettes = tuple((name, (x0 + 6 + i*80, 432, x0 + 70 + i*80, 496), label)
                          for i, (name, label) in enumerate((("classic", "STD"), ("kiwi", "KIWI"), ("gqrx", "GQRX"))))
+        spectrum_styles = tuple((name, (x0 + 6 + i*80, 536, x0 + 70 + i*80, 600), label)
+                                for i, (name, label) in enumerate(SPECTRUM_STYLE_OPTIONS))
         back = lcd_drawer_back_box()
         boxes["DISPLAY_ADVANCED_BOX"] = (x0, back[1] - LCD_NAV_GAP - 64, x1, back[1] - LCD_NAV_GAP)
-    globals().update(boxes, DISPLAY_PALETTE_BOXES=palettes, DISPLAY_LAYOUT_BOXES=layouts)
+    globals().update(boxes, DISPLAY_PALETTE_BOXES=palettes, DISPLAY_LAYOUT_BOXES=layouts,
+                     DISPLAY_SPECTRUM_STYLE_BOXES=spectrum_styles)
+
+
+def set_spectrum_style(style):
+    """Select a display-only preset, preserving all live receiver settings."""
+    global SPECTRUM_STYLE
+    SPECTRUM_STYLE = style if isinstance(style, str) and style in dict(SPECTRUM_STYLE_OPTIONS) else "icom"
+    return SPECTRUM_STYLE
 
 
 def display_page_action(choice):
@@ -9920,6 +9933,9 @@ def display_option_at(x, y):
     if LCD_800_MODE and contains(DISPLAY_THEME_BOX, x, y):
         return "theme", None
     if LCD_800_MODE:
+        for style, box, _label in DISPLAY_SPECTRUM_STYLE_BOXES:
+            if contains(box, x, y):
+                return "spectrum_style", style
         for action, box in (("spectrum_cycle", DISPLAY_SPECTRUM_BOX),
                             ("waterfall_cycle", DISPLAY_WATERFALL_BOX),
                             ("speed_cycle", DISPLAY_SPEED_BOX)):
@@ -9971,6 +9987,7 @@ def restore_waterfall_preferences(state, preferences):
 
 def reset_display_view(state):
     """Restore Display defaults while retaining the waterfall image."""
+    set_spectrum_style("icom")
     waterfall = state.set_waterfall(
         floor=WATERFALL_DEFAULT_FLOOR,
         ceil=WATERFALL_DEFAULT_CEIL,
@@ -14964,6 +14981,12 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 416, "WATERFALL COLORS")
             for option, box, label in DISPLAY_PALETTE_BOXES:
                 draw_display_control(text_cache, box, label, option == palette)
+            draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 520, "SPECTRUM STYLE")
+            for option, box, label in DISPLAY_SPECTRUM_STYLE_BOXES:
+                selected = option == SPECTRUM_STYLE
+                draw_styled_two_line_button(text_cache, box, label, "", active=selected,
+                    style=APP_UI_STYLE.smart_button, content_offset_y=LCD_RADIO_MODE_CONTENT_OFFSET_Y)
+                draw_radio_mode_indicator(text_cache, box, "", selected)
             draw_lcd_audio_tile(text_cache, DISPLAY_ADVANCED_BOX, "ADVANCED", "SETTINGS")
         draw_sidebar_header(text_cache, "DISPLAY · ADVANCED" if DISPLAY_ADVANCED_OPEN else "DISPLAY")
         return
@@ -19277,6 +19300,23 @@ def zoomed_spectrum_values(values, source_span_khz, visible_span_khz):
     return tuple(result)
 
 
+def spectrum_view_palette():
+    """ICOM retains the exact existing theme; alternatives affect only drawing."""
+    palette = APP_UI_STYLE.palette
+    if SPECTRUM_STYLE == "dark":
+        return replace(palette, spectrum_field=(0, 0, 0, 255),
+                       spectrum_grid=(35, 40, 44, 48), spectrum_axis=(60, 68, 74, 130),
+                       spectrum_tick=(75, 86, 94, 150), spectrum_label=(128, 141, 148),
+                       spectrum_line=(145, 159, 166, 210), spectrum_fill=(0, 0, 0, 0),
+                       spectrum_peak_fill=(0, 0, 0, 0), spectrum_peak_line=(0, 0, 0, 0))
+    if SPECTRUM_STYLE == "peak":
+        return replace(palette, spectrum_field=(0, 0, 0, 255),
+                       spectrum_grid=(55, 75, 82, 48), spectrum_line=(108, 215, 232, 235),
+                       spectrum_fill=(0, 0, 0, 0), spectrum_peak_fill=(0, 0, 0, 0),
+                       spectrum_peak_line=(213, 174, 108, 190))
+    return palette
+
+
 def draw_spectrum(
     y0,
     y1,
@@ -19291,9 +19331,9 @@ def draw_spectrum(
     # In the wide layout the scope intentionally sits over the lower edge of
     # the information strip. Keep its field translucent there so the reading
     # remains behind the live trace rather than becoming a separate hard box.
-    field_alpha = 156 if foreground else 236
+    field_alpha = (156 if foreground else 236) if SPECTRUM_STYLE == "icom" else 255
     canvas_w = rf_canvas_width()
-    spectrum_colors = APP_UI_STYLE.palette
+    spectrum_colors = spectrum_view_palette()
     draw_logical_rect(0, y0, canvas_w, y1,
                       (*spectrum_colors.spectrum_field[:3], field_alpha))
     show_dbm_scale = (y1 - y0) >= 120
@@ -19324,14 +19364,14 @@ def draw_spectrum(
         axis_x = 8
         label_x = 30
         draw_logical_rect(0, y0, 68, y1,
-                          themed_instrument_color("spectrum_field", (3, 11, 17, 102)))
+                          spectrum_colors.spectrum_field)
         draw_logical_line(axis_x, plot_top, axis_x, plot_bottom, spectrum_colors.spectrum_axis, 1)
         for index in range(17):
             fraction = index / 16
             y = plot_top + (plot_bottom - plot_top) * fraction
             major = index % 4 == 0
             tick_length = 14 if major else 6
-            tick_color = spectrum_colors.spectrum_tick if major else themed_instrument_color("spectrum_tick", (100, 151, 165, 106))
+            tick_color = spectrum_colors.spectrum_tick
             draw_logical_line(axis_x, y, axis_x + tick_length, y, tick_color, 1)
             if major:
                 label = f"{-40 - index * 5}"
@@ -19348,12 +19388,13 @@ def draw_spectrum(
         return
     top = plot_top
     bottom = plot_bottom
-    if len(peak_values) == len(values):
+    if SPECTRUM_STYLE != "dark" and len(peak_values) == len(values):
         peak_points = [
             (index * (canvas_w - 1) / max(1, len(peak_values) - 1), bottom - value * (bottom - top))
             for index, value in enumerate(peak_values)
         ]
-        draw_logical_area(peak_points, y1, spectrum_colors.spectrum_peak_fill)
+        if spectrum_colors.spectrum_peak_fill[3]:
+            draw_logical_area(peak_points, y1, spectrum_colors.spectrum_peak_fill)
         draw_logical_polyline(peak_points, spectrum_colors.spectrum_peak_line, 1.0)
     points = [
         (index * (canvas_w - 1) / max(1, len(values) - 1), bottom - value * (bottom - top))
@@ -19361,8 +19402,9 @@ def draw_spectrum(
     ]
     # Keep dBm labels inset, but fill the remaining pixels right to the
     # waterfall boundary so that inset cannot look like a blank divider.
-    draw_logical_area(points, y1, spectrum_colors.spectrum_fill)
-    draw_logical_polyline(points, spectrum_colors.spectrum_line, 1.25)
+    if spectrum_colors.spectrum_fill[3]:
+        draw_logical_area(points, y1, spectrum_colors.spectrum_fill)
+    draw_logical_polyline(points, spectrum_colors.spectrum_line, 1.0 if SPECTRUM_STYLE == "dark" else 1.25)
 
 
 def draw_connection_annunciator(text_cache, status, timeout_seconds=None, retry_seconds=None):
@@ -24082,6 +24124,7 @@ def main():
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
                 flush=True,
             )
+    set_spectrum_style(remembered_preferences.get("spectrum_style"))
     if fmdx.is_fmdx_server(args.server):
         # FM-DX opens at its widest available audio span, including restarts.
         args.zoom = 0
@@ -25175,6 +25218,7 @@ def main():
             },
             "spectrum_enabled": bool(spectrum_enabled),
             "spectrum_auto": state.spectrum_auto_snapshot(),
+            "spectrum_style": SPECTRUM_STYLE,
             "instrument_layout": instrument_layout,
             "compact_font_likes": sorted(compact_font_review_liked),
             "compact_frequency_font_family": compact_frequency_font_family,
@@ -29575,6 +29619,10 @@ def main():
                                             floor, ceiling, speed, auto, palette, _generation = cycle_display_control(state, kind)
                                             preferences_dirty = True
                                             write_remembered_view(force=True)
+                                        elif kind == "spectrum_style":
+                                            set_spectrum_style(value)
+                                            preferences_dirty = True
+                                            write_remembered_view(force=True)
                                         elif kind == "spectrum":
                                             toggle_display_spectrum_control(state, kind)
                                         elif kind == "auto":
@@ -29595,7 +29643,7 @@ def main():
                                             floor, ceiling, speed, auto, palette, _generation = (
                                                 apply_waterfall_palette_preset(state, value)
                                             )
-                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset", "spectrum_cycle", "waterfall_cycle", "speed_cycle"):
+                                        if kind not in ("layout", "palette", "spectrum", "auto", "waterfall_mode", "reset", "spectrum_cycle", "waterfall_cycle", "speed_cycle", "spectrum_style"):
                                             floor, ceiling, speed, auto, palette, _generation = state.set_waterfall(
                                                 floor=floor,
                                                 ceil=ceiling,
@@ -31000,7 +31048,7 @@ def main():
                     spectrum_values,
                     spectrum_peak_values,
                     (spectrum_y0, spectrum_y1, source_span_khz, display_span,
-                     theme_system.runtime_revision),
+                     theme_system.runtime_revision, SPECTRUM_STYLE),
                     lambda: draw_spectrum(
                         spectrum_y0,
                         spectrum_y1,
