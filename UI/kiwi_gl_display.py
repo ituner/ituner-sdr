@@ -16768,6 +16768,11 @@ def lcd_compact_smeter_box():
     top = y0 + LCD_COMPACT_SMETER_TOP
     height = LCD_COMPACT_SMETER_HEIGHT + smeter_rail_extra_height()
     if HOME_MODE_SELECTOR_TRIAL and METER_STYLES[theme_system.runtime_theme["smeter_style"]].height >= 236:
+        if theme_system.runtime_theme["smeter_style"] == "bakelite_square":
+            # Use the spare room above and beside the case without moving the
+            # mode grid or squeezing Volume. Keep the case and dial square.
+            top -= 12
+            height += 12
         left = (LCD_NAV_X0 + LOGICAL_W - height) / 2
         return left, top, left + height, top + height
     return LCD_NAV_X0 + 10, top, LOGICAL_W - 10, top + height
