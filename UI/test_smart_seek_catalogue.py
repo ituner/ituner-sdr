@@ -12,6 +12,19 @@ BANDS = ((5730,6200,'49 m'),(7200,7450,'41 m'),(9400,9900,'31 m'),(11600,12100,'
 
 
 class CatalogueTests(unittest.TestCase):
+    def test_band_picker_counts_are_read_only_scoped_and_expire(self):
+        catalogue=SmartSeekCatalogue(BANDS)
+        record=dict(measured_at=100,candidates=(object(),object()))
+        catalogue._count_cache[('rx',7200.,7450.)]=record
+        self.assertEqual(catalogue.band_counts('rx',101)['41 m'],2)
+        self.assertIsNone(catalogue.band_counts('other',101)['41 m'])
+        self.assertIsNone(catalogue.band_counts('rx',7300)['41 m'])
+        self.assertIsNone(catalogue.band_counts('rx',99)['41 m'])
+        self.assertIs(catalogue._count_cache[('rx',7200.,7450.)],record)
+        self.assertIsNone(catalogue._current)
+        self.assertFalse(catalogue.open)
+        self.assertEqual(record['measured_at'],100)
+
     def start(self):
         catalogue = SmartSeekCatalogue(BANDS)
         catalogue.start(7200,7450,'41 m',('rx',),100)

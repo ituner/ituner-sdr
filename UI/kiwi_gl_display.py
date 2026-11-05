@@ -4588,6 +4588,21 @@ def smart_seek_waterfall_box():
     return x0, y1 + 10, x1, y1 + 10 + (y1-y0)
 
 
+def band_waterfall_box():
+    """Third row, aligned with the right-hand Pause and Scan squares."""
+    x0, _y0, x1, y1 = smart_seek_waterfall_box()
+    return x0, y1 + 10, x1, y1 + 10 + (x1-x0)
+
+
+def waterfall_band_touch(x, y, drawn, modal_open=False):
+    return bool(drawn and not modal_open and contains_with_guard(band_waterfall_box(), x, y, guard=4))
+
+
+def band_navigation_available(server, receiver_type):
+    low, high = receiver_tuning_bounds(server, receiver_type)
+    return any(low <= target <= high for _label, target, _kind in BAND_NAV_PRESETS)
+
+
 def waterfall_scan_touch(x, y, drawn, modal_open=False):
     """A painted SCAN owns its tap, including the small margin between tiles."""
     return bool(drawn and not modal_open and
@@ -4641,8 +4656,8 @@ def waterfall_touch_bounds():
     ), y1
 
 
-def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None, scan_drawn=False):
-    if waterfall_scan_touch(x,y,scan_drawn):
+def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None, scan_drawn=False, band_drawn=False):
+    if waterfall_scan_touch(x,y,scan_drawn) or waterfall_band_touch(x,y,band_drawn):
         return False
     if LCD_800_MODE and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
         return False
@@ -5433,6 +5448,10 @@ class SharedState:
     def set_smart_seek_band_menu(self, opened):
         with self.lock:
             self.smart_seek.set_band_menu(opened, time.monotonic())
+
+    def band_navigation_counts(self):
+        with self.lock:
+            return self.smart_seek.band_counts(self.server)
 
     def smart_seek_snapshot(self):
         with self.lock:
@@ -16072,27 +16091,31 @@ def band_navigation_action_at(x, y):
     return None
 
 
-def draw_band_navigation(text_cache, freq_khz, mode):
-    """Touch-first HF/SW navigator with enough button size for the LCD."""
+def draw_band_navigation(text_cache, freq_khz, mode, band_counts=None, tuning_bounds=None):
+    """Band destinations with recent, receiver-scoped Smart Scan counts."""
     boxes = band_navigation_layout()
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 19, 241))
     draw_logical_line(x0 + 14, y0, x1 - 14, y0, (143, 190, 198, 176), 1)
-    draw_text(text_cache, x0 + 18, y0 + 24, "BAND NAVIGATION", (226, 242, 244), 20, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 18, y0 + 24, "BANDS", (226, 242, 244), 20, True, False, "lm", family="Liberation Sans")
     context, _kind = frequency_band_context(freq_khz, mode)
-    draw_text(text_cache, x0 + 232, y0 + 24, context, (126, 187, 196), 15, True, False, "lm", family="Liberation Sans")
+    draw_text(text_cache, x0 + 125, y0 + 24, context, (126, 187, 196), 15, True, False, "lm", family="Liberation Sans")
     draw_styled_text_button(text_cache, boxes["close"], "CLOSE", size=12)
-    active_context, _active_kind = frequency_band_context(freq_khz, mode)
-    for preset, box in boxes["cells"]:
-        label, _target_khz, kind = preset
-        is_active = label.replace(" H", "") in active_context
-        group = "BROADCAST" if kind == "broadcast" else "HAM"
-        bx0, by0, bx1, by1 = box
-        pressed = ui_button_pressed(box)
-        visual = draw_styled_button_frame(box, active=is_active, pressed=pressed)
-        accent = visual.text
-        draw_text(text_cache, (bx0 + bx1) / 2, (by0 + by1) / 2 - 8, label, accent, 20, True, False, "cm", family="Liberation Sans")
-        draw_text(text_cache, (bx0 + bx1) / 2, by1 - 13, group, accent, 11, True, False, "cm", family=APP_UI_STYLE.button.font_family)
+    counts = band_counts or {}
+    for (label, target_khz, kind), box in boxes["cells"]:
+        count = counts.get(label) if kind == "broadcast" else None
+        detail = f"({count})" if count is not None else ("BROADCAST" if kind == "broadcast" else "HAM")
+        enabled = tuning_bounds is None or tuning_bounds[0] <= target_khz <= tuning_bounds[1]
+        draw_styled_two_line_button(text_cache, box, label, detail,
+            active=label.replace(" H", "") in context, enabled=enabled,
+            style=replace(APP_UI_STYLE.button, title_size=20, subtitle_size=13))
+
+
+def draw_band_waterfall_button(text_cache, freq_khz, mode):
+    label = frequency_band_context(freq_khz, mode)[0].split(" · ", 1)[0]
+    draw_styled_two_line_button(text_cache, band_waterfall_box(), "BAND", label,
+                               style=replace(APP_UI_STYLE.button, title_size=18, subtitle_size=13),
+                               fit_full_subtitle=True)
 
 
 def compact_font_review_boxes():
@@ -24229,6 +24252,7 @@ def main():
     temp_c = None
     controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
     scan_button_drawn = False
+    band_button_drawn = False
     catalog_stations = STATIONS
     all_stations = catalog_stations
     main_receiver_capacity = MainReceiverCapacityMonitor()
@@ -27222,6 +27246,16 @@ def main():
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
                                 sstv_workspace.drag_begin(x, y)
+                            elif waterfall_band_touch(x,y,band_button_drawn,modal_open=(
+                                menu_open or picker_open or dual_vfo_open or network_panel_open
+                                or network_password_open or tests_panel_open or rtl_lab_open
+                                or font_lab_open or band_navigation_open or wspr_panel_open
+                                or wspr_add_open or wspr_identity_open or dj_tune_open
+                                or filter_panel_open or frequency_entry_open or deepgram_setup_open
+                                or (asr_panel_open and not LCD_800_MODE)
+                            )):
+                                gesture = "band_navigation_toggle"
+                                scope_drag_eligible = False
                             elif waterfall_scan_touch(x,y,scan_button_drawn,modal_open=(
                                 menu_open or picker_open or dual_vfo_open or network_panel_open
                                 or network_password_open or tests_panel_open or rtl_lab_open
@@ -27412,7 +27446,8 @@ def main():
                             elif (
                                 LCD_800_MODE
                                 and (
-                                    (instrument_layout == "right" and contains(compact_band_context_touch_box(), x, y))
+                                    (instrument_layout == "right" and not home_sidebar_open
+                                     and contains(compact_band_context_touch_box(), x, y))
                                     or (
                                         instrument_layout != "right"
                                         and contains(main_band_context_box(
@@ -27714,7 +27749,7 @@ def main():
                                 x, y, instrument_layout,
                                 left_smeter_box(text_cache, display_freq, compact_frequency_font_family)
                                 if LCD_800_MODE and instrument_layout == "left" and smeter_is_slim() else None,
-                                scan_drawn=scan_button_drawn,
+                                scan_drawn=scan_button_drawn, band_drawn=band_button_drawn,
                             ):
                                 gesture = "waterfall"
                             else:
@@ -28139,16 +28174,22 @@ def main():
                                     band_navigation_open = False
                                 elif isinstance(action, int):
                                     _label, target_khz, _kind = BAND_NAV_PRESETS[action]
-                                    target_khz = clamp_active_frequency(target_khz)
-                                    state.set_view(freq_khz=target_khz)
-                                    display_freq = target_khz
-                                    candidate_freq = target_khz
-                                    anim_start = 0.0
-                                    inertia_velocity_khz_s = 0.0
-                                    apply_band_default(target_khz)
-                                    remember_current_view()
-                                    band_navigation_open = False
-                                    print(f"gl band nav {_label} {target_khz:.3f} kHz", flush=True)
+                                    low_khz, high_khz = active_tuning_bounds()
+                                    if low_khz <= target_khz <= high_khz:
+                                        state.set_view(freq_khz=target_khz)
+                                        display_freq = target_khz
+                                        candidate_freq = target_khz
+                                        anim_start = 0.0
+                                        inertia_velocity_khz_s = 0.0
+                                        desired_mode = "AM" if _kind == "broadcast" else default_sideband_mode(target_khz)
+                                        rtl_active = rtl_lab.is_running()
+                                        if not rtl_active or rtl_lab.set_home_mode(desired_mode):
+                                            radio_mode = desired_mode
+                                            manual_radio_mode = True
+                                            state.set_radio_mode(rtl_lab.shared_radio_mode(desired_mode) if rtl_active else desired_mode)
+                                        remember_current_view()
+                                        band_navigation_open = False
+                                        print(f"gl band nav {_label} {target_khz:.3f} kHz", flush=True)
                             wake_controls()
                         elif touch_started and gesture == "band_navigation_toggle":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -31053,6 +31094,7 @@ def main():
             audio_controls, _audio_generation = state.audio_controls_snapshot()
             stream_paused = state.stream_paused_snapshot()
             scan_button_drawn = False
+            band_button_drawn = False
             if not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -31060,6 +31102,9 @@ def main():
             ):
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
+                if not dual_vfo_open and band_navigation_available(server, state.receiver_type_snapshot()):
+                    draw_band_waterfall_button(text_cache, display_freq, radio_mode)
+                    band_button_drawn = True
                 if state.smart_seek_available() and not dual_vfo_open:
                     draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SCAN",
                                             style=replace(APP_UI_STYLE.button, label_size=18))
@@ -31124,7 +31169,8 @@ def main():
             if frequency_entry_open:
                 draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
             if band_navigation_open:
-                draw_band_navigation(text_cache, display_freq, radio_mode)
+                draw_band_navigation(text_cache, display_freq, radio_mode,
+                                     state.band_navigation_counts(), active_tuning_bounds())
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
             if picker_open:

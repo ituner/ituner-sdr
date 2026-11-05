@@ -596,3 +596,12 @@ Modes uses a compact 32 px, left-aligned heading and a 103 px passband
 graphic. Extra space above and below the Tune Step heading keeps it clear
 of both button grids. A 16 px gap separates Shift from the presets. Slider
 and preset button sizes are retained, and the preset grid stays clear of Back.
+
+The waterfall listening controls include a square BAND tile in the third row,
+right-aligned below SCAN. Its lower line shows the current frequency-derived
+band. It opens the band chooser; broadcast tiles show parenthesized Smart Scan
+counts only for the current receiver and measurements younger than two hours.
+Unmeasured/expired counts are blank rather than zero. Opening or dismissing
+the chooser does not start scanning or retune. Selecting a supported band
+tunes its listening center and chooses AM for broadcast or the normal sideband
+for amateur bands. Unsupported destinations are dimmed and cannot retune.

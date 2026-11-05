@@ -329,10 +329,39 @@ class BoardLayoutTests(unittest.TestCase):
              patch.object(ui, 'draw_logical_line') as lines, \
              patch.object(ui, 'draw_text'), \
              patch.object(ui, 'draw_styled_button_frame'), \
+             patch.object(ui, 'draw_styled_two_line_button'), \
              patch.object(ui, 'draw_styled_text_button') as close_button:
             ui.draw_band_navigation(text_cache, 7075, 'LSB')
         self.assertEqual(len(lines.call_args_list), 1)
         close_button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
+
+    def test_band_button_is_third_row_right_with_live_context(self):
+        ui.configure_output(True)
+        scan=ui.smart_seek_waterfall_box();box=ui.band_waterfall_box()
+        self.assertEqual((box[0],box[2]),(scan[0],scan[2]))
+        self.assertEqual(box[1]-scan[3],10)
+        self.assertEqual(box[2]-box[0],box[3]-box[1])
+        with patch.object(ui,'draw_styled_two_line_button') as draw:
+            ui.draw_band_waterfall_button(None,7265,'AM')
+        self.assertEqual(draw.call_args.args[2:],('BAND','41 m'))
+        for x,y in (((box[0]+box[2])/2,box[1]),(box[0],box[3]),(box[2]+3,box[1]+8)):
+            self.assertTrue(ui.waterfall_band_touch(x,y,True))
+            self.assertFalse(ui.is_waterfall_tune_touch(x,y,band_drawn=True))
+        self.assertFalse(ui.waterfall_band_touch(box[0],box[1],False))
+        self.assertFalse(ui.waterfall_band_touch(box[0],box[1],True,modal_open=True))
+
+    def test_band_chooser_displays_only_supplied_broadcast_counts(self):
+        ui.configure_output(True)
+        with patch.object(ui,'draw_logical_rect'), patch.object(ui,'draw_logical_line'), \
+             patch.object(ui,'draw_text'), patch.object(ui,'draw_styled_text_button'), \
+             patch.object(ui,'draw_styled_two_line_button') as tile:
+            ui.draw_band_navigation(None,7265,'AM',{'41 m':13,'MW':0,'40 m':99},(0,30000))
+        details={c.args[2]:c for c in tile.call_args_list}
+        self.assertEqual(details['41 m'].args[3],'(13)')
+        self.assertEqual(details['MW'].args[3],'(0)')
+        self.assertEqual(details['31 m'].args[3],'BROADCAST')
+        self.assertEqual(details['40 m'].args[3],'HAM')
+        self.assertFalse(details['6 m'].kwargs['enabled'])
 
     def test_audio_pages_keep_visible_controls_separate_and_sliders_roomy(self):
         ui.configure_output(True)
