@@ -342,12 +342,16 @@ class ThemeSystemTests(unittest.TestCase):
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
                     patch.object(ui, "GL"), \
+                    patch.object(ui, "draw_text"), \
                     patch.object(ui, "ui_button_pressed", return_value=False):
                 ui.draw_zoom_button(None, ui.ZOOM_MINUS_BOX, "-")
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+")
                 ui.draw_stream_waterfall_button(None, False)
                 ui.draw_favorite_waterfall_button(False)
-            self.assertEqual(len(frame.call_args_list), 4)
+                ui.draw_carrier_waterfall_button(None)
+                ui.draw_waterfall_text_button(None, ui.smart_seek_waterfall_box(), "SCAN")
+                ui.draw_band_waterfall_button(None, 7265, 'AM')
+            self.assertEqual(len(frame.call_args_list), 7)
             for item in frame.call_args_list:
                 self.assertEqual(item.args[5],
                                  (*APP_UI_STYLE.palette.surface[:3], 184))
@@ -355,9 +359,13 @@ class ThemeSystemTests(unittest.TestCase):
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
                     patch.object(ui, "GL"), \
+                    patch.object(ui, "draw_text"), \
                     patch.object(ui, "ui_button_pressed", return_value=True):
                 ui.draw_stream_waterfall_button(None, True)
                 ui.draw_favorite_waterfall_button(True)
+                ui.draw_carrier_waterfall_button(None)
+                ui.draw_waterfall_text_button(None, ui.smart_seek_waterfall_box(), "SCAN")
+                ui.draw_band_waterfall_button(None, 7265, 'AM')
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+", active=True)
             for item in frame.call_args_list:
                 self.assertEqual(item.args[5],

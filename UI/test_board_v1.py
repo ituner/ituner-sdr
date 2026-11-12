@@ -505,16 +505,16 @@ class BoardLayoutTests(unittest.TestCase):
             waterfall_band[0], 0, waterfall_band[2], 280,
         ))
         self.assertEqual(waterfall_band[1:4:2], (280, 800))
-        self.assertEqual(spectrum_band[4][:3], ui.APP_UI_STYLE.palette.ready[:3])
+        self.assertEqual(spectrum_band[4][:3], ui.APP_UI_STYLE.palette.focus[:3])
         self.assertEqual(spectrum_band[4][3], ui.APP_UI_STYLE.palette.passband_fill[3])
-        self.assertEqual(spectrum_edge, (*ui.APP_UI_STYLE.palette.ready[:3], ui.APP_UI_STYLE.palette.passband_border[3]))
+        self.assertEqual(spectrum_edge, (*ui.APP_UI_STYLE.palette.focus[:3], ui.APP_UI_STYLE.palette.passband_border[3]))
         self.assertLess(spectrum_edge[3], ui.APP_UI_STYLE.palette.passband_center[3])
 
     def test_passband_tracks_custom_accent_preserving_layer_opacity(self):
         from dataclasses import replace
         ui.configure_output(True)
         for accent in ((31, 160, 240, 255), (210, 80, 190, 255)):
-            palette = replace(ui.APP_UI_STYLE.palette, ready=accent)
+            palette = replace(ui.APP_UI_STYLE.palette, focus=accent)
             with patch.object(ui, 'APP_UI_STYLE', replace(ui.APP_UI_STYLE, palette=palette)), \
                  patch.object(ui, 'draw_logical_rect') as fill, \
                  patch.object(ui, 'draw_logical_line') as lines:
@@ -784,13 +784,13 @@ class BoardLayoutTests(unittest.TestCase):
 
     def test_selected_options_use_display_theme_accent_and_dim_unselected(self):
         from dataclasses import replace
-        palette = replace(ui.APP_UI_STYLE.palette, ready=(220, 100, 40, 255))
+        palette = replace(ui.APP_UI_STYLE.palette, focus=(220, 100, 40, 255))
         style = replace(ui.APP_UI_STYLE, palette=palette)
         with patch.object(ui, 'APP_UI_STYLE', style), \
              patch.object(ui, 'draw_styled_two_line_button') as button, \
              patch.object(ui, 'draw_logical_rect') as lamp:
             ui.draw_selection_button(None, (0, 0, 74, 56), 'LEFT', True)
-            self.assertEqual(lamp.call_args.args[4], palette.ready)
+            self.assertEqual(lamp.call_args.args[4], palette.focus)
             self.assertEqual(button.call_args.kwargs['style'].variant, 'smart')
             ui.draw_selection_button(None, (0, 0, 74, 56), 'MIDDLE', False)
             self.assertEqual(lamp.call_args.args[4], (44, 20, 8))
@@ -803,7 +803,8 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertGreater(ui.DISPLAY_RESET_BOX[0],ui.DISPLAY_SPEED_BOX[2])
         ui.set_display_page(True)
         box=ui.DISPLAY_THEME_BOX
-        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[-1][1][3]+ui.LCD_NAV_GAP,ui.lcd_drawer_back_box()[1])
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[-1][1][3]+ui.LCD_NAV_GAP,ui.DISPLAY_HIDE_RAIL_BOX[1])
+        self.assertEqual(ui.DISPLAY_HIDE_RAIL_BOX[3]+ui.LCD_NAV_GAP,ui.lcd_drawer_back_box()[1])
         self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][1]-box[3],40)
         self.assertEqual(box[3]-box[1],64)
         self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),('theme',None))

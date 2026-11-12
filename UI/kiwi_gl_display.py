@@ -317,13 +317,74 @@ def mode_annunciator_active(label, active_mode, digital):
     )
 
 
+HOME_RAIL_HIDDEN = False
+
+
+def home_rail_hidden():
+    return LCD_800_MODE and HOME_RAIL_HIDDEN
+
+
+def set_home_rail_hidden(hidden):
+    """Presentation only: preserve the saved readout position and meter style."""
+    global HOME_RAIL_HIDDEN
+    HOME_RAIL_HIDDEN = bool(hidden) and LCD_800_MODE
+
+
+def cpu_annunciator_touch_box():
+    if home_rail_hidden():
+        return (LOGICAL_W - 224, CPU_ANNUNCIATOR_BOX[1], LOGICAL_W, CPU_ANNUNCIATOR_BOX[3])
+    return CPU_ANNUNCIATOR_BOX
+
+
+def home_rail_restore_box():
+    return LOGICAL_W - 48, LOGICAL_H / 2 - 48, LOGICAL_W, LOGICAL_H / 2 + 48
+
+
+def home_rail_restore_at(x, y):
+    return home_rail_hidden() and contains(home_rail_restore_box(), x, y)
+
+
+def collapsed_instrument_boxes():
+    """Center the VFO and the chosen meter together, retaining its face height."""
+    height = METER_STYLES[theme_system.runtime_theme["smeter_style"]].height
+    width, gap, meter_width = 330, 32, 300
+    left = (LOGICAL_W - width - gap - meter_width) / 2
+    center_y = max(80, height) / 2 + 8
+    return ((left, center_y - 36, left + width, center_y + 36),
+            (left + width + gap, 8, left + width + gap + meter_width, height + 8))
+
+
+def home_rail_collapse_box():
+    # Coordinates are pre-composition, just like the rail's other hit targets.
+    x0 = 0 if theme_system.runtime_theme["sidebar"] == "left" else LCD_NAV_X0 - 48
+    return x0, LOGICAL_H / 2 - 48, x0 + 48, LOGICAL_H / 2 + 48
+
+
+def draw_home_rail_tab(box, direction):
+    pressed = ui_button_pressed(box)
+    visual = draw_styled_button_frame(
+        box, pressed=pressed,
+        fill_alpha=waterfall_button_fill_alpha(False, pressed),
+    )
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    draw_logical_line(cx - 6 * direction, cy - 12, cx + 6 * direction, cy, visual.text, 3)
+    draw_logical_line(cx + 6 * direction, cy, cx - 6 * direction, cy + 12, visual.text, 3)
+
+
+def draw_home_rail_restore_tab(text_cache):
+    if home_rail_hidden():
+        draw_home_rail_tab(home_rail_restore_box(), -1)
+
+
+def draw_home_rail_collapse_tab(text_cache):
+    if LCD_800_MODE and not home_rail_hidden():
+        direction = -1 if theme_system.runtime_theme["sidebar"] == "left" else 1
+        draw_home_rail_tab(home_rail_collapse_box(), direction)
+
+
 def rf_canvas_width():
-    """Width of the live RF surface, excluding the permanent control rail."""
-    # The 800x1280 LCD is presented as a 1280x800 landscape UI, but only its
-    # left 1024 logical pixels are RF space.  The final 256 pixels are a
-    # separate Home/drawer rail and must never alter RF scaling or consume
-    # waterfall/scope samples.
-    return DESKTOP_1280_MAIN_W if LCD_800_MODE else LOGICAL_W
+    """Live RF width; hiding the Home rail expands drawing and touch together."""
+    return DESKTOP_1280_MAIN_W if LCD_800_MODE and not home_rail_hidden() else LOGICAL_W
 _RENDERER_DIR = Path(__file__).resolve().parent
 _MENU_ICON_DIRS = (_RENDERER_DIR.parent / "assets" / "menu-icons", _RENDERER_DIR / "assets" / "menu-icons")
 MENU_ICON_ASSET_DIR = next((directory for directory in _MENU_ICON_DIRS if directory.exists()), _MENU_ICON_DIRS[0])
@@ -4576,7 +4637,7 @@ def mute_waterfall_box():
 
 def stream_waterfall_box():
     """Top-right square in the shared two-by-two listening controls."""
-    x1 = (LCD_NAV_X0 if LCD_800_MODE else BASE_LOGICAL_W) - 6
+    x1 = (rf_canvas_width() if LCD_800_MODE else BASE_LOGICAL_W) - 6
     width = HOME_BOX[2] - HOME_BOX[0]
     height = width
     x0 = x1 - width
@@ -4659,7 +4720,10 @@ def waterfall_touch_bounds():
 def is_waterfall_tune_touch(x, y, instrument_layout="right", left_meter_box=None, scan_drawn=False, band_drawn=False):
     if waterfall_scan_touch(x,y,scan_drawn) or waterfall_band_touch(x,y,band_drawn):
         return False
-    if LCD_800_MODE and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
+    if home_rail_hidden() and (home_rail_restore_at(x, y) or any(
+            contains(box, x, y) for box in collapsed_instrument_boxes())):
+        return False
+    if LCD_800_MODE and not home_rail_hidden() and instrument_layout == "left" and left_meter_box and contains(left_meter_box, x, y):
         return False
     if DESKTOP_1280_MODE:
         # The wider development display has enough room for its controls to
@@ -8710,13 +8774,13 @@ def button_label_for_box(text_cache, label, box, style=None, *, size=None):
 
 
 def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
-                            danger=False, bold=True, style=None):
+                            danger=False, bold=True, style=None, fill_alpha=None):
     """Common one-line button used by drawers, pickers, tests, and workspaces."""
     style = style or APP_UI_STYLE.button
     label_size = style.label_size if size is None else size
     if str(label).strip() in ('−', '-', '+'):
         label_size = round(label_size * 1.5)
-    visual = draw_styled_button_frame(box, active=active, danger=danger, style=style)
+    visual = draw_styled_button_frame(box, active=active, danger=danger, style=style, fill_alpha=fill_alpha)
     draw_text(
         text_cache, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2,
         button_label_for_box(text_cache, label, box, style, size=label_size), visual.text,
@@ -8728,12 +8792,12 @@ def draw_styled_text_button(text_cache, box, label, *, size=None, active=False,
 
 def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=False,
                                 style=None, fit_full_subtitle=False, enabled=True, content_offset_y=0,
-                                footnote=None):
+                                footnote=None, fill_alpha=None):
     """The shared title/subtitle treatment for rail and workspace tiles."""
     style = style or APP_UI_STYLE.button
     x0, y0, x1, y1 = box
     pressed = enabled and ui_button_pressed(box)
-    visual = draw_styled_button_frame(box, active=active and enabled, pressed=pressed, style=style)
+    visual = draw_styled_button_frame(box, active=active and enabled, pressed=pressed, style=style, fill_alpha=fill_alpha)
     text_color = visual.text if enabled else style.palette.untested_text
     center_x = (x0 + x1) / 2
 
@@ -8758,7 +8822,7 @@ def draw_styled_two_line_button(text_cache, box, title, subtitle, *, active=Fals
         center_y = (y0 + y1) / 2 + content_offset_y
         draw_line(title, center_y - (18 if footnote else 12), text_color, style.title_size)
         draw_line(subtitle, center_y + (2 if footnote else 12),
-                  tuple(muted_text_color(text_color,visual.fill)) if pressed or not enabled else (style.palette.ready if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
+                  tuple(muted_text_color(text_color,visual.fill)) if pressed or not enabled else (style.palette.focus if active and style.variant == "smart" else style.subtitle_color), style.subtitle_size,
                   fit_full=fit_full_subtitle)
         if footnote:
             draw_line(footnote, center_y + 20,
@@ -9045,13 +9109,20 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
         draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
 
 
+def draw_waterfall_text_button(text_cache, box, label):
+    """HOME actions share the same theme surface and translucency as zoom."""
+    draw_styled_text_button(
+        text_cache, box, label, style=replace(APP_UI_STYLE.button, label_size=18),
+        fill_alpha=waterfall_button_fill_alpha(False, ui_button_pressed(box)),
+    )
+
+
 def draw_carrier_waterfall_button(text_cache, status="", alpha=1.0):
     if alpha <= 0:
         return
     # Visibility already means a correction is available. This is an action,
     # not an announcement that the receiver has tuned automatically.
-    draw_styled_text_button(text_cache, carrier_waterfall_box(), "TUNE",
-                            style=replace(APP_UI_STYLE.button, label_size=18))
+    draw_waterfall_text_button(text_cache, carrier_waterfall_box(), "TUNE")
 
 
 def draw_favorite_waterfall_button(favorited):
@@ -9062,7 +9133,7 @@ def draw_favorite_waterfall_button(favorited):
         (x0, y0, x1, y1), active=favorited, pressed=pressed,
         fill_alpha=waterfall_button_fill_alpha(favorited, pressed),
     )
-    edge = APP_UI_STYLE.palette.ready if favorited else visual.text
+    edge = APP_UI_STYLE.palette.focus if favorited else visual.text
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     draw_favorite_star(cx, cy, 17, edge, filled=favorited)
 
@@ -9309,7 +9380,7 @@ def visible_frequency_position(position, sidebar=None):
 
 
 def mirror_top_instruments():
-    return LCD_800_MODE and theme_system.runtime_theme["sidebar"] == "left"
+    return LCD_800_MODE and not home_rail_hidden() and theme_system.runtime_theme["sidebar"] == "left"
 
 
 def mirror_rf_box(box):
@@ -9330,6 +9401,8 @@ def big_frequency_rendered_width(text_cache, freq_khz, font_family):
 
 
 def frequency_display_box(text_cache, freq_khz, font_family=None, position="middle", mirrored=None):
+    if home_rail_hidden():
+        return collapsed_instrument_boxes()[0]
     if position == "right":
         return compact_frequency_touch_box()
     font_family = font_family or VFO_FONT_FAMILY
@@ -9379,7 +9452,7 @@ def home_rail_controls_available(
     receiver browser owns the screen), the covered Home mode grid, passband,
     and volume must stay inert instead of reacting under the visible page.
     """
-    return not picker_open and not settings_menu_open and not digital_menu_open and not sidebar_open
+    return not home_rail_hidden() and not picker_open and not settings_menu_open and not digital_menu_open and not sidebar_open
 
 
 def draw_radio_setup_pill(text_cache, mode, digital, step_hz, box=RADIO_SETUP_BOX):
@@ -9748,7 +9821,7 @@ def draw_radio_close_button(text_cache, box):
 def draw_radio_mode_indicator(text_cache, box, caption, active, *, lamp=True, size=11):
     """Variant text is an annunciator; other modes use a wide status lamp."""
     style = APP_UI_STYLE.button
-    ready = APP_UI_STYLE.palette.ready
+    ready = APP_UI_STYLE.palette.focus
     color = ready if active else tuple(round(channel * .2) for channel in ready[:3])
     center_x, center_y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2 + 15 + LCD_RADIO_MODE_CONTENT_OFFSET_Y
     led_width, led_height, gap = (15, 5, 4) if lamp else (0, 0, 0)
@@ -9917,12 +9990,14 @@ def set_display_page(advanced=False):
     if not LCD_800_MODE:
         return
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
-    names = ("SPECTRUM", "AUTO", "WATERFALL", "SPEED", "ADVANCED", "THEME", "RESET",
+    names = ("SPECTRUM", "AUTO", "WATERFALL", "SPEED", "ADVANCED", "THEME", "HIDE_RAIL", "RESET",
              "FLOOR_MINUS", "FLOOR_PLUS", "CEIL_MINUS", "CEIL_PLUS")
     boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
     palettes, layouts, spectrum_styles = (), (), ()
     if advanced:
         bottom = lcd_drawer_back_box()[1] - LCD_NAV_GAP
+        boxes["DISPLAY_HIDE_RAIL_BOX"] = (x0, bottom - 64, x1, bottom)
+        bottom -= 64 + LCD_NAV_GAP
         top = bottom - 160
         boxes["DISPLAY_THEME_BOX"] = (x0, top, x1, top + 64)
         layouts = tuple((name, (x0 + i*81, bottom - 56, x0 + i*81 + 74, bottom))
@@ -9975,6 +10050,8 @@ def display_option_at(x, y):
         return "advanced", None
     if LCD_800_MODE and contains(DISPLAY_RESET_BOX, x, y):
         return "reset", None
+    if LCD_800_MODE and contains(DISPLAY_HIDE_RAIL_BOX, x, y):
+        return "hide_sidebar", None
     if LCD_800_MODE and contains(DISPLAY_THEME_BOX, x, y):
         return "theme", None
     if LCD_800_MODE:
@@ -10101,7 +10178,7 @@ def draw_display_control(text_cache, box, label, active=False):
 
 def draw_selection_indicator(box, selected, *, enabled=True):
     """Theme-ready accent for persistent choices with an existing caption."""
-    ready = APP_UI_STYLE.palette.ready
+    ready = APP_UI_STYLE.palette.focus
     color = ready if selected and enabled else tuple(round(channel * .2) for channel in ready[:3])
     cx, cy = (box[0] + box[2]) / 2, box[3] - 8
     draw_logical_rect(cx - 7.5, cy - 2.5, cx + 7.5, cy + 2.5, color)
@@ -15139,6 +15216,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
         draw_radio_close_button(text_cache, lcd_display_drawer_close_box())
         if DISPLAY_ADVANCED_OPEN:
             draw_lcd_audio_tile(text_cache, DISPLAY_THEME_BOX, "THEMES", "STYLE SETTINGS")
+            draw_lcd_audio_tile(text_cache, DISPLAY_HIDE_RAIL_BOX, "HIDE SIDEBAR", "FULL WIDTH")
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14,
                                    DISPLAY_LAYOUT_BOXES[0][1][1] - 16, "READOUT POSITION")
             for layout, box in DISPLAY_LAYOUT_BOXES:
@@ -15266,7 +15344,7 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
     # Follow the same live theme accent as selected controls and Favorites.
     # Retain each overlay layer's opacity so RF detail remains visible.
     palette = APP_UI_STYLE.palette
-    accent = palette.ready[:3]
+    accent = palette.focus[:3]
     fill = (*accent, int(palette.passband_fill[3] * alpha))
     edge = (*accent, int(palette.passband_border[3] * alpha))
     center_shadow = (2, 7, 11, int(128 * alpha))
@@ -16347,12 +16425,13 @@ def draw_band_navigation(text_cache, freq_khz, mode, band_counts=None, tuning_bo
 
 
 def draw_band_waterfall_button(text_cache, freq_khz, mode):
-    context, kind = frequency_band_context(freq_khz, mode)
+    context, _kind = frequency_band_context(freq_khz, mode)
     label = context.split(" · ", 1)[0]
-    category = {"broadcast": "(Broadcast)", "ham": "(Ham)", "general": "(General)"}[kind]
-    draw_styled_two_line_button(text_cache, band_waterfall_box(), "BAND", label,
+    box = band_waterfall_box()
+    draw_styled_two_line_button(text_cache, box, "BAND", label,
                                style=replace(APP_UI_STYLE.button, title_size=18, subtitle_size=13),
-                               fit_full_subtitle=True, footnote=category)
+                               fit_full_subtitle=True,
+                               fill_alpha=waterfall_button_fill_alpha(False, ui_button_pressed(box)))
 
 
 def compact_font_review_boxes():
@@ -16472,12 +16551,12 @@ def smeter_is_slim():
 
 def home_rail_has_meter(instrument_layout):
     """Large meters stay in the rail independently of frequency placement."""
-    return instrument_layout == "right" or not smeter_supports_top_instrument_strip()
+    return not home_rail_hidden() and (instrument_layout == "right" or not smeter_supports_top_instrument_strip())
 
 
 def is_home_mode_touch(x, y, instrument_layout):
     """Hit the displayed grid, including rows below a large meter."""
-    return any(contains(box, x, y) for _label, box in
+    return not home_rail_hidden() and any(contains(box, x, y) for _label, box in
                lcd_home_mode_boxes(home_rail_has_meter(instrument_layout)))
 
 
@@ -17141,14 +17220,14 @@ def confirmed_box_tap(box, start_x, start_y, x, y):
 
 def inert_sidebar_gesture(gesture, x, y):
     """Rail margins and headers never serve as implicit dismissal controls."""
-    if LCD_800_MODE and LCD_NAV_X0 <= x < LOGICAL_W and 0 <= y < LOGICAL_H:
+    if LCD_800_MODE and not home_rail_hidden() and LCD_NAV_X0 <= x < LOGICAL_W and 0 <= y < LOGICAL_H:
         if gesture.endswith("_outside"):
             return "none"
     return gesture
 
 
 def lcd_nav_item_at(x, y, items=MENU_ITEMS):
-    if not LCD_800_MODE:
+    if not LCD_800_MODE or home_rail_hidden():
         return None
     has_back = items in (SETTINGS_MENU_ITEMS, DIGITAL_MENU_ITEMS)
     for index in range(len(items)):
@@ -17515,7 +17594,7 @@ def draw_lcd_navigation(text_cache, volume=None, smeter_dbm=None, muted=False, s
                         active_decoders=(), running_decoder_count=0, decoder_counts=None,
                         receiver_playing=False, captions_running=False):
     """Draw the 256 px right rail shared by the LCD and Mac simulator."""
-    if not LCD_800_MODE:
+    if not LCD_800_MODE or home_rail_hidden():
         return
     rail_bottom = lcd_rail_bottom()
     # The RF lower-status bar ends at x=1024.  The remaining Home rail is one
@@ -18998,7 +19077,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     if alpha <= 0.01:
         return
     if LCD_800_MODE:
-        status_x1 = DESKTOP_1280_MAIN_W
+        status_x1 = rf_canvas_width()
         footer_back = APP_UI_STYLE.palette.footer_background
         draw_logical_rect(0, y0, status_x1, y1, (*footer_back[:3], int(footer_back[3] * alpha)))
         size = 18
@@ -19046,7 +19125,7 @@ def draw_lower_status(text_cache, cpu_percent, temp_c, y0, y1, station_name="", 
     # The permanent 256 px Home rail is not part of the radio status bar.
     # Keeping this at the 1024 px RF canvas prevents status text or its dark
     # backing from appearing beneath Home controls.
-    status_x1 = DESKTOP_1280_MAIN_W if LCD_800_MODE else LOGICAL_W
+    status_x1 = rf_canvas_width()
     footer_back = APP_UI_STYLE.palette.footer_background
     draw_logical_rect(0, y0, status_x1, y1,
                       (*footer_back[:3], int(footer_back[3] * alpha * (164 / 208 if compact else 1))))
@@ -19775,9 +19854,11 @@ def draw_ui(
     # RIGHT places frequency and meter in the rail, leaving the RF corner
     # free. Other layouts retain clearance below their top instrument strip.
     WATERFALL_ACTIONS_TOP = 8 if instrument_layout == "right" else 88
+    if home_rail_hidden():
+        WATERFALL_ACTIONS_TOP = max(88, collapsed_instrument_boxes()[1][3] + 8)
     # Keep the large frequency's translucent strip aligned with the active
     # theme; RIGHT has no such strip over the RF canvas.
-    show_large_instruments = instrument_layout != "right"
+    show_large_instruments = instrument_layout != "right" or home_rail_hidden()
     band_color = themed_instrument_color("top_instrument_band", (0, 0, 0, 144))
     if DESKTOP_1280_MODE:
         # The wide unit has one uninterrupted instrument strip spanning the
@@ -19788,6 +19869,8 @@ def draw_ui(
         # The scope stays visible through one continuous top band. RIGHT has
         # its readout in the rail and needs no wash over the RF canvas.
         band_height = LCD_TOP_INSTRUMENT_BAND_H if LCD_800_MODE else sdr_ui.TOP_H
+        if home_rail_hidden():
+            band_height = WATERFALL_ACTIONS_TOP
         draw_logical_rect(0, 0, rf_canvas_width(), band_height, band_color)
     _frequency_text, radio_box = top_instrument_layout(
         text_cache, freq_khz, compact_frequency_font_family
@@ -19796,7 +19879,7 @@ def draw_ui(
         draw_desktop_1280_annunciator_button(text_cache, mode, digital, step_hz, bandwidth_hz)
     elif not LCD_800_MODE:
         draw_radio_setup_pill(text_cache, mode, digital, step_hz, radio_box)
-    if show_large_instruments:
+    if show_large_instruments and not home_rail_hidden():
         left_instruments = LCD_800_MODE and instrument_layout == "left"
         mirrored_instruments = mirror_top_instruments()
         frequency_x, frequency_anchor = large_frequency_placement(instrument_layout)
@@ -19830,6 +19913,12 @@ def draw_ui(
         background_alpha=ruler_background_alpha,
         subdued=bottom_ruler,
     )
+    if home_rail_hidden():
+        frequency_box, meter_box = collapsed_instrument_boxes()
+        draw_big_frequency(text_cache, freq_khz, (frequency_box[0] + frequency_box[2]) / 2,
+                           (frequency_box[1] + frequency_box[3]) / 2, 330.0,
+                           family=compact_frequency_font_family, anchor="cm")
+        draw_selected_smeter(text_cache, meter_box, smeter_dbm, smeter_peak_dbm)
     status_y0 = (
         ruler_y0 + ruler_height if bottom_ruler else WATERFALL_Y1
     ) if status_y0 is None else status_y0
@@ -19894,7 +19983,7 @@ def draw_ui(
     # The full-height black Home rail is laid down first; render its VFO/mode
     # instrument over it so the panel remains visible without touching the
     # independent 1024 px RF scope/waterfall canvas.
-    if LCD_800_MODE and not (sidebar_open or settings_menu_open or digital_menu_open):
+    if LCD_800_MODE and not home_rail_hidden() and not (sidebar_open or settings_menu_open or digital_menu_open):
         show_compact_readouts = home_rail_has_meter(instrument_layout)
         draw_lcd_mode_annunciators(
             text_cache, mode, digital, freq_khz, smeter_dbm,
@@ -26926,8 +27015,25 @@ def main():
                 return True
         return False
 
+    def home_collapse_tab_visible():
+        """Only Home owns this shortcut; drawers and decoder workspaces do not."""
+        return LCD_800_MODE and not home_rail_hidden() and not (
+            menu_open or picker_open or settings_menu_open or digital_menu_open
+            or radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open
+            or receiver_home_panel_open or fan_curve_panel_open or frequency_drawer_open
+            or frequency_entry_open or compact_font_review_open or network_panel_open
+            or tests_panel_open or asr_panel_open or deepgram_setup_open or band_navigation_open
+            or wspr_panel_open or wspr_identity_open or dj_tune_open or rtl_lab_open or font_lab_open
+            or filter_panel_open or dual_vfo_open or dual_vfo_mode_open or dual_vfo_picker_open
+            or theme_editor.open or smeter_picker.open or seek_view.open or application_update.open
+            or audio_test_workspace.open or adsb_workspace.open or station_workspace.open
+            or usb_radios_workspace.open or vhf_workspace.open or cw_workspace.open
+            or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
+            or usb_popup.visible() or web_apps.blocks_touch
+        )
+
     def rail_relocation_active():
-        if theme_system.runtime_theme["sidebar"] != "left":
+        if home_rail_hidden() or theme_system.runtime_theme["sidebar"] != "left":
             return False
         if shared_keyboard_open():
             return False
@@ -27597,7 +27703,18 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if smeter_picker.open:
+                            if home_collapse_tab_visible() and contains(home_rail_collapse_box(), x, y):
+                                gesture = "home_rail_collapse"
+                                scope_drag_eligible = False
+                            elif home_rail_restore_at(x, y):
+                                gesture = "home_rail_restore"
+                            elif home_rail_hidden() and contains(collapsed_instrument_boxes()[0], x, y):
+                                gesture = "frequency_drawer_open"
+                                scope_drag_eligible = False
+                            elif home_rail_hidden() and contains(collapsed_instrument_boxes()[1], x, y):
+                                gesture = "smeter_picker_open"
+                                scope_drag_eligible = False
+                            elif smeter_picker.open:
                                 gesture = "smeter_picker"
                             elif seek_view.open:
                                 gesture = "smart_seek"
@@ -27668,7 +27785,7 @@ def main():
                                 # control. It must work on the first touch,
                                 # even while the rest of the waterfall is in
                                 # its quiet, wake-on-touch presentation.
-                                or contains(CPU_ANNUNCIATOR_BOX, x, y)
+                                or contains(cpu_annunciator_touch_box(), x, y)
                                 or (
                                     frequency_identity_candidates
                                     and time.monotonic() < frequency_identity_osd_until
@@ -27918,7 +28035,7 @@ def main():
                                 # target. Compact typography review remains a
                                 # Settings tool and must never steal this tap.
                                 gesture = "frequency_drawer_open"
-                            elif (not LCD_800_MODE or x < LCD_NAV_X0) and contains(CPU_ANNUNCIATOR_BOX, x, y):
+                            elif (not LCD_800_MODE or x < rf_canvas_width()) and contains(cpu_annunciator_touch_box(), x, y):
                                 gesture = "cpu_utilization_graph"
                             elif audio_panel_open and LCD_800_MODE and contains((LCD_NAV_X0, 0, LOGICAL_W, LOGICAL_H), x, y):
                                 # The drawer owns the top-right rail while it
@@ -28409,11 +28526,22 @@ def main():
                             touch_started
                             and LCD_800_MODE
                             and start_x is not None
+                            and not home_rail_hidden()
                             and start_x >= LCD_NAV_X0
                             and gesture not in TOOLBOX_CONTINUOUS_GESTURES
                         ):
                             play_toolbox_confirmation_tone(args)
-                        if touch_started and gesture == "dual_vfo_mode":
+                        if touch_started and gesture == "home_rail_collapse":
+                            if (home_collapse_tab_visible()
+                                    and confirmed_box_tap(home_rail_collapse_box(), start_x, start_y, x, y)
+                                    and max(abs(x - start_x), abs(y - start_y)) <= args.tap_px):
+                                set_home_rail_hidden(True)
+                                wake_controls()
+                        elif touch_started and gesture == "home_rail_restore":
+                            if confirmed_box_tap(home_rail_restore_box(), start_x, start_y, x, y):
+                                set_home_rail_hidden(False)
+                                wake_controls()
+                        elif touch_started and gesture == "dual_vfo_mode":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action, selected_mode = confirmed_tap_action(dual_vfo_mode_picker_action_at, start_x, start_y, x, y) or (None, None)
@@ -29792,6 +29920,13 @@ def main():
                                     elif kind == "close":
                                         display_setup_open = False
                                         restore_navigation_parent(display_parent)
+                                    elif kind == "hide_sidebar":
+                                        display_setup_open = False
+                                        settings_menu_open = False
+                                        digital_menu_open = False
+                                        menu_open = False
+                                        set_home_rail_hidden(True)
+                                        wake_controls()
                                     elif kind == "theme":
                                         display_setup_open = False
                                         theme_editor.show()
@@ -31168,6 +31303,17 @@ def main():
                         row_span_khz = kiwi.zoom_to_span_khz(int(b_profile.get("zoom", zoom)))
                     dual_b_wf_texture.push_line(line, row_center_khz, row_span_khz)
 
+            if home_rail_hidden() and (
+                menu_open or picker_open or settings_menu_open or digital_menu_open
+                or radio_setup_open or audio_panel_open or display_setup_open
+                or filter_drawer_open or receiver_home_panel_open or fan_curve_panel_open
+                or frequency_drawer_open or frequency_entry_open or compact_font_review_open
+                or network_panel_open or tests_panel_open or asr_panel_open or deepgram_setup_open
+                or wspr_panel_open or wspr_identity_open or dj_tune_open or rtl_lab_open or font_lab_open
+                or theme_editor.open or smeter_picker.open or seek_view.open
+                or dual_vfo_open or band_navigation_open
+            ):
+                set_home_rail_hidden(False)
             GL.glClearColor(0, 0, 0, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, (4, 7, 11, 255))
@@ -31244,7 +31390,7 @@ def main():
                 spectrum_layer.draw(
                     spectrum_values,
                     spectrum_peak_values,
-                    (spectrum_y0, spectrum_y1, source_span_khz, display_span,
+                    (spectrum_y0, spectrum_y1, source_span_khz, display_span, rf_canvas_width(),
                      theme_system.runtime_revision, SPECTRUM_STYLE),
                     lambda: draw_spectrum(
                         spectrum_y0,
@@ -31485,8 +31631,7 @@ def main():
                     draw_band_waterfall_button(text_cache, display_freq, radio_mode)
                     band_button_drawn = True
                 if state.smart_seek_available() and not dual_vfo_open:
-                    draw_styled_text_button(text_cache, smart_seek_waterfall_box(), "SCAN",
-                                            style=replace(APP_UI_STYLE.button, label_size=18))
+                    draw_waterfall_text_button(text_cache, smart_seek_waterfall_box(), "SCAN")
                     scan_button_drawn = True
                 if carrier_button_visible(state):
                     status = state.carrier_status_snapshot()
@@ -31920,6 +32065,8 @@ def main():
             if smeter_picker.open:
                 smeter_picker.draw(sys.modules[__name__], text_cache)
             if not web_apps.blocks_touch:usb_popup.draw(text_cache)
+            if home_collapse_tab_visible():
+                draw_home_rail_collapse_tab(text_cache)
             if rail_relocation_active():
                 if sidebar_composer is None:
                     sidebar_composer = SidebarComposer()
@@ -31928,6 +32075,7 @@ def main():
             if web_notice:
                 draw_web_app_notice_osd(text_cache, web_notice, 220 if web_apps.active else
                                         green_osd_alpha(web_apps.error_until - time.monotonic(), 8))
+            draw_home_rail_restore_tab(text_cache)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

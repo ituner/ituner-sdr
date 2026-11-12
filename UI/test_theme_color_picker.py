@@ -34,6 +34,32 @@ class ColorPickerTests(unittest.TestCase):
         a,b,c,d = theme_screen_boxes(self.editor)[key]
         self.editor.tap((a+c)/2, (b+d)/2)
 
+    def test_accent_changes_reach_live_indicators_favorite_and_passband(self):
+        from theme_system import apply_theme, runtime_theme
+        original = deepcopy(runtime_theme)
+        self.addCleanup(apply_theme, original)
+        previous = None
+        for accent in ('cyan', 'amber'):
+            self.editor.choose_accent(accent)
+            draft = self.editor.preview
+            apply_theme(draft)
+            expected = tuple(draft['colors']['focus'])
+            self.assertNotEqual(expected, previous)
+            previous = expected
+            self.assertNotEqual(expected, ui.APP_UI_STYLE.palette.ready)
+            with patch.object(ui, 'draw_styled_two_line_button'), \
+                 patch.object(ui, 'draw_logical_rect') as lamp:
+                ui.draw_selection_button(None, (0,0,74,56), 'LEFT', True)
+            self.assertEqual(lamp.call_args.args[4], expected)
+            with patch.object(ui, 'draw_styled_button_frame', return_value=ui.APP_UI_STYLE.button.resolve()), \
+                 patch.object(ui, 'draw_favorite_star') as star:
+                ui.draw_favorite_waterfall_button(True)
+            self.assertEqual(star.call_args.args[3], expected)
+            with patch.object(ui, 'draw_logical_rect') as fill, \
+                 patch.object(ui, 'draw_logical_line'):
+                ui.draw_filter_overlay(None, 20, -3000, 3000, 0, 700, show_markers=False)
+            self.assertEqual(fill.call_args.args[4][:3], expected[:3])
+
     def test_defaults_and_equal_footer_buttons(self):
         self.assertEqual(self.editor.preview['border_intensity_percent'],25)
         self.assertEqual(self.editor.preview['color_intensity_percent'],100)

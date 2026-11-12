@@ -1555,7 +1555,7 @@ class ReceiverListStyleTests(unittest.TestCase):
             *box, ui.APP_UI_STYLE.button.radius,
             ui.APP_UI_STYLE.palette.surface, ui.APP_UI_STYLE.palette.active_border, 2,
         )
-        self.assertEqual(lamp.call_args.args[4], ui.APP_UI_STYLE.palette.ready)
+        self.assertEqual(lamp.call_args.args[4], ui.APP_UI_STYLE.palette.focus)
         self.assertEqual(text.call_args.args[4], ui.APP_UI_STYLE.palette.text)
 
     def test_receiver_rows_are_six_complete_with_balanced_padding(self):
@@ -1849,7 +1849,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         with mock.patch.object(ui,'draw_styled_button_frame',return_value=style.resolve(active=True)), \
              mock.patch.object(ui,'draw_text') as text:
             ui.draw_styled_two_line_button(None,(0,0,64,64),'CW','500 Hz',active=True,style=style)
-        self.assertEqual(text.call_args_list[-1].args[4],style.palette.ready)
+        self.assertEqual(text.call_args_list[-1].args[4],style.palette.focus)
 
     def test_pressed_two_line_button_dims_subtitle_from_title(self):
         pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
@@ -1860,7 +1860,7 @@ class ReceiverListStyleTests(unittest.TestCase):
         self.assertEqual([call.args[4] for call in text.call_args_list],
                          [pressed.text, tuple(ui.muted_text_color(pressed.text,pressed.fill))])
 
-    def test_home_favorite_uses_theme_ready_accent_without_gold_fill(self):
+    def test_home_favorite_uses_theme_accent_without_gold_fill(self):
         active = ui.APP_UI_STYLE.button.resolve(active=True)
         with mock.patch.object(ui, "ui_button_pressed", return_value=False), \
                 mock.patch.object(ui, "draw_styled_button_frame", return_value=active) as frame, \
@@ -1868,7 +1868,7 @@ class ReceiverListStyleTests(unittest.TestCase):
                 mock.patch.object(ui, "draw_logical_circle") as gold_fill:
             ui.draw_favorite_waterfall_button(True)
         self.assertTrue(frame.call_args.kwargs["active"])
-        self.assertEqual(star.call_args.args[3], ui.APP_UI_STYLE.palette.ready)
+        self.assertEqual(star.call_args.args[3], ui.APP_UI_STYLE.palette.focus)
         self.assertTrue(star.call_args.kwargs["filled"])
         gold_fill.assert_not_called()
 
