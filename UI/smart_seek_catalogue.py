@@ -324,6 +324,16 @@ class SmartSeekCatalogue:
             self._current.feed(message,bandwidth_hz,zoom_max,zoom_cap,now)
             self._finish_turn(now)
 
+    def band_counts(self, receiver, now=None):
+        """Read recent measurements without starting or advancing a scan."""
+        now = time.monotonic() if now is None else now
+        counts = {}
+        for low, high, label in self._bands:
+            record = self._count_cache.get((receiver, float(low), float(high)))
+            counts[label] = (len(record['candidates']) if record is not None
+                             and 0 <= now-record['measured_at'] < self.COUNT_CACHE_SECONDS else None)
+        return counts
+
     def snapshot(self, now=None):
         now = time.monotonic() if now is None else now
         self._remember_counts(now)

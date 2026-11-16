@@ -456,12 +456,12 @@ class WorkspaceTests(unittest.TestCase):
         original=deepcopy(theme_system.runtime_theme)
         self.addCleanup(theme_system.apply_theme,original)
         for color in ([24,48,72],[240,180,90]):
-            theme=deepcopy(original);theme['colors']['secondary_text']=color;theme_system.apply_theme(theme)
+            theme=deepcopy(original);theme['colors']['text']=color;theme_system.apply_theme(theme)
             ui.draw_text.reset_mock();w.draw(Mock())
             captions={'SELECT AN AIRCRAFT','DRAG','Tap a plane on the map to inspect it.'}
             calls=[c for c in ui.draw_text.call_args_list if c.args[3] in captions]
             self.assertEqual(len(calls),3)
-            self.assertTrue(all(tuple(c.args[4])==tuple(color) for c in calls))
+            self.assertTrue(all(tuple(c.args[4])==tuple(APP_UI_STYLE.palette.secondary_text) for c in calls))
 
     def test_option_rails_keep_one_back_and_all_actions_on_both_theme_sides(self):
         import theme_system

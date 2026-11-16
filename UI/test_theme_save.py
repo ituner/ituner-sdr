@@ -7,7 +7,7 @@ import unittest
 import json
 from unittest.mock import patch
 
-from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE
+from theme_editor import ThemeEditor
 from theme_system import BUILTIN_THEME_IDS, DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, theme_appearance, runtime_theme
 from smeter_styles import METER_STYLES
 
@@ -22,55 +22,28 @@ class ThemeSaveTests(unittest.TestCase):
         apply_theme(DEFAULT_THEME)
         self.directory.cleanup()
 
-    @staticmethod
-    def tap(editor, action):
-        box = theme_screen_boxes(editor)[action]
-        editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-
-    def choose_meter(self, editor, identifier):
-        target = editor.meter_ids.index(identifier) // METER_CARDS_PER_PAGE
-        while editor.meter_page != target:
-            self.tap(editor, "meter_next" if editor.meter_page < target else "meter_previous")
-        self.tap(editor, "meter:" + identifier)
-
     def test_meter_changes_from_every_builtin_preserve_all_saved_themes(self):
         original = new_theme()
         self.library.upsert(original)
         preserved = deepcopy(self.library.themes)
-        designs = ("linear_orange", "flex_vintage_hd_white", "flex_vintage_hd", "flex_orange")
-        for index, builtin in enumerate(BUILTIN_THEME_IDS):
-            with self.subTest(builtin=builtin):
-                self.library.activate(builtin)
-                editor = ThemeEditor(self.library)
-                editor.show("meters")
-                self.tap(editor, "filter:all")
-                identifier = designs[index % len(designs)]
-                self.choose_meter(editor, identifier)
-                self.tap(editor, "save")
-                self.assertEqual(editor.mode, "browse", editor.notice)
-                saved = ThemeLibrary(self.path)
-                self.assertEqual(saved.get(saved.active_id)["smeter_style"], identifier)
-                self.assertEqual(saved.themes, preserved)
-                self.assertEqual(saved.active_id, builtin)
-                self.assertEqual(saved.get(original["id"])["smeter_style"], identifier)
-                self.assertTrue(all("smeter_style" not in t for t in json.loads(self.path.read_text())["themes"]))
-        self.assertEqual(len(self.library.themes), 1)
+        for builtin in BUILTIN_THEME_IDS:
+            self.library.activate(builtin)
+            self.library.set_smeter_style('linear_orange')
+            saved = ThemeLibrary(self.path)
+            self.assertEqual(saved.smeter_style, 'linear_orange')
+            self.assertEqual(saved.themes, preserved)
+            self.assertEqual(saved.active_id, builtin)
+            self.assertTrue(all('smeter_style' not in t for t in json.loads(self.path.read_text())['themes']))
 
     def test_repeated_meter_edits_leave_saved_theme_untouched(self):
         original = new_theme()
         self.library.upsert(original)
         preserved = deepcopy(self.library.themes)
-        editor = ThemeEditor(self.library)
-        for identifier in ("flex_icom", "linear_orange"):
-            editor.show("meters")
-            self.tap(editor, "filter:all")
-            self.choose_meter(editor, identifier)
-            self.tap(editor, "save")
-            self.assertEqual(editor.mode, "browse", editor.notice)
+        for identifier in ('flex_icom', 'linear_orange'):
+            self.library.set_smeter_style(identifier)
             saved = ThemeLibrary(self.path)
-            self.assertEqual(saved.active_id, original["id"])
-            self.assertEqual(saved.get(saved.active_id)["name"], original["name"])
-            self.assertEqual(saved.get(saved.active_id)["smeter_style"], identifier)
+            self.assertEqual(saved.active_id, original['id'])
+            self.assertEqual(saved.smeter_style, identifier)
             self.assertEqual(saved.themes, preserved)
 
     def test_legacy_active_meter_migrates_and_other_themes_cannot_restore_theirs(self):
@@ -99,25 +72,27 @@ class ThemeSaveTests(unittest.TestCase):
                                             "smeter_style": value, "themes": [legacy]}))
             self.assertEqual(ThemeLibrary(self.path).smeter_style, expected)
 
-    def test_palette_edit_creates_appearance_copy_and_saves_meter_separately(self):
+    def test_palette_edit_saves_builtin_override_and_keeps_meter_separate(self):
+        self.library.set_smeter_style('linear_orange')
         editor = ThemeEditor(self.library)
         editor.show()
-        editor.draft["colors"]["frequency"] = [240, 120, 30]
-        editor.draft["smeter_style"] = "linear_orange"
+        editor.select_theme('default')
+        editor.draft['colors']['frequency'] = [240, 120, 30]
         before = deepcopy(runtime_theme)
-        with patch.object(self.library, "save", side_effect=OSError("Full disk")):
+        with patch.object(self.library, 'save', side_effect=OSError('Full disk')):
             self.assertFalse(editor.save())
         self.assertEqual(self.library.themes, [])
-        self.assertEqual(self.library.active_id, "default")
-        self.assertEqual(self.library.smeter_style, "led")
+        self.assertEqual(self.library.builtin_overrides, {})
+        self.assertEqual(self.library.active_id, 'default')
+        self.assertEqual(self.library.smeter_style, 'linear_orange')
         self.assertEqual(runtime_theme, before)
         self.assertTrue(editor.save())
         document = json.loads(self.path.read_text())
-        self.assertEqual(len(document["themes"]), 1)
-        self.assertEqual(document["themes"][0]["colors"]["frequency"], [240, 120, 30])
-        self.assertNotIn("smeter_style", document["themes"][0])
-        self.assertEqual(document["smeter_style"], "linear_orange")
-        self.assertNotEqual(document["active_id"], "default")
+        self.assertEqual(document['themes'], [])
+        self.assertEqual(document['builtin_overrides']['default']['colors']['frequency'], [240, 120, 30])
+        self.assertNotIn('smeter_style', document['builtin_overrides']['default'])
+        self.assertEqual(document['smeter_style'], 'linear_orange')
+        self.assertEqual(document['active_id'], 'default')
 
     def test_new_draft_skips_existing_names_case_insensitively(self):
         for name in ("NEW THEME", "new theme 2", "New Theme 4"):

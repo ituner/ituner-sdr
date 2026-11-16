@@ -6,6 +6,7 @@ same instruments and touch actions as the browser without embedding a browser.
 import math
 import time
 from ui_style import APP_UI_STYLE
+from theme_system import runtime_theme
 from decoder_style import full_width_back_box
 from adsb_traffic import historical_aircraft, position_age, reception_summary, trail_label
 from adsb_view import aged, freshness
@@ -18,8 +19,10 @@ class AirspaceDashboard:
     def ink(self, cache, x, y, value, size=16, color=None, width=None, anchor='lm', bold=False):
         value=str(value)
         bold=bold or size>=20
-        if width:value=self.ui.fit_station_text(cache,value,width,size,bold,False,'Oxanium')
-        self.ui.draw_text(cache,x,y,value,color or self.TEXT,size,bold,False,anchor,family='Oxanium')
+        family = ('Oxanium' if runtime_theme.get('font_style','current')=='current'
+                  else APP_UI_STYLE.button.font_family)
+        if width:value=self.ui.fit_station_text(cache,value,width,size,bold,False,family)
+        self.ui.draw_text(cache,x,y,value,color or self.TEXT,size,bold,False,anchor,family=family)
 
     def surface(self, box, fill=None, border=None, radius=8):
         self.ui.draw_logical_rounded_rect(*box,APP_UI_STYLE.button.radius,fill or self.PANEL,border or self.LINE,1)
@@ -29,6 +32,11 @@ class AirspaceDashboard:
         self.ui.draw_styled_two_line_button(cache,box,str(title).upper(),str(subtitle).upper(),active=active,enabled=enabled)
         if enabled:
             self.actions.append((box,action))
+
+    def selection_button(self, cache, box, title, action, selected):
+        """A persistent option uses the same accent lamp as Display presets."""
+        self.ui.draw_selection_button(cache,box,str(title).upper(),selected)
+        self.actions.append((box,action))
 
     @staticmethod
     def instrument_value(value, digits=0):
@@ -153,7 +161,7 @@ class AirspaceDashboard:
         choices=(90*86400,86400,43200,21600,10800,3600,1800,900,300)
         for index,value in enumerate(choices):
             x=40+(index%3)*400;y=258+(index//3)*90
-            self.button(cache,(x,y,x+376,y+72),'All recorded' if value>86400 else trail_label(value),('history_choice',value),active=value==self.history_draft)
+            self.selection_button(cache,(x,y,x+376,y+72),'All recorded' if value>86400 else trail_label(value),('history_choice',value),value==self.history_draft)
         self.button(cache,(40,592,616,664),'Cancel',('cancel_history',None))
         self.button(cache,(640,592,1216,664),'Apply',('history_apply',None))
 

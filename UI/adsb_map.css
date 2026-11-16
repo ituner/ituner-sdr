@@ -26,3 +26,6 @@ footer{position:fixed;bottom:0;left:0;right:0;z-index:3;display:flex;justify-con
 @media(max-width:720px){.band-strip{top:197px;left:16px;right:16px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 12px}.band-reading{min-width:0}.band-reading>div{display:block}.band-reading strong{font-size:15px}.band-reading [data-band-state]{display:block;margin-top:4px;font-size:12px}.band-reading small{font-size:10px;line-height:1.4}.band-strip button{grid-column:1/-1;justify-self:end;min-height:40px;font-size:13px;padding:8px 14px}#window-summary{top:352px}}
 
 .band-strip .weather-link{display:flex;align-items:center;min-height:48px;padding:12px 18px;border:1px solid #365461;border-radius:6px;background:#122735e8;color:#b9e8df;text-decoration:none;font-size:14px}.band-strip .weather-link:hover{background:#244350}@media(max-width:720px){.band-strip .weather-link{grid-column:1/-1;justify-self:end;min-height:40px;padding:8px 14px}.band-strip button{grid-column:1;grid-row:2}.band-strip .weather-link{grid-column:2;grid-row:2}}
+
+/* Enlarge the sign without changing its button or hit target. */
+.map-controls .step-glyph{display:inline-block;transform:scale(1.5);transform-origin:center;pointer-events:none}

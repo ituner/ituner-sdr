@@ -542,6 +542,9 @@ class LongScanView:
         def button(box,label,action,active=False):
             ui.draw_styled_text_button(cache,box,label,active=active)
             self.actions.append((box,action))
+        def selection_button(box,label,action,selected):
+            ui.draw_selection_button(cache,box,label,selected)
+            self.actions.append((box,action))
         ink(20,31,'LONG SCAN'+(' · EXPERIMENTAL' if self.page == 'setup' else ''),24,palette.section_heading)
         button((ui.LOGICAL_W-246,8,ui.LOGICAL_W-10,66),'Back',('back',None))
         if self.page == 'setup':
@@ -556,7 +559,7 @@ class LongScanView:
             ink(32,441,'History window',20,palette.secondary_text)
             for index,hours in enumerate(HOURS):
                 x = 32+index*130
-                button((x,458,x+118,522),f'{hours} hour'+('s' if hours != 1 else ''),('hours',hours),state['hours']==hours)
+                selection_button((x,458,x+118,522),f'{hours} hour'+('s' if hours != 1 else ''),('hours',hours),state['hours']==hours)
             ink(32,566,'Uses an additional receiver channel. Your listening session stays separate.',20,width=ui.LOGICAL_W-64)
             ink(32,603,timing_label or 'Targets ten full checks per hour; a slow receiver may take longer.',18,palette.secondary_text)
             ink(32,638,'History is saved on this device. Long Scan keeps running when this window closes.',18,palette.secondary_text)
@@ -571,7 +574,7 @@ class LongScanView:
             button((ui.LOGICAL_W-372,8,ui.LOGICAL_W-256,66),'Clear',('clear_search',None))
         for index,hours in enumerate(HOURS):
             x = 20+index*124
-            button((x,76,x+114,140),f'{hours} h',('hours',hours),state['hours']==hours)
+            selection_button((x,76,x+114,140),f'{hours} h',('hours',hours),state['hours']==hours)
         button((ui.LOGICAL_W-282,76,ui.LOGICAL_W-226,132),'−',('zoom',1/1.5))
         button((ui.LOGICAL_W-216,76,ui.LOGICAL_W-160,132),'+',('zoom',1.5))
         button((ui.LOGICAL_W-150,76,ui.LOGICAL_W-20,132),'Fit bands',('fit',None))

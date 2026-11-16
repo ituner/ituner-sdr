@@ -5,7 +5,7 @@ semantic colors and state resolver without coupling the design system to
 OpenGL, pygame, or a particular panel layout.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -15,12 +15,12 @@ class UIPalette:
     sidebar_header: tuple = (0, 0, 0, 255)
     surface: tuple = (0, 0, 0, 255)
     active_surface: tuple = (42, 42, 42, 255)
-    active_border: tuple = (160, 160, 160, 255)
+    active_border: tuple = (255, 255, 255, 255)
     selected_surface: tuple = (30, 30, 30, 255)
-    selected_border: tuple = (160, 160, 160, 255)
+    selected_border: tuple = (255, 255, 255, 255)
     pressed_surface: tuple = (42, 42, 42, 255)
     pressed_border: tuple = (160, 160, 160, 255)
-    border: tuple = (88, 88, 88, 255)
+    border: tuple = (255, 255, 255, 255)
     text: tuple = (255, 255, 255)
     secondary_text: tuple = (160, 160, 160)
     section_heading: tuple = (174, 203, 208)
@@ -101,6 +101,7 @@ class ButtonStyle:
     title_size: int = 14
     subtitle_size: int = 12
     font_family: tuple = ("Roboto", "Inter", "DejaVu Sans")
+    variant: str = "standard"
 
     @property
     def subtitle_color(self):
@@ -108,18 +109,21 @@ class ButtonStyle:
 
     def resolve(self, *, active=False, pressed=False, selected=False, danger=False) -> ButtonVisualState:
         if pressed:
+            channels = [v / 255 for v in self.palette.pressed_surface[:3]]
+            light = sum((v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4)*weight
+                        for v,weight in zip(channels,(.2126,.7152,.0722)))
             return ButtonVisualState(
                 self.palette.pressed_surface, self.palette.pressed_border,
-                (0, 0, 0), 2,
+                (0, 0, 0) if light > .179 else (255, 255, 255), 2,
             )
         if active:
             return ButtonVisualState(
-                self.palette.active_surface, self.palette.active_border,
+                self.palette.surface if self.variant == "smart" else self.palette.active_surface, self.palette.active_border,
                 self.palette.text, 2,
             )
         if selected:
             return ButtonVisualState(
-                self.palette.selected_surface, self.palette.selected_border,
+                self.palette.surface if self.variant == "smart" else self.palette.selected_surface, self.palette.selected_border,
                 self.palette.text, 2,
             )
         if danger:
@@ -138,6 +142,11 @@ class AppUIStyle:
     palette: UIPalette = field(default_factory=UIPalette)
     button: ButtonStyle = field(init=False)
 
+    @property
+    def smart_button(self):
+        """Smart Button: dark face, selected outline, green state text or lamp."""
+        return replace(self.button, variant="smart")
+
     def __post_init__(self):
         object.__setattr__(self, "button", ButtonStyle(self.palette))
 
@@ -145,7 +154,8 @@ class AppUIStyle:
 APP_UI_STYLE = AppUIStyle()
 
 
-def apply_ui_style(palette, *, radius=8):
+def apply_ui_style(palette, *, radius=8, font_family=None):
     """Update the shared style object so existing importers see the new theme."""
     object.__setattr__(APP_UI_STYLE, "palette", palette)
-    object.__setattr__(APP_UI_STYLE, "button", ButtonStyle(palette, radius=radius))
+    options = {'font_family':font_family} if font_family is not None else {}
+    object.__setattr__(APP_UI_STYLE, "button", ButtonStyle(palette, radius=radius, **options))

@@ -32,21 +32,21 @@ METER_STYLES = {
     "triple_black": MeterStyle("OBSIDIAN · RF LAB", "triple", 190, (10, 17, 22), (211, 230, 230), (60, 72, 80), (255, 82, 53), -31, 62, scales=("S", "dBm", "µV")),
     "triple_amber": MeterStyle("AMBER · RF LAB", "triple", 190, (27, 18, 10), (255, 191, 85), (117, 89, 43), (255, 224, 159), -31, 62, scales=("S", "dBm", "µV")),
     "triple_copper": MeterStyle("COPPER · RF LAB", "triple", 190, (183, 81, 20), (35, 23, 13), (95, 58, 32), (39, 23, 14), -31, 62, scales=("S", "dBm", "µV")),
-    "flex_dark": MeterStyle("FLEX DARK · HB9HSJ", "skin", 160, (12, 30, 39), (222, 235, 237), (55, 75, 86), (255, 48, 35), skin="flex_dark", scales=("S", "ARTWORK")),
-    "flex_neon": MeterStyle("FLEX NEON · HB9HSJ", "skin", 160, (0, 0, 0), (72, 214, 255), (53, 74, 94), (57, 255, 20), skin="flex_neon"),
     "led": MeterStyle("LED BAR", "led", 80, (8, 13, 17), (203, 226, 232), (48, 57, 64), (96, 221, 249)),
     "linear": MeterStyle("SLIDING POINTER", "linear", 80, (13, 20, 25), (204, 225, 230), (58, 69, 77), (255, 188, 79)),
     "classic": MeterStyle("CLASSIC IVORY", "radial", 160, (232, 223, 198), (45, 43, 38), (89, 92, 86), (155, 39, 28)),
     "precision": MeterStyle("PRECISION DARK", "radial", 160, (13, 22, 28), (212, 228, 229), (62, 77, 86), (255, 174, 61)),
     "aviation": MeterStyle("AVIATION BLACK", "aircraft", 236, (10, 14, 15), (220, 231, 210), (56, 63, 66), (235, 239, 219), -130, 260, scales=("S", "dBm", "µV")),
-    "heritage": MeterStyle("AVIATION BRASS", "aircraft", 236, (26, 25, 19), (236, 217, 165), (137, 113, 67), (255, 237, 187), -130, 260, scales=("S", "dBm", "µV")),
 }
 DEFAULT_METER_STYLE = "led"
 REMOVED_METER_MIGRATIONS = {
     "oe3ide_eye_" + variant: "oe3ide_eye_plain"
     for variant in ("black", "brass", "silver", "aero", "retro")
 }
-REMOVED_METER_MIGRATIONS.update({"ke9ns_tr7": "led", "flex_transparent": "led"})
+REMOVED_METER_MIGRATIONS.update({
+    "ke9ns_tr7": "led", "flex_transparent": "led",
+    "flex_dark": "led", "flex_neon": "led", "heritage": "led",
+})
 SCALE_LABELS = ((-121, "1"), (-109, "3"), (-97, "5"), (-85, "7"),
                 (-73, "9"), (-53, "+20"), (-33, "+40"))
 SKIN_ASSET_DIR = Path(__file__).parent / "assets" / "smeters" / "flexible"

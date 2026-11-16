@@ -43,6 +43,11 @@ Side-rail content starts 16 px below the horizontal divider under the rail
 name. Apply this spacing to every titled side rail; retain the established
 bottom BACK position and existing button sizes.
 
+For sparse option screens, bottom-align the control groups above BACK instead
+of starting below the header. Build upward from an 8 px gap above BACK,
+preserving group order, labels, button sizes and internal spacing. DISPLAY →
+ADVANCED follows this rule. Dense screens retain their existing top alignment.
+
 All current and future native text-entry screens must use the shared Wi-Fi
 password keyboard design, layout, and placement. Reuse `draw_touch_keyboard`,
 `touch_keyboard_action_at`, and `touch_keyboard_next_mode` in
