@@ -242,6 +242,7 @@ from boot_ready import mark_boot_ready
 from app_update import UpdateController, register_runtime
 import app_update_ui
 import kiwi_live_display_fb as kiwi
+from waterfall_history import CompactRow, WaterfallHistory, WaterfallPixels
 import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
@@ -4687,6 +4688,12 @@ def carrier_button_visible(state):
             and state.carrier_ready_snapshot())
 
 
+def waterfall_action_enabled(state, action, reviewing=False):
+    if reviewing:
+        return False
+    return carrier_button_visible(state) if action == "TUNE" else state.smart_seek_available()
+
+
 def favorite_waterfall_box():
     """A matching one-tap favorite target immediately left of Play/Pause."""
     x0, y0, _x1, y1 = stream_waterfall_box()
@@ -4760,6 +4767,31 @@ def is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
     return (
         dx >= max(args.swipe_start_px, WATERFALL_DRAG_START_PX)
         and dx >= dy * WATERFALL_HORIZONTAL_DRAG_RATIO
+    )
+
+
+def is_waterfall_history_drag(start_x, start_y, x, y, args):
+    dx, dy = abs(x - start_x), abs(y - start_y)
+    return dy >= max(args.swipe_start_px, WATERFALL_DRAG_START_PX) and dy > dx * WATERFALL_HORIZONTAL_DRAG_RATIO
+
+
+def waterfall_history_touch(x, y, drawn, modal_open=False):
+    return bool(drawn and not modal_open and contains_with_guard(waterfall_live_box(), x, y, guard=4))
+
+
+def waterfall_live_box():
+    x0, y0, x1, y1 = carrier_waterfall_box()
+    width = x1 - x0
+    return x0 - width - 10, y0, x0 - 10, y1
+
+
+def draw_waterfall_live_button(text_cache, age):
+    seconds = int(age)
+    box = waterfall_live_box()
+    draw_styled_two_line_button(
+        text_cache, box, "LIVE", f"-{seconds // 60}:{seconds % 60:02d}",
+        style=replace(APP_UI_STYLE.button, title_size=18, subtitle_size=14),
+        fill_alpha=waterfall_button_fill_alpha(False, ui_button_pressed(box)),
     )
 
 
@@ -7218,7 +7250,11 @@ def waterfall_theme_signature():
 
 
 class WaterfallTexture:
-    def __init__(self):
+    def __init__(self, retain_history=False):
+        self.history = WaterfallHistory(WF_TEX_W) if retain_history else None
+        self.history_texture = None
+        self.history_view_key = None
+        self.history_upload_at = 0.0
         self.tex = GL.glGenTextures(1)
         self.row = 0
         self.row_center_khz = [None] * WF_TEX_H
@@ -7243,6 +7279,9 @@ class WaterfallTexture:
         )
 
     def clear(self):
+        if self.history is not None:
+            self.history.clear()
+            self.history_view_key = None
         self.row = 0
         self.row_center_khz = [None] * WF_TEX_H
         self.row_span_khz = [None] * WF_TEX_H
@@ -7272,9 +7311,6 @@ class WaterfallTexture:
         self.theme_revision = signature
 
     def push_line(self, line, center_khz=None, span_khz=None):
-        self.row = (self.row - 1) % WF_TEX_H
-        self.row_center_khz[self.row] = center_khz
-        self.row_span_khz[self.row] = span_khz
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.tex)
         try:
             if isinstance(line, (bytes, bytearray, memoryview)):
@@ -7287,6 +7323,14 @@ class WaterfallTexture:
             # A malformed producer row must never terminate the display.
             print(f"gl discarded waterfall row: {exc}", flush=True)
             return False
+        if self.history is not None:
+            compact = getattr(line, "compact", None)
+            if compact is None:
+                compact = getattr(line, "info", {}).get("waterfall_compact")
+            self.history.append(compact, center_khz, span_khz, time.monotonic())
+        self.row = (self.row - 1) % WF_TEX_H
+        self.row_center_khz[self.row] = center_khz
+        self.row_span_khz[self.row] = span_khz
         self.ensure_theme()
         start = self.row * WF_TEX_W * 4
         self.base_pixels[start:start + WF_TEX_W * 4] = data
@@ -7294,7 +7338,43 @@ class WaterfallTexture:
                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, themed_waterfall_pixels(data))
         return True
 
+    def draw_history(self, x0, y0, x1, y1, center_khz, span_khz):
+        height = min(WF_TEX_H, max(1, int(y1 - y0)))
+        top = self.history.top(height)
+        key = (top, height)
+        if self.history_texture is None:
+            self.history_texture = WaterfallTexture()
+        texture = self.history_texture
+        upload_now = time.monotonic() if key != self.history_view_key else self.history_upload_at
+        upload_due = (self.history_view_key is None
+                      or height != self.history_view_key[1]
+                      or upload_now - self.history_upload_at >= 1.0 / 30.0)
+        if key != self.history_view_key and upload_due:
+            # Bound drag uploads to 30 Hz even with faster touch/render loops.
+            # Only rebuild/upload the viewport after scrolling or expiry.
+            # Incoming live rows do not invalidate an anchored historical view.
+            pixels = bytearray(WF_TEX_W * WF_TEX_H * 4)
+            texture.row_center_khz = [None] * WF_TEX_H
+            texture.row_span_khz = [None] * WF_TEX_H
+            for index, row in enumerate(self.history.window(height)):
+                offset = index * WF_TEX_W * 4
+                pixels[offset:offset + WF_TEX_W * 4] = row.compact.rgba()
+                texture.row_center_khz[index] = row.center_khz
+                texture.row_span_khz[index] = row.span_khz
+            texture.base_pixels = pixels
+            texture.row = 0
+            texture.theme_revision = waterfall_theme_signature()
+            GL.glBindTexture(GL.GL_TEXTURE_2D, texture.tex)
+            GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, WF_TEX_W, WF_TEX_H,
+                              GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, themed_waterfall_pixels(pixels))
+            self.history_view_key = key
+            self.history_upload_at = upload_now
+        texture.draw(x0, y0, x1, y1, center_khz, span_khz)
+
     def draw(self, x0, y0, x1, y1, center_khz=None, span_khz=None, row_offset=0):
+        if self.history is not None and self.history.reviewing:
+            self.draw_history(x0, y0, x1, y1, center_khz, span_khz)
+            return
         self.ensure_theme()
         draw_logical_rect(x0, y0, x1, y1, waterfall_empty_background_color())
         if center_khz is not None and span_khz is not None:
@@ -9109,8 +9189,15 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
         draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
 
 
-def draw_waterfall_text_button(text_cache, box, label):
+def draw_waterfall_text_button(text_cache, box, label, *, enabled=True):
     """HOME actions share the same theme surface and translucency as zoom."""
+    if not enabled:
+        draw_styled_two_line_button(
+            text_cache, box, label, "", enabled=False,
+            style=replace(APP_UI_STYLE.button, title_size=18),
+            fill_alpha=waterfall_button_fill_alpha(False, False),
+        )
+        return
     draw_styled_text_button(
         text_cache, box, label, style=replace(APP_UI_STYLE.button, label_size=18),
         fill_alpha=waterfall_button_fill_alpha(False, ui_button_pressed(box)),
@@ -15490,6 +15577,17 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
 
 
+def draw_waterfall_live_osd(text_cache, alpha):
+    """Live confirmation uses the Zoom panel, notice color and typography."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0:
+        return
+    x0, y0, x1, y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
+    draw_text(text_cache, (x0 + x1) / 2, (y0 + y1) / 2,
+              "LIVE ENABLED", APP_UI_STYLE.palette.notice, 28, True, True, "cm")
+
+
 def draw_globe_zoom_osd(text_cache, scale, alpha=220):
     """Show Globe magnification in Home Zoom's green panel and bar style."""
     alpha = clamp(int(alpha), 0, 255)
@@ -20247,7 +20345,7 @@ def publish_fmdx_pcm(
         return True
     for samples in analyzer.feed(mono):
         floor, ceiling = state.waterfall_levels(samples, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ/1000.0)
-        line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
+        line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W, retain_compact=True)
         state.update_spectrum(samples, 0.0, 255.0)
         row_item = (line, center_khz, fmdx.AUDIO_WATERFALL_SPAN_HZ / 1000.0)
         for _ in range(max(1, int(getattr(args, "wf_row_pixels", 1)))):
@@ -21028,7 +21126,7 @@ class RTLSDRLab:
         # Feed raw RGBA directly to the OpenGL uploader. Creating a Pygame
         # surface here makes its display-dependent color mask leak into the
         # main render thread and can crash the KMS UI on local-audio start.
-        line = rgba_line.tobytes()
+        line = WaterfallPixels(rgba_line.tobytes(), CompactRow.capture(values.tobytes(), lut))
         item = (line, center_khz, self.source_span_khz())
         try:
             self.line_queue.put_nowait(item)
@@ -23369,7 +23467,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                 row_center_khz = float(session.center_frequency_hz or freq_khz*1000.0)/1000.0
                 floor, ceiling = state.waterfall_levels(samples, row_center_khz, source_span)
                 update_openwebrx_scope(state, samples, floor, ceiling)
-                line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
+                line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W, retain_compact=True)
                 source_span = float(session.sample_rate_hz or kiwi.zoom_source_span_khz(zoom)) / 1000.0
                 # FFT rows describe the receiver's whole current profile,
                 # not merely the narrow audio demodulator offset.
@@ -24267,7 +24365,7 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     source_span = wf_bandwidth_hz/(2**source_zoom*1000)
                     source_center = rf_view_center_hz(sent_freq_khz*1000, wf_bandwidth_hz, source_zoom)/1000
                     floor, ceiling = state.waterfall_levels(samples, source_center, source_span)
-                    line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W)
+                    line = kiwi.waterfall_line(samples, mapper, floor, ceiling, width=WF_TEX_W, retain_compact=True)
                     # Scope can be hidden for a waterfall-first screen. Do
                     # not calculate its 10-second peak history in that mode:
                     # this runs for every W/F row and competes with PCM timing
@@ -24487,8 +24585,11 @@ def main():
     )
     text_cache = TextCache()
     prepare_globe_resources(text_cache)
-    wf_texture = WaterfallTexture()
+    wf_texture = WaterfallTexture(retain_history=True)
     wf_presenter = WaterfallPresenter()
+    history_source_key = None
+    history_was_reviewing = False
+    live_osd_until = 0.0
     spectrum_layer = SpectrumLayerCache()
     line_queue = queue.Queue(maxsize=96)
     transcript_queue = queue.Queue(maxsize=24)
@@ -24699,6 +24800,8 @@ def main():
     controls_active_until = time.monotonic() + CONTROL_QUIET_SECONDS
     scan_button_drawn = False
     band_button_drawn = False
+    history_button_drawn = False
+    tune_button_drawn = False
     catalog_stations = STATIONS
     all_stations = catalog_stations
     main_receiver_capacity = MainReceiverCapacityMonitor()
@@ -25425,6 +25528,7 @@ def main():
     touch_started = False
     gesture = None
     swipe_started = False
+    history_drag_y = 0.0
     start_x = start_freq = start_view_center_khz = None
     start_y = 0
     scope_drag_eligible = False
@@ -27747,6 +27851,16 @@ def main():
                             elif sstv_workspace.open:
                                 gesture = "sstv_workspace"
                                 sstv_workspace.drag_begin(x, y)
+                            elif waterfall_history_touch(x,y,history_button_drawn,modal_open=(
+                                menu_open or picker_open or dual_vfo_open or network_panel_open
+                                or network_password_open or tests_panel_open or rtl_lab_open
+                                or font_lab_open or band_navigation_open or wspr_panel_open
+                                or wspr_add_open or wspr_identity_open or dj_tune_open
+                                or filter_panel_open or frequency_entry_open or deepgram_setup_open
+                                or (asr_panel_open and not LCD_800_MODE)
+                            )):
+                                gesture = "waterfall_live"
+                                scope_drag_eligible = False
                             elif waterfall_band_touch(x,y,band_button_drawn,modal_open=(
                                 menu_open or picker_open or dual_vfo_open or network_panel_open
                                 or network_password_open or tests_panel_open or rtl_lab_open
@@ -27765,7 +27879,8 @@ def main():
                                 or filter_panel_open or frequency_entry_open or deepgram_setup_open
                                 or (asr_panel_open and not LCD_800_MODE)
                             )):
-                                gesture = "smart_seek_start"
+                                gesture = ("smart_seek_start" if waterfall_action_enabled(
+                                    state, "SCAN", wf_texture.history.reviewing) else "waterfall_disabled")
                                 scope_drag_eligible = False
                             elif waterfall_focus_progress() > 0.01 and not (
                                 font_lab_open
@@ -27986,8 +28101,10 @@ def main():
                                 gesture = "frequency_identity_tune"
                             elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
-                            elif carrier_button_visible(state) and contains(carrier_waterfall_box(), x, y):
-                                gesture = "carrier_tune"
+                            elif tune_button_drawn and contains(carrier_waterfall_box(), x, y):
+                                gesture = ("carrier_tune" if waterfall_action_enabled(
+                                    state, "TUNE", wf_texture.history.reviewing) else "waterfall_disabled")
+                                scope_drag_eligible = False
                             elif contains(favorite_waterfall_box(), x, y):
                                 gesture = "favorite_toggle"
                             elif contains(stream_waterfall_box(), x, y):
@@ -28512,9 +28629,22 @@ def main():
                             )
                             scope_adjust_until = time.monotonic() + SCOPE_ADJUST_VISIBLE_SECONDS
                             wake_controls()
+                        elif gesture == "waterfall_history":
+                            wf_texture.history.scroll(round(history_drag_y - y), waterfall_y1 - waterfall_y0)
+                            history_drag_y = y
+                            wake_controls()
                         elif gesture == "waterfall":
                             last_x = x
-                            if not swipe_started and is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
+                            if (not swipe_started and waterfall_visible and len(points) == 1
+                                    and start_y >= waterfall_y0
+                                    and is_waterfall_history_drag(start_x, start_y, x, y, args)):
+                                gesture = "waterfall_history"
+                                scope_drag_eligible = False
+                                wf_texture.history.scroll(round(start_y - y), waterfall_y1 - waterfall_y0)
+                                history_drag_y = y
+                                wake_controls()
+                            elif not swipe_started and is_deliberate_waterfall_drag(start_x, start_y, x, y, args):
+                                wf_texture.history.live()
                                 begin_swipe(x)
                             if swipe_started:
                                 advance_waterfall_drag(x)
@@ -28531,7 +28661,12 @@ def main():
                             and gesture not in TOOLBOX_CONTINUOUS_GESTURES
                         ):
                             play_toolbox_confirmation_tone(args)
-                        if touch_started and gesture == "home_rail_collapse":
+                        if touch_started and gesture == "waterfall_live":
+                            if (history_button_drawn and confirmed_box_tap(waterfall_live_box(), start_x, start_y, x, y)
+                                    and max(abs(x - start_x), abs(y - start_y)) <= args.tap_px):
+                                wf_texture.history.live()
+                                wake_controls()
+                        elif touch_started and gesture == "home_rail_collapse":
                             if (home_collapse_tab_visible()
                                     and confirmed_box_tap(home_rail_collapse_box(), start_x, start_y, x, y)
                                     and max(abs(x - start_x), abs(y - start_y)) <= args.tap_px):
@@ -29169,7 +29304,8 @@ def main():
                                     seek_view.press_action = None
                             wake_controls()
                         elif touch_started and gesture == "smart_seek_start":
-                            if waterfall_scan_touch(x,y,drawn=True):
+                            if (waterfall_scan_touch(x,y,drawn=scan_button_drawn)
+                                    and waterfall_action_enabled(state, "SCAN", wf_texture.history.reviewing)):
                                 inertia_velocity_khz_s = 0.0
                                 inertia_active = False
                                 anim_start = 0.0
@@ -30504,7 +30640,8 @@ def main():
                             move_monitoring_graph_to_lane("cpu", target)
                             wake_controls()
                         elif touch_started and gesture == "carrier_tune":
-                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                            if (max(abs(x-start_x), abs(y-start_y)) <= args.tap_px
+                                    and waterfall_action_enabled(state, "TUNE", wf_texture.history.reviewing)):
                                 inertia_velocity_khz_s = 0.0
                                 anim_start = 0.0
                                 state.apply_prepared_carrier()
@@ -30766,7 +30903,7 @@ def main():
                             receiver_type = state.receiver_type_snapshot()
                             live_step_hz = receiver_tune_step_hz(zoom, tune_step_hz, receiver_type, fmdx_tune_step_hz)
                             if not swipe_started and max(abs(x - start_x), abs(y - start_y)) <= args.tap_px:
-                                if frequency_drawer_tuning_allowed(receiver_type, server):
+                                if not wf_texture.history.reviewing and frequency_drawer_tuning_allowed(receiver_type, server):
                                     candidate_freq = clamp(
                                         snap_frequency_khz(
                                             waterfall_tap_frequency_khz(
@@ -31275,6 +31412,20 @@ def main():
                 receiver_type, presentation_speed, args.wf_row_pixels,
                 external=state.external_waterfall_snapshot(),
             )
+            source_key = (server_generation, receiver_type, state.external_waterfall_snapshot())
+            if history_source_key != source_key:
+                wf_texture.clear()
+                history_source_key = source_key
+            wf_texture.history.expire(now)
+            history_auto_resumed = wf_texture.history.resume_if_idle(now, touching=touch_started)
+            if history_was_reviewing and not wf_texture.history.reviewing:
+                live_osd_until = now + args.zoom_osd_seconds
+                reason = "5 seconds idle" if history_auto_resumed else "interaction or history reset"
+                print(f"gl waterfall LIVE resumed: {reason}", flush=True)
+            elif not history_was_reviewing and wf_texture.history.reviewing:
+                live_osd_until = 0.0
+                print("gl waterfall history review started", flush=True)
+            history_was_reviewing = wf_texture.history.reviewing
             for item in wf_presenter.take(line_queue, now, presentation_fps, presentation_key):
                 if isinstance(item, tuple):
                     line, row_center_khz, row_span_khz = item
@@ -31620,23 +31771,30 @@ def main():
             stream_paused = state.stream_paused_snapshot()
             scan_button_drawn = False
             band_button_drawn = False
+            history_button_drawn = False
+            tune_button_drawn = False
             if not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
             ):
+                if waterfall_visible and not dual_vfo_open and wf_texture.history.reviewing:
+                    draw_waterfall_live_button(text_cache, wf_texture.history.age(now, waterfall_y1 - waterfall_y0))
+                    history_button_drawn = True
                 draw_favorite_waterfall_button(server in favorite_servers)
                 draw_stream_waterfall_button(text_cache, stream_paused)
                 if not dual_vfo_open and band_navigation_available(server, state.receiver_type_snapshot()):
                     draw_band_waterfall_button(text_cache, display_freq, radio_mode)
                     band_button_drawn = True
-                if state.smart_seek_available() and not dual_vfo_open:
-                    draw_waterfall_text_button(text_cache, smart_seek_waterfall_box(), "SCAN")
+                if not dual_vfo_open:
+                    draw_waterfall_text_button(
+                        text_cache, smart_seek_waterfall_box(), "SCAN",
+                        enabled=waterfall_action_enabled(state, "SCAN", wf_texture.history.reviewing))
                     scan_button_drawn = True
-                if carrier_button_visible(state):
-                    status = state.carrier_status_snapshot()
-                    draw_carrier_waterfall_button(
-                        text_cache, status, 1.0)
+                    draw_waterfall_text_button(
+                        text_cache, carrier_waterfall_box(), "TUNE",
+                        enabled=waterfall_action_enabled(state, "TUNE", wf_texture.history.reviewing))
+                    tune_button_drawn = True
             if waterfall_visible and audio_controls.get("mute", False) and not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -31995,8 +32153,11 @@ def main():
                     frequency_identity_candidates, identity_receiver_context,
                     frequency_identity_alpha,
                 )
+            live_remaining = live_osd_until - now
             osd_remaining = zoom_osd_until - now
-            if (osd_remaining > 0 and not dual_vfo_open
+            if live_remaining > 0 and waterfall_visible and not dual_vfo_open:
+                draw_waterfall_live_osd(text_cache, green_osd_alpha(live_remaining, args.zoom_osd_seconds))
+            elif (osd_remaining > 0 and not dual_vfo_open
                     and not (picker_open and not picker_map_open and now < picker_list_notice_until)):
                 alpha = green_osd_alpha(osd_remaining, args.zoom_osd_seconds)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)

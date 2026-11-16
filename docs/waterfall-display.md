@@ -34,3 +34,30 @@ existing Auto control remains independent of the waterfall mode.
 The range estimation changes display mapping, not receiver tuning. There are
 no new network connections or speech models. Existing waterfall history is retained while newly arriving rows use the
 selected settings; hiding the image does not discard its rows.
+
+## Five-minute scrollback
+
+On HOME, drag upward on the waterfall to inspect older traces; drag downward
+for newer traces. The floating LIVE button shows how far the top row is behind
+reception and returns immediately to the newest trace. Incoming reception and
+audio continue while browsing. A historical trace tap does not tune; a horizontal
+drag returns to live tuning. Hold-then-drag still resizes the spectrum.
+TUNE and SCAN stay in place with disabled styling while reviewing history or
+when unavailable; touching a disabled action does not tune or start a scan.
+After five seconds without interaction, the waterfall automatically resumes
+LIVE. Touching or dragging restarts this timer. Both manual and automatic
+returns show LIVE ENABLED in the Zoom notification's position, style and fade.
+
+History is RAM-only and expires after five minutes, including during stream
+pauses. Changing receiver clears it. Each captured row retains its frequency
+mapping and original palette. The buffer stores one byte per column at up to
+30 distinct rows/second; repeated presentation rows are not duplicated. At
+1,280 columns the maximum pixel payload is about 11.5 MB, plus row metadata.
+Slower sources retain fewer rows. History becomes scrollable once it exceeds
+the visible waterfall height. This is visual history, not audio replay.
+
+The live GPU texture stays small. A separate viewport texture is allocated only
+when reviewing history, and rebuilt only after scrolling, expiry, or resizing;
+changes to the theme recolour only that viewport. Incoming rows do not trigger
+historical uploads. Drag uploads are capped at 30 Hz. Hidden waterfall views continue collecting rows when the
+source supplies them; sources suspended by a full-screen workspace have gaps.

@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
+from waterfall_history import CompactRow
 
 import render_sdr_frontend_mockup as sdr_ui
 from client_identity import CLIENT_NAME
@@ -753,7 +754,7 @@ class WaterfallLeveler:
         return self.floor, self.ceiling
 
 
-def waterfall_line(samples, mapper, floor, ceiling, width=None):
+def waterfall_line(samples, mapper, floor, ceiling, width=None, retain_compact=False):
     """Convert one Kiwi W/F row at the requested RF-canvas width.
 
     `LOGICAL_W` remains the complete UI/touch coordinate space.  The GL LCD
@@ -767,7 +768,10 @@ def waterfall_line(samples, mapper, floor, ceiling, width=None):
     normalized = bytes(max(0, min(255, int((value - floor) * scale))) for value in samples)
     gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((width, 1), Image.Resampling.BILINEAR)
     r_lut, g_lut, b_lut = mapper
-    return Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
+    image = Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
+    if retain_compact:
+        image.info["waterfall_compact"] = CompactRow.capture(gray.tobytes(), mapper)
+    return image
 
 
 def contains(box, x, y):
