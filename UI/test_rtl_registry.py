@@ -1,5 +1,8 @@
 """Identity, persistence and hardware-write guards for duplicate RTL receivers."""
 import json
+import gc
+import weakref
+import rtl_registry
 from pathlib import Path
 import tempfile
 import unittest
@@ -23,6 +26,38 @@ def image(serial='00001000'):
 
 
 class InventoryTests(unittest.TestCase):
+    def test_repeated_usb_scans_do_not_retain_descriptor_types(self):
+        # ctypes caches POINTER(Structure) globally. Defining the descriptor
+        # inside usb_order leaked a new type on every background inventory scan.
+        class Function:
+            def __init__(self, result=0):
+                self.result = result
+                self.calls = 0
+            def __call__(self, *args):
+                self.calls += 1
+                return self.result
+
+        class Library:
+            def __init__(self, init_result):
+                for name in ('init', 'get_device_list', 'get_device_descriptor',
+                             'get_bus_number', 'get_device_address', 'free_device_list', 'exit'):
+                    setattr(self, 'libusb_' + name, Function())
+                self.libusb_init.result = init_result
+
+        for init_result in (0, -1):
+            with self.subTest(init_result=init_result):
+                lib = Library(init_result)
+                descriptors = set()
+                with patch.object(rtl_registry.ctypes, 'CDLL', return_value=lib), \
+                        patch.object(rtl_registry.ctypes.util, 'find_library', return_value='libusb-test'):
+                    for _ in range(100):
+                        self.assertEqual(rtl_registry.usb_order(), [])
+                        descriptors.add(weakref.ref(lib.libusb_get_device_descriptor.argtypes[1]._type_))
+                gc.collect()
+                self.assertLessEqual(sum(ref() is not None for ref in descriptors), 1)
+                self.assertEqual(lib.libusb_exit.calls, 100 if init_result == 0 else 0)
+
+
     def test_actual_libusb_order_not_sorted_ports_and_missing_strings(self):
         rows=identify(raw_rows(),[physical('1-1',1,6),physical('3-1',3,2)],[(3,2),(1,6)])
         self.assertEqual([r['usb_path'] for r in rows],['3-1','1-1'])

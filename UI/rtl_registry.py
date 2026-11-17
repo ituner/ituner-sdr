@@ -30,17 +30,21 @@ def usb_inventory(root=Path('/sys/bus/usb/devices')):
     return rows
 
 
+# ctypes retains pointer types globally. Reuse this ABI descriptor across
+# inventory scans instead of permanently caching a new class per scan.
+class _USBDeviceDescriptor(ctypes.Structure):
+    _fields_ = [(k, ctypes.c_uint16 if k in ('idVendor','idProduct','bcdUSB','bcdDevice') else ctypes.c_uint8) for k in
+        ('bLength','bDescriptorType','bcdUSB','bDeviceClass','bDeviceSubClass','bDeviceProtocol','bMaxPacketSize0','idVendor','idProduct','bcdDevice','iManufacturer','iProduct','iSerialNumber','bNumConfigurations')]
+
+
 def usb_order():
     """libusb order, as used by librtlsdr; never infer indices from sorted ports."""
-    class Descriptor(ctypes.Structure):
-        _fields_ = [(k, ctypes.c_uint16 if k in ('idVendor','idProduct','bcdUSB','bcdDevice') else ctypes.c_uint8) for k in
-            ('bLength','bDescriptorType','bcdUSB','bDeviceClass','bDeviceSubClass','bDeviceProtocol','bMaxPacketSize0','idVendor','idProduct','bcdDevice','iManufacturer','iProduct','iSerialNumber','bNumConfigurations')]
     lib = ctypes.CDLL(ctypes.util.find_library('usb-1.0') or 'libusb-1.0.so.0')
     ptr = ctypes.c_void_p
     lib.libusb_init.argtypes=[ctypes.POINTER(ptr)]
     lib.libusb_get_device_list.argtypes=[ptr,ctypes.POINTER(ctypes.POINTER(ptr))]
     lib.libusb_get_device_list.restype=ctypes.c_ssize_t
-    lib.libusb_get_device_descriptor.argtypes=[ptr,ctypes.POINTER(Descriptor)]
+    lib.libusb_get_device_descriptor.argtypes=[ptr,ctypes.POINTER(_USBDeviceDescriptor)]
     lib.libusb_get_bus_number.argtypes=[ptr];lib.libusb_get_bus_number.restype=ctypes.c_uint8
     lib.libusb_get_device_address.argtypes=[ptr];lib.libusb_get_device_address.restype=ctypes.c_uint8
     lib.libusb_free_device_list.argtypes=[ctypes.POINTER(ptr),ctypes.c_int]
@@ -50,7 +54,7 @@ def usb_order():
     try:
         n=lib.libusb_get_device_list(ctx,ctypes.byref(devices))
         for i in range(max(0,n)):
-            desc=Descriptor()
+            desc=_USBDeviceDescriptor()
             if lib.libusb_get_device_descriptor(devices[i],ctypes.byref(desc)) == 0 and (desc.idVendor,desc.idProduct) in ((0x0bda,0x2832),(0x0bda,0x2838)):
                 order.append((lib.libusb_get_bus_number(devices[i]),lib.libusb_get_device_address(devices[i])))
     finally:
