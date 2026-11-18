@@ -111,13 +111,13 @@ static int jadard_prepare(struct drm_panel *panel)
 	if (jadard->desc->lp11_to_reset_delay_ms)
 		msleep(jadard->desc->lp11_to_reset_delay_ms);
 
-	gpiod_set_value(jadard->reset, 0);
+	gpiod_set_value_cansleep(jadard->reset, 0);
 	msleep(5);
 
-	gpiod_set_value(jadard->reset, 1);
+	gpiod_set_value_cansleep(jadard->reset, 1);
 	msleep(10);
 
-	gpiod_set_value(jadard->reset, 0);
+	gpiod_set_value_cansleep(jadard->reset, 0);
 	msleep(130);
 
 	ret = jadard->desc->init(jadard);
@@ -127,7 +127,7 @@ static int jadard_prepare(struct drm_panel *panel)
 	return 0;
 
 disable_supplies:
-	gpiod_set_value(jadard->reset, 1);
+	gpiod_set_value_cansleep(jadard->reset, 1);
 	regulator_disable(jadard->vdd);
 	regulator_disable(jadard->vccio);
 	return ret;
@@ -137,11 +137,11 @@ static int jadard_unprepare(struct drm_panel *panel)
 {
 	struct jadard *jadard = panel_to_jadard(panel);
 
-	gpiod_set_value(jadard->reset, 0);
+	gpiod_set_value_cansleep(jadard->reset, 0);
 	msleep(120);
 
 	if (jadard->desc->reset_before_power_off_vcioo) {
-		gpiod_set_value(jadard->reset, 1);
+		gpiod_set_value_cansleep(jadard->reset, 1);
 
 		usleep_range(1000, 2000);
 	}

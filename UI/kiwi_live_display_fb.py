@@ -176,7 +176,8 @@ class KiwiWebSocket:
                     if expected not in response:
                         raise RuntimeError(f"websocket accept check failed for {stream_name}")
                     raw.settimeout(1.0)
-                    return KiwiWebSocket(raw, endpoint, stream_name)
+                    from receiver_command_pacing import paced_socket
+                    return paced_socket(KiwiWebSocket(raw, endpoint, stream_name), endpoint, 'kiwi')
                 redirect = websocket_redirect_endpoint(response)
                 if redirect and redirect_count < 2:
                     raw.close()

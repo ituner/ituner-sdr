@@ -1264,7 +1264,7 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 10.02, 23.0, "stream"), ())
         self.assertEqual(presenter.take(rows, 10.05, 23.0, "stream"), (1,))
 
-    def test_presenter_rebuffers_after_a_real_underrun(self):
+    def test_presenter_rebuffers_at_measured_rate_after_a_real_underrun(self):
         rows = ui.queue.Queue()
         presenter = ui.WaterfallPresenter(reserve_seconds=0.10)
         for value in range(3):
@@ -1274,9 +1274,9 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 1.2, 23.0, "stream"), ())
         rows.put(3)
         rows.put(4)
-        self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), ())
-        rows.put(5)
         self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), (3,))
+        rows.put(5)
+        self.assertEqual(presenter.take(rows, 1.31, 23.0, "stream"), ())
 
     def test_fmdx_presenter_uses_audio_fft_cadence(self):
         self.assertAlmostEqual(
