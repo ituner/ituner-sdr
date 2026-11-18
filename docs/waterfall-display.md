@@ -34,3 +34,19 @@ existing Auto control remains independent of the waterfall mode.
 The range estimation changes display mapping, not receiver tuning. There are
 no new network connections or speech models. Existing waterfall history is retained while newly arriving rows use the
 selected settings; hiding the image does not discard its rows.
+
+## Adaptive row playback
+
+The native waterfall measures how many rows reach its display queue over time
+and paces playback to that rate. Speed presets seed startup; a slow or busy
+receiver no longer has to satisfy a fixed 23-row-per-second playback clock.
+A small jitter reserve smooths network batches, and the estimate follows
+changes in reception rate. Real pauses remain visible; no synthetic reception
+rows are inserted. At most two rows are displayed per render when catching up.
+
+Each receiver has independent pacing. Changing receiver or RF view starts a
+fresh estimate; palette changes preserve it. Speed changes begin measuring
+again using the new preset. This affects display scheduling only; the audio
+pipeline and the server's requested waterfall speed are unchanged. A bounded
+diagnostic line reports measured rate, preset, queue depth and underruns about
+once every 30 seconds while the waterfall is updating.

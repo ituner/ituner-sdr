@@ -194,7 +194,9 @@ class OpenWebRxSession:
 
     def connect(self) -> None:
         self.close()
-        self.ws = WebSocket.connect(self.endpoint, timeout=self.connect_timeout)
+        from receiver_command_pacing import paced_socket
+        self.ws = paced_socket(WebSocket.connect(self.endpoint, timeout=self.connect_timeout),
+                               self.endpoint, 'openwebrx')
         self.ws.send_text(f"SERVER DE CLIENT client={self.user_agent} type=receiver")
         self.ws.send_text(json.dumps({
             "type": "connectionproperties",

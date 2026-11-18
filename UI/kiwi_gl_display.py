@@ -29,6 +29,7 @@ import threading
 import time
 from caption_reveal import CaptionReveal
 from main_volume_control import MainVolumeControl
+from lcd_backlight import LCDBacklight, MIN_BRIGHTNESS
 from ui_chrome import draw_status_clock, format_clock_pair, RAIL_BACK_BOX, STATUS_TOP
 import traceback
 import re
@@ -517,7 +518,9 @@ SDR_AUDIO_JITTER_REFERENCE_RATE = 12_000
 AUDIO_BACKENDS = ("pipewire", "alsa")
 CM5_AUDIO = None
 if os.environ.get("ITUNER_CM5_AUDIO") == "1":
-    import cm5_audio_control as CM5_AUDIO
+    import cm5_audio_control
+    from async_audio_control import AsyncAudioControl
+    CM5_AUDIO = AsyncAudioControl(cm5_audio_control)
 ALSA_DIRECT_DEVICE = "cm5_speaker" if CM5_AUDIO else "plughw:2,0"
 ALSA_DIRECT_PERIOD_FRAMES = 512
 ALSA_DIRECT_BUFFER_FRAMES = 1536
@@ -619,11 +622,7 @@ WATERFALL_PALETTE_PRESETS = {
 # A real waterfall line normally arrives in roughly one second. Four seconds
 # leaves room for a slow receiver without treating an open idle socket as live.
 WATERFALL_STARTUP_TIMEOUT_SECONDS = 4.0
-# Kiwi sends speed-4 waterfall rows at roughly 23 fps, just below the 24 fps
-# display clock. Presenting each row immediately drains the queue between
-# ordinary network bursts and exposes sub-second packet gaps as a frozen
-# waterfall. Keep about a quarter-second of rows and release them on the
-# source cadence, like the browser client's waterfall dequeue timer.
+# WaterfallPresenter measures actual arrivals; these presets seed startup only.
 WATERFALL_PRESENTATION_RESERVE_SECONDS = 0.26
 WATERFALL_SOURCE_FPS = {1: 1.0, 2: 5.0, 3: 13.0, 4: 23.0}
 # The frequency ruler now separates scope and waterfall instead of consuming
@@ -9859,6 +9858,10 @@ def draw_radio_setup_panel(
         draw_radio_option(text_cache, box, label, option == step_hz)
 
 
+LCD_BACKLIGHT = None
+DISPLAY_BRIGHTNESS_BOX = (-1, -1, -1, -1)
+
+
 def set_display_page(advanced=False):
     global DISPLAY_ADVANCED_OPEN
     DISPLAY_ADVANCED_OPEN = bool(advanced)
@@ -9866,7 +9869,7 @@ def set_display_page(advanced=False):
         return
     x0, x1 = LCD_NAV_X0 + 10, LOGICAL_W - 10
     names = ("SPECTRUM", "AUTO", "WATERFALL", "SPEED", "ADVANCED", "THEME", "RESET",
-             "FLOOR_MINUS", "FLOOR_PLUS", "CEIL_MINUS", "CEIL_PLUS")
+             "FLOOR_MINUS", "FLOOR_PLUS", "CEIL_MINUS", "CEIL_PLUS", "BRIGHTNESS")
     boxes = {"DISPLAY_" + n + "_BOX": (-1, -1, -1, -1) for n in names}
     palettes, layouts, spectrum_styles = (), (), ()
     if advanced:
@@ -9886,6 +9889,7 @@ def set_display_page(advanced=False):
                                 for i, (name, label) in enumerate(SPECTRUM_STYLE_OPTIONS))
         back = lcd_drawer_back_box()
         boxes["DISPLAY_ADVANCED_BOX"] = (x0, back[1] - LCD_NAV_GAP - 64, x1, back[1] - LCD_NAV_GAP)
+        boxes["DISPLAY_BRIGHTNESS_BOX"] = (x0, 604, x1, 652)
     globals().update(boxes, DISPLAY_PALETTE_BOXES=palettes, DISPLAY_LAYOUT_BOXES=layouts,
                      DISPLAY_SPECTRUM_STYLE_BOXES=spectrum_styles)
 
@@ -10082,6 +10086,13 @@ def draw_display_slider_section(text_cache, box, title, value, maximum, detail, 
                       themed_instrument_color("slider_fill", (80, 226, 164, 235)) if active else (*palette.secondary_text[:3], 105))
     draw_logical_rect(current_x - 5, track_y - 9, current_x + 5, track_y + 9,
                       themed_instrument_color("slider_thumb", (229, 246, 246, 250)) if active else (*palette.secondary_text[:3], 180))
+
+
+def apply_display_brightness(x):
+    if LCD_BACKLIGHT is None:
+        return False
+    fraction = slider_fraction_at_x(x, DISPLAY_BRIGHTNESS_BOX)
+    return LCD_BACKLIGHT.set_percent(MIN_BRIGHTNESS + fraction * (100 - MIN_BRIGHTNESS))
 
 
 def volume_at_x(x, box):
@@ -14983,6 +14994,14 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             draw_lcd_drawer_heading(text_cache, LCD_NAV_X0 + 14, 520, "SPECTRUM STYLE")
             for option, box, label in DISPLAY_SPECTRUM_STYLE_BOXES:
                 draw_display_preset_button(text_cache, box, label, option == SPECTRUM_STYLE)
+            backlight = LCD_BACKLIGHT
+            available = backlight is not None and backlight.available
+            value = backlight.percent if backlight is not None else 100
+            draw_display_slider_section(
+                text_cache, DISPLAY_BRIGHTNESS_BOX, "BRIGHTNESS",
+                value - MIN_BRIGHTNESS, 100 - MIN_BRIGHTNESS,
+                f"{value}%" if available else "N/A", available,
+            )
             draw_lcd_audio_tile(text_cache, DISPLAY_ADVANCED_BOX, "ADVANCED", "SETTINGS")
         draw_sidebar_header(text_cache, "DISPLAY · ADVANCED" if DISPLAY_ADVANCED_OPEN else "DISPLAY")
         return
@@ -15820,7 +15839,7 @@ VFO_NEON_COLOR = (115, 255, 177)
 # The LEFT/MIDDLE top readout and FREQUENCY drawer use the original large
 # digits. The narrow RIGHT Home rail has its own compact size.
 BIG_FREQUENCY_SIZE = 58
-COMPACT_FREQUENCY_SIZE = 36
+COMPACT_FREQUENCY_SIZE = 60
 BIG_FREQUENCY_COLOR = VFO_NEON_COLOR
 LCD_TOP_INSTRUMENT_BAND_H = 88
 LCD_LEFT_INSTRUMENT_BAND_H = LCD_TOP_INSTRUMENT_BAND_H
@@ -17422,7 +17441,7 @@ def draw_lcd_mode_annunciators(text_cache, mode, digital, freq_khz, smeter_dbm=N
         # Compact mode makes this the primary frequency readout. The SDR is
         # frequency-centric, so do not waste this narrow rail on a repeated
         # MHz unit: give the digits the entire available width instead.
-        # Keep the narrow Home rail at 36 px; LEFT/MIDDLE retain 58 px.
+        # Taller Home readout; LEFT/MIDDLE retain 58 px.
         draw_big_frequency(
             text_cache, freq_khz, (LCD_NAV_X0 + LOGICAL_W) / 2, y0 + 41,
             236, family=compact_frequency_font_family, fit_text="30.000.000",
@@ -17914,6 +17933,58 @@ def frequency_chevron_texture(text_cache, direction, pressed=False):
         colored.blit(icon, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         icon = colored
     return text_cache.surface_texture(key, icon)
+
+
+def optical_tuning_panel_box():
+    return (0, 0, LOGICAL_W - LCD_NAV_X0, lcd_rail_bottom())
+
+
+def optical_tuning_control_boxes():
+    return {
+        "auto": (10, 76, 122, 120), "manual": (134, 76, 246, 120),
+        "fine": (10, 128, 82, 172), "normal": (90, 128, 166, 172),
+        "coarse": (174, 128, 246, 172),
+        "receiver_rate": (10, 264, 246, 308),
+        "rate_public": (10, 320, 246, 380), "rate_local": (10, 388, 246, 448),
+    }
+
+
+def optical_tuning_action_at(x, y):
+    return next((key for key, box in optical_tuning_control_boxes().items() if contains(box, x, y)), None)
+
+
+def draw_optical_tuning_controls(text_cache, mode, sensitivity, effective_hz, fmdx=False, command_rate=5, trusted_local=False, public_rate=5, local_rate=50):
+    x0, y0, x1, y1 = optical_tuning_panel_box()
+    palette = APP_UI_STYLE.palette
+    draw_logical_rect(x0, y0, x1, y1, palette.sidebar)
+    # Mirror the frequency rail's header, gutters and shared button treatment.
+    draw_logical_rect(x0, 0, x1, LCD_DRAWER_HEADER_H, palette.sidebar_header)
+    draw_text(text_cache, (x0+x1)/2, 32, "TUNING KNOB", palette.sidebar_title,
+              15, True, False, "cm", family="Liberation Sans")
+    draw_section_divider(10, LCD_DRAWER_HEADER_H, x1-10)
+    for key, box in optical_tuning_control_boxes().items():
+        if key == "receiver_rate":
+            label = f"{'LOCAL' if trusted_local else 'PUBLIC'} RECEIVER  {command_rate}/s"
+            draw_styled_text_button(text_cache, box, label, size=14, active=trusted_local)
+            continue
+        if key in ("rate_public", "rate_local"):
+            rate = public_rate if key == "rate_public" else local_rate
+            draw_lcd_audio_slider_tile(text_cache, box,
+                "PUBLIC" if key == "rate_public" else "LOCAL", rate - 1, 99,
+                f"{rate} / SEC", active=(key == "rate_local") == trusted_local, roomy=True)
+            continue
+        active = (key == mode) if key in ("auto", "manual") else (key == sensitivity)
+        draw_styled_text_button(text_cache, box, key.upper(), size=14, active=active)
+    draw_text(text_cache, 14, 196, f"{effective_hz:.3g} Hz / count", palette.secondary_text,
+              14, True, False, "lm", family=APP_UI_STYLE.button.font_family)
+    note = ("FM-DX: fixed RF step" if fmdx else
+            "Step: use right-hand controls" if mode == "manual" else "Auto follows zoom")
+    draw_text(text_cache, 14, 218, note, palette.secondary_text,
+              13, False, False, "lm", family=APP_UI_STYLE.button.font_family)
+    draw_section_divider(10, 236, x1-10)
+    draw_lcd_drawer_heading(text_cache, 14, 250, "COMMAND RATE")
+    draw_text(text_cache, 14, 470, "1–100 / sec · shared profiles", palette.secondary_text,
+              13, False, False, "lm", family=APP_UI_STYLE.button.font_family)
 
 
 def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=None,
@@ -19742,48 +19813,7 @@ def drain_queue(line_queue):
             return
 
 
-class WaterfallPresenter:
-    """Smooth bursty waterfall arrivals without delaying the audio path."""
-
-    def __init__(self, reserve_seconds=WATERFALL_PRESENTATION_RESERVE_SECONDS):
-        self.reserve_seconds = max(0.0, float(reserve_seconds))
-        self.stream_key = None
-        self.started = False
-        self.next_row_at = 0.0
-
-    def reset(self, stream_key=None):
-        self.stream_key = stream_key
-        self.started = False
-        self.next_row_at = 0.0
-
-    def take(self, line_queue, now, source_fps, stream_key):
-        """Return rows due at *now*, after a small startup/rebuffer reserve."""
-        source_fps = max(0.01, float(source_fps))
-        if stream_key != self.stream_key:
-            self.reset(stream_key)
-        reserve_rows = max(1, int(math.ceil(source_fps * self.reserve_seconds)))
-        if not self.started:
-            if line_queue.qsize() < reserve_rows:
-                return ()
-            self.started = True
-            self.next_row_at = float(now)
-        if now + 1e-9 < self.next_row_at:
-            return ()
-        due = 1 + int(max(0.0, now - self.next_row_at) * source_fps)
-        # Two rows per render catches up after a delayed display frame without
-        # turning a short scheduling hiccup into a visible waterfall jump.
-        due = min(2, due)
-        rows = []
-        for _ in range(due):
-            try:
-                rows.append(line_queue.get_nowait())
-            except queue.Empty:
-                self.started = False
-                self.next_row_at = 0.0
-                break
-        if rows and self.started:
-            self.next_row_at += len(rows) / source_fps
-        return tuple(rows)
+from waterfall_presenter import WaterfallPresenter
 
 
 def waterfall_stream_key(server_generation, view_generation, receiver_type, external):
@@ -21345,6 +21375,7 @@ VALUE_SLIDER_GESTURES = frozenset((
     "passband_graph",
     "audio_volume", "home_volume", "audio_squelch_level", "audio_denoise_level",
     "audio_voice_level", "audio_passband", "display_floor_slider", "display_ceiling_slider",
+    "display_brightness_slider",
     "fan_start_slider", "fan_full_slider", "fan_minimum_slider",
     "lcd_filter_shift", "lcd_filter_width", "radio_filter_shift", "radio_filter_width",
 ))
@@ -21361,6 +21392,7 @@ TOOLBOX_CONTINUOUS_GESTURES = frozenset((
     "audio_passband",
     "display_floor_slider",
     "display_ceiling_slider",
+    "display_brightness_slider",
     "fan_start_slider",
     "fan_full_slider",
     "fan_minimum_slider",
@@ -24160,6 +24192,9 @@ def main():
                 f"{args.freq_khz:.3f} kHz zoom {args.zoom}",
                 flush=True,
             )
+    global LCD_BACKLIGHT
+    LCD_BACKLIGHT = LCDBacklight()
+    LCD_BACKLIGHT.set_percent(remembered_preferences.get("display_brightness", 100), force=True)
     set_spectrum_style(remembered_preferences.get("spectrum_style"))
     if fmdx.is_fmdx_server(args.server):
         # FM-DX opens at its widest available audio span, including restarts.
@@ -25122,6 +25157,24 @@ def main():
     fmdx_tune_step_hz = remembered_preferences.get("fmdx_tune_step_hz", 100_000)
     if fmdx_tune_step_hz not in FMDX_TUNE_STEPS_HZ:
         fmdx_tune_step_hz = 100_000
+    from optical_tuning import OpticalTuning, step_hz as optical_step_hz
+    from receiver_command_pacing import POLICY as command_policy, receiver_key
+
+    def apply_receiver_rate_slider(action, x, persist=False):
+        profile = "public" if action == "rate_public" else "local"
+        rate = 1 + round(99 * slider_fraction_at_x(x, optical_tuning_control_boxes()[action]))
+        try:
+            command_policy.set_profile_rate(profile, rate, persist=persist)
+        except OSError as exc:
+            print(f"Receiver rate could not be saved: {exc}", flush=True)
+
+    optical_tuning = OpticalTuning()
+    optical_mode = remembered_preferences.get("optical_tuning_mode", "auto")
+    if optical_mode not in ("auto", "manual"):
+        optical_mode = "auto"
+    optical_sensitivity = remembered_preferences.get("optical_tuning_sensitivity", "normal")
+    if optical_sensitivity not in ("fine", "normal", "coarse"):
+        optical_sensitivity = "normal"
     rc28_zoom_detents = 0
     rc28_zoom_last_at = 0.0
     rc28_dial_mode = "TUNE"
@@ -25255,6 +25308,7 @@ def main():
             "spectrum_enabled": bool(spectrum_enabled),
             "spectrum_auto": state.spectrum_auto_snapshot(),
             "spectrum_style": SPECTRUM_STYLE,
+            "display_brightness": LCD_BACKLIGHT.percent if LCD_BACKLIGHT.available else remembered_preferences.get("display_brightness", 100),
             "instrument_layout": instrument_layout,
             "compact_font_likes": sorted(compact_font_review_liked),
             "compact_frequency_font_family": compact_frequency_font_family,
@@ -25265,6 +25319,8 @@ def main():
             "callsign_anchor": callsign_anchor,
             "buffer_graph_anchor": buffer_graph_anchor,
             "cpu_graph_anchor": cpu_graph_anchor,
+            "optical_tuning_mode": optical_mode,
+            "optical_tuning_sensitivity": optical_sensitivity,
             "tune_step_hz": int(tune_step_hz),
             "fmdx_tune_step_hz": int(fmdx_tune_step_hz),
             "waterfall": {
@@ -25633,6 +25689,54 @@ def main():
         remember_current_view()
         wake_controls()
 
+    def optical_configuration():
+        server, frequency, zoom, _s, _g, generation = state.snapshot()
+        receiver_type = state.receiver_type_snapshot()
+        # FM-DX displays audio bandwidth, so its zoom is not an RF tuning scale.
+        mode = "manual" if receiver_type == "fmdx" else optical_mode
+        manual = configured_tune_step_hz(receiver_type, tune_step_hz, fmdx_tune_step_hz)
+        span_hz = receiver_display_span(zoom, receiver_type) * 1000.0
+        return server, frequency, generation, receiver_type, mode, manual, span_hz
+
+    def apply_optical_counts(counts):
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s, inertia_active
+        server, current, generation, receiver_type, mode, manual, span_hz = optical_configuration()
+        if not frequency_drawer_tuning_allowed(receiver_type, server):
+            optical_tuning.reset()
+            return False
+        low, high = active_tuning_bounds()
+        target = optical_tuning.target(current, counts, span_hz, mode, optical_sensitivity,
+                                       manual, (server, generation, receiver_type), low, high,
+                                       quantum_hz=manual if receiver_type == "fmdx" else 1)
+        if target == current:
+            return False
+        if state.smart_seek_snapshot()["open"]:
+            seek_view.close()
+        state.set_view(freq_khz=target)
+        display_freq = candidate_freq = target
+        anim_start = inertia_velocity_khz_s = 0.0
+        inertia_active = False
+        remember_current_view()
+        wake_controls()
+        return True
+
+    def apply_tuning_steps(steps):
+        """Shared signed-step tuning for RC-28 and the V4 optical encoder."""
+        nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s, inertia_active
+        _server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
+        step_hz = receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
+        frequency = clamp_active_frequency(freq_khz + int(steps) * step_hz / 1000.0)
+        if frequency == freq_khz:
+            return False
+        state.set_view(freq_khz=frequency)
+        display_freq = candidate_freq = frequency
+        anim_start = 0.0
+        inertia_velocity_khz_s = 0.0
+        inertia_active = False
+        remember_current_view()
+        wake_controls()
+        return True
+
     def apply_rc28_events():
         """Apply RC-28 Tune/Zoom/Width/Volume editing on the render thread."""
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
@@ -25671,17 +25775,7 @@ def main():
                 continue
 
             if kind == "dial" and rc28_dial_mode == "TUNE":
-                _server, freq_khz, zoom, _smeter, _generation, _server_generation = state.snapshot()
-                step_hz = receiver_tune_step_hz(zoom, tune_step_hz, state.receiver_type_snapshot(), fmdx_tune_step_hz)
-                frequency = clamp_active_frequency(freq_khz + int(value) * step_hz / 1000.0)
-                if frequency == freq_khz:
-                    continue
-                state.set_view(freq_khz=frequency)
-                display_freq = frequency
-                candidate_freq = frequency
-                anim_start = 0.0
-                inertia_velocity_khz_s = 0.0
-                remember_current_view()
+                apply_tuning_steps(value)
                 continue
 
             if kind == "dial" and rc28_dial_mode == "VOLUME":
@@ -26227,6 +26321,16 @@ def main():
             picker_map_garden_mode = True
             station_pending_server = None
             station_connected_at = 0.0
+        elif kind in ("physical_home", "physical_mode", "physical_band"):
+            # Physical navigation uses the same workspace teardown as the rail.
+            settings_menu_open = digital_menu_open = False
+            picker_open = display_setup_open = filter_drawer_open = False
+            receiver_home_panel_open = fan_curve_panel_open = audio_panel_open = asr_panel_open = False
+            tests_panel_open = dj_tune_open = filter_panel_open = False
+            network_panel_open = network_password_open = False
+            cpu_utilization_graph_open = False
+            radio_setup_open = kind == "physical_mode"
+            radio_family_open = None
         elif kind == "display":
             display_parent = parent
             settings_menu_open = False
@@ -26965,10 +27069,121 @@ def main():
             network_connect_pending = True
             network_notice = f"Connecting to {network_selected_ssid}…"
 
+    def apply_v4_button(role):
+        """Dispatch debounced input on the UI thread through existing actions."""
+        nonlocal preferences_dirty, band_navigation_open, picker_map_open
+        nonlocal picker_map_garden_mode, picker_map_view, globe_fetch_started
+        nonlocal inertia_velocity_khz_s, inertia_active, anim_start
+        nonlocal network_panel_open, cpu_utilization_graph_open, fmdx_disclaimer_open
+        if role == "ptt":
+            print("V4 button ptt unassigned", flush=True)
+            return
+        if role == "mute":
+            muted = not state.audio_controls_snapshot()[0].get("mute", False)
+            set_main_mute(muted)
+            preferences_dirty = True
+            wake_controls()
+            print(f"V4 button mute {muted}", flush=True)
+            return
+        # Keep text entry and external application ownership intact.
+        if shared_keyboard_open() or frequency_entry_open or web_apps.blocks_touch:
+            print(f"V4 button {role} ignored while modal screen is open", flush=True)
+            return
+        if role == "scan":
+            if state.smart_seek_snapshot()["open"]:
+                seek_view.close()
+                print("V4 button scan closed", flush=True)
+            else:
+                band_navigation_open = False
+                network_panel_open = cpu_utilization_graph_open = fmdx_disclaimer_open = False
+                activate_navigation_item(0, (("physical_home", "HOME"),))
+                inertia_velocity_khz_s = 0.0
+                inertia_active = False
+                anim_start = 0.0
+                started = state.start_smart_seek()
+                print(f"V4 button scan started={started}", flush=True)
+            wake_controls()
+            return
+        opened = {"mode": radio_setup_open, "band": band_navigation_open,
+                  "display": display_setup_open, "map": picker_open and picker_map_open}
+        if role not in opened:
+            return
+        close = opened[role]
+        band_navigation_open = False
+        network_panel_open = cpu_utilization_graph_open = fmdx_disclaimer_open = False
+        if close:
+            activate_navigation_item(0, (("physical_home", "HOME"),))
+        elif role in ("mode", "band"):
+            activate_navigation_item(0, (("physical_" + role, role.upper()),))
+            band_navigation_open = role == "band"
+        elif role == "display":
+            activate_navigation_item(next(i for i, item in enumerate(MENU_ITEMS) if item[0] == "display"))
+        elif role == "map":
+            activate_navigation_item(next(i for i, item in enumerate(MENU_ITEMS) if item[0] == "rx"))
+            picker_map_open = True
+            picker_map_garden_mode = True
+            picker_map_view = GLOBE_DEFAULT_VIEW
+            focus_receiver_map_on_active()
+            if not globe_fetch_started:
+                globe_fetch_started = True
+                threading.Thread(target=refresh_globe_receivers,
+                                 args=(globe_result_queue,), daemon=True).start()
+        wake_controls()
+        print(f"V4 button {role} {'closed' if close else 'opened'}", flush=True)
+
+    v4_buttons = None
+    if os.environ.get("ITUNER_CM5_BOARD") == "v4" and os.environ.get("ITUNER_CM5_BUTTONS") == "1":
+        try:
+            from cm5_button_input import ButtonReader
+            v4_buttons = ButtonReader()
+        except Exception as exc:
+            print(f"V4 buttons unavailable: {exc}", flush=True)
+
+    v4_optical = None
+    if os.environ.get("ITUNER_CM5_BOARD") == "v4" and os.environ.get("ITUNER_CM5_OPTICAL") == "1":
+        try:
+            from cm5_encoder_input import OpticalEncoderReader
+            v4_optical = OpticalEncoderReader()
+        except Exception as exc:
+            print(f"V4 optical encoder unavailable: {exc}", flush=True)
+
+    from ui_responsiveness import UIHeartbeat
+    ui_heartbeat = UIHeartbeat()
+    v4_encoders = None
+    if os.environ.get("ITUNER_CM5_BOARD") == "v4" and os.environ.get("ITUNER_CM5_ENCODERS") == "1":
+        try:
+            from cm5_encoder_input import EncoderReader
+            v4_encoders = EncoderReader()
+        except Exception as exc:
+            print(f"V4 encoders unavailable: {exc}", flush=True)
     try:
         if dual_vfo_open:
             start_dual_vfo_clients()
         while not stop_event.is_set():
+            ui_heartbeat.beat()
+            if v4_optical is not None:
+                for _role, counts in v4_optical.poll():
+                    if (shared_keyboard_open() or frequency_entry_open or web_apps.blocks_touch
+                            or (frequency_drawer_open and not frequency_entry_replace_on_digit)):
+                        optical_tuning.reset()
+                        continue
+                    if apply_optical_counts(counts):
+                        print(f"V4 optical {optical_mode} counts={counts} frequency={display_freq:.6f} kHz", flush=True)
+            if v4_buttons is not None:
+                for button_role in v4_buttons.poll():
+                    apply_v4_button(button_role)
+            if v4_encoders is not None:
+                for knob_role, knob_delta in v4_encoders.poll():
+                    if knob_role == "volume":
+                        knob_volume = clamp((audio_volume if audio_volume is not None else 0.0) + 0.04 * knob_delta, 0.0, 1.0)
+                        applied_volume = apply_main_volume(knob_volume)
+                        if applied_volume is not None:
+                            audio_volume = args.output_volume = applied_volume
+                            preferences_dirty = True
+                            wake_controls()
+                            print(f"V4 knob volume {applied_volume:.2f}", flush=True)
+                    elif knob_role == "zoom":
+                        change_zoom(knob_delta)
             rtl_lab.refresh_usb_devices()
             if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
                 pending_usb_restore = None
@@ -27544,6 +27759,14 @@ def main():
                                 gesture = "frequency_entry"
                             elif frequency_entry_open:
                                 gesture = "frequency_entry_outside"
+                            elif frequency_drawer_open and optical_tuning_action_at(x, y):
+                                gesture = "optical_setting"
+                                frequency_drawer_pressed = optical_tuning_action_at(x, y)
+                                if frequency_drawer_pressed in ("rate_public", "rate_local"):
+                                    gesture = "receiver_rate_slider"
+                                    apply_receiver_rate_slider(frequency_drawer_pressed, x)
+                            elif frequency_drawer_open and contains(optical_tuning_panel_box(), x, y):
+                                gesture = "optical_panel_background"
                             elif frequency_drawer_open and contains(frequency_drawer_boxes()["panel"], x, y):
                                 gesture = "frequency_drawer"
                                 frequency_drawer_pressed = frequency_drawer_action_at(
@@ -27787,7 +28010,9 @@ def main():
                             elif display_setup_open and LCD_800_MODE and contains(DISPLAY_PANEL_BOX, x, y):
                                 # Display is also a non-modal rail drawer.
                                 # Its controls own the rail, not the waterfall.
-                                if contains(DISPLAY_FLOOR_MINUS_BOX, x, y):
+                                if contains(DISPLAY_BRIGHTNESS_BOX, x, y):
+                                    gesture = "display_brightness_slider" if LCD_BACKLIGHT.available else "display_readonly"
+                                elif contains(DISPLAY_FLOOR_MINUS_BOX, x, y):
                                     gesture = "display_readonly" if state.waterfall_snapshot()[3] or not state.waterfall_enabled_snapshot() else "display_floor_slider"
                                 elif contains(DISPLAY_CEIL_MINUS_BOX, x, y):
                                     gesture = "display_readonly" if state.waterfall_snapshot()[3] or not state.waterfall_enabled_snapshot() else "display_ceiling_slider"
@@ -28051,6 +28276,8 @@ def main():
                             set_lcd_filter_shift(x)
                         elif gesture == "lcd_filter_width":
                             set_lcd_filter_width(x)
+                        elif gesture == "receiver_rate_slider":
+                            apply_receiver_rate_slider(frequency_drawer_pressed, x)
                         elif gesture == "fan_start_slider":
                             adjust_fan_curve_slider(fan_curve, "start", x)
                         elif gesture == "fan_full_slider":
@@ -28059,6 +28286,8 @@ def main():
                             adjust_fan_curve_slider(fan_curve, "minimum", x)
                         elif gesture == "theme":
                             theme_editor.drag(x, y, started_at=(start_x, start_y))
+                        elif gesture == "display_brightness_slider":
+                            apply_display_brightness(x)
                         elif gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
                             state.set_waterfall(
@@ -28451,6 +28680,32 @@ def main():
                                 frequency_entry_invalid = False
                                 frequency_entry_replace_on_digit = False
                             wake_controls()
+                        elif touch_started and gesture == "receiver_rate_slider":
+                            apply_receiver_rate_slider(frequency_drawer_pressed, x, persist=True)
+                            frequency_drawer_pressed = None
+                            wake_controls()
+                        elif touch_started and gesture == "optical_setting":
+                            action = optical_tuning_action_at(x, y)
+                            if (action == frequency_drawer_pressed
+                                    and max(abs(x-start_x), abs(y-start_y)) <= args.tap_px):
+                                if action == "receiver_rate":
+                                    endpoint = state.snapshot()[0]
+                                    protocol = receiver_worker_protocol(state.receiver_type_snapshot())
+                                    key = receiver_key(endpoint, protocol)
+                                    try:
+                                        command_policy.set_trusted(key, not command_policy.is_trusted(key))
+                                        print(f"Receiver command profile {key} {command_policy.rate(key)}/s", flush=True)
+                                    except OSError as exc:
+                                        print(f"Receiver command profile could not be saved: {exc}", flush=True)
+                                elif action in ("auto", "manual"):
+                                    optical_mode = action
+                                elif action in ("fine", "normal", "coarse"):
+                                    optical_sensitivity = action
+                                optical_tuning.reset()
+                                remember_current_view()
+                                print(f"V4 optical setting {optical_mode} {optical_sensitivity}", flush=True)
+                            frequency_drawer_pressed = None
+                            wake_controls()
                         elif touch_started and gesture == "frequency_drawer":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -28506,6 +28761,8 @@ def main():
                                         fmdx_tune_step_hz = selected_step
                                     else:
                                         tune_step_hz = selected_step
+                                    optical_mode = "manual"
+                                    optical_tuning.reset()
                                     remember_current_view()
                                 elif action == "close":
                                     frequency_drawer_open = False
@@ -28663,6 +28920,11 @@ def main():
                         elif touch_started and gesture == "audio_passband":
                             apply_audio_slider(state, gesture, x)
                             filter_custom_width = True
+                            wake_controls()
+                        elif touch_started and gesture == "display_brightness_slider":
+                            if apply_display_brightness(x):
+                                preferences_dirty = True
+                                write_remembered_view(force=True)
                             wake_controls()
                         elif touch_started and gesture == "display_floor_slider":
                             _floor, ceiling, speed, _auto, palette, _generation = state.waterfall_snapshot()
@@ -29521,6 +29783,8 @@ def main():
                                             fmdx_tune_step_hz = value
                                         else:
                                             tune_step_hz = value
+                                        optical_mode = "manual"
+                                        optical_tuning.reset()
                                         remember_current_view()
                                     wake_controls()
                                     if kind != "close":
@@ -31364,6 +31628,12 @@ def main():
                 draw_deepgram_setup(text_cache, deepgram_key_value, deepgram_key_mode, deepgram_key_error)
             if frequency_drawer_open:
                 _drawer_server, _drawer_freq, _drawer_zoom, _drawer_smeter, _drawer_gen, _drawer_server_gen = state.snapshot()
+                _os, _of, _og, _ot, _om, _manual, _span = optical_configuration()
+                draw_optical_tuning_controls(text_cache, _om, optical_sensitivity,
+                    optical_step_hz(_span, _om, optical_sensitivity, _manual), _ot == "fmdx",
+                    command_policy.rate(receiver_key(_os, receiver_worker_protocol(_ot))),
+                    command_policy.is_trusted(receiver_key(_os, receiver_worker_protocol(_ot))),
+                    command_policy.profile_rate("public"), command_policy.profile_rate("local"))
                 draw_frequency_drawer(
                     text_cache,
                     display_freq,
@@ -31797,6 +32067,15 @@ def main():
             dome_interacting = adsb_workspace.open and adsb_workspace.coverage_open and (adsb_workspace.coverage_view.pointer_active or time.monotonic()<adsb_workspace.coverage_view.interaction_until)
             clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, (picker_open and picker_map_open) or (adsb_workspace.open and adsb_workspace.coverage_open), globe_moving or dome_interacting))
     finally:
+        ui_heartbeat.close()
+        if CM5_AUDIO is not None:
+            CM5_AUDIO.close()
+        if v4_buttons is not None:
+            v4_buttons.close()
+        if v4_optical is not None:
+            v4_optical.close()
+        if v4_encoders is not None:
+            v4_encoders.close()
         if theme_frame_context is not None:
             theme_frame_context.__exit__(None, None, None)
             instrument_layout = theme_frame_layout
