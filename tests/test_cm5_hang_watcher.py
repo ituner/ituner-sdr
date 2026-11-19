@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -12,6 +13,45 @@ SPEC.loader.exec_module(watcher)
 
 
 class HangWatcherTests(unittest.TestCase):
+    def test_core_ticks_exclude_aggregate_and_double_counted_guest(self):
+        proc = "cpu 999 0 0 0 0\ncpu0 100 10 20 800 30 4 5 6 50 5\ncpu1 0 0 0 100 0 0 0 0 0 0\nintr 123\n"
+        with patch.object(watcher, "read_text", return_value=proc) as read:
+            self.assertEqual(watcher.cpu_core_ticks(), {
+                "cpu0": {"total": 975, "idle": 800, "iowait": 30},
+                "cpu1": {"total": 100, "idle": 100, "iowait": 0},
+            })
+            read.assert_called_once_with("/proc/stat")
+
+    def test_missing_or_invalid_core_counters_are_omitted(self):
+        for proc in ("", "cpu0 bad 0 0 0 0", "cpu1 1 2", "cpu2 -1 0 0 1 0"):
+            with self.subTest(proc=proc), patch.object(watcher, "read_text", return_value=proc):
+                self.assertEqual(watcher.cpu_core_ticks(), {})
+
+    def test_task_names_with_spaces_and_parentheses(self):
+        fields = ["0"] * 37
+        fields[0], fields[11], fields[12], fields[19], fields[36] = "S", "80", "20", "123", "3"
+        with patch.object(watcher, "read_text", return_value="42 (a ) worker) " + " ".join(fields)):
+            self.assertEqual(watcher.task_stat("unused"), {
+                "name": "a ) worker", "cpu_ticks": 100, "start_ticks": 123, "last_cpu": 3})
+        with patch.object(watcher, "read_text", return_value=""):
+            self.assertIsNone(watcher.task_stat("gone"))
+
+    def test_attribution_deltas_pid_reuse_and_bounded_ranking(self):
+        monitor = watcher.CPUAttribution()
+        monitor.hz = 100
+        def tasks(ticks, start=1):
+            return {("process", i): {"name": "worker", "cpu_ticks": ticks * i,
+                    "start_ticks": start, "last_cpu": i % 4} for i in range(1, 21)}
+        self.assertEqual(monitor.summarize(tasks(0), 10, 1)["top_processes"], [])
+        result = monitor.summarize(tasks(10), 20, 1)["top_processes"]
+        self.assertEqual(len(result), 8)
+        self.assertEqual(result[0]["pid"], 20)
+        self.assertEqual(result[0]["cpu_percent"], 20)
+        self.assertEqual(result[0]["leader_last_cpu"], 0)
+        self.assertEqual(monitor.summarize(tasks(100, start=2), 30, 1)["top_processes"], [])
+        self.assertEqual(monitor.summarize({}, 40, 1)["top_processes"], [])
+        self.assertEqual(monitor.previous, {})
+
     def sample(self):
         return {
             "mem_available_kb": 500_000,

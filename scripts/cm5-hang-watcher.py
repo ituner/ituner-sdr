@@ -56,6 +56,96 @@ def pressure(kind):
     return values
 
 
+def cpu_core_ticks():
+    """Cumulative system-wide counters; one proc read, no subprocess per core.
+
+    Across samples in the same boot, busy% is
+    100 * (delta(total) - delta(idle) - delta(iowait)) / delta(total).
+    Guest counters are already included in user/nice, so exclude them.
+    Consumers must skip missing cores, zero totals and counter regressions.
+    """
+    cores = {}
+    for line in read_text("/proc/stat").splitlines():
+        fields = line.split()
+        if not fields or not fields[0].startswith("cpu") or not fields[0][3:].isdigit():
+            continue
+        try:
+            ticks = [int(value) for value in fields[1:9]]
+        except ValueError:
+            continue
+        if len(ticks) < 5 or any(value < 0 for value in ticks):
+            continue
+        cores[fields[0]] = {"total": sum(ticks), "idle": ticks[3], "iowait": ticks[4]}
+    return cores
+
+
+def task_stat(path):
+    """Parse comm safely (it may contain spaces or closing parentheses)."""
+    text = read_text(path)
+    try:
+        head, tail = text.rsplit(")", 1)
+        fields = tail.split()  # starts at stat field 3
+        return {
+            "name": head.split("(", 1)[1],
+            "start_ticks": int(fields[19]),
+            "cpu_ticks": int(fields[11]) + int(fields[12]),
+            "last_cpu": int(fields[36]),
+        }
+    except (ValueError, IndexError):
+        return None
+
+
+class CPUAttribution:
+    """Bounded interval summaries, not scheduler tracing or per-core residency.
+
+    Scan process totals and iTuner threads every 10 seconds. Keep only the
+    previous scan in RAM and log the top eight processes and twelve threads.
+    Short-lived tasks that disappear between scans cannot be accounted for.
+    """
+    def __init__(self):
+        self.previous = {}
+        self.at = None
+        self.hz = os.sysconf("SC_CLK_TCK")
+
+    def snapshot(self, pid):
+        tasks = {}
+        for path in Path("/proc").glob("[0-9]*/stat"):
+            value = task_stat(path)
+            if value:
+                tasks[("process", int(path.parent.name))] = value
+        if pid > 0:
+            for path in Path(f"/proc/{pid}/task").glob("[0-9]*/stat"):
+                value = task_stat(path)
+                if value:
+                    tasks[("thread", int(path.parent.name))] = value
+        return self.summarize(tasks, time.monotonic(), pid)
+
+    def summarize(self, tasks, now, pid):
+        elapsed = now - self.at if self.at is not None else 0
+        groups = {"process": [], "thread": []}
+        for key, value in tasks.items():
+            old = self.previous.get(key)
+            if not old or old["start_ticks"] != value["start_ticks"] or elapsed <= 0:
+                continue
+            ticks = value["cpu_ticks"] - old["cpu_ticks"]
+            if ticks <= 0:
+                continue
+            kind, ident = key
+            core_key = "leader_last_cpu" if kind == "process" else "last_cpu"
+            groups[kind].append({
+                "pid" if kind == "process" else "tid": ident,
+                "name": value["name"], "start_ticks": value["start_ticks"],
+                "cpu_percent": round(ticks / self.hz / elapsed * 100, 2),
+                core_key: value["last_cpu"],
+            })
+        self.previous, self.at = tasks, now
+        for group in groups.values():
+            group.sort(key=lambda item: item["cpu_percent"], reverse=True)
+        return {"interval_s": round(elapsed, 3), "ituner_pid": pid,
+                "top_processes": groups["process"][:8],
+                "top_ituner_threads": groups["thread"][:12]}
+
+
 def process_sample(pid):
     if pid <= 0:
         return {"pid": 0, "state": "missing"}
@@ -99,6 +189,7 @@ def collect():
         "boot_id": read_text(BOOT_ID),
         "uptime_s": float(read_text("/proc/uptime", "0").split()[0]),
         "load": [float(value) for value in load[:3]] if len(load) >= 3 else [],
+        "cpu_core_ticks": cpu_core_ticks(),
         "mem_available_kb": int(mem.get("MemAvailable", "0 kB").split()[0]),
         "swap_free_kb": int(mem.get("SwapFree", "0 kB").split()[0]),
         "temperature_c": round(int(thermal) / 1000, 1),
@@ -209,9 +300,11 @@ def main():
         "gap_s": round(time.time() - previous_sample.get("time", time.time()), 1),
     })
     previous = None
+    attribution = CPUAttribution()
     while not stopping:
         started = time.monotonic()
         sample = collect()
+        sample["cpu_attribution"] = attribution.snapshot(sample["ituner"]["pid"])
         sample["warnings"] = warnings(sample, previous)
         if sample["warnings"]:
             sample["kernel_warnings"] = diagnostic_tail()

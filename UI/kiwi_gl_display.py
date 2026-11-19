@@ -75,7 +75,7 @@ class NetworkManagerBridge:
                 return False
             self._busy = True
             self._snapshot["scanning"] = action in ("open", "scan")
-        threading.Thread(target=self._run, args=(action, payload), daemon=True).start()
+        threading.Thread(target=self._run, name="network-config", args=(action, payload), daemon=True).start()
         return True
 
     def _run(self, action, payload):
@@ -13144,7 +13144,7 @@ class WSPRDistanceHistoryCache:
             if self.loading or self.ready:
                 return
             self.loading = True
-        threading.Thread(target=self._load_worker, name="wspr-distance-history", daemon=True).start()
+        threading.Thread(target=self._load_worker, name="wspr-distance", daemon=True).start()
 
     def points_for(self, tile, window_index):
         window_index = int(clamp(window_index, 0, len(WSPR_DISTANCE_WINDOWS) - 1))
@@ -14663,9 +14663,8 @@ def receiver_map_zoom_boxes():
     return RADIOGARDEN_ZOOM_IN_BOX, RADIOGARDEN_ZOOM_OUT_BOX
 
 
-# The Globe legend is a colour key for the receiver source groups. Each chip
-# is a toggle: switching a group off removes its dots from the globe (and from
-# the tap surface) without touching the saved favorites or health records.
+# The Globe source list selects exactly one receiver group. Selection filters
+# both markers and hit targets without changing saved favorites or health.
 RECEIVER_MAP_GROUP_ORDER = ("kiwi", "openwebrx", "local", "fmdx")
 RECEIVER_MAP_GROUP_LABELS = {
     "kiwi": "KIWI",
@@ -14681,8 +14680,8 @@ RECEIVER_MAP_GROUP_COLORS = {
     "local": (255, 208, 92, 235),
     "fmdx": (255, 154, 61, 245),
 }
-# Session-only visibility; groups the operator has switched off in the legend.
-RECEIVER_MAP_HIDDEN_GROUPS = set()
+# Session-only single selection; start with public Kiwi receivers.
+RECEIVER_MAP_SELECTED_GROUP = "kiwi"
 # Legend filters match the Receivers category rows. Their full-width line
 # carries the dot colour when visible and turns gray when hidden.
 RECEIVER_MAP_LEGEND_RAIL_TOP = 64 + 16
@@ -14707,20 +14706,20 @@ def receiver_map_group(receiver):
 
 
 def receiver_map_group_visible(group):
-    return group not in RECEIVER_MAP_HIDDEN_GROUPS
+    return group == RECEIVER_MAP_SELECTED_GROUP
 
 
-def receiver_map_toggle_group(group):
-    """Flip a legend group and report whether it is visible afterwards."""
-    if group in RECEIVER_MAP_HIDDEN_GROUPS:
-        RECEIVER_MAP_HIDDEN_GROUPS.discard(group)
-        return True
-    RECEIVER_MAP_HIDDEN_GROUPS.add(group)
-    return False
+def receiver_map_select_group(group):
+    """Select one source; tapping it again never clears the selection."""
+    global RECEIVER_MAP_SELECTED_GROUP
+    if group not in RECEIVER_MAP_GROUP_ORDER:
+        return False
+    RECEIVER_MAP_SELECTED_GROUP = group
+    return True
 
 
 def receiver_map_reset_groups():
-    RECEIVER_MAP_HIDDEN_GROUPS.clear()
+    receiver_map_select_group("kiwi")
 
 
 def receiver_map_legend_entries(receivers):
@@ -14744,12 +14743,12 @@ def receiver_map_legend_swatch_color(group, active):
 
 
 def receiver_map_legend_boxes(receivers, box=None):
-    """Compact Globe-only filters, aligned to the rail's right edge."""
+    """Single-choice source rows share BACK's exact horizontal bounds."""
     entries = receiver_map_legend_entries(receivers)
     if not entries:
         return ()
-    width = 148
-    x0 = LOGICAL_W - RECEIVER_PICKER_MARGIN - width
+    x0, _y0, x1, _y1 = RADIOGARDEN_EXIT_BOX
+    width = x1 - x0
     boxes = []
     for index, (group, _label, _color) in enumerate(entries):
         y = RECEIVER_MAP_LEGEND_RAIL_TOP + index * (
@@ -14760,8 +14759,8 @@ def receiver_map_legend_boxes(receivers, box=None):
 
 
 def receiver_map_legend_label(group, active):
-    """Name the action, not the state: HIDE a visible group, SHOW a hidden one."""
-    return f"{'HIDE' if active else 'SHOW'} {RECEIVER_MAP_GROUP_LABELS[group]}"
+    """Expose single-choice selection rather than independent visibility."""
+    return f"{RECEIVER_MAP_GROUP_LABELS[group]} {'SELECTED' if active else 'SELECT'}"
 
 
 def receiver_map_legend_at(x, y, receivers, box=None):
@@ -15107,6 +15106,8 @@ def draw_receiver_map(
     marker_rows, selected_key, pending_key, selected = receiver_map_render_rows(
         receivers, selected_server, pending_server, interactive,
     )
+    if selected and not receiver_map_group_visible(receiver_map_group(selected)):
+        selected = None
     for receiver, group, endpoint in marker_rows:
         if not receiver_map_group_visible(group):
             continue
@@ -15164,8 +15165,9 @@ def draw_receiver_map(
         "waterfall_audio_retry": "AUDIO RETRY",
         "failed": "UNAVAILABLE",
         "access_blocked": "APP ACCESS BLOCKED",
-    }.get(connection_status, "SELECTED") if selected else "TAP A SQUARE TO SELECT"
-    detail = bottom_station_title(selected["name"], selected["location"]) if selected else f"{len(receivers)} GPS RECEIVERS"
+    }.get(connection_status, "SELECTED") if selected else "TAP A RECEIVER TO SELECT"
+    visible_count = sum(receiver_map_group_visible(group) for _receiver, group, _endpoint in marker_rows)
+    detail = bottom_station_title(selected["name"], selected["location"]) if selected else f"{visible_count} GPS RECEIVERS"
     draw_logical_rect(box[0] + 14, box[1] + 14, min(box[2] - 14, box[0] + 604), box[1] + 66, (3, 13, 19, 202))
     draw_text(text_cache, box[0] + 28, box[1] + 32, state_label, (108, 250, 191) if selected else (180, 213, 219), 17, True, False, "lm", family="Cantarell")
     draw_text(text_cache, box[0] + 28, box[1] + 52, fit_station_text(text_cache, detail, 554, 18, True, False, family="Cantarell"), (229, 242, 244), 18, True, False, "lm", family="Cantarell")
@@ -15180,7 +15182,8 @@ def draw_receiver_map(
     draw_logical_line(cx + 24, cy, cx + 70, cy, reticle, 2)
     draw_logical_line(cx, cy - 70, cx, cy - 24, reticle, 2)
     draw_logical_line(cx, cy + 24, cx, cy + 70, reticle, 2)
-    hovered = next((receiver for receiver in receivers if receiver["server"] == hover_server), None)
+    hovered = next((receiver for receiver in receivers if receiver["server"] == hover_server
+                    and receiver_map_group_visible(receiver_map_group(receiver))), None)
     if hovered:
         hover_detail = bottom_station_title(hovered["name"], hovered["location"])
         hover_point = radiogarden_project(hovered, center_lon, center_lat, box, scale)
@@ -15220,8 +15223,7 @@ def draw_receiver_map(
         family=APP_UI_STYLE.button.font_family,
     )
 
-    # Compact visibility filters pair each source name with its dot colour.
-    # A hidden source keeps a gray square in the same position.
+    # Radio-style source list: one selected group and a stable hit area per row.
     for legend_group, (lx0, ly0, lx1, ly1) in receiver_map_legend_boxes(receivers):
         legend_active = receiver_map_group_visible(legend_group)
         pressed = ui_button_pressed((lx0, ly0, lx1, ly1))
@@ -15237,10 +15239,11 @@ def draw_receiver_map(
             RECEIVER_MAP_GROUP_LABELS[legend_group], visual.text,
             APP_UI_STYLE.button.label_size, True, False, "lm", family=APP_UI_STYLE.button.font_family,
         )
-        draw_logical_rect(
-            lx0 + 12, (ly0 + ly1) / 2 - 6, lx0 + 24, (ly0 + ly1) / 2 + 6,
-            receiver_map_legend_swatch_color(legend_group, legend_active),
-        )
+        indicator_color = receiver_map_legend_swatch_color(legend_group, legend_active)
+        draw_logical_circle(lx0 + 18, (ly0 + ly1) / 2, 7,
+                            indicator_color, outline=True, width=2)
+        if legend_active:
+            draw_logical_circle(lx0 + 18, (ly0 + ly1) / 2, 3, indicator_color)
 
     draw_directory_refresh_button(text_cache, directory_refreshing)
     draw_styled_text_button(text_cache, RADIOGARDEN_LIST_BOX, "LIST")
@@ -21258,7 +21261,7 @@ class RTLSDRLab:
             drain_queue(self.line_queue)
             drain_queue(self.waterfall_queue)
             lut = tuple(np.asarray(channel, dtype=np.uint8) for channel in waterfall_mapper("kiwi"))
-            waterfall_thread = threading.Thread(target=self._waterfall_worker, args=(lut,), name="airspy-hf-waterfall", daemon=True)
+            waterfall_thread = threading.Thread(target=self._waterfall_worker, args=(lut,), name="airspy-hf-wf", daemon=True)
             self.waterfall_thread = waterfall_thread
             waterfall_thread.start()
             iq_queue = queue.Queue(maxsize=10)
@@ -21443,7 +21446,7 @@ class RTLSDRLab:
             waterfall_thread = threading.Thread(
                 target=self._waterfall_worker,
                 args=(lut,),
-                name="rtl-sdr-lab-waterfall",
+                name="rtl-lab-wf",
                 daemon=True,
             )
             self.waterfall_thread = waterfall_thread
@@ -22299,7 +22302,7 @@ class DualVFOProgramMatcher:
             self.queue = queue.Queue(maxsize=160)
             self.stop_event = threading.Event()
             self.thread = threading.Thread(
-                target=self._worker, name="dual-vfo-program-match", daemon=True,
+                target=self._worker, name="dual-match", daemon=True,
             )
             thread = self.thread
         thread.start()
@@ -24426,6 +24429,8 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
 
 
 def main():
+    from thread_names import install_thread_names
+    install_thread_names()
     global STATIONS
     global LCD_RADIO_DRAWER_PROGRESS
     parser = argparse.ArgumentParser(description="OpenGL KiwiSDR display prototype.")
@@ -24702,12 +24707,12 @@ def main():
     dual_b_stop_event = None
     dual_b_snd_thread = None
     dual_b_wf_thread = None
-    wf_thread = threading.Thread(target=waterfall_worker, args=(args, line_queue, stop_event, state), daemon=True)
+    wf_thread = threading.Thread(target=waterfall_worker, name="waterfall-rx", args=(args, line_queue, stop_event, state), daemon=True)
     # The main listener normally owns the speaker. When Dual opens the same
     # live A worker atomically switches into the shared mixer, becoming its
     # timing source instead of continuing to bypass VFO B.
     snd_thread = threading.Thread(
-        target=snd_meter_worker,
+        target=snd_meter_worker, name="audio-rx",
         args=(args, stop_event, state, transcript_queue, callsign_queue),
         kwargs={
             "dual_mixer": dual_audio_mixer,
@@ -24717,8 +24722,8 @@ def main():
         },
         daemon=True,
     )
-    caption_thread = threading.Thread(target=asr_caption_worker, args=(stop_event, state, transcript_queue), daemon=True)
-    callsign_thread = threading.Thread(target=callsign_worker, args=(stop_event, state, callsign_queue), daemon=True)
+    caption_thread = threading.Thread(target=asr_caption_worker, name="asr-captions", args=(stop_event, state, transcript_queue), daemon=True)
+    callsign_thread = threading.Thread(target=callsign_worker, name="callsign-decode", args=(stop_event, state, callsign_queue), daemon=True)
     snd_thread.start()
     # Public Kiwi endpoints often have only a small number of client slots.
     # Sound is the primary listening path, so establish SND before the
@@ -24828,7 +24833,7 @@ def main():
     receiver_home_result_queue = queue.Queue(maxsize=1)
     receiver_home_locating = not receiver_home_saved
     if receiver_home_locating:
-        threading.Thread(target=detect_receiver_home, args=(receiver_home_result_queue,), daemon=True).start()
+        threading.Thread(target=detect_receiver_home, name="receiver-home", args=(receiver_home_result_queue,), daemon=True).start()
     station_pending_server = None
     station_pending_started_at = 0.0
     station_connected_at = 0.0
@@ -25151,7 +25156,7 @@ def main():
             target=waterfall_worker,
             args=(args, dual_b_line_queue, dual_b_stop_event, dual_b_state),
             kwargs={"listener_name": f"{args.user}-VFOB"},
-            name="dual-vfo-b-waterfall",
+            name="vfo-b-waterfall",
             daemon=True,
         )
         dual_b_snd_thread.start()
@@ -25443,13 +25448,13 @@ def main():
     globe_result_queue = queue.Queue(maxsize=1)
     globe_fetch_started = True
     threading.Thread(
-        target=refresh_globe_receivers,
+        target=refresh_globe_receivers, name="globe-directory",
         args=(globe_result_queue,), daemon=True,
     ).start()
     openwebrx_result_queue = queue.Queue(maxsize=1)
     threading.Thread(
         target=refresh_openwebrx_stations,
-        args=(openwebrx_result_queue,), name="openwebrx-directory", daemon=True,
+        args=(openwebrx_result_queue,), name="owrx-directory", daemon=True,
     ).start()
     public_result_queue = queue.Queue(maxsize=1)
     daily_directories = DailyDirectoryRefresh((
@@ -27344,8 +27349,9 @@ def main():
             ),
             None,
         )
-        if receiver is not None:
-            RECEIVER_MAP_HIDDEN_GROUPS.discard(receiver_map_group(receiver))
+        if receiver is not None and not receiver_map_group_visible(receiver_map_group(receiver)):
+            picker_map_selected_server = picker_map_hover_server = None
+            return focus_receiver_map_on_home()
         return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
 
 
@@ -27513,10 +27519,10 @@ def main():
                             if picker_open and picker_map_open else None
                         )
                         if legend_group:
-                            legend_visible = receiver_map_toggle_group(legend_group)
+                            receiver_map_select_group(legend_group)
                             picker_map_notice = (
                                 f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                "SELECTED"
                             )
                             picker_map_notice_until = time.monotonic() + 1.6
                         elif (
@@ -30154,7 +30160,7 @@ def main():
                                 elif confirmed_box_tap(home_boxes["locate"], start_x, start_y, x, y) and not receiver_home_locating:
                                     receiver_home_locating = True
                                     threading.Thread(
-                                        target=detect_receiver_home,
+                                        target=detect_receiver_home, name="receiver-home",
                                         args=(receiver_home_result_queue,), daemon=True,
                                     ).start()
                                 wake_controls()
@@ -30713,7 +30719,7 @@ def main():
                                 if not globe_fetch_started:
                                     globe_fetch_started = True
                                     threading.Thread(
-                                        target=refresh_globe_receivers,
+                                        target=refresh_globe_receivers, name="globe-directory",
                                         args=(globe_result_queue,), daemon=True,
                                     ).start()
                             wake_controls()
@@ -30737,10 +30743,10 @@ def main():
                             if moved <= args.tap_px:
                                 legend_group = receiver_map_legend_at(x, y, globe_receivers)
                                 if legend_group:
-                                    legend_visible = receiver_map_toggle_group(legend_group)
+                                    receiver_map_select_group(legend_group)
                                     picker_map_notice = (
                                         f"{RECEIVER_MAP_GROUP_LABELS[legend_group]} "
-                                        f"{'SHOWN' if legend_visible else 'HIDDEN'}"
+                                        "SELECTED"
                                     )
                                     picker_map_notice_until = time.monotonic() + 1.6
                             wake_controls()
