@@ -75,9 +75,31 @@ sudo systemctl restart cm5-headphone-monitor.service ituner-sdr.service
 sudo bash scripts/enable-cm5-usb3.sh --v4
 ```
 
-The USB helper backs up boot config and replaces the old marked active-low
-workaround with active-high boot and service settings. It also detects an
-already enabled V4 overlay. Older boards retain their existing behavior.
+The USB helper detects an already enabled V4 overlay or accepts `--v4`.
+It backs up both boot files, selects DWC2 host mode, removes the old serial
+USB gadget autoload, and replaces the marked active-low power workaround
+with active-high boot and service settings. **Reboot after applying it** to
+activate the USB controller change; enabling socket power alone is insufficient.
+Older boards retain their existing behavior.
+
+The four internal headers CN6–CN9 are behind the FE1.1S hub, connected to the
+CM5's separate DWC2 USB controller through the boot-controlled USB selector.
+The external USB ports use RP1 xHCI controllers. A later
+`dtoverlay=dwc2,dr_mode=peripheral` override can therefore disable internal
+hub enumeration while external dongles still work. The V4 helper resolves
+these conflicting settings in `config.txt` and removes `g_serial` from
+`modules-load` in `cmdline.txt`, preserving unrelated parameters and other
+board sections. It preserves optional DWC2 parameters. Keep any custom included
+boot files consistent with host mode too. This host profile deliberately gives
+up USB serial-gadget operation on this controller.
+
+Verify after reboot with `lsusb -t`: the DWC2 root should contain a four-port
+Terminus hub, then the accessory on the selected downstream port. On the tested
+board the hub enumerated as `1a40:0101` and the RTL2832U as `0bda:2832` at
+480 Mbit/s. Hub VDD5 is across C18; downstream socket power is across C28/C29.
+The user measured 5 V at the header; the missing host configuration was corrected
+and both hub and RTL dongle then enumerated. The observed disconnect was a
+user unplug, not an unexplained hardware fault.
 The audio installer preserves an existing V4 profile and installs its helper
 without driving GPIO13.
 

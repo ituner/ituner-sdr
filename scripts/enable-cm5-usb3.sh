@@ -15,6 +15,7 @@ elif grep -q '^dtoverlay=cm5-v4-display-touch\(,\|$\)' "$boot"; then
 fi
 [[ $# -eq 0 ]] || { echo 'Usage: enable-cm5-usb3.sh [--v4]' >&2; exit 2; }
 if ((v4)); then
+    python3 "$repo/scripts/configure-cm5-usb-host.py"
     cp -a "$boot" "$boot.before-ituner-usb3-$(date -u +%Y%m%dT%H%M%SZ)"
     python3 - "$boot" <<'PYCONF'
 from pathlib import Path

@@ -25674,6 +25674,16 @@ def main():
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
         return True
 
+    def apply_zoom_knob(steps):
+        if shared_keyboard_open() or web_apps.blocks_touch:
+            return
+        if adsb_workspace.open:
+            if adsb_workspace.zoom_knob(steps):
+                wake_controls()
+            # ADS-B pages without zoom must not change the hidden radio view.
+            return
+        change_zoom(steps)
+
     def listen_to_seek_candidate(frequency):
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
         if frequency is None:
@@ -27183,7 +27193,7 @@ def main():
                             wake_controls()
                             print(f"V4 knob volume {applied_volume:.2f}", flush=True)
                     elif knob_role == "zoom":
-                        change_zoom(knob_delta)
+                        apply_zoom_knob(knob_delta)
             rtl_lab.refresh_usb_devices()
             if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
                 pending_usb_restore = None
