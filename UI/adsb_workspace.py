@@ -123,6 +123,24 @@ class ADSBWorkspace(DecoderStyle, AirspaceDashboard, SSTVWorkspace):
         self.scale=max(MAP_ZOOM_MIN,min(MAP_ZOOM_MAX,self.scale*factor))
         self.centered=True
 
+    def zoom_knob(self, steps):
+        """Use the visible ADS-B view's existing +/- zoom behavior."""
+        if not self.open or not steps:
+            return False
+        if (self.radio_info and self.radio_info.open) or (self.dongles and self.dongles.open):
+            return False
+        screen = self.current_screen()
+        if screen == 'coverage':
+            if self.coverage_view.window_open:
+                return False
+            self.coverage_view.action('coverage_zoom', .25 * steps)
+        elif screen == 'map':
+            # Saturate large batches without overflowing exponentiation.
+            self.zoom(1.6 ** max(-100, min(100, steps)))
+        else:
+            return False
+        return True
+
     def locate(self, plane):
         if self.positioned(plane):
             self.yaw, self.pitch = math.radians(plane['lon']), max(math.radians(-82), min(math.radians(82), math.radians(plane['lat'])))
