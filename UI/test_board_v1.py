@@ -833,7 +833,7 @@ class BoardLayoutTests(unittest.TestCase):
             else:
                 self.assertEqual([c.args[2:4] for c in cycles.call_args_list if c.args[3]],
                                  [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('RESET','DISPLAY')])
-                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
+                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING','BRIGHTNESS'])
                 self.assertEqual([c.args[2] for c in controls.call_args_list], ['STD','KIWI','GQRX','FILL','DARK','PEAK'])
                 self.assertIn('ADVANCED', [c.args[2] for c in tiles.call_args_list])
 
@@ -1339,7 +1339,7 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 10.02, 23.0, "stream"), ())
         self.assertEqual(presenter.take(rows, 10.05, 23.0, "stream"), (1,))
 
-    def test_presenter_rebuffers_after_a_real_underrun(self):
+    def test_presenter_rebuffers_at_measured_rate_after_a_real_underrun(self):
         rows = ui.queue.Queue()
         presenter = ui.WaterfallPresenter(reserve_seconds=0.10)
         for value in range(3):
@@ -1349,9 +1349,9 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 1.2, 23.0, "stream"), ())
         rows.put(3)
         rows.put(4)
-        self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), ())
-        rows.put(5)
         self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), (3,))
+        rows.put(5)
+        self.assertEqual(presenter.take(rows, 1.31, 23.0, "stream"), ())
 
     def test_fmdx_presenter_uses_audio_fft_cadence(self):
         self.assertAlmostEqual(

@@ -1,0 +1,14 @@
+[Unit]
+Description=iTuner CM5 V4 external USB power enable
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+Before=ituner-sdr.service
+ConditionPathExists=/proc/device-tree/model
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pinctrl set 42 op dh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

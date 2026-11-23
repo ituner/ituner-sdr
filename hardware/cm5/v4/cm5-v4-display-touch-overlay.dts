@@ -1,0 +1,102 @@
+/dts-v1/;
+/plugin/;
+
+/* October 22 V4 carrier; existing YX80030ACT3 panel and timings. */
+/ {
+    compatible = "brcm,bcm2712";
+
+    fragment@0 {
+        target = <&rp1_i2c1>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&rp1_i2c1_2_3>;
+            clock-frequency = <100000>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            v4_io: gpio@20 {
+                compatible = "nxp,pca9555"; /* TCA9555 register compatible */
+                reg = <0x20>;
+                gpio-controller;
+                #gpio-cells = <2>;
+                gpio-line-names = "PTT", "MAP", "DISP", "BAND", "MODE",
+                    "TP_RST", "LCD_RST", "UNUSED", "ENC2_D", "BTN2",
+                    "ENC1_D", "BTN1", "CODEC_GPIO3", "CODEC_GPIO2",
+                    "CODEC_GPIO1", "SPK_ON";
+            };
+
+            touchscreen@5d {
+                compatible = "goodix,gt911";
+                reg = <0x5d>;
+                interrupt-parent = <&rp1_gpio>;
+                interrupts = <17 2>;
+                irq-gpios = <&rp1_gpio 17 0>;
+                reset-gpios = <&v4_io 5 0>;
+                status = "okay";
+            };
+        };
+    };
+
+    fragment@1 {
+        target = <&rp1_dsi1>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+            port {
+                v4_dsi_out: endpoint {
+                    remote-endpoint = <&v4_panel_in>;
+                };
+            };
+            panel@0 {
+                compatible = "yousee,yx80030act3";
+                reg = <0>;
+                vdd-supply = <&vdd_3v3_reg>;
+                vccio-supply = <&vdd_3v3_reg>;
+                reset-gpios = <&v4_io 6 1>;
+                backlight = <&v4_backlight>;
+                port {
+                    v4_panel_in: endpoint {
+                        remote-endpoint = <&v4_dsi_out>;
+                        data-lanes = <1 2 3 4>;
+                    };
+                };
+            };
+        };
+    };
+
+    fragment@2 {
+        target-path = "/";
+        __overlay__ {
+            v4_backlight: backlight-v4 {
+                compatible = "pwm-backlight";
+                /* U17 SY7201ABC: 20 kHz–1 MHz PWM; use 25 kHz. */
+                pwms = <&rp1_pwm0 0 40000 0>;
+                brightness-levels = <0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100>;
+                default-brightness-level = <100>;
+                power-supply = <&vdd_5v0_reg>;
+                /* DRM enables the backlight after the panel is prepared. */
+            };
+        };
+    };
+
+    fragment@3 {
+        target = <&rp1_gpio>;
+        __overlay__ {
+            v4_backlight_pwm_pins: v4_backlight_pwm_pins {
+                function = "pwm0";
+                pins = "gpio12";
+                bias-pull-down;
+            };
+        };
+    };
+    fragment@4 {
+        target = <&rp1_pwm0>;
+        __overlay__ {
+            pinctrl-names = "default";
+            pinctrl-0 = <&v4_backlight_pwm_pins>;
+            status = "okay";
+        };
+    };
+};

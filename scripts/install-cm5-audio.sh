@@ -4,6 +4,8 @@ set -Eeuo pipefail
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 restart=1
 hardware=1
+v4=0
+if grep -qs 'ITUNER_CM5_BOARD=v4' /etc/systemd/system/ituner-sdr.service.d/v4-audio.conf; then v4=1; fi
 for option in "$@"; do
     case "$option" in
         --no-restart) restart=0 ;;
@@ -56,7 +58,13 @@ backup=/var/lib/ituner-sdr/cm5-audio-backup-$(date +%Y%m%d-%H%M%S)
 install -d "$backup" /etc/ituner-sdr /usr/local/lib/ituner-sdr /etc/systemd/system/ituner-sdr.service.d
 # Stop before updating controls/preferences, so the UI cannot overwrite them.
 systemctl stop ituner-sdr.service
-pinctrl set 13 op dl
+if ((v4)); then
+    # GPIO13 is encoder B on V4; never drive it as the old amplifier gate.
+    install -m 0644 "$repo/scripts/cm5_v4_gpio.py" /usr/local/lib/ituner-sdr/
+    python3 /usr/local/lib/ituner-sdr/cm5_v4_gpio.py --off
+else
+    pinctrl set 13 op dl
+fi
 for name in cm5-speaker-test.conf cm5-headphone-auto-mute.conf cm5-audio.conf; do
     path=/etc/systemd/system/ituner-sdr.service.d/$name
     [[ ! -f $path ]] || mv "$path" "$backup/"

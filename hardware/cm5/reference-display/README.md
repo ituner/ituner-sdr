@@ -51,8 +51,8 @@ carrier board needs overlays adapted to its actual wiring.
 ## Build on CM5
 
 Start with a 64-bit Raspberry Pi OS **Desktop** image for the documented labwc
-setup. Lite users need to arrange their own compositor/session. The driver uses
-Linux 6.18 DRM APIs; older or newer kernels may need source changes. Matching
+setup. Lite users need to arrange their own compositor/session. The driver supports
+the panel allocation APIs in Linux 6.12 and 6.18; other kernels may need changes. Matching
 headers alone do not guarantee source compatibility.
 
 ```sh

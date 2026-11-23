@@ -61,3 +61,19 @@ when reviewing history, and rebuilt only after scrolling, expiry, or resizing;
 changes to the theme recolour only that viewport. Incoming rows do not trigger
 historical uploads. Drag uploads are capped at 30 Hz. Hidden waterfall views continue collecting rows when the
 source supplies them; sources suspended by a full-screen workspace have gaps.
+
+## Adaptive row playback
+
+The native waterfall measures how many rows reach its display queue over time
+and paces playback to that rate. Speed presets seed startup; a slow or busy
+receiver no longer has to satisfy a fixed 23-row-per-second playback clock.
+A small jitter reserve smooths network batches, and the estimate follows
+changes in reception rate. Real pauses remain visible; no synthetic reception
+rows are inserted. At most two rows are displayed per render when catching up.
+
+Each receiver has independent pacing. Changing receiver or RF view starts a
+fresh estimate; palette changes preserve it. Speed changes begin measuring
+again using the new preset. This affects display scheduling only; the audio
+pipeline and the server's requested waterfall speed are unchanged. A bounded
+diagnostic line reports measured rate, preset, queue depth and underruns about
+once every 30 seconds while the waterfall is updating.

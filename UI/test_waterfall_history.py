@@ -12,6 +12,32 @@ def row(at, width=4, value=42):
 
 
 class HistoryTests(unittest.TestCase):
+    def test_adaptive_playback_keeps_captures_and_idle_live_during_review(self):
+        import queue
+        from waterfall_presenter import WaterfallPresenter
+
+        history = WaterfallHistory(4)
+        presenter = WaterfallPresenter()
+        pending = queue.Queue()
+        for i in range(20):
+            history.append(row(i), 7100, 20, i)
+        history.scroll(5, 4, now=20)
+        anchor = history.window(4)
+        resumed = False
+        for frame in range(181):
+            now = 20 + frame / 30
+            if frame % 6 == 0:
+                pending.put(row(now))
+            for compact in presenter.take(pending, now, 23, 'receiver'):
+                history.append(compact, 7200, 20, now)
+            if now < 25:
+                self.assertEqual(history.window(4), anchor)
+            resumed = history.resume_if_idle(now) or resumed
+        self.assertTrue(resumed)
+        self.assertFalse(history.reviewing)
+        self.assertGreater(history.window(4)[0].compact.captured_at, 25)
+        self.assertEqual(history.window(4)[0].center_khz, 7200)
+
     def test_idle_resume_waits_five_seconds_and_touch_restarts_timer(self):
         history = WaterfallHistory(4)
         for i in range(20):
