@@ -38,6 +38,22 @@ class KiwiTransportTests(unittest.TestCase):
         with self.assertRaises(socket.timeout):
             kiwi.recv_exact(sock, 2)
 
+    def test_stalled_partial_frame_requires_reconnect_not_worker_retry(self):
+        from unittest.mock import patch
+        sock = ScriptedSocket((b'\x82\x04', socket.timeout()))
+        with patch.object(kiwi.time, 'monotonic', side_effect=(0, 0, 9)):
+            with self.assertRaises(ConnectionError) as raised:
+                kiwi.KiwiWebSocket(sock).recv()
+        self.assertNotIsInstance(raised.exception, socket.timeout)
+
+    def test_timeout_between_header_and_payload_preserves_frame(self):
+        sock = ScriptedSocket((b'\x82\x04', socket.timeout(), b'SND!'))
+        self.assertEqual(kiwi.KiwiWebSocket(sock).recv(), b'SND!')
+
+    def test_timeout_before_extended_length_preserves_frame(self):
+        sock = ScriptedSocket((b'\x82\x7e', socket.timeout(), b'\x00\x04', b'SND!'))
+        self.assertEqual(kiwi.KiwiWebSocket(sock).recv(), b'SND!')
+
     def test_corrupt_huge_frame_length_is_rejected_before_payload_read(self):
         declared = kiwi.WEBSOCKET_MAX_FRAME_BYTES + 1
         sock = ScriptedSocket((b'\x82\x7f', struct.pack('>Q', declared)))

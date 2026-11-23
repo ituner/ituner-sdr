@@ -39,10 +39,52 @@ class Quadrature:
         return 0
 
 
+class DetentQuadrature:
+    """Emit mechanical movement only after a complete valid quadrature cycle.
+
+    Raw contact bounce retraces edges and cancels. A skipped phase invalidates
+    the partial cycle until the starting detent phase returns; never infer a
+    direction from incomplete movement. Any starting phase is supported.
+    """
+    def __init__(self, state):
+        self.invalid_transitions = 0
+        self.reset(state)
+
+    def reset(self, state):
+        self.state = self.detent_state = state
+        self.partial = 0
+        self.synchronized = True
+
+    def feed(self, state):
+        old, self.state = self.state, state
+        if old == state:
+            return 0
+        transition = (old, state)
+        if transition in Quadrature.FORWARD:
+            direction = 1
+        elif transition in Quadrature.REVERSE:
+            direction = -1
+        else:
+            self.invalid_transitions += 1
+            self.partial = 0
+            self.synchronized = state == self.detent_state
+            return 0
+        if not self.synchronized:
+            if state == self.detent_state:
+                self.synchronized = True
+            return 0
+        self.partial += direction
+        if state != self.detent_state:
+            return 0
+        movement = self.partial
+        self.partial = 0
+        return 1 if movement == 4 else -1 if movement == -4 else 0
+
+
 class EncoderReader:
     PAIRS = {"zoom": (26, 13), "volume": (6, 5)}
 
-    def __init__(self, *, pairs=None, debounce_us=200, pending_limit=100, edges_per_step=4):
+    def __init__(self, *, pairs=None, debounce_us=0, pending_limit=100, edges_per_step=4):
         import gpiod
         from gpiod.line import Bias, Direction, Edge, Value
         self._gpiod, self._value = gpiod, Value
@@ -66,6 +108,8 @@ class EncoderReader:
             raise RuntimeError('RP1 GPIO controller not found')
         settings = dict(direction=Direction.INPUT, edge_detection=Edge.BOTH,
                         bias=Bias.DISABLED)
+        # Independent GPIO debounce can suppress/reorder the two quadrature
+        # channels. Mechanical contact filtering belongs to the full cycle.
         self.debounce_us = debounce_us
         try:
             self._request = gpiod.request_lines(
@@ -100,7 +144,9 @@ class EncoderReader:
             if role in self._decoders:
                 self._decoders[role].reset(self._state(role))
             else:
-                self._decoders[role] = Quadrature(self._state(role), self._edges_per_step)
+                self._decoders[role] = (DetentQuadrature(self._state(role))
+                                        if self._edges_per_step == 4 else
+                                        Quadrature(self._state(role), self._edges_per_step))
 
     def _run(self):
         last_sequence = None

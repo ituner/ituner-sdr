@@ -215,14 +215,14 @@ class KiwiWebSocket:
             masked = bool(b1 & 0x80)
             length = b1 & 0x7F
             if length == 126:
-                length = struct.unpack(">H", recv_exact(self.sock, 2))[0]
+                length = struct.unpack(">H", recv_exact(self.sock, 2, frame_started=True))[0]
             elif length == 127:
-                length = struct.unpack(">Q", recv_exact(self.sock, 8))[0]
+                length = struct.unpack(">Q", recv_exact(self.sock, 8, frame_started=True))[0]
             if length > WEBSOCKET_MAX_FRAME_BYTES:
                 raise ValueError(f"websocket frame too large: {length} bytes")
 
-            mask = recv_exact(self.sock, 4) if masked else None
-            payload = recv_exact(self.sock, length) if length else b""
+            mask = recv_exact(self.sock, 4, frame_started=True) if masked else None
+            payload = recv_exact(self.sock, length, frame_started=True) if length else b""
             if mask:
                 payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
 
@@ -551,7 +551,7 @@ def raise_for_kiwi_server_message(params):
     raise KiwiServerBusyError(capacity)
 
 
-def recv_exact(sock, count):
+def recv_exact(sock, count, *, frame_started=False):
     """Read one frame segment without losing bytes across socket timeouts."""
     data = bytearray()
     started_at = time.monotonic()
@@ -560,12 +560,13 @@ def recv_exact(sock, count):
             chunk = sock.recv(count - len(data))
         except socket.timeout:
             # At a frame boundary the worker may safely poll again. Once any
-            # bytes have arrived, returning would lose framing permanently:
+            # bytes of this frame have arrived, including an earlier segment,
+            # returning would lose framing permanently:
             # the next recv() would mistake payload bytes for a new header.
-            if not data:
+            if not data and not frame_started:
                 raise
             if time.monotonic() - started_at >= WEBSOCKET_PARTIAL_FRAME_TIMEOUT_SECONDS:
-                raise TimeoutError("websocket partial frame timed out")
+                raise ConnectionError("websocket partial frame timed out; reconnect required")
             continue
         if not chunk:
             raise EOFError("socket closed")

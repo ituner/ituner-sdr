@@ -22,6 +22,26 @@ button mappings are in `UI/cm5_button_input.py`. PTT remains unassigned.
 GPIO13 is now an encoder input, not the amplifier enable used by the old board.
 Python libgpiod 2.x is required (2.2.0 on the tested CM5).
 
+The volume encoder controls master audio on every screen and shows a temporary
+volume popup above the current workspace, including managed browser previews.
+The installed volume knob's push contact was measured on expander line 8
+(`ENC2_D/P10`): pressing it toggles mute while retaining the volume level, with
+a persistent red mute badge on native screens and red feedback in managed
+browser previews. Unmuting removes the badge and restores the remembered level.
+The existing line 11 mute input remains supported; line 10 is unassigned.
+Each detent changes volume by one percentage point. Mechanical encoders decode
+complete quadrature cycles from raw edges; invalid cycles are discarded rather
+than guessing a direction. The optical tuning reader retains one count per edge.
+The zoom encoder targets only visible, zoomable content. Settings, keyboards,
+lists and other unsupported screens show “Not available on this screen” without
+changing the hidden HOME receiver. Encoder feedback uses the existing Zoom
+notice style; the most recent knob action replaces the previous notice.
+Clockwise increases magnification by 10% per detent and displays ZOOM IN;
+counterclockwise reverses that step and displays ZOOM OUT. HOME crops the
+viewport between the receiver's discrete zoom levels, changing the source level
+only when necessary. This fractional adjustment lasts for the session and resets
+on receiver changes or explicit coarse zoom changes.
+
 ## Display build and initial migration
 
 The shared `../reference-display/panel-jadard-jd9365da-h3.c` uses sleeping GPIO

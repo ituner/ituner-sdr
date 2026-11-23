@@ -244,6 +244,7 @@ from app_update import UpdateController, register_runtime
 import app_update_ui
 import kiwi_live_display_fb as kiwi
 from waterfall_history import CompactRow, WaterfallHistory, WaterfallPixels
+from encoder_zoom import ContinuousHomeZoom, zoom_factor, zoom_workspace
 import openwebrx_client as owrx
 import openwebrx_directory
 import fmdx
@@ -9158,14 +9159,16 @@ def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
     draw_text(text_cache, x0 + 12, scope_bottom_y - 15, f"SCOPE {int(round(scope_height))}", (229, 195, 134), 12, True, False, "lm", family="Liberation Sans")
 
 
-def draw_muted_waterfall_badge(text_cache):
+def draw_muted_waterfall_badge(text_cache, *, touch_enabled=True):
     """Keep an intentional mute obvious without obscuring live RF detail."""
     box = mute_waterfall_box()
     x0, y0, _x1, _y1 = box
     red = themed_instrument_color("danger_border", MUTE_ACCENT)[:3]
     draw_analog_osd_panel(box, 246, red, (8, 0, 0))
     draw_text(text_cache, x0 + 18, y0 + 22, "AUDIO MUTED", red, 28, True, True, "lm")
-    draw_text(text_cache, x0 + 18, y0 + 64, "TAP TO UNMUTE", red, 28, True, True, "lm")
+    draw_text(text_cache, x0 + 18, y0 + 64,
+              "TAP TO UNMUTE" if touch_enabled else "PRESS KNOB TO UNMUTE",
+              red, 28 if touch_enabled else 20, True, True, "lm")
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
@@ -15572,7 +15575,7 @@ def format_zoom_span(span_khz):
     return f"{span_khz:.1f} kHz"
 
 
-def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
+def draw_zoom_osd(text_cache, zoom, span_khz, alpha, *, title=None, step_text=None):
     alpha = clamp(int(alpha), 0, 255)
     if alpha <= 0:
         return
@@ -15583,9 +15586,12 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     dim = (*notice, int(alpha * 0.18))
     soft = (*notice, int(alpha * 0.35))
     digital_factor = kiwi.DIGITAL_ZOOM_FACTORS.get(int(zoom))
-    zoom_label = f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM"
+    zoom_label = title or (f"ZOOM DIGITAL {digital_factor:.0f}x" if digital_factor else "ZOOM")
     draw_text(text_cache, x0 + 18, y0 + 22, zoom_label, green[:3], 28, True, True, "lm")
     draw_text(text_cache, x1 - 18, y0 + 22, format_zoom_span(span_khz), green[:3], 28, True, True, "rm")
+    if step_text:
+        draw_text(text_cache, (x0 + x1) / 2, y0 + 43, step_text, green[:3],
+                  16, True, True, "cm")
 
     track_x0 = x0 + 24
     track_x1 = x1 - 24
@@ -15595,8 +15601,45 @@ def draw_zoom_osd(text_cache, zoom, span_khz, alpha):
     for level in range(kiwi.DISPLAY_MAX_ZOOM + 1):
         x = int(round(track_x0 + (track_x1 - track_x0) * level / kiwi.DISPLAY_MAX_ZOOM))
         fill = green if level <= zoom else dim
-        h = 36 if level == zoom else 24
+        h = 28 if step_text and level == round(zoom) else 36 if level == zoom else 24
         draw_logical_rect(x - bar_w / 2, base_y - h, x + bar_w / 2, base_y - 1, fill)
+
+
+def draw_home_encoder_zoom_osd(text_cache, title, span_khz, receiver_type, alpha):
+    """Keep the HOME bar scale aligned with the fractional visible RF span."""
+    level = float(kiwi.DISPLAY_MAX_ZOOM)
+    for index in range(kiwi.DISPLAY_MAX_ZOOM):
+        wide = receiver_display_span(index, receiver_type)
+        narrow = receiver_display_span(index + 1, receiver_type)
+        if span_khz >= narrow:
+            level = index + clamp(math.log(wide / max(span_khz, 1e-12)) /
+                                  math.log(wide / narrow), 0.0, 1.0)
+            break
+    draw_zoom_osd(text_cache, level, span_khz, alpha, title=title, step_text="10% STEP")
+
+
+def draw_volume_osd(text_cache, volume, alpha, *, muted=False, title="VOLUME"):
+    """Master volume feedback uses the same analog notice as Zoom."""
+    alpha = clamp(int(alpha), 0, 255)
+    if alpha <= 0 or volume is None:
+        return
+    volume = clamp(float(volume), 0.0, 1.0)
+    x0, y0, x1, _y1 = ZOOM_OSD_BOX
+    draw_green_osd_panel(ZOOM_OSD_BOX, alpha)
+    notice = APP_UI_STYLE.palette.notice
+    opacity = alpha / 255.0
+    label = "MUTED" if muted else f"{round(volume * 100)}%" if volume > MAIN_VOLUME_MUTE_THRESHOLD else "MUTED  0%"
+    draw_text(text_cache, x0 + 18, y0 + 22, title, notice,
+              28, True, True, "lm", alpha=opacity)
+    draw_text(text_cache, x1 - 18, y0 + 22, label, notice,
+              28, True, True, "rm", alpha=opacity)
+    track_x0, track_x1, base_y = x0 + 24, x1 - 24, y0 + 81
+    draw_logical_line(track_x0, base_y, track_x1, base_y, (*notice, int(alpha * .35)), 3)
+    lit = 0 if muted else round(volume * 20)
+    for level in range(20):
+        x = track_x0 + (track_x1 - track_x0) * level / 19
+        fill = (*notice, alpha if level < lit else int(alpha * .18))
+        draw_logical_rect(x - 8.5, base_y - 24, x + 8.5, base_y - 1, fill)
 
 
 def draw_waterfall_live_osd(text_cache, alpha):
@@ -24810,6 +24853,14 @@ def main():
     anim_start = 0.0
     anim_duration = 0.20
     zoom_osd_until = 0.0
+    zoom_unavailable_osd_until = 0.0
+    encoder_zoom_osd_until = 0.0
+    encoder_zoom_osd_detail = ""
+    encoder_zoom_osd_title = "ZOOM"
+    encoder_zoom_osd_context = None
+    continuous_home_zoom = ContinuousHomeZoom()
+    volume_osd_until = 0.0
+    volume_osd_title = "VOLUME"
     vosc_error_osd_until = 0.0
     vosc_error_osd_message = ""
     last_vosc_error_key = ()
@@ -25008,6 +25059,7 @@ def main():
         if applied_volume is not None:
             audio_volume = args.output_volume = applied_volume
             audio_volume_last_apply = time.monotonic()
+        return applied_volume
 
     tests_panel_open = False
     tests_parent = "home"
@@ -25962,6 +26014,12 @@ def main():
     def animate_to(freq_khz, span_khz, duration=0.20):
         nonlocal anim_from_freq, anim_from_span, anim_to_freq, anim_to_span, anim_start, anim_duration
         nonlocal display_freq, display_span
+        _server, _freq, source_zoom, _smeter, _generation, source_generation = state.snapshot()
+        source_type = state.receiver_type_snapshot()
+        source_key = (source_generation, source_type, state.external_waterfall_snapshot())
+        native_span = receiver_display_span(source_zoom, source_type)
+        if span_khz == native_span:
+            span_khz = continuous_home_zoom.span(source_key, source_zoom, native_span)
         anim_from_freq = display_freq
         anim_from_span = display_span
         anim_to_freq = freq_khz
@@ -26054,6 +26112,26 @@ def main():
         zoom_osd_until = time.monotonic() + args.zoom_osd_seconds
         print(f"gl zoom {new_zoom} span {kiwi.zoom_to_span_khz(new_zoom):.1f} kHz", flush=True)
         return True
+
+    def change_home_encoder_zoom(delta):
+        nonlocal auto_zoom_levels_used
+        _server, frequency, level, _smeter, _generation, source_generation = state.snapshot()
+        source_type = state.receiver_type_snapshot()
+        local = state.external_waterfall_snapshot() or rtl_lab.is_running()
+        source_key = (source_generation, source_type, state.external_waterfall_snapshot())
+        minimum = rtl_lab.minimum_zoom() if local else 0
+        current = continuous_home_zoom.span(source_key, level, display_span)
+        new_level, span = continuous_home_zoom.step(
+            source_key, level, current, delta, minimum, args.max_zoom,
+            lambda zoom: receiver_display_span(zoom, source_type),
+        )
+        if new_level != level:
+            state.set_view(zoom=new_level)
+            remember_current_view()
+        auto_zoom_levels_used = 0
+        animate_to(frequency, span, .12)
+        visible_span = f"{span / 1000:.3f} MHz" if span >= 1000 else f"{span:.3f} kHz"
+        return f"10% STEP  {visible_span}"
 
     def listen_to_seek_candidate(frequency):
         nonlocal display_freq, candidate_freq, anim_start, inertia_velocity_khz_s
@@ -27228,22 +27306,108 @@ def main():
                 return True
         return False
 
-    def home_collapse_tab_visible():
-        """Only Home owns this shortcut; drawers and decoder workspaces do not."""
-        return LCD_800_MODE and not home_rail_hidden() and not (
-            menu_open or picker_open or settings_menu_open or digital_menu_open
+    def zoom_blocking_screen_open(*, include_home_overlays=True):
+        """These screens cover zoomable content, including all modal controls."""
+        return (
+            menu_open or settings_menu_open or digital_menu_open
             or radio_setup_open or audio_panel_open or display_setup_open or filter_drawer_open
             or receiver_home_panel_open or fan_curve_panel_open or frequency_drawer_open
             or frequency_entry_open or compact_font_review_open or network_panel_open
             or tests_panel_open or asr_panel_open or deepgram_setup_open or band_navigation_open
             or wspr_panel_open or wspr_identity_open or dj_tune_open or rtl_lab_open or font_lab_open
             or filter_panel_open or dual_vfo_open or dual_vfo_mode_open or dual_vfo_picker_open
-            or theme_editor.open or smeter_picker.open or seek_view.open or application_update.open
-            or audio_test_workspace.open or adsb_workspace.open or station_workspace.open
-            or usb_radios_workspace.open or vhf_workspace.open or cw_workspace.open
+            or theme_editor.open or smeter_picker.open or application_update.open
+            or audio_test_workspace.open or station_workspace.open
+            or usb_radios_workspace.open or cw_workspace.open
             or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
             or usb_popup.visible() or web_apps.blocks_touch
+            or (include_home_overlays and (cpu_utilization_graph_open or audio_transport_graph_open
+                or (LCD_800_MODE and LCD_RADIO_DRAWER_PROGRESS > 0.002)))
         )
+
+    def home_screen_visible(*, include_home_overlays=True):
+        return not (zoom_blocking_screen_open(include_home_overlays=include_home_overlays) or picker_open or seek_view.open
+                    or adsb_workspace.open or vhf_workspace.open)
+
+    def home_collapse_tab_visible():
+        """Only Home owns this shortcut; drawers and decoder workspaces do not."""
+        return LCD_800_MODE and not home_rail_hidden() and home_screen_visible(include_home_overlays=False)
+
+    def encoder_zoom_context():
+        """Invalidate map feedback as soon as its visible page is replaced."""
+        if zoom_blocking_screen_open() or shared_keyboard_open():
+            return None
+        if seek_view.open:
+            view = seek_view.long_view
+            return ("scan", view.page) if view is not None and view.open and not view.keyboard else None
+        if vhf_workspace.open:
+            if vhf_workspace.dongles.open or vhf_workspace.overlay:
+                return None
+            if vhf_workspace.mode == "spectrum":
+                view = vhf_workspace.spectrum
+                return ("spectrum", view.screen) if not view.overlay else None
+            return ("vhf", vhf_workspace.mode, vhf_workspace.view)
+        if adsb_workspace.open:
+            if any(getattr(getattr(adsb_workspace, name, None), "open", False)
+                   for name in ("dongles", "radio_info")):
+                return None
+            if adsb_workspace.coverage_open and adsb_workspace.coverage_view.window_open:
+                return None
+            return ("adsb", adsb_workspace.current_screen())
+        if picker_open and picker_map_open and not search_open:
+            return ("globe",)
+        if home_screen_visible() and not wf_texture.history.reviewing:
+            return ("home",)
+        return None
+
+    def encoder_zoom_feedback_visible():
+        return encoder_zoom_osd_context is not None and encoder_zoom_osd_context == encoder_zoom_context()
+
+    def apply_encoder_zoom(delta):
+        nonlocal picker_map_zoom_target, picker_map_lock_target
+        nonlocal picker_map_inertia_yaw, picker_map_inertia_pitch
+        nonlocal picker_map_notice, picker_map_notice_until, zoom_osd_until
+        nonlocal zoom_unavailable_osd_until, encoder_zoom_osd_until, encoder_zoom_osd_detail
+        nonlocal encoder_zoom_osd_context, encoder_zoom_osd_title, volume_osd_until
+        if not delta:
+            return
+        wake_controls()
+        zoom_osd_until = zoom_unavailable_osd_until = encoder_zoom_osd_until = 0.0
+        volume_osd_until = 0.0
+        encoder_zoom_osd_title = "ZOOM IN" if delta > 0 else "ZOOM OUT"
+        notice_until = time.monotonic() + args.zoom_osd_seconds
+        if not zoom_blocking_screen_open() and not shared_keyboard_open():
+            # Match the foreground workspace order; never fall through to RF.
+            if seek_view.open:
+                detail = zoom_workspace(seek_view.long_view, "scan", delta)
+            elif vhf_workspace.open:
+                detail = zoom_workspace(vhf_workspace, "vhf", delta)
+            elif adsb_workspace.open:
+                detail = zoom_workspace(adsb_workspace, "adsb", delta)
+            elif picker_open:
+                detail = None
+                if picker_map_open and not search_open:
+                    picker_map_lock_target = None
+                    picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
+                    base = picker_map_zoom_target if picker_map_zoom_target is not None else picker_map_scale
+                    picker_map_zoom_target = clamp(base * zoom_factor(delta),
+                                                  RADIOGARDEN_ZOOM_MIN, RADIOGARDEN_ZOOM_MAX)
+                    picker_map_notice = ""
+                    picker_map_notice_until = 0.0
+                    detail = f"GLOBE  {picker_map_zoom_target:.2f}×"
+            elif (home_screen_visible() and not wf_texture.history.reviewing
+                  and (state.waterfall_enabled_snapshot() or state.spectrum_snapshot()[0])):
+                detail = change_home_encoder_zoom(delta)
+            else:
+                detail = None
+            if detail is not None:
+                encoder_zoom_osd_detail = detail
+                encoder_zoom_osd_context = encoder_zoom_context()
+                encoder_zoom_osd_until = notice_until
+                print(f"V4 knob zoom {encoder_zoom_osd_title} steps={delta} {detail}", flush=True)
+                return
+        zoom_unavailable_osd_until = notice_until
+        web_apps.publish_encoder_notice("ZOOM", "Not available on this screen", args.zoom_osd_seconds)
 
     def rail_relocation_active():
         if home_rail_hidden() or theme_system.runtime_theme["sidebar"] != "left":
@@ -27474,14 +27638,26 @@ def main():
         nonlocal picker_map_garden_mode, picker_map_view, globe_fetch_started
         nonlocal inertia_velocity_khz_s, inertia_active, anim_start
         nonlocal network_panel_open, cpu_utilization_graph_open, fmdx_disclaimer_open
+        nonlocal volume_osd_until, volume_osd_title, zoom_osd_until
+        nonlocal encoder_zoom_osd_until, zoom_unavailable_osd_until
         if role == "ptt":
             print("V4 button ptt unassigned", flush=True)
             return
         if role == "mute":
             muted = not state.audio_controls_snapshot()[0].get("mute", False)
-            set_main_mute(muted)
+            if set_main_mute(muted) is None:
+                return
             preferences_dirty = True
             wake_controls()
+            volume_osd_until = 0.0 if muted else time.monotonic() + args.zoom_osd_seconds
+            volume_osd_title = "MUTE" if muted else "UNMUTE"
+            zoom_osd_until = encoder_zoom_osd_until = zoom_unavailable_osd_until = 0.0
+            mute_color = "#%02x%02x%02x" % tuple(themed_instrument_color("danger_border", MUTE_ACCENT)[:3])
+            web_apps.publish_encoder_notice(volume_osd_title,
+                                            "Audio muted" if muted else f"Volume {round(audio_volume * 100)}%",
+                                            args.zoom_osd_seconds,
+                                            colors=dict(background="#080000", border=mute_color,
+                                                        title=mute_color, detail=mute_color) if muted else None)
             print(f"V4 button mute {muted}", flush=True)
             return
         # Keep text entry and external application ownership intact.
@@ -27574,15 +27750,21 @@ def main():
             if v4_encoders is not None:
                 for knob_role, knob_delta in v4_encoders.poll():
                     if knob_role == "volume":
-                        knob_volume = clamp((audio_volume if audio_volume is not None else 0.0) + 0.04 * knob_delta, 0.0, 1.0)
+                        knob_volume = clamp((audio_volume if audio_volume is not None else 0.0) + 0.01 * knob_delta, 0.0, 1.0)
                         applied_volume = apply_main_volume(knob_volume)
                         if applied_volume is not None:
                             audio_volume = args.output_volume = applied_volume
+                            volume_osd_until = time.monotonic() + args.zoom_osd_seconds
+                            volume_osd_title = "VOLUME"
+                            zoom_osd_until = encoder_zoom_osd_until = zoom_unavailable_osd_until = 0.0
+                            volume_detail = (f"{round(applied_volume * 100)}%"
+                                             if applied_volume > MAIN_VOLUME_MUTE_THRESHOLD else "MUTED  0%")
+                            web_apps.publish_encoder_notice("VOLUME", volume_detail, args.zoom_osd_seconds)
                             preferences_dirty = True
                             wake_controls()
                             print(f"V4 knob volume {applied_volume:.2f}", flush=True)
                     elif knob_role == "zoom":
-                        change_zoom(knob_delta)
+                        apply_encoder_zoom(knob_delta)
             rtl_lab.refresh_usb_devices()
             if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
                 pending_usb_restore = None
@@ -31645,7 +31827,11 @@ def main():
             apply_band_default(freq_khz)
             if not touch_started and not inertia_active and time.monotonic() - anim_start > anim_duration:
                 display_freq = freq_khz
-                display_span = receiver_display_span(zoom, state.receiver_type_snapshot())
+                source_type = state.receiver_type_snapshot()
+                display_span = continuous_home_zoom.span(
+                    (_server_generation, source_type, state.external_waterfall_snapshot()), zoom,
+                    receiver_display_span(zoom, source_type),
+                )
 
             if receiver_visuals_hidden(picker_open, picker_map_open, adsb_workspace.open):
                 MAIN_RADIO_VISUALS_HIDDEN.set()
@@ -32065,12 +32251,11 @@ def main():
                         text_cache, carrier_waterfall_box(), "TUNE",
                         enabled=waterfall_action_enabled(state, "TUNE", wf_texture.history.reviewing))
                     tune_button_drawn = True
-            if waterfall_visible and audio_controls.get("mute", False) and not (
+            mute_badge_touch_enabled = waterfall_visible and not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
                 or filter_panel_open or frequency_entry_open
-            ):
-                draw_muted_waterfall_badge(text_cache)
+            )
             if waterfall_visible and audio_transport_graph_open and not (
                 menu_open or picker_open or (asr_panel_open and not LCD_800_MODE) or (deepgram_setup_open and not LCD_800_MODE)
                 or tests_panel_open or rtl_lab_open or dj_tune_open
@@ -32433,7 +32618,7 @@ def main():
             osd_remaining = zoom_osd_until - now
             if live_remaining > 0 and waterfall_visible and not dual_vfo_open:
                 draw_waterfall_live_osd(text_cache, green_osd_alpha(live_remaining, args.zoom_osd_seconds))
-            elif (osd_remaining > 0 and not dual_vfo_open
+            elif (osd_remaining > 0 and home_screen_visible()
                     and not (picker_open and not picker_map_open and now < picker_list_notice_until)):
                 alpha = green_osd_alpha(osd_remaining, args.zoom_osd_seconds)
                 draw_zoom_osd(text_cache, zoom, kiwi.zoom_to_span_khz(zoom), alpha)
@@ -32513,6 +32698,25 @@ def main():
                 draw_web_app_notice_osd(text_cache, web_notice, 220 if web_apps.active else
                                         green_osd_alpha(web_apps.error_until - time.monotonic(), 8))
             draw_home_rail_restore_tab(text_cache)
+            # Hardware feedback is the final foreground layer: workspaces,
+            # keyboards, theme preview and the rail composer must not cover it.
+            if encoder_zoom_osd_until > now and encoder_zoom_feedback_visible():
+                encoder_alpha = green_osd_alpha(encoder_zoom_osd_until - now, args.zoom_osd_seconds)
+                if encoder_zoom_osd_context == ("home",):
+                    draw_home_encoder_zoom_osd(text_cache, encoder_zoom_osd_title,
+                                              continuous_home_zoom.target_span or display_span,
+                                              state.receiver_type_snapshot(), encoder_alpha)
+                else:
+                    draw_web_app_notice_osd(text_cache, (encoder_zoom_osd_title, encoder_zoom_osd_detail), encoder_alpha)
+            if zoom_unavailable_osd_until > now:
+                draw_web_app_notice_osd(text_cache, ("ZOOM", "Not available on this screen"),
+                                        green_osd_alpha(zoom_unavailable_osd_until - now, args.zoom_osd_seconds))
+            if state.audio_controls_snapshot()[0].get("mute", False):
+                draw_muted_waterfall_badge(text_cache, touch_enabled=mute_badge_touch_enabled)
+            elif volume_osd_until > now:
+                draw_volume_osd(text_cache, audio_volume,
+                                green_osd_alpha(volume_osd_until - now, args.zoom_osd_seconds),
+                                muted=state.audio_controls_snapshot()[0].get("mute", False), title=volume_osd_title)
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)

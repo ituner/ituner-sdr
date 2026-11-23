@@ -23,7 +23,8 @@ class PressFilter:
 
 
 class ButtonReader:
-    LINES = {0: 'ptt', 1: 'map', 2: 'display', 3: 'band', 4: 'mode',
+    # The installed top volume knob's push contact was measured on ENC2_D/P10.
+    LINES = {0: 'ptt', 1: 'map', 2: 'display', 3: 'band', 4: 'mode', 8: 'mute',
              9: 'scan', 11: 'mute'}
 
     def __init__(self):

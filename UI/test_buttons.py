@@ -4,10 +4,15 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from cm5_button_input import PressFilter
+from cm5_button_input import PressFilter, ButtonReader
 
 
 class DebounceTests(unittest.TestCase):
+    def test_measured_volume_push_and_existing_mute_button_share_action(self):
+        self.assertEqual(ButtonReader.LINES[8], 'mute')
+        self.assertEqual(ButtonReader.LINES[11], 'mute')
+        self.assertNotIn(10, ButtonReader.LINES)
+
     def test_bounce_hold_and_release(self):
         f = PressFilter()
         events = [(True, 1), (False, 1.01), (True, 1.02),
@@ -48,10 +53,12 @@ class DispatchTests(unittest.TestCase):
         self.state.audio_controls_snapshot.return_value = ({'mute': False}, 0)
         self.state.smart_seek_snapshot.return_value = {'open': False}
         self.state.start_smart_seek.return_value = True
-        self.env = dict(state=self.state, print=Mock(), seek_view=Mock(),
-                        set_main_mute=Mock(), wake_controls=Mock(),
+        self.env = dict(themed_instrument_color=lambda *a:(255,85,85), MUTE_ACCENT=(255,85,85), state=self.state, print=Mock(), seek_view=Mock(),
+                        set_main_mute=Mock(return_value=.73), wake_controls=Mock(),
+                        time=SimpleNamespace(monotonic=lambda:10),
+                        args=SimpleNamespace(zoom_osd_seconds=2), audio_volume=.73,
                         shared_keyboard_open=Mock(return_value=False),
-                        web_apps=SimpleNamespace(blocks_touch=False),
+                        web_apps=SimpleNamespace(blocks_touch=False,publish_encoder_notice=Mock()),
                         activate_navigation_item=Mock(), focus_receiver_map_on_active=Mock(),
                         MENU_ITEMS=(('rx', 'RECEIVERS'), ('display', 'DISPLAY')),
                         GLOBE_DEFAULT_VIEW='globe', globe_fetch_started=True)
@@ -67,6 +74,22 @@ class DispatchTests(unittest.TestCase):
         self.press('mute')
         self.env['set_main_mute'].assert_called_once_with(True)
         self.assertTrue(self.env['preferences_dirty'])
+        self.assertEqual(self.env['volume_osd_title'],'MUTE')
+        self.assertEqual(self.env['volume_osd_until'],0)
+        self.env['web_apps'].publish_encoder_notice.assert_called_once_with('MUTE','Audio muted',2, colors=dict(background='#080000',border='#ff5555',title='#ff5555',detail='#ff5555'))
+
+    def test_second_press_unmutes_with_feedback_even_over_browser(self):
+        self.state.audio_controls_snapshot.return_value=({'mute':True},0)
+        self.env['web_apps'].blocks_touch=True
+        self.press('mute')
+        self.env['set_main_mute'].assert_called_once_with(False)
+        self.assertEqual(self.env['volume_osd_title'],'UNMUTE')
+        self.env['web_apps'].publish_encoder_notice.assert_called_once_with('UNMUTE','Volume 73%',2,colors=None)
+
+    def test_failed_unmute_does_not_report_success(self):
+        self.env['set_main_mute'].return_value=None
+        self.press('mute')
+        self.env['web_apps'].publish_encoder_notice.assert_not_called()
 
     def test_ptt_unassigned(self):
         self.press('ptt')
