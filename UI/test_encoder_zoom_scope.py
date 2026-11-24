@@ -21,7 +21,7 @@ class EncoderZoomScopeTests(unittest.TestCase):
         nodes = [copy.deepcopy(self.nodes[name]) for name in names]
         self.flags = {n.id for n in ast.walk(nodes[0]) if isinstance(n, ast.Name) and n.id.endswith('_open')}
         scope = {name: False for name in self.flags}
-        for name in ('theme_editor', 'smeter_picker', 'application_update', 'audio_test_workspace',
+        for name in ('theme_editor', 'smeter_picker', 'application_update', 'power_control', 'audio_test_workspace',
                      'station_workspace', 'usb_radios_workspace', 'cw_workspace', 'qrss_workspace',
                      'hell_workspace', 'sstv_workspace', 'seek_view', 'vhf_workspace', 'adsb_workspace'):
             scope[name] = NS(open=False)

@@ -6,11 +6,13 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cm5_audio=0
 adsb=0
 vhf=0
+quiet_halt_args=()
 for option in "$@"; do
     case "$option" in
         --cm5-audio) cm5_audio=1 ;;
         --adsb) adsb=1 ;;
         --vhf) vhf=1 ;;
+        --cm5-quiet-halt) quiet_halt_args=(--cm5-quiet-halt) ;;
         --*) echo "Unknown CM5 option: $option" >&2; exit 2 ;;
         *) repo=$option ;;
     esac
@@ -170,6 +172,7 @@ disable_splash=1
 EOF
 fi
 
+bash "$repo/scripts/install-power-controls.sh" "$app_user"
 install -m 0755 "$repo/scripts/configure.sh" /usr/local/sbin/ituner-sdr-configure
 install -m 0755 "$repo/systemd/ituner-network" /usr/local/sbin/ituner-network
 sudoers_file=$(mktemp)
@@ -204,7 +207,7 @@ if ((cm5_audio)); then
     bash "$repo/scripts/install-cm5-audio.sh" --no-restart
 fi
 # Fixed-scope application updater; never changes board drivers.
-python3 "$repo/scripts/install-updater.py" --user "$app_user"
+python3 "$repo/scripts/install-updater.py" --user "$app_user" "${quiet_halt_args[@]}"
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 systemctl restart ituner-sdr-touch-ready.service
 systemctl restart ituner-sdr.service

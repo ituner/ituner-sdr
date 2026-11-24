@@ -2,6 +2,7 @@
 """Small root-only NetworkManager bridge for the iTuner touch UI."""
 
 import json
+import ipaddress
 import subprocess
 import sys
 from pathlib import Path
@@ -42,41 +43,57 @@ def profile_name(ssid):
 
 def ensure_persistent_profile(ssid, password, saved_uuid=None, open_network=False):
     name = profile_name(ssid)
+    if password and not 8 <= len(password) <= 63:
+        return None, "Enter a password with 8–63 characters."
+    saved_uuid = saved_uuid or saved_networks().get(ssid)
     if saved_uuid:
-        # Only activate the saved Wi-Fi profile that belongs to the selected SSID.
         check = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", saved_uuid, timeout=8)
         if check.returncode or check.stdout.rstrip("\n") != ssid:
             return None, "Saved network no longer matches. Scan again."
         target = ("uuid", saved_uuid)
     else:
-        if not open_network and not 8 <= len(password) <= 63:
+        if not open_network and not password:
             return None, "Enter a password with 8–63 characters."
-        if not connection_exists(name):
+        target = None
+    current = run("-g", "GENERAL.CON-UUID", "device", "show", WLAN_DEVICE, timeout=8).stdout.strip()
+    current_ssid = run("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", current, timeout=8).stdout.rstrip("\n") if current and current != "--" else ""
+    # An explicitly entered replacement key always wins, including saved UUIDs.
+    if target and password and not open_network:
+        result = run("connection", "modify", *target, "802-11-wireless-security.psk", password,
+                     "802-11-wireless-security.psk-flags", "0", timeout=15)
+        if result.returncode:
+            return None, "Could not save the Wi-Fi password."
+    switched = bool(current_ssid and current_ssid != ssid)
+    if switched:
+        if run("--wait", "15", "connection", "down", "uuid", current, timeout=20).returncode:
+            return None, "Could not disconnect the current access point."
+    def failed():
+        if switched:
+            try:
+                run("--wait", "20", "connection", "up", "uuid", current, "ifname", WLAN_DEVICE, timeout=25)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return None, "Could not connect. Check the password and signal, then try again."
+    try:
+        run("radio", "wifi", "on", timeout=8)
+        if target is None:
             args = ["--wait", "30", "device", "wifi", "connect", ssid, "ifname", WLAN_DEVICE, "name", name]
             if not open_network:
                 args += ["password", password]
-            result = run(*args, timeout=38)
-            if result.returncode:
-                return None, "Could not connect. Check the password and signal, then try again."
-        target = ("id", name)
-        if not open_network:
-            # Preserve NetworkManager's WPA2/WPA3 choice rather than forcing WPA2.
-            result = run("connection", "modify", *target,
-                         "802-11-wireless-security.psk", password,
-                         "802-11-wireless-security.psk-flags", "0", timeout=15)
-            if result.returncode:
-                return None, "Could not save the Wi-Fi password."
-
-    result = run("connection", "modify", *target,
-                 "connection.permissions", "", "connection.autoconnect", "yes",
-                 "connection.autoconnect-priority", "100", timeout=15)
-    if result.returncode:
-        return None, "Could not save this Wi-Fi network."
-    run("device", "set", WLAN_DEVICE, "managed", "yes", timeout=8)
-    run("device", "set", WLAN_DEVICE, "autoconnect", "yes", timeout=8)
-    result = run("--wait", "30", "connection", "up", *target, "ifname", WLAN_DEVICE, timeout=38)
-    if result.returncode:
-        return None, "Could not connect. Check the password and signal, then try again."
+            if run(*args, timeout=38).returncode:
+                return failed()
+            target = ("id", name)
+        result = run("connection", "modify", *target,
+                     "connection.permissions", "", "connection.autoconnect", "yes",
+                     "connection.autoconnect-priority", "100", "ipv4.route-metric", "50", "ipv6.route-metric", "50", timeout=15)
+        if result.returncode:
+            return failed()
+        run("device", "set", WLAN_DEVICE, "managed", "yes", timeout=8)
+        run("device", "set", WLAN_DEVICE, "autoconnect", "yes", timeout=8)
+        if run("--wait", "30", "connection", "up", *target, "ifname", WLAN_DEVICE, timeout=38).returncode:
+            return failed()
+    except (OSError, subprocess.SubprocessError):
+        return failed()
     return name, f"Connected to {ssid}. Saved for automatic reconnection."
 
 
@@ -233,8 +250,79 @@ def manage_saved_network(action, payload):
     return response
 
 
+
+def interface_profile(device):
+    if device not in ('wlan0', 'eth0'):
+        raise ValueError('Unknown network interface')
+    current = run('-g', 'GENERAL.CON-UUID', 'device', 'show', device, timeout=8).stdout.strip()
+    if current and current != '--':
+        return current
+    profiles = run('-t', '-f', 'UUID,TYPE', 'connection', 'show', timeout=8)
+    expected = '802-11-wireless' if device == 'wlan0' else '802-3-ethernet'
+    for line in profiles.stdout.splitlines():
+        parts = split_nmcli(line)
+        if len(parts) != 2 or parts[1] != expected: continue
+        bound = run('-g', 'connection.interface-name', 'connection', 'show', 'uuid', parts[0], timeout=8).stdout.strip()
+        if bound in ('', '--', device): return parts[0]
+    return None
+
+
+def interface_settings(payload):
+    device = payload.get('device')
+    try: uid = interface_profile(device)
+    except ValueError as exc: return dict(ok=False, error=str(exc))
+    data = dict(device=device, uuid=uid, method='auto', addresses='', gateway='', dns='', autoneg=True, speed=0, duplex='full')
+    if uid:
+        for key, prop in (('method','ipv4.method'),('addresses','ipv4.addresses'),('gateway','ipv4.gateway'),('dns','ipv4.dns')):
+            value = run('-g', prop, 'connection','show','uuid',uid,timeout=8).stdout.strip()
+            data[key] = '' if value == '--' else value
+        if device == 'eth0':
+            for key, prop in (('autoneg','802-3-ethernet.auto-negotiate'),('speed','802-3-ethernet.speed'),('duplex','802-3-ethernet.duplex')):
+                value=run('-g',prop,'connection','show','uuid',uid,timeout=8).stdout.strip()
+                data[key]=value == 'yes' if key=='autoneg' else int(value or 0) if key=='speed' else value or 'full'
+    return dict(ok=True, interface=data)
+
+
+def configure_interface(payload):
+    device=payload.get('device')
+    if device not in ('wlan0','eth0'):return dict(ok=False,error='Unknown network interface')
+    # Validate all user input before changing a profile or disconnecting anything.
+    mode=payload.get('method','auto');operation=payload.get('operation','apply')
+    if operation not in ('apply','off','on'):return dict(ok=False,error='Unknown interface action')
+    if mode not in ('auto','manual'):return dict(ok=False,error='Choose DHCP or Static')
+    address=str(payload.get('addresses','')).strip();gateway=str(payload.get('gateway','')).strip();dns=str(payload.get('dns','')).strip()
+    if operation=='apply' and mode=='manual':
+        try:
+            if '/' not in address:raise ValueError('Use an IPv4 address with prefix, e.g. 192.168.1.20/24')
+            ipaddress.IPv4Interface(address)
+            if gateway:ipaddress.IPv4Address(gateway)
+            for value in dns.replace(',', ' ').split():ipaddress.IPv4Address(value)
+        except ValueError as exc:return dict(ok=False,error=str(exc))
+    speed=payload.get('speed',0);autoneg=payload.get('autoneg',True);duplex=payload.get('duplex','full')
+    if device=='eth0' and (type(speed) is not int or speed not in (0,10,100,1000) or type(autoneg) is not bool or duplex not in ('full','half') or (not autoneg and speed==0)):
+        return dict(ok=False,error='Choose a valid Ethernet speed, duplex and negotiation mode')
+    uid=interface_profile(device)
+    if payload.get('uuid') and payload['uuid'] != uid:
+        return dict(ok=False,error='The active connection changed. Reopen interface settings.')
+    if operation=='off':
+        if uid and run('connection','modify','uuid',uid,'connection.autoconnect','no',timeout=15).returncode:
+            return dict(ok=False,error='Could not disable automatic connection')
+        result=run('radio','wifi','off',timeout=10) if device=='wlan0' else run('--wait','15','device','disconnect',device,timeout=20)
+    else:
+        if not uid:return dict(ok=False,error='Connect to an access point first' if device=='wlan0' else 'No Ethernet profile found')
+        if device=='wlan0':run('radio','wifi','on',timeout=10)
+        args=['connection','modify','uuid',uid,'connection.autoconnect','yes']
+        if operation=='apply':
+            args += ['ipv4.method',mode,'ipv4.addresses',address if mode=='manual' else '', 'ipv4.gateway',gateway if mode=='manual' else '', 'ipv4.dns',','.join(dns.replace(',', ' ').split()) if mode=='manual' else '', 'ipv4.ignore-auto-dns','yes' if mode=='manual' and dns else 'no']
+            if device=='eth0':args += ['802-3-ethernet.auto-negotiate','yes' if autoneg else 'no','802-3-ethernet.speed',str(speed),'802-3-ethernet.duplex',duplex if speed else '']
+        if run(*args,timeout=15).returncode:return dict(ok=False,error='Could not save interface settings')
+        result=run('--wait','30','connection','up','uuid',uid,'ifname',device,timeout=38)
+    if result.returncode:return dict(ok=False,error='Could not apply interface settings. Check the address and link.')
+    response=network_status();response.update(ok=True,message='Interface turned off.' if operation=='off' else 'Interface settings applied.')
+    return response
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "scan", "connect", "country", "disconnect", "forget"}:
+    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "scan", "connect", "country", "disconnect", "forget", "interface", "configure-interface"}:
         json_reply({"ok": False, "error": "Unsupported network request."}, 2)
     action = sys.argv[1]
     if action == "status":
@@ -249,6 +337,9 @@ def main():
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, TypeError):
         json_reply({"ok": False, "error": "Invalid Wi-Fi request."}, 2)
+    if action in ("interface", "configure-interface"):
+        response = interface_settings(payload) if action == "interface" else configure_interface(payload)
+        json_reply(response, 0 if response["ok"] else 1)
     if action in ("disconnect", "forget"):
         response = manage_saved_network(action, payload)
         json_reply(response, 0 if response["ok"] else 1)
@@ -268,4 +359,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        json_reply(dict(ok=False,error="Network request failed. Check the connection and try again."), 1)

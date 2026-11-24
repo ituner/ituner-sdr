@@ -45,6 +45,18 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn('UI/.venv/bin/python', names)
         self.assertIn('UI/app_update.py', names)
 
+    def test_device_step_payload_is_allowlisted_and_required(self):
+        payload = {'source/app-update.json': b'{"protocol":1,"runtime":1,"system_steps":["pi-power-controls-v1"]}',
+                   'source/scripts/ituner-power': b'fixed helper',
+                   'source/hardware/cm5/v4/config.ini': b'[all]\nPOWER_OFF_ON_HALT=0',
+                   'source/scripts/arbitrary-install.sh': b'never execute'}
+        names = u.extract_application(self.archive(payload), self.base / 'device-stage')
+        self.assertIn('scripts/ituner-power', names)
+        self.assertNotIn('scripts/arbitrary-install.sh', names)
+        del payload['source/scripts/ituner-power']
+        with self.assertRaisesRegex(RuntimeError, 'required device update files'):
+            u.extract_application(self.archive(payload), self.base / 'missing-stage')
+
     def test_traversal_rejected(self):
         with self.assertRaisesRegex(RuntimeError, 'Unsafe path'):
             u.extract_application(self.archive({'source/../escape': b'oops'}), self.base / 'stage')
@@ -138,6 +150,33 @@ class UpdateTests(unittest.TestCase):
         with mock.patch.object(u, 'request_json', return_value={'sha':'bad','commit':{'message':'test'}}):
             with self.assertRaises(RuntimeError):
                 u.check_release('development')
+
+    def test_legacy_pi_helper_is_visible_even_when_app_is_current(self):
+        self.cfg['platform'] = 'linux'
+        with mock.patch.object(u, 'load_config', return_value=self.cfg), mock.patch.object(u, 'check_release') as check:
+            controller = u.UpdateController()
+            controller.check()
+            check.assert_not_called()
+            self.assertEqual(controller.phase, 'error')
+            self.assertIn('One-time', controller.message)
+
+    def test_current_build_can_finish_pending_device_steps(self):
+        self.cfg.update(platform='linux', system_steps_version=1, cm5_quiet_halt=True)
+        u.atomic_json(self.root / 'app-update.json', dict(system_steps=list(u.SYSTEM_STEPS)))
+        self.assertTrue(u.device_setup_pending(self.cfg))
+        controller = self.controller()
+        with mock.patch.object(u.threading, 'Thread', side_effect=self.immediate_thread), mock.patch.object(u, 'check_release', return_value={'commit':'a'*40}):
+            controller.check()
+        self.assertEqual(controller.phase, 'available')
+        u.atomic_json(self.state / 'device-steps-complete.json', dict(steps=list(u.SYSTEM_STEPS), cm5_quiet_halt=True))
+        self.assertFalse(u.device_setup_pending(self.cfg))
+
+    def test_device_failure_restores_application_and_reports_failure(self):
+        with mock.patch.object(u, 'system_update_steps', side_effect=RuntimeError('EEPROM failed')):
+            result, platform = self.run_worker([True, True])
+        self.assertEqual(result, 1)
+        self.assertEqual(u.installed(self.cfg)['commit'], 'a'*40)
+        self.assertIn('EEPROM failed', u.read_json(self.state / 'status.json')['message'])
 
     def test_controller_does_not_check_on_open(self):
         with mock.patch.object(u, 'load_config', return_value=self.cfg), mock.patch.object(u,'check_release') as check:

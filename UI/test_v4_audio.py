@@ -60,6 +60,23 @@ class V4Audio(unittest.TestCase):
         req.get_value.return_value = 0
         self.assertTrue(self.gpio.read_inserted())
 
+    def test_mute_switches_both_codec_channels_without_stopping_pcm(self):
+        with patch.dict(sys.modules, {'cm5_v4_gpio': self.gpio}), patch.dict(os.environ, {
+            'ITUNER_CM5_BOARD': 'v4', 'ITUNER_CM5_JACK_STATE': '',
+        }):
+            app = load('audio_mixer_test', 'cm5_audio_control.py')
+        atexit.unregister(app._shutdown)
+        app.card_available = lambda: True
+        app.run = Mock()
+        app.set_speaker = Mock()
+        app._ready = True
+        for muted, switch in ((True, 'off'), (False, 'on')):
+            app.set_mute(muted)
+            self.assertEqual(app.run.call_args_list[-2].args,
+                             ('amixer', '-q', '-c', 'CM5ES8316', 'sset', 'Left Headphone Mixer Left DAC', switch))
+            self.assertEqual(app.run.call_args_list[-1].args,
+                             ('amixer', '-q', '-c', 'CM5ES8316', 'sset', 'Right Headphone Mixer Right DAC', switch))
+
     def test_app_interlocks_route_to_expander(self):
         with patch.dict(sys.modules, {'cm5_v4_gpio': self.gpio}), patch.dict(os.environ, {
             'ITUNER_CM5_BOARD': 'v4', 'ITUNER_CM5_JACK_STATE': '',

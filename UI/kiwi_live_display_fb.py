@@ -655,7 +655,7 @@ def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
     is_nbfm = str(mode).lower() in ("nbfm", "nnfm")
     squelch_param = 0.0 if is_nbfm else float(audio_controls.get("squelch_tail", 0.25))
     send(f"SET squelch={squelch} param={squelch_param:.2f}")
-    send(f"SET mute={int(bool(audio_controls.get('mute', False)))}")
+    send(f"SET mute={int(bool(audio_controls.get('mute', False)) and not audio_controls.get('hardware_mute', False))}")
     send(f"SET de_emp={int(audio_controls.get('deemphasis', 0))} nfm={int(is_nbfm)}")
 
     nb_algo = int(audio_controls.get("nb_algo", 0))

@@ -91,7 +91,7 @@ class EncoderFeedbackTests(unittest.TestCase):
                  draw_home_rail_restore_tab=lambda *a:order.append('restore'),
                  draw_volume_osd=lambda *a,**k:order.append('volume'),
                  draw_muted_waterfall_badge=lambda *a,**k:order.append('red-mute'),
-                 mute_badge_touch_enabled=False,
+                 mute_badge_touch_enabled=False, home_screen_visible=lambda:True,
                  state=SimpleNamespace(audio_controls_snapshot=lambda:({'mute':False},0)),
                  volume_osd_title='VOLUME',
                  text_cache=None, now=10, encoder_zoom_osd_until=12,
@@ -110,6 +110,9 @@ class EncoderFeedbackTests(unittest.TestCase):
         env['state']=SimpleNamespace(audio_controls_snapshot=lambda:({'mute':True},0))
         exec(self.foreground_code,env)
         self.assertEqual(order,['compose','LOADING','restore','red-mute'])
+        order.clear(); env['home_screen_visible'] = lambda: False
+        exec(self.foreground_code, env)
+        self.assertEqual(order, ['compose','LOADING','restore'])
 
     def test_home_zoom_preserves_bars_span_and_step_caption(self):
         with patch.object(ui,'draw_green_osd_panel') as panel, patch.object(ui,'draw_text') as text, \

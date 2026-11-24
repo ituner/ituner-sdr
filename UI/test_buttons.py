@@ -76,7 +76,7 @@ class DispatchTests(unittest.TestCase):
         self.assertTrue(self.env['preferences_dirty'])
         self.assertEqual(self.env['volume_osd_title'],'MUTE')
         self.assertEqual(self.env['volume_osd_until'],0)
-        self.env['web_apps'].publish_encoder_notice.assert_called_once_with('MUTE','Audio muted',2, colors=dict(background='#080000',border='#ff5555',title='#ff5555',detail='#ff5555'))
+        self.env['web_apps'].publish_encoder_notice.assert_not_called()
 
     def test_second_press_unmutes_with_feedback_even_over_browser(self):
         self.state.audio_controls_snapshot.return_value=({'mute':True},0)
@@ -84,7 +84,7 @@ class DispatchTests(unittest.TestCase):
         self.press('mute')
         self.env['set_main_mute'].assert_called_once_with(False)
         self.assertEqual(self.env['volume_osd_title'],'UNMUTE')
-        self.env['web_apps'].publish_encoder_notice.assert_called_once_with('UNMUTE','Volume 73%',2,colors=None)
+        self.env['web_apps'].publish_encoder_notice.assert_not_called()
 
     def test_failed_unmute_does_not_report_success(self):
         self.env['set_main_mute'].return_value=None

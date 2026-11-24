@@ -43,7 +43,8 @@ class MenuIconTests(unittest.TestCase):
             return mock.Mock(stdout='Found 1 device(s):\n  0: Nooelec, NESDR, SN: 123\nFound Rafael Micro R820T tuner',stderr='')
         def thread(**kwargs):
             return mock.Mock(start=kwargs['target'])
-        with mock.patch.object(ui.subprocess,'run',side_effect=run), \
+        with mock.patch('rtl_registry.usb_inventory', return_value=[]), \
+             mock.patch.object(ui.subprocess,'run',side_effect=run), \
              mock.patch.object(ui.threading,'Thread',side_effect=thread):
             lab=ui.RTLSDRLab(mock.Mock(),mock.Mock(),mock.Mock())
             self.assertTrue(lab.snapshot()['present'])

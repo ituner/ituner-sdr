@@ -70,6 +70,13 @@ def set_mute(value):
     global _muted
     with _lock:
         _muted = bool(value)
+        if _muted:
+            gate()
+        # Mute at the codec mixer, after the queued PCM, so both headphones
+        # and speakers react immediately while the playback stream stays live.
+        if card_available():
+            for control in ('Left Headphone Mixer Left DAC', 'Right Headphone Mixer Right DAC'):
+                run('amixer', '-q', '-c', 'CM5ES8316', 'sset', control, 'off' if _muted else 'on')
         gate()
 
 def prepare():
@@ -84,6 +91,7 @@ def prepare():
                             ('Left Headphone Mixer Left DAC','on'), ('Right Headphone Mixer Right DAC','on')]:
             run('amixer','-q','-c','CM5ES8316','sset',name,value)
         set_volume(_volume)
+        set_mute(_muted)
 
 def ready(value=True):
     global _ready

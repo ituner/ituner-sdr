@@ -85,7 +85,7 @@ class NetworkManagerBridge:
             def invoke(operation, operation_payload=None):
                 result = subprocess.run(
                     ["sudo", "-n", NETWORK_MANAGER_HELPER, operation],
-                    input=json.dumps(operation_payload or {}) if operation in ("connect", "country", "disconnect", "forget") else None,
+                    input=json.dumps(operation_payload or {}) if operation in ("connect", "country", "disconnect", "forget", "interface", "configure-interface") else None,
                     text=True,
                     capture_output=True,
                     timeout=180 if operation == "connect" else 60,
@@ -120,7 +120,7 @@ class NetworkManagerBridge:
                 if action == "status" and not response.get("networks"):
                     self._snapshot["networks"] = previous_networks
                 self._snapshot["notice"] = notice
-                if action in ("refresh", "status", "open", "disconnect", "forget") and "devices" in response:
+                if action in ("refresh", "status", "open", "disconnect", "forget", "configure-interface") and "devices" in response:
                     wifi = response["devices"].get("wlan0", {})
                     if wifi.get("state") != "connected":
                         self._snapshot["networks"] = [dict(n, active=False) for n in self._snapshot.get("networks", [])]
@@ -242,6 +242,8 @@ from client_identity import CLIENT_NAME
 from boot_ready import mark_boot_ready
 from app_update import UpdateController, register_runtime
 import app_update_ui
+import system_power
+import network_interface
 import kiwi_live_display_fb as kiwi
 from waterfall_history import CompactRow, WaterfallHistory, WaterfallPixels
 from encoder_zoom import ContinuousHomeZoom, zoom_factor, zoom_workspace
@@ -2544,6 +2546,8 @@ SETTINGS_MENU_ITEMS = (
     ("tests", "TOOLS"),
     ("system", "SYSTEM"),
     ("updates", "UPDATES"),
+    ("reboot", "REBOOT"),
+    ("poweroff", "SHUT DOWN"),
     ("settings_back", "BACK"),
 )
 HF_DECODER_ITEMS = (
@@ -6025,6 +6029,7 @@ class SharedState:
                 "squelch_level": self.squelch_level,
                 "squelch_tail": self.squelch_tail,
                 "mute": self.audio_mute,
+                "hardware_mute": bool(CM5_AUDIO),
                 "agc": self.agc_enabled,
                 "agc_hang": self.agc_hang,
                 "agc_threshold": self.agc_threshold,
@@ -10571,7 +10576,9 @@ def restore_voice_clean_profile(controls, profile):
 
 def remote_audio_controls_key(controls):
     """Local blend changes must not resend Kiwi's full SND configuration."""
-    local = {"voice_clean_level", "tone_profile"}
+    local = {"voice_clean_level", "tone_profile", "hardware_mute"}
+    if controls.get("hardware_mute"):
+        local.add("mute")
     return tuple(sorted((name, value) for name, value in controls.items() if name not in local))
 
 
@@ -17978,7 +17985,8 @@ def network_action_boxes():
     left, right = (x0 + x1) / 2 - 280, (x0 + x1) / 2 + 280
     return {"primary": (left, y0 + 300, right, y0 + 364),
             "forget": (left, y0 + 382, right, y0 + 446),
-            "cancel": (left, y0 + 464, right, y0 + 528)}
+            "password": (left, y0 + 464, right, y0 + 528),
+            "cancel": (left, y0 + 546, right, y0 + 610)}
 
 
 def draw_network_actions(text_cache, network):
@@ -18002,6 +18010,7 @@ def draw_network_actions(text_cache, network):
                         ("Disconnect" if network.get("active") else "Connect"), 26)
     if not confirm and network.get("saved_uuid"):
         draw_network_button(text_cache, boxes["forget"], "Forget network…", 24)
+        draw_network_button(text_cache, boxes["password"], "Change password", 24)
     draw_network_button(text_cache, boxes["cancel"], "Cancel", 24)
 
 
@@ -20394,7 +20403,7 @@ def publish_fmdx_pcm(
         return False
     audio_controls, _audio_generation = state.audio_controls_snapshot()
     scan_active = state.fmdx_scan_request_snapshot()[0]
-    muted = bool(audio_controls.get("mute", False) or scan_active)
+    muted = bool((audio_controls.get("mute", False) and not audio_controls.get("hardware_mute")) or scan_active)
     if player is not None:
         player.submit(bytes(len(pcm)) if muted else pcm, silence=muted)
     mono = stereo_s16le_to_mono(pcm)
@@ -20961,7 +20970,7 @@ class RTLSDRLab:
         """Apply the shared squelch control to locally demodulated audio."""
         controls, _generation = self.state.audio_controls_snapshot()
         level = int(controls.get("squelch_level", 0) or 0)
-        muted = bool(controls.get("mute", False))
+        muted = bool(controls.get("mute", False) and not controls.get("hardware_mute"))
         closed = muted
         if not closed and level > 0 and pcm:
             samples = np.frombuffer(pcm, dtype="<i2")
@@ -21015,10 +21024,18 @@ class RTLSDRLab:
                         return (result.stdout or "") + "\n" + (result.stderr or ""), ""
                     except (OSError, subprocess.TimeoutExpired) as exc:
                         return "", str(exc)
-                output, rtl_error = probe_output(["rtl_test", "-t"], 14)
+                # Inventory must not open a receiver already streaming to ADS-B
+                # or another decoder. A failed/busy probe is not a USB removal.
+                from rtl_registry import usb_inventory
+                physical_rtl = usb_inventory()
+                output, rtl_error = ("", "") if physical_rtl else probe_output(["rtl_test", "-t"], 14)
                 device_match = re.search(r"^\s*0:\s*(.+)$", output, re.MULTILINE)
                 tuner_match = re.search(r"Found\s+(.+?)\s+tuner", output, re.IGNORECASE)
-                rtl_present = "Found 1 device(s)" in output or device_match is not None
+                rtl_present = bool(physical_rtl) or "Found 1 device(s)" in output or device_match is not None
+                rtl_device = device_match.group(1).strip() if device_match else "NO RTL-SDR DETECTED"
+                if physical_rtl:
+                    detected = physical_rtl[0]
+                    rtl_device = " · ".join(filter(None, (detected.get("product") or "RTL-SDR", detected.get("serial"))))
                 airspy_output, airspy_error = probe_output(["airspyhf_info"], 12)
                 serial_match = re.search(r"S/N:\s*(0x[0-9A-F]+)", airspy_output, re.IGNORECASE)
                 firmware_match = re.search(r"Firmware Version:\s*([^\r\n]+)", airspy_output, re.IGNORECASE)
@@ -21027,7 +21044,7 @@ class RTLSDRLab:
                     self.source_inventory = {
                         RTL_SDR_CAPABILITIES.source_id: {
                             "present": rtl_present,
-                            "device": device_match.group(1).strip() if device_match else "NO RTL-SDR DETECTED",
+                            "device": rtl_device,
                             "tuner": tuner_match.group(1).strip() if tuner_match else "",
                             "detail": rtl_error or "Connect an RTL-SDR and reopen USB to rescan.",
                         },
@@ -21473,7 +21490,7 @@ class RTLSDRLab:
             library = self._librtlsdr()
             device_ref = ctypes.c_void_p()
             if library.rtlsdr_open(ctypes.byref(device_ref), 0) < 0:
-                raise RuntimeError("could not open RTL-SDR device 0")
+                raise RuntimeError("RTL-SDR unavailable: stop ADS-B or another USB user, then retry")
             device = device_ref
             if library.rtlsdr_set_sample_rate(device, RTL_IQ_SAMPLE_RATE) < 0:
                 raise RuntimeError("could not set RTL-SDR sample rate")
@@ -23527,7 +23544,7 @@ def openwebrx_live_worker(args, stop_event, state, line_queue):
                     )
             elif event.kind == "audio" and event.audio:
                 state.connection_ready(server_generation, "audio")
-                muted = bool(audio_controls.get("mute", False))
+                muted = bool(audio_controls.get("mute", False) and not audio_controls.get("hardware_mute"))
                 player.submit(bytes(len(event.audio)) if muted else event.audio, silence=muted)
                 if np is not None:
                     samples = np.frombuffer(event.audio, dtype="<i2")
@@ -24180,13 +24197,13 @@ def snd_meter_worker(
                             stereo_s16le_to_mono(listening_audio)
                             if packet_is_stereo else listening_audio
                         )
-                        conceal_with_silence = bool(audio_controls.get("mute", False) or squelched)
+                        conceal_with_silence = bool((audio_controls.get("mute", False) and not audio_controls.get("hardware_mute")) or squelched)
                         dual_mixer.submit(dual_source, mix_audio, silence=conceal_with_silence)
                     elif player and listening_audio:
                         # Deliberate mute/squelch must feed quiet PCM into the
                         # same clock. Otherwise it would look like a network
                         # starvation and incorrectly grow the reserve.
-                        conceal_with_silence = bool(audio_controls.get("mute", False) or squelched)
+                        conceal_with_silence = bool((audio_controls.get("mute", False) and not audio_controls.get("hardware_mute")) or squelched)
                         player.submit(
                             bytes(len(listening_audio))
                             if conceal_with_silence else listening_audio,
@@ -24993,8 +25010,11 @@ def main():
     network_keyboard_caps = False
     network_notice = ""
     network_next_refresh = 0.0
+    pending_usb_selection = False
     network_bridge = NetworkManagerBridge()
+    interface_settings = network_interface.InterfaceSettings(network_bridge)
     application_update = UpdateController()
+    power_control = system_power.PowerController()
     update_poll_at = 0.0
     audio_panel_open = False
     audio_transport_graph_open = False
@@ -26702,10 +26722,12 @@ def main():
         if kind != "dual":
             dual_vfo_receiver_list_target = None
         seek_view.close()
+        interface_settings.open = False
         audio_test_workspace.close()
         station_workspace.open=False
         usb_radios_workspace.open=False
         application_update.open = False
+        power_control.cancel()
         adsb_workspace.open = False
         vhf_workspace.open = False
         vhf_workspace.spectrum.open = False
@@ -26823,6 +26845,9 @@ def main():
             settings_menu_open=digital_menu_open=False
             picker_open=radio_setup_open=display_setup_open=filter_drawer_open=receiver_home_panel_open=fan_curve_panel_open=audio_panel_open=asr_panel_open=False
             tests_panel_open=dj_tune_open=filter_panel_open=False
+        elif kind in ("reboot", "poweroff"):
+            power_control.select(kind)
+            settings_menu_open = digital_menu_open = False
         elif kind == "updates":
             application_update.open = True
             application_update.confirm = None
@@ -27281,6 +27306,8 @@ def main():
     desktop_map_motion_at = 0.0
 
     def shared_keyboard_open():
+        if interface_settings.open and interface_settings.field:
+            return True
         # Text keyboards fill the canvas and bypass rail composition/hit mapping.
         if seek_view.open and seek_view.keyboard_open:
             return True
@@ -27316,7 +27343,7 @@ def main():
             or tests_panel_open or asr_panel_open or deepgram_setup_open or band_navigation_open
             or wspr_panel_open or wspr_identity_open or dj_tune_open or rtl_lab_open or font_lab_open
             or filter_panel_open or dual_vfo_open or dual_vfo_mode_open or dual_vfo_picker_open
-            or theme_editor.open or smeter_picker.open or application_update.open
+            or theme_editor.open or smeter_picker.open or application_update.open or power_control.open
             or audio_test_workspace.open or station_workspace.open
             or usb_radios_workspace.open or cw_workspace.open
             or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
@@ -27473,7 +27500,7 @@ def main():
         # Fullscreen workspaces own their visible right edge too. Without
         # this guard, the desktop-only permanent rail could steal a click
         # from WSPR's top-band actions or transparent Home button.
-        if picker_open or wspr_panel_open or application_update.open:
+        if picker_open or wspr_panel_open or application_update.open or power_control.open:
             return None
         window_w, window_h = pygame.display.get_window_size()
         nx = round(position[0] * NATIVE_W / max(1, window_w))
@@ -27623,6 +27650,38 @@ def main():
         return focus_receiver_map_on_server(active_server) or focus_receiver_map_on_home()
 
 
+    def start_usb_receiver():
+        nonlocal radio_mode, manual_radio_mode, filter_custom_width, digital_mode
+        nonlocal display_freq, display_span, candidate_freq, anim_start, inertia_velocity_khz_s
+        nonlocal rtl_lab_open, pending_usb_restore, pending_usb_selection
+        _name, preset_hz, _mode, _rate = rtl_lab.snapshot()["preset"]
+        _server, _current_freq, current_zoom, _smeter, _generation, _server_generation = state.snapshot()
+        local_minimum_zoom = rtl_lab.minimum_zoom()
+        local_zoom = int(clamp(max(local_minimum_zoom, current_zoom), local_minimum_zoom, args.max_zoom))
+        local_frequency = preset_hz / 1000.0
+        if rtl_lab.start(local_frequency, local_zoom):
+            # RTL now consumes the same Home
+            # mode state as Kiwi. Start the
+            # drawer on its truthful local
+            # equivalent, not the previous
+            # remote receiver's sideband.
+            radio_mode = rtl_lab.preferred_home_mode(rtl_lab.snapshot()["preset"])
+            manual_radio_mode = True
+            filter_custom_width = False
+            digital_mode = "DIG"
+            _server, active_frequency, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
+            display_freq = active_frequency
+            display_span = kiwi.zoom_to_span_khz(active_zoom)
+            candidate_freq = active_frequency
+            anim_start = 0.0
+            inertia_velocity_khz_s = 0.0
+            drain_queue(line_queue)
+            wf_texture.clear()
+            rtl_lab_open = True
+            pending_usb_selection = True
+            pending_usb_restore = None
+            write_remembered_view(save_current_frequency=True, force=True)
+
     def submit_network_password():
         nonlocal network_notice, network_connect_pending
         if not 8 <= len(network_password_value) <= 63:
@@ -27652,12 +27711,6 @@ def main():
             volume_osd_until = 0.0 if muted else time.monotonic() + args.zoom_osd_seconds
             volume_osd_title = "MUTE" if muted else "UNMUTE"
             zoom_osd_until = encoder_zoom_osd_until = zoom_unavailable_osd_until = 0.0
-            mute_color = "#%02x%02x%02x" % tuple(themed_instrument_color("danger_border", MUTE_ACCENT)[:3])
-            web_apps.publish_encoder_notice(volume_osd_title,
-                                            "Audio muted" if muted else f"Volume {round(audio_volume * 100)}%",
-                                            args.zoom_osd_seconds,
-                                            colors=dict(background="#080000", border=mute_color,
-                                                        title=mute_color, detail=mute_color) if muted else None)
             print(f"V4 button mute {muted}", flush=True)
             return
         # Keep text entry and external application ownership intact.
@@ -27765,6 +27818,13 @@ def main():
                             print(f"V4 knob volume {applied_volume:.2f}", flush=True)
                     elif knob_role == "zoom":
                         apply_encoder_zoom(knob_delta)
+            if pending_usb_selection:
+                usb_start_status = rtl_lab.snapshot()['status']
+                if usb_start_status == 'LIVE':
+                    rtl_lab_open = False
+                    pending_usb_selection = False
+                elif usb_start_status in ('ERROR', 'NOT FOUND', 'READY'):
+                    pending_usb_selection = False
             rtl_lab.refresh_usb_devices()
             if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
                 pending_usb_restore = None
@@ -27870,6 +27930,9 @@ def main():
                     elif event.key==pygame.K_RETURN:station_workspace.key('DONE')
                     elif event.key==pygame.K_BACKSPACE:station_workspace.key('DELETE')
                     elif getattr(event,'unicode','') and event.unicode.isprintable():station_workspace.key(event.unicode)
+                elif event.type == pygame.KEYDOWN and interface_settings.open:
+                    key = {pygame.K_ESCAPE: 'CANCEL' if interface_settings.field else 'back', pygame.K_RETURN: 'SAVE', pygame.K_BACKSPACE: 'DELETE'}.get(event.key, getattr(event, 'unicode', ''))
+                    interface_settings.key(key, sys.modules[__name__])
                 elif event.type == pygame.KEYDOWN and network_action is not None and network_panel_open:
                     if event.key == pygame.K_ESCAPE:
                         network_action = None
@@ -28228,6 +28291,9 @@ def main():
                                 seek_view.press(x, y, points=points)
                             elif audio_test_workspace.open:
                                 gesture = "audio_test"
+                            elif power_control.open:
+                                gesture = "system_power"
+                                scope_drag_eligible = False
                             elif application_update.open:
                                 gesture = "application_update"
                             elif theme_editor.open:
@@ -28397,6 +28463,10 @@ def main():
                                 # the display completely; do not let a test
                                 # tap retune the live receiver underneath.
                                 gesture = "font_lab"
+                            elif interface_settings.open:
+                                gesture = "interface_settings"
+                            elif home_screen_visible() and 260 <= x < LCD_NAV_X0 and STATUS_TOP <= y < LOGICAL_H:
+                                gesture = "receiver_switch"
                             elif network_password_open:
                                 gesture = "network_password"
                             elif network_panel_open:
@@ -28510,7 +28580,7 @@ def main():
                                 )
                             ):
                                 gesture = "frequency_identity_tune"
-                            elif state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
+                            elif home_screen_visible() and state.audio_controls_snapshot()[0].get("mute", False) and contains(mute_waterfall_box(), x, y):
                                 gesture = "waterfall_mute"
                             elif tune_button_drawn and contains(carrier_waterfall_box(), x, y):
                                 gesture = ("carrier_tune" if waterfall_action_enabled(
@@ -29761,6 +29831,17 @@ def main():
                                 anim_start = 0.0
                                 state.start_smart_seek()
                             wake_controls()
+                        elif touch_started and gesture == "system_power":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                action = confirmed_tap_action(
+                                    lambda px, py: system_power.action_at(power_control, sys.modules[__name__], px, py),
+                                    start_x, start_y, x, y)
+                                if action == "back":
+                                    power_control.cancel()
+                                    restore_navigation_parent("settings")
+                                elif action == "confirm":
+                                    power_control.confirm()
+                            wake_controls()
                         elif touch_started and gesture == "application_update":
                             if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
                                 if app_update_ui.action(application_update, sys.modules[__name__], x, y) == "back":
@@ -30266,32 +30347,7 @@ def main():
                                     if rtl_lab.snapshot()["running"]:
                                         rtl_lab.stop()
                                     else:
-                                        _name, preset_hz, _mode, _rate = rtl_lab.snapshot()["preset"]
-                                        _server, _current_freq, current_zoom, _smeter, _generation, _server_generation = state.snapshot()
-                                        local_minimum_zoom = rtl_lab.minimum_zoom()
-                                        local_zoom = int(clamp(max(local_minimum_zoom, current_zoom), local_minimum_zoom, args.max_zoom))
-                                        local_frequency = preset_hz / 1000.0
-                                        if rtl_lab.start(local_frequency, local_zoom):
-                                            # RTL now consumes the same Home
-                                            # mode state as Kiwi. Start the
-                                            # drawer on its truthful local
-                                            # equivalent, not the previous
-                                            # remote receiver's sideband.
-                                            radio_mode = rtl_lab.preferred_home_mode(rtl_lab.snapshot()["preset"])
-                                            manual_radio_mode = True
-                                            filter_custom_width = False
-                                            digital_mode = "DIG"
-                                            _server, active_frequency, active_zoom, _smeter, _generation, _server_generation = state.snapshot()
-                                            display_freq = active_frequency
-                                            display_span = kiwi.zoom_to_span_khz(active_zoom)
-                                            candidate_freq = active_frequency
-                                            anim_start = 0.0
-                                            inertia_velocity_khz_s = 0.0
-                                            drain_queue(line_queue)
-                                            wf_texture.clear()
-                                            rtl_lab_open = False
-                                            pending_usb_restore = None
-                                            write_remembered_view(save_current_frequency=True, force=True)
+                                        start_usb_receiver()
                                 elif choice == "back":
                                     rtl_lab.stop()
                                     rtl_lab_open = False
@@ -30893,6 +30949,17 @@ def main():
                                         network_password_value += key
                                         network_password_placeholder_visible = False
                             wake_controls()
+                        elif touch_started and gesture == "receiver_switch":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px and 260 <= x < LCD_NAV_X0 and STATUS_TOP <= y < LOGICAL_H:
+                                activate_navigation_item(next(i for i, item in enumerate(MENU_ITEMS) if item[0] == 'rx'))
+                            wake_controls()
+                        elif touch_started and gesture == "interface_settings":
+                            if max(abs(x-start_x), abs(y-start_y)) <= args.tap_px:
+                                ui_module = sys.modules[__name__]
+                                action = interface_settings.action_at(ui_module, x, y)
+                                if action == interface_settings.action_at(ui_module, start_x, start_y):
+                                    interface_settings.key(action, ui_module)
+                            wake_controls()
                         elif touch_started and gesture == "network_panel":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
@@ -30906,6 +30973,14 @@ def main():
                                     elif not busy:
                                         if confirmed_box_tap(action_boxes["forget"], start_x, start_y, x, y) and not network_action.get("confirm_forget") and network_action.get("saved_uuid"):
                                             network_action = dict(network_action, confirm_forget=True)
+                                        elif confirmed_box_tap(action_boxes["password"], start_x, start_y, x, y) and not network_action.get("confirm_forget"):
+                                            network_selected_ssid = network_action['ssid']
+                                            network_password_value = ''
+                                            network_password_revealed = False
+                                            network_keyboard_mode = 'lower'
+                                            network_keyboard_caps = False
+                                            network_password_open = True
+                                            network_action = None
                                         elif confirmed_box_tap(action_boxes["primary"], start_x, start_y, x, y):
                                             operation = "forget" if network_action.get("confirm_forget") else ("disconnect" if network_action.get("active") else "connect")
                                             if network_bridge.request(operation, network_action):
@@ -30918,6 +30993,10 @@ def main():
                                     network_selected_ssid = ""
                                     settings_menu_open = True
                                     digital_menu_open = False
+                                elif not busy and not network_country_open and confirmed_box_tap(boxes["wifi"], start_x, start_y, x, y):
+                                    interface_settings.show('wlan0')
+                                elif not busy and not network_country_open and confirmed_box_tap(boxes["ethernet"], start_x, start_y, x, y):
+                                    interface_settings.show('eth0')
                                 elif confirmed_box_tap(boxes["country"], start_x, start_y, x, y) and not busy:
                                     network_country_open = not network_country_open
                                     network_page = 0
@@ -31343,10 +31422,13 @@ def main():
                                 if idx is not None:
                                     wake_controls()
                                     if station_route_filter == "usb":
+                                        if rtl_lab.is_running() and rtl_lab.source_id != visible_stations[idx][0]:
+                                            rtl_lab.stop()
                                         if rtl_lab.select_source(visible_stations[idx][0]):
                                             picker_open = False
                                             rtl_lab_open = True
-                                            rtl_lab.show("receivers")
+                                            rtl_lab.navigation_parent = "receivers"
+                                            start_usb_receiver()
                                     else:
                                         connect_to_station(visible_stations[idx])
                         elif touch_started and gesture == "waterfall":
@@ -31520,7 +31602,7 @@ def main():
                     f"{receiver_home_profile['lat']:.4f},{receiver_home_profile['lon']:.4f}",
                     flush=True,
                 )
-            if network_panel_open and network_action is None and not network_password_open and not network_connect_pending and now >= network_next_refresh:
+            if network_panel_open and not interface_settings.open and network_action is None and not network_password_open and not network_connect_pending and now >= network_next_refresh:
                 network_bridge.request("refresh")
                 network_next_refresh = now + 12.0
             network_snapshot, network_busy = network_bridge.snapshot()
@@ -32394,6 +32476,8 @@ def main():
                 if network_notice:
                     network_draw_snapshot["notice"] = network_notice
                 draw_network_manager(text_cache, network_draw_snapshot, network_busy, network_selected_ssid, network_page, network_country_open)
+                if interface_settings.open:
+                    interface_settings.draw(sys.modules[__name__], text_cache)
                 if network_action is not None:
                     draw_network_actions(text_cache, network_action)
                 if network_password_open:
@@ -32684,6 +32768,8 @@ def main():
                     application_update.poll()
                     update_poll_at = now + 0.5
                 app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
+            if power_control.open:
+                system_power.draw(power_control, sys.modules[__name__], text_cache)
             if smeter_picker.open:
                 smeter_picker.draw(sys.modules[__name__], text_cache)
             if not web_apps.blocks_touch:usb_popup.draw(text_cache)
@@ -32711,9 +32797,9 @@ def main():
             if zoom_unavailable_osd_until > now:
                 draw_web_app_notice_osd(text_cache, ("ZOOM", "Not available on this screen"),
                                         green_osd_alpha(zoom_unavailable_osd_until - now, args.zoom_osd_seconds))
-            if state.audio_controls_snapshot()[0].get("mute", False):
+            if home_screen_visible() and state.audio_controls_snapshot()[0].get("mute", False):
                 draw_muted_waterfall_badge(text_cache, touch_enabled=mute_badge_touch_enabled)
-            elif volume_osd_until > now:
+            elif volume_osd_until > now and not state.audio_controls_snapshot()[0].get("mute", False):
                 draw_volume_osd(text_cache, audio_volume,
                                 green_osd_alpha(volume_osd_until - now, args.zoom_osd_seconds),
                                 muted=state.audio_controls_snapshot()[0].get("mute", False), title=volume_osd_title)

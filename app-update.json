@@ -1,1 +1,1 @@
-{"protocol": 1, "runtime": 1}
+{"protocol": 1, "runtime": 1, "system_steps": ["pi-power-controls-v1", "pi-network-controls-v1", "cm5-quiet-halt-v1"]}

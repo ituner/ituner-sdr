@@ -5,6 +5,14 @@ import kiwi_gl_display as ui
 
 
 class MainVolumeTests(unittest.TestCase):
+    def test_hardware_mute_does_not_reconfigure_remote_stream(self):
+        controls = dict(mute=False, hardware_mute=True, agc=True)
+        self.assertEqual(ui.remote_audio_controls_key(controls),
+                         ui.remote_audio_controls_key(dict(controls, mute=True)))
+        controls['hardware_mute'] = False
+        self.assertNotEqual(ui.remote_audio_controls_key(controls),
+                            ui.remote_audio_controls_key(dict(controls, mute=True)))
+
     def test_mute_unmute_restores_exact_level_repeatedly(self):
         setter = Mock(side_effect=lambda value: value)
         muted = Mock()

@@ -1,0 +1,23 @@
+#!/usr/bin/python3
+"""Root-owned, fixed-operation bridge to orderly systemd power management."""
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1 or args[0] not in ('reboot', 'poweroff'):
+        raise SystemExit('Usage: ituner-power reboot|poweroff')
+    if os.geteuid() != 0:
+        raise SystemExit('Root privileges required')
+    model = Path('/proc/device-tree/model').read_text().rstrip('\0')
+    if 'Raspberry Pi' not in model:
+        raise SystemExit('Power controls are only supported on the Raspberry Pi appliance')
+    # No force flag: systemd stops services, saves settings and unmounts storage.
+    subprocess.run(['/usr/bin/systemctl', '--no-block', args[0]], check=True)
+
+
+if __name__ == '__main__':
+    main()
