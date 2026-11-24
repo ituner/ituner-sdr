@@ -61,6 +61,59 @@ class RadioTests(unittest.TestCase):
             b,_=rows[0];w.tap((b[0]+b[2])/2,(b[1]+b[3])/2);self.assertIsNotNone(w.selected);self.assertIsNone(w.field)
             w.draw(Mock());b=full_width_back_box();w.tap((b[0]+b[2])/2,(b[1]+b[3])/2)
             self.assertIsNone(w.selected);self.assertTrue(w.open)
+    def test_home_handoff_waits_for_adsb_release_and_owns_selected_radio(self):
+        import threading
+        from usb_radios import acquire_home_receiver
+        key=self.devices[0]['id'];self.broker.acquire('adsb',key)
+        stopped=[]
+        def stop():
+            stopped.append('adsb');self.broker.release('adsb')
+        self.broker.register('adsb',stop)
+        result=acquire_home_receiver(self.broker,self.devices,key,threading.Event())
+        self.assertEqual(result['id'],key);self.assertEqual(stopped,['adsb'])
+        self.assertEqual(self.broker.snapshot()[key],'home')
+
+    def test_route_stops_old_service_before_assigning_and_starting_new_service(self):
+        key=self.devices[0]['id'];self.broker.acquire('adsb',key);events=[]
+        self.broker.register('adsb',lambda:(events.append('stop'),self.broker.release('adsb')))
+        hub=SimpleNamespace(sessions={'aprs':Mock()},sensor_receivers={},control=lambda *a,**k:events.append((a,k)))
+        service=RadioManagement(self.registry,self.broker,vhf=hub)
+        service.route(key,'aprs',self.devices)
+        self.assertEqual(events,['stop',(('aprs','configure'),{'selection':key}),(('aprs','start'),{})])
+
+    def test_am_fm_service_choices_use_home_with_explicit_demodulator(self):
+        start=Mock();service=RadioManagement(self.registry,self.broker,home_request=start)
+        self.assertIn(('home_am','AM Radio'),service.services())
+        self.assertIn(('home_fm','FM Radio'),service.services())
+        for owner,mode in [('home_am','AM'),('home_fm','WFM')]:
+            service.route(self.devices[0]['id'],owner,self.devices)
+            start.assert_called_with(self.devices[0]['id'],mode)
+
+    def test_invalid_route_never_stops_current_owner(self):
+        key=self.devices[0]['id'];self.broker.acquire('adsb',key);stop=Mock();self.broker.register('adsb',stop)
+        service=RadioManagement(self.registry,self.broker)
+        with self.assertRaisesRegex(ValueError,'Unknown'):service.route(key,'unknown',self.devices)
+        stop.assert_not_called();self.assertEqual(self.broker.snapshot()[key],'adsb')
+
+    def test_home_selection_queues_ui_start_after_releasing_decoder(self):
+        key=self.devices[0]['id'];self.broker.acquire('adsb',key)
+        self.broker.register('adsb',lambda:self.broker.release('adsb'))
+        start=Mock();service=RadioManagement(self.registry,self.broker,home_request=start)
+        service.route(key,'home',self.devices)
+        start.assert_called_once_with(key);self.assertEqual(self.broker.snapshot(),{})
+
+    def test_service_column_opens_editable_service_selector(self):
+        from dongle_workspace import DongleWorkspace
+        ui=Mock();ui.fit_station_text.side_effect=lambda cache,text,*args:text
+        ui.contains.side_effect=lambda b,x,y:b[0]<=x<=b[2] and b[1]<=y<=b[3]
+        manager=SimpleNamespace(devices=self.devices,broker=self.broker)
+        service=RadioManagement(self.registry,self.broker,home_request=Mock())
+        with patch('dongle_workspace.REGISTRY',self.registry),patch('usb_radios.SERVICE',service):
+            w=DongleWorkspace(ui,manager);w.show();w.draw(Mock())
+            box=next(b for b,a in w.actions if a[0]=='select_service')
+            w.tap(box[0]+10,box[1]+10);self.assertTrue(w.routing)
+            w.draw(Mock());self.assertIn(('service','home'),[a for b,a in w.actions])
+
     def test_web_management_and_assets_share_the_same_live_inventory(self):
         from adsb_monitor import ADSBManager
         from urllib.request import urlopen

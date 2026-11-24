@@ -9,7 +9,7 @@ from theme_system import (BUILTIN_THEMES, BUILTIN_THEME_IDS, DEFAULT_THEME, COLO
                           TEXT_SCALE_MAX, SLIDER_STYLES, is_builtin_theme_id)
 
 COLOR_GROUPS = (
-    ("BASE", ("background", "sidebar", "sidebar_header", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
+    ("BASE", ("background", "modal_backdrop", "sidebar", "sidebar_header", "section_surface", "section_border", "divider", "top_instrument_band", "sidebar_rule", "focus")),
     ("TEXT", ("text", "secondary_text", "section_heading", "sidebar_title", "frequency", "focus_text", "untested_text")),
     ("BUTTON", ("surface", "border", "active_surface", "active_border", "selected_surface", "selected_border", "pressed_surface", "pressed_border")),
     ("STATES", ("ready", "waiting", "danger", "danger_border", "untested", "notice")),
@@ -124,7 +124,8 @@ def theme_screen_boxes(editor, *, ignore_overlay=False):
             x = 36+i*176
             boxes['font:'+identifier] = (x,508,x+160,572)
         return {key: (a + dx, b, c + dx, d) for key, (a,b,c,d) in boxes.items()}
-    boxes = {'back': (828, 634, 988, 698),
+    boxes = {'close': (884, 230, 988, 262),
+             'back': (828, 634, 988, 698),
              'theme_previous': (36, 634, 204, 698),
              'theme_next': (220, 634, 388, 698)}
     items = editor.themes[editor.page * CARDS_PER_PAGE:(editor.page + 1) * CARDS_PER_PAGE]
@@ -433,7 +434,7 @@ class ThemeEditor:
             else:
                 self.draft[field+'_rgb'] = [0,0,0] if choice == 'black' else [255,255,255]
                 self._rebuild_colors()
-        elif action == 'back':
+        elif action in ('back', 'close'):
             self.cancel()
         elif action == 'choose':
             self.back()

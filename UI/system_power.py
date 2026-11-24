@@ -60,7 +60,7 @@ class PowerController:
 
 def boxes(ui):
     back = ui.lcd_drawer_back_box()
-    return {'back': back, 'confirm': (back[0], back[1] - 76, back[2], back[1] - 8)}
+    return {'back': back, 'confirm': (32, 304, 368, 371)}
 
 
 def action_at(controller, ui, x, y):
@@ -88,9 +88,15 @@ def draw(controller, ui, cache):
     if message:
         import textwrap
         for i, line in enumerate(textwrap.wrap(message, 68)[:4]):
-            ui.draw_text(cache, 32, 330 + i * 28, line, p.text, 20, False, False, 'lm', family=ui.APP_UI_STYLE.button.font_family)
+            ui.draw_text(cache, 32, 464 + i * 28, line, p.text, 20, False, False, 'lm', family=ui.APP_UI_STYLE.button.font_family)
     b = boxes(ui)
-    ui.draw_styled_two_line_button(cache, b['confirm'], ACTIONS.get(controller.action, 'POWER'),
-                                  'PLEASE WAIT' if controller.busy else 'CONFIRM',
-                                  enabled=controller.available and not controller.busy)
+    enabled = controller.available and not controller.busy
+    visual = ui.draw_styled_button_frame(
+        b['confirm'], danger=enabled,
+        pressed=enabled and ui.ui_button_pressed(b['confirm']))
+    caption = 'PLEASE WAIT' if controller.busy else 'CONFIRM ' + ACTIONS.get(controller.action, 'POWER')
+    ui.draw_text(cache, (b['confirm'][0] + b['confirm'][2]) / 2,
+                 (b['confirm'][1] + b['confirm'][3]) / 2, caption,
+                 visual.text if enabled else p.untested_text, 19, True, False, 'cm',
+                 family=ui.APP_UI_STYLE.button.font_family)
     ui.draw_styled_two_line_button(cache, b['back'], 'BACK', '', enabled=not controller.busy)

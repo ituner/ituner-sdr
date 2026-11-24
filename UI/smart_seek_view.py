@@ -837,7 +837,7 @@ class SmartSeekView:
         ui = self.ui
         palette = ui.APP_UI_STYLE.palette
         self.actions = []
-        ui.draw_logical_rect(0,0,ui.LOGICAL_W,ui.LOGICAL_H,(*palette.background[:3],210))
+        ui.draw_modal_backdrop()
         left,top = (ui.LOGICAL_W-680)/2,(ui.LOGICAL_H-280)/2
         right,bottom = left+680,top+280
         ui.draw_styled_button_frame((left,top,right,bottom))

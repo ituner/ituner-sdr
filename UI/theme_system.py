@@ -66,8 +66,9 @@ DEFAULT_THEME = {
 
 
 def invert_colors(colors):
-    """Invert RGB while retaining every color's original transparency."""
-    return {name: [255 - channel for channel in value[:3]] + list(value[3:])
+    """Invert UI RGB, retaining transparency and the dark modal backdrop."""
+    return {name: list(value) if name == "modal_backdrop" else
+            [255 - channel for channel in value[:3]] + list(value[3:])
             for name, value in colors.items()}
 
 

@@ -4,6 +4,26 @@ from unittest.mock import Mock, patch
 import kiwi_gl_display as ui
 
 class USBHomeStreamTests(unittest.TestCase):
+    def test_failed_usb_open_releases_lease_without_resuming_kiwi(self):
+        import threading
+        from sdr_broker import ReceiverBroker
+        state=ui.SharedState('http://example.test:8073',1104.7,7,-95.,142,245,4,'am',True)
+        state.set_external_audio(True);state.set_external_waterfall(True)
+        with patch.object(ui.RTLSDRLab,'probe'):
+            receiver=ui.RTLSDRLab(Mock(),state,Mock())
+        receiver.receiver_broker=ReceiverBroker()
+        receiver.receiver_devices=lambda:[dict(id='serial:abc',serial='abc',persistent=True,index=0)]
+        receiver._restore_view=(1104.7,7)
+        receiver._remembered_usb_receiver=dict(source_id=receiver.source_id,freq_khz=100100,zoom=8,preset_index=0)
+        library=Mock();library.rtlsdr_get_index_by_serial.return_value=0;library.rtlsdr_open.return_value=-1
+        with patch.object(receiver,'_librtlsdr',return_value=library),patch.object(ui,'configure_realtime_audio_path'),patch.object(ui,'release_realtime_audio_thread'),patch('builtins.print'):
+            receiver._iq_worker('Test',12000)
+        self.assertEqual(receiver.snapshot()['status'],'ERROR')
+        self.assertTrue(state.external_audio_snapshot());self.assertTrue(state.external_waterfall_snapshot())
+        self.assertEqual(receiver.receiver_broker.snapshot(),{})
+        receiver.stop()
+        self.assertFalse(state.external_audio_snapshot());self.assertFalse(state.external_waterfall_snapshot())
+
     def test_home_fm_tap_selects_real_usb_demodulator(self):
         state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
         with patch.object(ui.RTLSDRLab,'probe'):

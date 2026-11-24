@@ -2465,7 +2465,7 @@ def draw_dual_vfo_mode_picker(text_cache, target_vfo, active_mode):
     boxes = dual_vfo_mode_picker_boxes()
     x0, y0, x1, y1 = boxes["panel"]
     accent = themed_instrument_color("ready", (90, 222, 245)) if target_vfo == "A" else themed_instrument_color("waiting", (242, 181, 92))
-    draw_logical_rect(0, 58, LOGICAL_W, LOGICAL_H, (0, 0, 0, 128))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (7, 18, 25, 244)))
     draw_logical_line(x0, y0, x1, y0, (*accent, 220), 2)
     draw_section_divider(x0, y1, x1)
@@ -2499,7 +2499,7 @@ def dual_vfo_receiver_picker_boxes():
 def draw_dual_vfo_receiver_picker(text_cache, target_vfo, stations, page):
     boxes = dual_vfo_receiver_picker_boxes()
     x0, y0, x1, y1 = boxes["panel"]
-    draw_logical_rect(0, 0, rf_canvas_width(), LOGICAL_H, (0, 4, 8, 188))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (8, 18, 25, 250))
     draw_logical_line(x0, y0, x1, y0, (111, 214, 210, 220), 2)
     draw_text(text_cache, x0 + 24, y0 + 28, f"SELECT RECEIVER FOR VFO {target_vfo}", themed_instrument_color("text", (230, 245, 246)), 22, True, False, "lm", family="Liberation Sans")
@@ -4182,7 +4182,17 @@ def frequency_entry_layout():
     return panel, entry, commands, tuple(keys)
 
 
+def frequency_unit_boxes(legacy=False):
+    top = 592 if legacy else 64
+    left, right = LCD_NAV_X0 + 10, LOGICAL_W - 10
+    middle = (left + right) / 2
+    return (("kHz", (left, top, middle - 4, top + 48)),
+            ("MHz", (middle + 4, top, right, top + 48)))
+
+
 def frequency_entry_action_at(x, y):
+    for unit, box in frequency_unit_boxes(legacy=True):
+        if contains(box, x, y):return "unit_" + unit
     layout = frequency_entry_layout()
     if layout is None:
         return None
@@ -4196,7 +4206,7 @@ def frequency_entry_action_at(x, y):
     return None
 
 
-FREQUENCY_DRAWER_READOUT_SIZE = 72
+FREQUENCY_DRAWER_READOUT_SIZE = 36
 FREQUENCY_KEY_DIGIT_SIZE = 26
 FREQUENCY_KEY_COMMAND_SIZE = 20
 FREQUENCY_SMALL_BUTTON_W = 55
@@ -4230,7 +4240,7 @@ def frequency_drawer_boxes():
     step_heading_top = keypad_bottom + 16
     return {
         "panel": (x0, 0, x1, lcd_rail_bottom()),
-        "readout": (left, 76, right, readout_bottom),
+        "readout": (left, 120, right, readout_bottom),
         "down": (left, arrow_top, left + arrow, arrow_bottom),
         "up": (right - arrow, arrow_top, right, arrow_bottom),
         "step_heading": (left, step_heading_top, right, step_heading_top + 24),
@@ -4276,6 +4286,8 @@ def frequency_drawer_key_boxes():
 
 
 def frequency_drawer_action_at(x, y, receiver_type="kiwi"):
+    for unit, box in frequency_unit_boxes():
+        if contains(box, x, y):return "unit_" + unit
     boxes = frequency_drawer_boxes()
     for action in ("down", "up", "close"):
         if contains(boxes[action], x, y):
@@ -4320,7 +4332,7 @@ def edit_frequency_entry(value, key, replace_on_digit=False):
 
 
 def frequency_entry_preview_khz(value, tuned_khz, replace_on_digit,
-                                max_frequency_khz=TUNING_MAX_KHZ):
+                                max_frequency_khz=TUNING_MAX_KHZ, unit=None):
     """Show the keypad's pending value in the large readout before OK tunes."""
     if replace_on_digit:
         return tuned_khz
@@ -4328,6 +4340,7 @@ def frequency_entry_preview_khz(value, tuned_khz, replace_on_digit,
         numeric = float(str(value or "0"))
     except ValueError:
         return 0.0
+    if unit is not None:return numeric * (1000.0 if unit == "MHz" else 1.0)
     return numeric * 1000.0 if numeric <= max_frequency_khz / 1000.0 else numeric
 
 
@@ -4420,6 +4433,27 @@ def configured_tune_step_hz(receiver_type, kiwi_step_hz, fmdx_step_hz):
     if receiver_type == "fmdx":
         return fmdx_step_hz if fmdx_step_hz in FMDX_TUNE_STEPS_HZ else 100_000
     return max(1, int(kiwi_step_hz))
+
+
+def format_frequency_entry(frequency_khz, unit):
+    return f"{frequency_khz / (1000.0 if unit == 'MHz' else 1.0):.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def convert_frequency_entry(value, old_unit, new_unit):
+    try:
+        number = float(value)
+    except (ValueError, TypeError):
+        return value
+    if not math.isfinite(number):return value
+    return format_frequency_entry(number * (1000.0 if old_unit == "MHz" else 1.0), new_unit)
+
+
+def parse_frequency_entry(value, unit, max_frequency_khz=TUNING_MAX_KHZ):
+    try:
+        frequency_khz = float(value.strip()) * (1000.0 if unit == "MHz" else 1.0)
+    except (ValueError, TypeError):
+        return None
+    return frequency_khz if math.isfinite(frequency_khz) and 0 <= frequency_khz <= max_frequency_khz else None
 
 
 def parse_frequency_entry_mhz(value, max_frequency_khz=TUNING_MAX_KHZ):
@@ -9167,13 +9201,12 @@ def draw_scope_height_grip(text_cache, scope_bottom_y, scope_height):
 def draw_muted_waterfall_badge(text_cache, *, touch_enabled=True):
     """Keep an intentional mute obvious without obscuring live RF detail."""
     box = mute_waterfall_box()
-    x0, y0, _x1, _y1 = box
+    x0, y0, x1, _y1 = box
     red = themed_instrument_color("danger_border", MUTE_ACCENT)[:3]
     draw_analog_osd_panel(box, 246, red, (8, 0, 0))
     draw_text(text_cache, x0 + 18, y0 + 22, "AUDIO MUTED", red, 28, True, True, "lm")
-    draw_text(text_cache, x0 + 18, y0 + 64,
-              "TAP TO UNMUTE" if touch_enabled else "PRESS KNOB TO UNMUTE",
-              red, 28 if touch_enabled else 20, True, True, "lm")
+    draw_text(text_cache, x1 - 18, y0 + 22, "0%", red, 28, True, True, "rm")
+    draw_logical_line(x0 + 24, y0 + 81, x1 - 24, y0 + 81, (*red, 86), 3)
 
 
 def draw_stream_waterfall_button(text_cache, stream_paused):
@@ -9779,6 +9812,7 @@ def fmdx_shared_prompt_action_at(x, y):
 
 def draw_fmdx_shared_prompt(text_cache):
     """Draw the modal that must be accepted before the shared tuner moves."""
+    draw_modal_backdrop()
     x0, y0, x1, y1 = fmdx_shared_prompt_boxes()["panel"]
     draw_logical_rect(x0, y0, x1, y1, (14, 20, 26, 250))
     draw_logical_line(x0, y0, x1, y0, (222, 170, 84, 235), 1)
@@ -10026,8 +10060,6 @@ def draw_radio_setup_panel(
                 text_cache, step_hz, fmdx_status, fmdx_stations,
                 fmdx_scan_active, fmdx_shared_control, reveal_y,
             )
-            if fmdx_shared_prompt:
-                draw_fmdx_shared_prompt(text_cache)
             return
         for family, modes, box in radio_mode_layout(mode_families):
             if reveal_y >= box[3]:
@@ -10052,7 +10084,7 @@ def draw_radio_setup_panel(
         draw_filter_width_presets(text_cache, tuple(p for p in presets if p[2][3] <= reveal_y), high_cut-low_cut)
         return
 
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 242))
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
@@ -12323,7 +12355,7 @@ def draw_audio_panel(text_cache, volume, controls, low_cut, high_cut, output_ava
         draw_lcd_audio_drawer(text_cache, volume, controls, low_cut, high_cut, output_available, radio_mode, audio_backend)
         return
     x0, y0, x1, y1 = AUDIO_PANEL_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
@@ -12461,7 +12493,19 @@ def font_lab_sample_size(text_cache, family, bold):
     return FONT_LAB_SIZE_CACHE[cache_key]
 
 
+def rtl_lab_service_box():
+    return (LCD_NAV_X0 + 10, 368, LOGICAL_W - 10, 432) if LCD_800_MODE else (42, 290, 474, 338)
+
+
+def rtl_lab_mode_boxes():
+    return (("AM", (24, 448, 496, 512)), ("WFM", (512, 448, 1000, 512))) if LCD_800_MODE else ()
+
+
 def rtl_lab_option_at(x, y):
+    for mode, box in rtl_lab_mode_boxes():
+        if contains(box, x, y):return "mode:" + mode
+    if contains(rtl_lab_service_box(), x, y):
+        return "service"
     if contains(RTL_LAB_PROBE_BOX, x, y):
         return "source"
     if contains(RTL_LAB_PRESET_BOX, x, y):
@@ -12498,7 +12542,7 @@ def draw_tests_panel(text_cache, pattern_index, sweep, openwebrx_active=False):
                 accent=(255, 184, 83, 220), title_size=12, detail_size=11,
             )
         return
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
@@ -12585,6 +12629,9 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
     name, frequency_hz, mode, _rate = snapshot["preset"]
     running = snapshot["running"]
     status = snapshot["status"]
+    if running:
+        frequency_hz = rtl_lab.state.snapshot()[1] * 1000
+        name = "LOCAL " + rtl_lab.demod_snapshot()[0].upper()
     if LCD_800_MODE:
         palette = APP_UI_STYLE.palette
         source_label = snapshot["capabilities"].label
@@ -12597,7 +12644,7 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
                                   palette.section_surface, palette.border, 1)
         draw_text(text_cache, 48, 176, name, palette.section_heading, 22, True, False, "lm", family="Liberation Sans")
         draw_text(text_cache, 48, 238, f"{frequency_hz / 1e6:.3f} MHz", palette.text, 38, True, False, "lm", family="Liberation Sans")
-        draw_text(text_cache, 48, 306, "LOCAL AUDIO ACTIVE" if running else "STARTS IN AM", palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
+        draw_text(text_cache, 48, 306, ("LOCAL AUDIO · " + rtl_lab.demod_snapshot()[0].upper()) if running else "CHOOSE AM OR FM RADIO", palette.secondary_text, 20, False, False, "lm", family="Liberation Sans")
         tuner = snapshot["tuner"] or "Tuner information unavailable"
         tuner = fit_station_text(text_cache, tuner, 976, 18, False, False, family="Liberation Sans")
         draw_text(text_cache, 24, 398, tuner, palette.secondary_text, 18, False, False, "lm", family="Liberation Sans")
@@ -12606,6 +12653,11 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
         draw_tests_button(text_cache, RTL_LAB_RUN_BOX,
                           "STOP LOCAL AUDIO" if running else "START LOCAL AUDIO",
                           "LISTEN ON THIS DEVICE", running)
+        draw_tests_button(text_cache, rtl_lab_service_box(), "RECEIVING SERVICE", "USB-RADIOS")
+        for mode, box in rtl_lab_mode_boxes():
+            draw_tests_button(text_cache, box, "AM RADIO" if mode == "AM" else "FM RADIO",
+                              "AMPLITUDE MODULATION" if mode == "AM" else "BROADCAST FM",
+                              running and rtl_lab.demod_snapshot()[0] == ("am" if mode == "AM" else "wbfm"))
         draw_logical_rect(0, STATUS_TOP, 1024, 800, palette.footer_background)
         detail = fit_station_text(text_cache, f"{status} · {snapshot['detail']}", 988, 18, True, False, family="Liberation Sans")
         draw_text(text_cache, 18, 739, detail, palette.footer_primary, 18, True, False, "lm", family="Liberation Sans")
@@ -12617,7 +12669,7 @@ def draw_rtl_lab_panel(text_cache, rtl_lab):
         "NOT FOUND": (244, 156, 110), "PROBE ERROR": (244, 156, 110),
         "ERROR": (244, 132, 111),
     }.get(status, (184, 207, 210))
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 112))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 17, 24, 244))
     draw_logical_line(x0, y0, x1, y0, (102, 220, 183, 158), 1)
     draw_logical_line(x0, y1, x1, y1, (82, 151, 158, 126), 1)
@@ -15290,7 +15342,7 @@ def draw_dj_tune_panel(text_cache, origin_khz, current_khz, step_hz, range_khz, 
     """Finger-driven, detented tune laboratory that always has an origin."""
     x0, y0, x1, y1 = DJ_PANEL_BOX
     tx0, ty0, tx1, ty1 = DJ_TRACK_BOX
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 234))
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
@@ -15369,7 +15421,7 @@ def draw_display_setup_panel(text_cache, floor, ceiling, speed, spectrum_auto, p
             draw_lcd_audio_tile(text_cache, DISPLAY_ADVANCED_BOX, "ADVANCED", "SETTINGS")
         draw_sidebar_header(text_cache, "DISPLAY · ADVANCED" if DISPLAY_ADVANCED_OPEN else "DISPLAY")
         return
-    draw_logical_rect(0, sdr_ui.TOP_H, LOGICAL_W, LOGICAL_H, (0, 0, 0, 92))
+    draw_modal_backdrop()
     draw_logical_rect(x0, y0, x1, y1, (7, 14, 20, 228))
     draw_section_divider(x0, y0, x1)
     draw_section_divider(x0, y1, x1)
@@ -15521,6 +15573,7 @@ def draw_filter_overlay(text_cache, span_khz, low_cut, high_cut, y0, y1,
 
 
 def draw_filter_setup_panel(text_cache, mode, low_cut, high_cut, custom_width=False):
+    draw_modal_backdrop()
     x0, y0, x1, y1 = FILTER_PANEL_BOX
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 174))
     draw_section_divider(x0, y0, x1)
@@ -16199,6 +16252,7 @@ def menu_icon_texture(text_cache, kind, label, width=132, height=112, muted=Fals
 
 
 def draw_main_menu(text_cache, scroll):
+    draw_modal_backdrop()
     x0, y0, x1, y1 = MENU_BOX
     # Let the waterfall remain legible behind a single calm, temporary veil.
     draw_logical_rect(x0, y0, x1, y1, (5, 12, 18, 222))
@@ -16574,9 +16628,15 @@ def band_navigation_action_at(x, y):
     return None
 
 
+def draw_modal_backdrop():
+    """Dim blocked controls with one inexpensive, theme-owned GL fill."""
+    draw_logical_rect(0, 0, LOGICAL_W, LOGICAL_H, APP_UI_STYLE.palette.modal_backdrop)
+
+
 def draw_band_navigation(text_cache, freq_khz, mode, band_counts=None, tuning_bounds=None):
     """Band destinations with recent, receiver-scoped Smart Scan counts."""
     boxes = band_navigation_layout()
+    draw_modal_backdrop()
     x0, y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, y0, x1, y1, (5, 13, 19, 241))
     draw_logical_line(x0 + 14, y0, x1 - 14, y0, (143, 190, 198, 176), 1)
@@ -18301,12 +18361,13 @@ def draw_station_search(text_cache, all_stations, query, sort_mode, keyboard_mod
                         rail_detail="RECEIVERS")
 
 
-def draw_frequency_keypad(text_cache, value, invalid=False):
+def draw_frequency_keypad(text_cache, value, invalid=False, unit="MHz"):
     """Render a focused frequency-entry workspace over the live waterfall."""
     layout = frequency_entry_layout()
     if layout is None:
         return
     panel, entry, commands, keys = layout
+    draw_modal_backdrop()
     x0, y0, x1, y1 = panel
     draw_logical_rect(x0, y0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_logical_line(x0, y0, x0, y1, APP_UI_STYLE.palette.sidebar_rule, 1)
@@ -18333,6 +18394,8 @@ def draw_frequency_keypad(text_cache, value, invalid=False):
     def draw_key(box, label, size, active=False):
         draw_styled_text_button(text_cache, box, label, size=size, active=active)
 
+    for choice, box in frequency_unit_boxes(legacy=True):
+        draw_key(box, choice, 20, active=choice == unit)
     for label, box in commands:
         if label == "CANCEL":
             continue  # Drawn as the shared bottom return bar below.
@@ -18413,12 +18476,14 @@ def draw_optical_tuning_controls(text_cache, mode, sensitivity, effective_hz, fm
 def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=None,
                           receiver_type="kiwi", entry_value="", entry_invalid=False,
                           tuning_allowed=True, entry_replace_on_digit=True,
-                          max_frequency_khz=TUNING_MAX_KHZ):
+                          max_frequency_khz=TUNING_MAX_KHZ, entry_unit="MHz"):
     """Draw a single-purpose frequency rail for touch and encoder use."""
     boxes = frequency_drawer_boxes()
     x0, _y0, x1, y1 = boxes["panel"]
     draw_logical_rect(x0, 0, x1, y1, APP_UI_STYLE.palette.sidebar)
     draw_sidebar_header(text_cache, "FREQUENCY")
+    for unit, box in frequency_unit_boxes():
+        draw_styled_text_button(text_cache, box, unit, size=20, active=unit == entry_unit)
 
     rx0, ry0, rx1, ry1 = boxes["readout"]
     draw_logical_rect(
@@ -18429,13 +18494,13 @@ def draw_frequency_drawer(text_cache, freq_khz, step_hz, font_family, pressed=No
     # Retain the shared frequency face/color, with larger digits in the
     # keypad rail where the operator is reviewing an entered frequency.
     readout_khz = frequency_entry_preview_khz(
-        entry_value, freq_khz, entry_replace_on_digit, max_frequency_khz,
+        entry_value, freq_khz, entry_replace_on_digit, max_frequency_khz, entry_unit,
     )
     draw_big_frequency(
         text_cache, readout_khz,
         rx1 - 9, (ry0 + ry1) / 2, rx1 - rx0 - 18,
         family=font_family, size=FREQUENCY_DRAWER_READOUT_SIZE,
-        display_text=(entry_value or "0") if not entry_replace_on_digit else None,
+        display_text=(entry_value or "0") if not entry_replace_on_digit else format_frequency_entry(freq_khz, entry_unit),
     )
 
     arrow_style = replace(APP_UI_STYLE.button, label_size=18)
@@ -19652,6 +19717,7 @@ def draw_asr_panel(text_cache, engine, caption_mode="original", moon_language_me
                       title, visual.text, 13, True, False, "cm", family="Liberation Sans")
         draw_radio_close_button(text_cache, lcd_drawer_back_box())
         return
+    draw_modal_backdrop()
     if moon_language_menu:
         x0, y0, x1, y1 = ASR_MOON_LANGUAGE_PANEL_BOX
         draw_logical_rect(x0, y0, x1, y1, themed_instrument_color("section_surface", (5, 13, 18, 232)))
@@ -20767,6 +20833,9 @@ class RTLSDRLab:
         self.line_queue = line_queue
         self.navigation_parent = "apps"
         self.source_id = RTL_SDR_CAPABILITIES.source_id
+        self.receiver_selection = "auto"
+        self.receiver_broker = None
+        self.receiver_devices = lambda: []
         self.capabilities = RTL_SDR_CAPABILITIES
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
@@ -20887,7 +20956,7 @@ class RTLSDRLab:
                 _server, frequency, zoom, *_rest = self.state.snapshot()
                 self._remembered_usb_receiver = dict(
                     source_id=self.source_id, freq_khz=frequency, zoom=zoom,
-                    preset_index=self.preset_indices[self.source_id])
+                    preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection)
             return dict(self._remembered_usb_receiver)
 
     @staticmethod
@@ -20902,13 +20971,15 @@ class RTLSDRLab:
         except (KeyError, TypeError, ValueError, OverflowError):return None
         if not math.isfinite(frequency) or not LOCAL_RECEIVER_CAPABILITIES[source].supports_frequency(frequency):return None
         return dict(source_id=source, freq_khz=frequency,
-                    zoom=int(clamp(zoom, 0, kiwi.DISPLAY_MAX_ZOOM)), preset_index=max(0, preset))
+                    zoom=int(clamp(zoom, 0, kiwi.DISPLAY_MAX_ZOOM)), preset_index=max(0, preset),
+                    selection=str(value.get("selection") or "auto"))
 
     def restore_receiver(self, saved):
         with self.lock:
             if self.probing or not self.source_inventory.get(saved['source_id'], {}).get('present'):
                 return False
             if not self.select_source(saved['source_id']):return False
+            self.receiver_selection = saved.get("selection", "auto")
             self.preset_indices[self.source_id] = saved['preset_index'] % len(self._presets())
         return self.start(saved['freq_khz'], saved['zoom'])
 
@@ -21096,7 +21167,8 @@ class RTLSDRLab:
             if self.thread and self.thread.is_alive():
                 return True
             _server, prior_frequency, prior_zoom, _smeter, _generation, _server_generation = self.state.snapshot()
-            self._restore_view = (prior_frequency, prior_zoom)
+            if self._restore_view is None:
+                self._restore_view = (prior_frequency, prior_zoom)
             bounds_low, bounds_high = self.tuning_bounds()
             target_frequency = clamp(float(frequency_khz), bounds_low, bounds_high)
             if not self.capabilities.supports_frequency(target_frequency):
@@ -21126,7 +21198,7 @@ class RTLSDRLab:
             worker_name = "airspy-hf-lab-iq" if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else "rtl-sdr-lab-iq"
             self._remembered_usb_receiver = dict(
                 source_id=self.source_id, freq_khz=target_frequency, zoom=target_zoom,
-                preset_index=self.preset_indices[self.source_id])
+                preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection)
             self.thread = threading.Thread(target=worker, args=(name, rate), name=worker_name, daemon=True)
             self.thread.start()
         return True
@@ -21482,6 +21554,13 @@ class RTLSDRLab:
         player = None
         waterfall_thread = None
         try:
+            device_index = 0
+            selected_device = None
+            if self.receiver_broker is not None:
+                from usb_radios import acquire_home_receiver
+                selected_device = acquire_home_receiver(self.receiver_broker, self.receiver_devices(), self.receiver_selection, self.stop_event)
+                self.receiver_selection = selected_device['id']
+                device_index = selected_device['index']
             configure_realtime_audio_path(
                 announce=True,
                 priority=AUDIO_INGRESS_RT_PRIORITY,
@@ -21489,7 +21568,12 @@ class RTLSDRLab:
             )
             library = self._librtlsdr()
             device_ref = ctypes.c_void_p()
-            if library.rtlsdr_open(ctypes.byref(device_ref), 0) < 0:
+            if selected_device and selected_device.get('persistent') and selected_device.get('serial'):
+                library.rtlsdr_get_index_by_serial.argtypes = (ctypes.c_char_p,)
+                library.rtlsdr_get_index_by_serial.restype = ctypes.c_int
+                device_index = library.rtlsdr_get_index_by_serial(selected_device['serial'].encode())
+                if device_index < 0:raise RuntimeError('Selected USB receiver is disconnected')
+            if library.rtlsdr_open(ctypes.byref(device_ref), device_index) < 0:
                 raise RuntimeError("RTL-SDR unavailable: stop ADS-B or another USB user, then retry")
             device = device_ref
             if library.rtlsdr_set_sample_rate(device, RTL_IQ_SAMPLE_RATE) < 0:
@@ -21607,21 +21691,28 @@ class RTLSDRLab:
                     self._librtlsdr().rtlsdr_close(device)
                 except Exception:
                     pass
+            if self.receiver_broker is not None:
+                self.receiver_broker.release('home')
             with self.lock:
                 self.remembered_receiver()
-                restore_view, self._restore_view = self._restore_view, None
-            if restore_view is not None:
-                # Return Kiwi to its last genuine radio state before waking
-                # its transports. This avoids one invalid VHF tune on resume.
-                self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
-            self.state.set_external_audio(False)
-            self.state.set_external_waterfall(False)
+            # An unsuccessful explicit USB selection must not silently resume
+            # the old network receiver. Stop/Back performs that transition.
+            if self.stop_event.is_set():
+                self._restore_network_view()
             with self.lock:
                 self.player = None
                 if self.stop_event.is_set():
                     self.status = "READY" if self.present else "NOT FOUND"
                     self.detail = "Local I/Q stopped; Kiwi audio and waterfall resumed."
             release_realtime_audio_thread()
+
+    def _restore_network_view(self):
+        with self.lock:
+            restore_view, self._restore_view = self._restore_view, None
+        if restore_view is not None:
+            self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
+        self.state.set_external_audio(False)
+        self.state.set_external_waterfall(False)
 
     def stop(self):
         with self.lock:
@@ -21632,8 +21723,7 @@ class RTLSDRLab:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)
         if thread is None or not thread.is_alive():
-            self.state.set_external_audio(False)
-            self.state.set_external_waterfall(False)
+            self._restore_network_view()
 
 
 RC28_VENDOR_ID = "00000C26"
@@ -25451,7 +25541,15 @@ def main():
     usb_notices=dongle_notice.USBNotices(adsb_manager.scanner,REGISTRY,receiver_broker,(adsb_manager,vhf_hub)).start()
     dongle_notice.SERVICE=usb_notices
     import usb_radios
-    usb_radios.SERVICE=usb_radios.RadioManagement(REGISTRY,receiver_broker,adsb_manager,vhf_hub)
+    usb_route_requests = queue.SimpleQueue()
+    rtl_lab.receiver_broker = receiver_broker
+    rtl_lab.receiver_devices = lambda: list(adsb_manager.devices)
+    def stop_home_receiver():
+        rtl_lab.stop()
+        usb_route_requests.put(('save', None))
+    receiver_broker.register('home', stop_home_receiver)
+    usb_radios.SERVICE=usb_radios.RadioManagement(REGISTRY,receiver_broker,adsb_manager,vhf_hub,
+                                                home=rtl_lab,home_request=lambda key,mode=None:usb_route_requests.put(('home',(key,mode))))
     usb_popup=USBNoticePopup(sys.modules[__name__],usb_notices)
     usb_notice_touch=NoticeTouchCapture()
     usb_notice_desktop=None
@@ -25591,8 +25689,10 @@ def main():
     # pressed tile lit briefly, while a held press stays lit for the gesture.
     zoom_flash_gesture = None
     zoom_flash_until = 0.0
+    frequency_entry_unit = remembered_preferences.get("frequency_entry_unit", "MHz")
+    if frequency_entry_unit not in ("kHz", "MHz"):frequency_entry_unit = "MHz"
     frequency_entry_value = (
-        f"{args.freq_khz / 1000.0:.6f}"
+        format_frequency_entry(args.freq_khz, frequency_entry_unit)
         if frequency_entry_open or frequency_drawer_open else ""
     )
     frequency_entry_invalid = False
@@ -25703,6 +25803,7 @@ def main():
         audio_controls, _audio_generation = state.audio_controls_snapshot()
         return {
             "usb_receiver": pending_usb_restore or rtl_lab.remembered_receiver(),
+            "frequency_entry_unit": frequency_entry_unit,
             "audio": {
                 "squelch_level": audio_controls["squelch_level"],
                 "squelch_tail": audio_controls["squelch_tail"],
@@ -26093,7 +26194,7 @@ def main():
             anim_start = 0.0
             apply_band_default(target_khz)
             remember_current_view()
-        frequency_entry_value = f"{target_khz / 1000.0:.6f}"
+        frequency_entry_value = format_frequency_entry(target_khz, frequency_entry_unit)
         frequency_entry_replace_on_digit = True
         frequency_entry_invalid = False
         wake_controls()
@@ -27356,6 +27457,22 @@ def main():
         return not (zoom_blocking_screen_open(include_home_overlays=include_home_overlays) or picker_open or seek_view.open
                     or adsb_workspace.open or vhf_workspace.open)
 
+    def muted_rf_notice_visible():
+        """Keep mute visible over live RF, including drawers and modal previews."""
+        if dual_vfo_open:return True
+        if not (waterfall_visible or (spectrum_enabled and spectrum_h > 0)):return False
+        if theme_editor.open:return True  # The live HOME preview still shows RF.
+        return not (
+            picker_open or network_panel_open or network_password_open
+            or interface_settings.open or shared_keyboard_open()
+            or compact_font_review_open or font_lab_open or rtl_lab_open
+            or wspr_panel_open or wspr_identity_open or web_apps.blocks_touch
+            or adsb_workspace.open or vhf_workspace.open or seek_view.open
+            or application_update.open or power_control.open
+            or audio_test_workspace.open or station_workspace.open or usb_radios_workspace.open
+            or cw_workspace.open or qrss_workspace.open or hell_workspace.open or sstv_workspace.open
+        )
+
     def home_collapse_tab_visible():
         """Only Home owns this shortcut; drawers and decoder workspaces do not."""
         return LCD_800_MODE and not home_rail_hidden() and home_screen_visible(include_home_overlays=False)
@@ -27682,6 +27799,17 @@ def main():
             pending_usb_restore = None
             write_remembered_view(save_current_frequency=True, force=True)
 
+    def select_usb_listening_mode(mode):
+        nonlocal radio_mode, manual_radio_mode
+        if not rtl_lab.is_running():start_usb_receiver()
+        if mode == "WFM" and not 87500 <= state.snapshot()[1] <= 108000:
+            state.set_view(freq_khz=100100.0)
+        if rtl_lab.set_home_mode(mode):
+            radio_mode = mode
+            manual_radio_mode = True
+            state.set_radio_mode(rtl_lab.shared_radio_mode(mode))
+            write_remembered_view(save_current_frequency=True, force=True)
+
     def submit_network_password():
         nonlocal network_notice, network_connect_pending
         if not 8 <= len(network_password_value) <= 63:
@@ -27818,10 +27946,22 @@ def main():
                             print(f"V4 knob volume {applied_volume:.2f}", flush=True)
                     elif knob_role == "zoom":
                         apply_encoder_zoom(knob_delta)
+            while not usb_route_requests.empty():
+                route_action, route_key = usb_route_requests.get_nowait()
+                if route_action == 'home':
+                    rtl_lab.stop()
+                    route_key, route_mode = route_key
+                    rtl_lab.receiver_selection = route_key
+                    rtl_lab.select_source(RTL_SDR_CAPABILITIES.source_id)
+                    usb_radios_workspace.open = False
+                    restore_navigation_parent('home')
+                    start_usb_receiver()
+                    if route_mode:select_usb_listening_mode(route_mode)
+                else:
+                    write_remembered_view(force=True)
             if pending_usb_selection:
                 usb_start_status = rtl_lab.snapshot()['status']
                 if usb_start_status == 'LIVE':
-                    rtl_lab_open = False
                     pending_usb_selection = False
                 elif usb_start_status in ('ERROR', 'NOT FOUND', 'READY'):
                     pending_usb_selection = False
@@ -28273,7 +28413,19 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if home_collapse_tab_visible() and contains(home_rail_collapse_box(), x, y):
+                            if theme_editor.open:
+                                gesture = "theme"
+                                scope_drag_eligible = False
+                            elif radio_setup_open and fmdx_shared_prompt_open:
+                                gesture = "radio_setup"
+                                scope_drag_eligible = False
+                            elif band_navigation_open:
+                                gesture = "band_navigation"
+                                scope_drag_eligible = False
+                            elif smeter_picker.open:
+                                gesture = "smeter_picker"
+                                scope_drag_eligible = False
+                            elif home_collapse_tab_visible() and contains(home_rail_collapse_box(), x, y):
                                 gesture = "home_rail_collapse"
                                 scope_drag_eligible = False
                             elif home_rail_restore_at(x, y):
@@ -29336,7 +29488,13 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 action = confirmed_tap_action(frequency_entry_action_at, start_x, start_y, x, y)
-                                if action == "BACK":
+                                if action and action.startswith("unit_"):
+                                    new_unit = action[5:]
+                                    frequency_entry_value = convert_frequency_entry(frequency_entry_value, frequency_entry_unit, new_unit)
+                                    frequency_entry_unit = new_unit
+                                    frequency_entry_invalid = False
+                                    write_remembered_view(force=True)
+                                elif action == "BACK":
                                     frequency_entry_value = frequency_entry_value[:-1]
                                     frequency_entry_invalid = False
                                     frequency_entry_replace_on_digit = False
@@ -29350,7 +29508,7 @@ def main():
                                     frequency_entry_replace_on_digit = False
                                 elif action == "ENTER":
                                     _minimum_frequency, maximum_frequency = active_tuning_bounds()
-                                    entered_khz = parse_frequency_entry_mhz(frequency_entry_value, maximum_frequency)
+                                    entered_khz = parse_frequency_entry(frequency_entry_value, frequency_entry_unit, maximum_frequency)
                                     if entered_khz is not None and entered_khz < _minimum_frequency:
                                         entered_khz = None
                                     if entered_khz is None:
@@ -29421,7 +29579,13 @@ def main():
                                 can_tune_frequency = frequency_drawer_tuning_allowed(
                                     state.receiver_type_snapshot(), receiver_server,
                                 )
-                                if action in ("down", "up") and arrow_tap:
+                                if isinstance(action, str) and action.startswith("unit_"):
+                                    new_unit = action[5:]
+                                    frequency_entry_value = convert_frequency_entry(frequency_entry_value, frequency_entry_unit, new_unit)
+                                    frequency_entry_unit = new_unit
+                                    frequency_entry_invalid = False
+                                    write_remembered_view(force=True)
+                                elif action in ("down", "up") and arrow_tap:
                                     step_frequency_in_drawer(action)
                                 elif isinstance(action, str) and action.startswith("key_"):
                                     key = action[4:]
@@ -29430,8 +29594,8 @@ def main():
                                             frequency_entry_invalid = True
                                         else:
                                             minimum_khz, maximum_khz = active_tuning_bounds()
-                                            entered_khz = parse_frequency_entry_mhz(
-                                                frequency_entry_value, maximum_khz
+                                            entered_khz = parse_frequency_entry(
+                                                frequency_entry_value, frequency_entry_unit, maximum_khz
                                             )
                                             if entered_khz is None or entered_khz < minimum_khz:
                                                 frequency_entry_invalid = True
@@ -29443,7 +29607,7 @@ def main():
                                                 animate_to(entered_khz, display_span, 0.16)
                                                 apply_band_default(entered_khz)
                                                 remember_current_view()
-                                                frequency_entry_value = f"{entered_khz / 1000.0:.6f}"
+                                                frequency_entry_value = format_frequency_entry(entered_khz, frequency_entry_unit)
                                                 frequency_entry_replace_on_digit = True
                                                 frequency_entry_invalid = False
                                     else:
@@ -29474,7 +29638,7 @@ def main():
                                 frequency_drawer_open = True
                                 frequency_entry_open = False
                                 frequency_drawer_pressed = None
-                                frequency_entry_value = f"{display_freq / 1000.0:.6f}"
+                                frequency_entry_value = format_frequency_entry(display_freq, frequency_entry_unit)
                                 frequency_entry_replace_on_digit = True
                                 frequency_entry_invalid = False
                                 rc28_dial_mode = "TUNE"
@@ -29850,7 +30014,9 @@ def main():
                         elif touch_started and gesture == "usb_radios_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
                                 usb_radios_workspace.tap(x,y)
-                                if not usb_radios_workspace.open:restore_navigation_parent(usb_radios_parent)
+                                if not usb_radios_workspace.open:
+                                    if usb_radios_parent == "usb_settings":rtl_lab_open = True
+                                    else:restore_navigation_parent(usb_radios_parent)
                             wake_controls()
                         elif touch_started and gesture == "station_workspace":
                             if max(abs(x-start_x),abs(y-start_y))<=args.tap_px:
@@ -30338,7 +30504,19 @@ def main():
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
                                 choice = confirmed_tap_action(rtl_lab_option_at, start_x, start_y, x, y)
-                                if choice == "source":
+                                if choice == "service":
+                                    rtl_lab_open = False
+                                    usb_radios_workspace.show()
+                                    usb_radios_parent = "usb_settings"
+                                    records = usb_radios_workspace.data.get('dongles', [])
+                                    selected = next((r for r in records if r['id'] == rtl_lab.receiver_selection), None)
+                                    if selected is None:selected = next((r for r in records if r.get('connected')), None)
+                                    if selected is not None:
+                                        usb_radios_workspace.selected = selected
+                                        usb_radios_workspace.routing = True
+                                elif choice and choice.startswith("mode:"):
+                                    select_usb_listening_mode(choice.split(":", 1)[1])
+                                elif choice == "source":
                                     rtl_lab.cycle_source()
                                     rtl_lab.probe()
                                 elif choice == "preset":
@@ -30349,16 +30527,14 @@ def main():
                                     else:
                                         start_usb_receiver()
                                 elif choice == "back":
-                                    rtl_lab.stop()
                                     rtl_lab_open = False
-                                    restore_navigation_parent(rtl_lab.navigation_parent)
+                                    restore_navigation_parent("home" if rtl_lab.is_running() else rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "rtl_lab_outside":
                             moved = max(abs(x - start_x), abs(y - start_y))
                             if moved <= args.tap_px:
-                                rtl_lab.stop()
                                 rtl_lab_open = False
-                                restore_navigation_parent(rtl_lab.navigation_parent)
+                                restore_navigation_parent("home" if rtl_lab.is_running() else rtl_lab.navigation_parent)
                             wake_controls()
                         elif touch_started and gesture == "radio_setup":
                             moved = max(abs(x - start_x), abs(y - start_y))
@@ -31932,7 +32108,11 @@ def main():
                 temp_c = read_cpu_temp_c()
                 input_power_ok = read_input_power_ok()
 
+            # HOME remains live behind Themes, but its buttons must not react
+            # to the pointer intended for the modal. Restore it only after capture.
+            theme_background_press_point = UI_PRESS_POINT
             if theme_editor.open:
+                set_ui_press_point()
                 theme_frame_context = theme_system.preview_theme(theme_editor.preview)
                 theme_frame_context.__enter__()
                 theme_frame_layout = instrument_layout
@@ -32359,6 +32539,8 @@ def main():
                     cpu_core_percentages,
                     cpu_graph_box,
                 )
+            if not picker_open and not dual_vfo_open and not adsb_workspace.open:
+                draw_desktop_1280_navigation(text_cache)
             if asr_panel_open:
                 draw_asr_panel(
                     text_cache, asr_engine, caption_mode, asr_moon_language_open,
@@ -32390,12 +32572,8 @@ def main():
                     ),
                     frequency_entry_replace_on_digit,
                     active_tuning_bounds()[1],
+                    frequency_entry_unit,
                 )
-            if frequency_entry_open:
-                draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid)
-            if band_navigation_open:
-                draw_band_navigation(text_cache, display_freq, radio_mode,
-                                     state.band_navigation_counts(), active_tuning_bounds())
             if menu_open:
                 draw_main_menu(text_cache, menu_scroll)
             if picker_open:
@@ -32661,19 +32839,6 @@ def main():
                     dual_best_vfo,
                     compact_frequency_font_family,
                 )
-                if dual_vfo_mode_open:
-                    draw_dual_vfo_mode_picker(
-                        text_cache,
-                        dual_vfo_mode_target,
-                        dual_vfo_profiles.get(dual_vfo_mode_target, {}).get("mode", radio_mode),
-                    )
-                elif dual_vfo_picker_open:
-                    draw_dual_vfo_receiver_picker(
-                        text_cache,
-                        dual_vfo_picker_target,
-                        all_stations,
-                        dual_vfo_picker_page,
-                    )
             # The WSPR workspace already labels a running decode in its card.
             # Everywhere else, keep an explicit OSD over the live RF view so
             # an audible hiccup can be correlated with wsprd activity.
@@ -32718,8 +32883,6 @@ def main():
                     text_cache, rc28_dial_mode,
                     green_osd_alpha(rc28_osd_remaining, args.zoom_osd_seconds),
                 )
-            if not picker_open and not dual_vfo_open and not adsb_workspace.open:
-                draw_desktop_1280_navigation(text_cache)
             if adsb_workspace.open:
                 adsb_workspace.draw(text_cache)
             if vhf_workspace.open:
@@ -32754,6 +32917,7 @@ def main():
                 instrument_layout = theme_frame_layout
                 theme_frame_layout = None
                 theme_editor.live_frame = theme_live_frame
+                set_ui_press_point(*(theme_background_press_point or (None, None)))
                 draw_theme_panel(text_cache, theme_editor)
                 theme_notice_remaining = theme_editor.notice_until - now
                 if theme_notice_remaining > 0:
@@ -32770,6 +32934,27 @@ def main():
                 app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
             if power_control.open:
                 system_power.draw(power_control, sys.modules[__name__], text_cache)
+            if band_navigation_open:
+                draw_band_navigation(text_cache, display_freq, radio_mode,
+                                     state.band_navigation_counts(), active_tuning_bounds())
+            if frequency_entry_open:
+                draw_frequency_keypad(text_cache, frequency_entry_value, frequency_entry_invalid, frequency_entry_unit)
+            if dual_vfo_open:
+                if dual_vfo_mode_open:
+                    draw_dual_vfo_mode_picker(
+                        text_cache,
+                        dual_vfo_mode_target,
+                        dual_vfo_profiles.get(dual_vfo_mode_target, {}).get("mode", radio_mode),
+                    )
+                elif dual_vfo_picker_open:
+                    draw_dual_vfo_receiver_picker(
+                        text_cache,
+                        dual_vfo_picker_target,
+                        all_stations,
+                        dual_vfo_picker_page,
+                    )
+            if radio_setup_open and fmdx_shared_prompt_open:
+                draw_fmdx_shared_prompt(text_cache)
             if smeter_picker.open:
                 smeter_picker.draw(sys.modules[__name__], text_cache)
             if not web_apps.blocks_touch:usb_popup.draw(text_cache)
@@ -32783,7 +32968,8 @@ def main():
             if web_notice:
                 draw_web_app_notice_osd(text_cache, web_notice, 220 if web_apps.active else
                                         green_osd_alpha(web_apps.error_until - time.monotonic(), 8))
-            draw_home_rail_restore_tab(text_cache)
+            if not theme_editor.open:
+                draw_home_rail_restore_tab(text_cache)
             # Hardware feedback is the final foreground layer: workspaces,
             # keyboards, theme preview and the rail composer must not cover it.
             if encoder_zoom_osd_until > now and encoder_zoom_feedback_visible():
@@ -32797,7 +32983,7 @@ def main():
             if zoom_unavailable_osd_until > now:
                 draw_web_app_notice_osd(text_cache, ("ZOOM", "Not available on this screen"),
                                         green_osd_alpha(zoom_unavailable_osd_until - now, args.zoom_osd_seconds))
-            if home_screen_visible() and state.audio_controls_snapshot()[0].get("mute", False):
+            if muted_rf_notice_visible() and state.audio_controls_snapshot()[0].get("mute", False):
                 draw_muted_waterfall_badge(text_cache, touch_enabled=mute_badge_touch_enabled)
             elif volume_osd_until > now and not state.audio_controls_snapshot()[0].get("mute", False):
                 draw_volume_osd(text_cache, audio_volume,

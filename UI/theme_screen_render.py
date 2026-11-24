@@ -49,6 +49,7 @@ def _chooser(ui, cache, editor, boxes):
     p = ui.APP_UI_STYLE.palette
     dx = _floating_panel(ui, editor)
     _text(ui, cache, 36+dx, 250, 'THEMES', 22)
+    ui.draw_styled_text_button(cache, boxes['close'], 'CLOSE', size=12)
     _text(ui, cache, 36+dx, 276, 'Choose a theme to customize on your full-size HOME screen.', 15, p.secondary_text)
     items = editor.themes[editor.page * CARDS_PER_PAGE:(editor.page + 1) * CARDS_PER_PAGE]
     for theme in items:
@@ -201,6 +202,7 @@ def draw_theme_screen(cache, editor, ui):
         elif editor.overlay == 'sliders':
             _slider_picker(ui,cache,editor,boxes)
         elif not editor.fullscreen:
+            ui.draw_modal_backdrop()
             _chooser(ui,cache,editor,boxes)
         elif editor.fullscreen_controls:
             _inspector(ui,cache,editor,boxes)

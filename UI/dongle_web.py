@@ -18,7 +18,11 @@ def maintenance_busy(manager):
 
 def dongle_control(manager,data):
     action=data.get('action');key=data.get('id')
-    if action=='rename':REGISTRY.rename(key,data.get('nickname'))
+    if action=='route':
+        if not usb_radios.SERVICE:raise ValueError('Receiver routing is unavailable')
+        devices=dongle_notice.SERVICE.rows if dongle_notice.SERVICE else manager.devices
+        return dict(usb_radios.snapshot(manager,REGISTRY),message=usb_radios.SERVICE.route(key,data.get('service'),devices))
+    elif action=='rename':REGISTRY.rename(key,data.get('nickname'))
     elif action=='assign_id':
         service=dongle_notice.SERVICE
         if service and any(r['id']==key and r.get('can_assign') for r in (service.snapshot().get('notice') or {}).get('receivers',[])):

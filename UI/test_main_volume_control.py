@@ -70,10 +70,11 @@ class MainVolumeTests(unittest.TestCase):
                 self.assertEqual(box, ui.ZOOM_OSD_BOX)
 
     def test_mute_uses_zoom_typography_and_persistent_red_panel(self):
-        with patch.object(ui, 'draw_analog_osd_panel') as panel, patch.object(ui, 'draw_text') as text:
+        with patch.object(ui, 'draw_analog_osd_panel') as panel, patch.object(ui, 'draw_text') as text, patch.object(ui, 'draw_logical_line') as line:
             ui.draw_muted_waterfall_badge(None)
         red = ui.themed_instrument_color('danger_border', ui.MUTE_ACCENT)[:3]
         panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 246, red, (8, 0, 0))
-        self.assertEqual([c.args[3] for c in text.call_args_list], ['AUDIO MUTED', 'TAP TO UNMUTE'])
+        self.assertEqual([c.args[3] for c in text.call_args_list], ['AUDIO MUTED', '0%'])
         for call in text.call_args_list:
-            self.assertEqual(call.args[4:9], (red, 28, True, True, 'lm'))
+            self.assertEqual(call.args[4:8], (red, 28, True, True))
+        line.assert_called_once()

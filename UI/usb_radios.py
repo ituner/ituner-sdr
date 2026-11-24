@@ -4,7 +4,7 @@ import re
 from rtl_registry import REGISTRY
 
 SERVICE=None
-LABELS={'adsb':'ADS-B · 1090 ES','uat':'ADS-B · 978 UAT','spectrum':'Spectrum Analyzer','ism':'rtl_433 sensors','ais':'AIS','aprs':'APRS','meteor':'Meteor-M','cubesat':'CubeSat','sonde':'Radiosonde','dongle-maintenance':'USB ID update'}
+LABELS={'home':'HOME receiver','home_am':'AM Radio','home_fm':'FM Radio','none':'Stop receiving','adsb':'ADS-B · 1090 ES','uat':'ADS-B · 978 UAT','spectrum':'Spectrum Analyzer','ism':'rtl_433 sensors','ais':'AIS','aprs':'APRS','meteor':'Meteor-M','cubesat':'CubeSat','sonde':'Radiosonde','dongle-maintenance':'USB ID update'}
 
 
 def owner_label(owner):
@@ -33,9 +33,55 @@ def choices(devices,leases=None,owner='',selection='auto',unique=True,blocked=()
 
 
 class RadioManagement:
-    def __init__(self,registry,broker,adsb=None,vhf=None):self.registry,self.broker,self.adsb,self.vhf=registry,broker,adsb,vhf
+    def __init__(self,registry,broker,adsb=None,vhf=None,home=None,home_request=None):
+        self.registry,self.broker,self.adsb,self.vhf=registry,broker,adsb,vhf
+        self.home,self.home_request=home,home_request
+        import threading
+        self.route_lock=threading.Lock()
+    def services(self):
+        owners=['none']
+        if self.home_request:owners.extend(('home','home_am','home_fm'))
+        if self.adsb:owners.extend(('adsb','uat'))
+        if self.vhf:
+            owners.append('spectrum')
+            owners.extend(k for k in LABELS if k in getattr(self.vhf,'sessions',{}) or k=='ism' and k in getattr(self.vhf,'sensor_receivers',{}))
+        return [(owner,owner_label(owner)) for owner in dict.fromkeys(owners)]
+    def route(self,key,owner,devices):
+        if not self.route_lock.acquire(blocking=False):raise ValueError('Another receiver switch is in progress')
+        try:
+            if owner not in dict(self.services()):raise ValueError('Unknown receiving service')
+            device=next((d for d in devices if d['id']==key),None)
+            if device is None:raise ValueError('Reconnect this USB receiver first')
+            if owner!='none' and not device.get('persistent'):raise ValueError('Assign a unique USB ID before routing this receiver')
+            requested_owner=owner
+            mode={'home_am':'AM','home_fm':'WFM'}.get(owner)
+            if mode:owner='home'
+            previous=self.broker.snapshot().get(key)
+            if previous and previous!=owner:
+                stop=self.broker.stoppers.get(previous)
+                if stop is None:raise ValueError('Current receiver owner cannot be stopped here')
+                stop()
+                deadline=time.monotonic()+10
+                while self.broker.snapshot().get(key)==previous:
+                    if time.monotonic()>deadline:raise ValueError('Previous service has not released USB. Try again.')
+                    time.sleep(.05)
+            if owner=='none':return 'Receiver released'
+            if owner=='home':
+                if mode:self.home_request(key,mode)
+                else:self.home_request(key)
+            elif owner in ('adsb','uat'):
+                self.adsb.control('assign',selection=key,band='978' if owner=='uat' else '1090')
+                self.adsb.control('start',band='978' if owner=='uat' else '1090')
+            else:
+                self.vhf.control(owner,'configure',selection=key)
+                self.vhf.control(owner,'start')
+            return 'Requested '+owner_label(requested_owner)
+        finally:self.route_lock.release()
     def connection(self,owner):
         a,v=self.adsb,self.vhf;session=None;frequency=None
+        if owner=='home' and self.home:
+            data=self.home.snapshot()
+            return dict(owner=owner,label=owner_label(owner),status=data['status'],detail='Local USB audio and waterfall')
         if owner=='adsb' and a:session=a;frequency=1090000000
         elif owner=='uat' and a:session=a.uat;frequency=978000000
         elif owner=='spectrum' and v:session=v.spectrum
@@ -79,3 +125,16 @@ def snapshot(manager,registry=None):
         devices=dongle_notice.SERVICE.rows if dongle_notice.SERVICE else manager.devices
         return SERVICE.snapshot(devices)
     return RadioManagement(registry or REGISTRY,getattr(manager,'broker',None)).snapshot(manager.scanner())
+
+
+def acquire_home_receiver(broker, devices, selection, stop_event):
+    """Wait on the I/Q worker, never the UI, for the previous owner to release."""
+    selected=broker.request('home',devices,selection)
+    device=next((d for d in devices if d['id']==selected),None)
+    if device is None:raise ValueError('Selected USB receiver is disconnected')
+    deadline=time.monotonic()+10
+    while not stop_event.is_set():
+        if broker.acquire('home',selected):return device
+        if time.monotonic()>deadline:raise ValueError('Previous service did not release the USB receiver')
+        stop_event.wait(.05)
+    raise ValueError('USB receiver start cancelled')

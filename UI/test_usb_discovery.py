@@ -32,14 +32,14 @@ class USBDiscoveryTests(unittest.TestCase):
             self.assertEqual(lab.receiver_rows(),[])
 
 class USBStartupFeedbackTests(unittest.TestCase):
-    def test_return_home_only_after_live_and_keep_errors_visible(self):
+    def test_settings_stay_open_after_live_and_keep_errors_visible(self):
         import ast
         from pathlib import Path
         from types import SimpleNamespace
         tree=ast.parse(Path(ui.__file__).read_text())
         node=next(n for n in ast.walk(tree) if isinstance(n,ast.If) and isinstance(n.test,ast.Name) and n.test.id=='pending_usb_selection')
         code=compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),ui.__file__,'exec')
-        for status, panel, pending in [('STARTING',True,True),('LIVE',False,False),('ERROR',True,False)]:
+        for status, panel, pending in [('STARTING',True,True),('LIVE',True,False),('ERROR',True,False)]:
             env=dict(pending_usb_selection=True,rtl_lab_open=True,rtl_lab=SimpleNamespace(snapshot=lambda:dict(status=status)))
             exec(code,env)
             self.assertEqual(env['rtl_lab_open'],panel)

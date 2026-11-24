@@ -30,7 +30,7 @@ class EncoderFeedbackTests(unittest.TestCase):
         loop = next(n for n in ast.walk(tree) if isinstance(n, ast.While)
                     and any(isinstance(s, ast.Expr) and isinstance(s.value, ast.Call)
                             and isinstance(s.value.func, ast.Name)
-                            and s.value.func.id == 'draw_home_rail_restore_tab' for s in n.body))
+                            and s.value.func.id == 'draw_home_rail_restore_tab' for s in ast.walk(n)))
         start = next(i for i,s in enumerate(loop.body) if isinstance(s, ast.If)
                      and isinstance(s.test, ast.Call) and isinstance(s.test.func, ast.Name)
                      and s.test.func.id == 'rail_relocation_active')
@@ -91,7 +91,8 @@ class EncoderFeedbackTests(unittest.TestCase):
                  draw_home_rail_restore_tab=lambda *a:order.append('restore'),
                  draw_volume_osd=lambda *a,**k:order.append('volume'),
                  draw_muted_waterfall_badge=lambda *a,**k:order.append('red-mute'),
-                 mute_badge_touch_enabled=False, home_screen_visible=lambda:True,
+                 mute_badge_touch_enabled=False, muted_rf_notice_visible=lambda:True,
+                 theme_editor=SimpleNamespace(open=False),
                  state=SimpleNamespace(audio_controls_snapshot=lambda:({'mute':False},0)),
                  volume_osd_title='VOLUME',
                  text_cache=None, now=10, encoder_zoom_osd_until=12,
@@ -110,7 +111,7 @@ class EncoderFeedbackTests(unittest.TestCase):
         env['state']=SimpleNamespace(audio_controls_snapshot=lambda:({'mute':True},0))
         exec(self.foreground_code,env)
         self.assertEqual(order,['compose','LOADING','restore','red-mute'])
-        order.clear(); env['home_screen_visible'] = lambda: False
+        order.clear(); env['muted_rf_notice_visible'] = lambda: False
         exec(self.foreground_code, env)
         self.assertEqual(order, ['compose','LOADING','restore'])
 

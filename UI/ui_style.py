@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 @dataclass(frozen=True)
 class UIPalette:
     background: tuple = (18, 18, 18, 255)
+    modal_backdrop: tuple = (0, 0, 0, 160)
     sidebar: tuple = (0, 0, 0, 255)
     sidebar_header: tuple = (0, 0, 0, 255)
     surface: tuple = (0, 0, 0, 255)

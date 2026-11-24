@@ -62,7 +62,8 @@ class PowerTests(unittest.TestCase):
         self.assertEqual(labels['poweroff'], 'SHUT DOWN')
         b = power.boxes(ui)
         self.assertEqual(b['back'], ui.lcd_drawer_back_box())
-        self.assertEqual(b['back'][1] - b['confirm'][3], 8)
+        self.assertEqual(b['confirm'], (32, 304, 368, 371))
+        self.assertLess(b['confirm'][2], ui.LCD_NAV_X0)
         for name, box in b.items():
             x, y = (box[0]+box[2])/2, (box[1]+box[3])/2
             self.assertEqual(power.action_at(self.controller, ui, x, y), name)

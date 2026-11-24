@@ -214,7 +214,8 @@ class ThemeSystemTests(unittest.TestCase):
         inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
         self.assertEqual(inverted["radius"], 0)
         for key, color in original["colors"].items():
-            self.assertEqual(inverted["colors"][key][:3], [255 - value for value in color[:3]])
+            expected = color[:3] if key == "modal_backdrop" else [255 - value for value in color[:3]]
+            self.assertEqual(inverted["colors"][key][:3], expected)
             self.assertEqual(inverted["colors"][key][3:], color[3:])
         green = self.library.get(GREEN_THEME_ID)
         for key, color in green["colors"].items():
@@ -247,6 +248,23 @@ class ThemeSystemTests(unittest.TestCase):
         self.assertEqual(APP_UI_STYLE.button.font_family,
                          ("Roboto", "Inter", "DejaVu Sans"))
         self.assertEqual(APP_UI_STYLE.button.radius, 0)
+
+    def test_modal_backdrop_is_dark_in_every_builtin_and_theme_editable(self):
+        self.assertIn("modal_backdrop", next(
+            keys for name, keys in ui.COLOR_GROUPS if name == "BASE"))
+        for identifier in BUILTIN_THEME_IDS:
+            self.assertEqual(self.library.get(identifier)["colors"]["modal_backdrop"],
+                             [0, 0, 0, 160])
+        custom = new_theme("Modal shade")
+        custom["colors"]["modal_backdrop"] = [8, 12, 20, 176]
+        self.library.upsert(custom)
+        restarted = ThemeLibrary(self.path)
+        self.assertEqual(restarted.get(custom["id"])["colors"]["modal_backdrop"],
+                         [8, 12, 20, 176])
+        self.assertEqual(APP_UI_STYLE.palette.modal_backdrop, (8, 12, 20, 176))
+        del custom["colors"]["modal_backdrop"]
+        self.assertEqual(normalize_theme(custom)["colors"]["modal_backdrop"],
+                         [0, 0, 0, 160])
 
     def test_section_divider_is_dark_thin_and_theme_editable(self):
         self.assertEqual(DEFAULT_THEME["colors"]["divider"], [42, 42, 42, 180])

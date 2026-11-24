@@ -72,7 +72,7 @@ class SMeterPicker:
         width = ui.rf_canvas_width()
         boxes = self.boxes(width)
         palette = ui.APP_UI_STYLE.palette
-        ui.draw_logical_rect(0, 0, width, ui.LOGICAL_H, (0, 0, 0, 105))
+        ui.draw_modal_backdrop()
         ui.draw_logical_rounded_rect(*boxes["panel"], ui.APP_UI_STYLE.button.radius,
                                      palette.background, palette.border, 1)
         ui.draw_text(cache, 40, 188, "CHOOSE S-METER", palette.text, 24, True, False, "lm")
