@@ -9,7 +9,7 @@ from theme_editor import ThemeEditor, theme_screen_boxes
 from theme_system import (
     BUILTIN_THEME_IDS, DEFAULT_THEME, DEFAULT_THEME_ID, GREEN_THEME_ID, BLACK_WHITE_THEME_ID,
     REMOVED_THEME_MIGRATIONS, STRAIGHT_INVERTED_THEME_ID,
-    ThemeLibrary, apply_theme,
+    ThemeLibrary, apply_theme, normalize_theme,
     display_distance, display_temperature, distance_axis_label,
     display_to_logical_x, new_theme, runtime_theme,
 )
@@ -82,7 +82,7 @@ class ThemeSystemTests(unittest.TestCase):
                 patch.object(ui, "draw_lcd_drawer_heading"), \
                 patch.object(ui, "draw_display_slider_section"), \
                 patch.object(ui, "draw_sidebar_header"), \
-                patch.object(ui, "draw_display_control") as control:
+                patch.object(ui, "draw_selection_button") as control:
             ui.draw_display_setup_panel(None, 160, 220, 2, False, "classic", True,
                                         instrument_layout="right")
             active_positions = [item.args[2] for item in control.call_args_list
@@ -97,6 +97,7 @@ class ThemeSystemTests(unittest.TestCase):
         custom["colors"]["section_heading"] = [237, 208, 41]
         custom["colors"]["ready"] = [37, 244, 68, 255]
         custom["colors"]["sidebar_header"] = [19, 29, 39, 255]
+        custom = normalize_theme(custom, allow_default=True)
         apply_theme(custom)
         with patch.object(ui, "draw_logical_rect") as rectangles, patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_rounded_rect"), \
@@ -213,7 +214,8 @@ class ThemeSystemTests(unittest.TestCase):
         inverted = self.library.get(STRAIGHT_INVERTED_THEME_ID)
         self.assertEqual(inverted["radius"], 0)
         for key, color in original["colors"].items():
-            self.assertEqual(inverted["colors"][key][:3], [255 - value for value in color[:3]])
+            expected = color[:3] if key == "modal_backdrop" else [255 - value for value in color[:3]]
+            self.assertEqual(inverted["colors"][key][:3], expected)
             self.assertEqual(inverted["colors"][key][3:], color[3:])
         green = self.library.get(GREEN_THEME_ID)
         for key, color in green["colors"].items():
@@ -234,19 +236,35 @@ class ThemeSystemTests(unittest.TestCase):
             self.assertEqual(restarted.active_id, replacement_id)
             self.assertNotIn(removed_id, BUILTIN_THEME_IDS)
 
-    def test_default_theme_uses_quiet_square_controls(self):
+    def test_default_theme_uses_quarter_intensity_borders_on_square_controls(self):
         theme = self.library.get(DEFAULT_THEME_ID)
         self.assertEqual(theme["name"], "Default")
         self.assertEqual(theme["radius"], 0)
         self.assertEqual(theme["colors"]["surface"], [0, 0, 0, 255])
-        self.assertEqual(theme["colors"]["border"], [46, 46, 46, 255])
-        self.assertLess(sum(theme["colors"]["border"][:3]),
-                        sum(theme["colors"]["text"][:3]) / 4)
+        self.assertEqual(theme["colors"]["border"], [64, 64, 64, 255])
         self.library.activate(DEFAULT_THEME_ID)
+        self.assertEqual(APP_UI_STYLE.button.resolve().border, (64,64,64,255))
         self.assertEqual(APP_UI_STYLE.button.label_size, 13)
         self.assertEqual(APP_UI_STYLE.button.font_family,
                          ("Roboto", "Inter", "DejaVu Sans"))
         self.assertEqual(APP_UI_STYLE.button.radius, 0)
+
+    def test_modal_backdrop_is_dark_in_every_builtin_and_theme_editable(self):
+        self.assertIn("modal_backdrop", next(
+            keys for name, keys in ui.COLOR_GROUPS if name == "BASE"))
+        for identifier in BUILTIN_THEME_IDS:
+            self.assertEqual(self.library.get(identifier)["colors"]["modal_backdrop"],
+                             [0, 0, 0, 160])
+        custom = new_theme("Modal shade")
+        custom["colors"]["modal_backdrop"] = [8, 12, 20, 176]
+        self.library.upsert(custom)
+        restarted = ThemeLibrary(self.path)
+        self.assertEqual(restarted.get(custom["id"])["colors"]["modal_backdrop"],
+                         [8, 12, 20, 176])
+        self.assertEqual(APP_UI_STYLE.palette.modal_backdrop, (8, 12, 20, 176))
+        del custom["colors"]["modal_backdrop"]
+        self.assertEqual(normalize_theme(custom)["colors"]["modal_backdrop"],
+                         [0, 0, 0, 160])
 
     def test_section_divider_is_dark_thin_and_theme_editable(self):
         self.assertEqual(DEFAULT_THEME["colors"]["divider"], [42, 42, 42, 180])
@@ -342,12 +360,16 @@ class ThemeSystemTests(unittest.TestCase):
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
                     patch.object(ui, "GL"), \
+                    patch.object(ui, "draw_text"), \
                     patch.object(ui, "ui_button_pressed", return_value=False):
                 ui.draw_zoom_button(None, ui.ZOOM_MINUS_BOX, "-")
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+")
                 ui.draw_stream_waterfall_button(None, False)
                 ui.draw_favorite_waterfall_button(False)
-            self.assertEqual(len(frame.call_args_list), 4)
+                ui.draw_carrier_waterfall_button(None)
+                ui.draw_waterfall_text_button(None, ui.smart_seek_waterfall_box(), "SCAN")
+                ui.draw_band_waterfall_button(None, 7265, 'AM')
+            self.assertEqual(len(frame.call_args_list), 7)
             for item in frame.call_args_list:
                 self.assertEqual(item.args[5],
                                  (*APP_UI_STYLE.palette.surface[:3], 184))
@@ -355,9 +377,13 @@ class ThemeSystemTests(unittest.TestCase):
                     patch.object(ui, "draw_logical_line"), \
                     patch.object(ui, "draw_logical_polyline"), \
                     patch.object(ui, "GL"), \
+                    patch.object(ui, "draw_text"), \
                     patch.object(ui, "ui_button_pressed", return_value=True):
                 ui.draw_stream_waterfall_button(None, True)
                 ui.draw_favorite_waterfall_button(True)
+                ui.draw_carrier_waterfall_button(None)
+                ui.draw_waterfall_text_button(None, ui.smart_seek_waterfall_box(), "SCAN")
+                ui.draw_band_waterfall_button(None, 7265, 'AM')
                 ui.draw_zoom_button(None, ui.ZOOM_PLUS_BOX, "+", active=True)
             for item in frame.call_args_list:
                 self.assertEqual(item.args[5],
@@ -446,7 +472,8 @@ class ThemeSystemTests(unittest.TestCase):
                                  station_name="Test Receiver", audio_jitter_depth=3)
             colors = {item.args[3]: item.args[4] for item in text_draw.call_args_list}
             self.assertEqual(colors["Test Receiver"], APP_UI_STYLE.palette.footer_primary)
-            self.assertEqual(colors["BUFFER Q3/T6"], APP_UI_STYLE.palette.footer_live)
+            self.assertFalse(any(label.startswith("BUFFER") for label in colors))
+            self.assertTrue(any("UTC" in label and color == APP_UI_STYLE.palette.footer_live for label, color in colors.items()))
 
     def test_audio_volume_uses_the_same_theme_colors_as_home(self):
         self.library.activate(GREEN_THEME_ID)
@@ -483,13 +510,16 @@ class ThemeSystemTests(unittest.TestCase):
     def test_passband_labels_and_each_band_position_follow_theme(self):
         self.library.activate(GREEN_THEME_ID)
         ui.configure_output(True)
-        with patch.object(ui, "draw_logical_rect"), \
+        with patch.object(ui, "draw_text_scaled_x") as scaled, \
+                patch.object(ui, "draw_logical_rect"), \
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_logical_area"), \
                 patch.object(ui, "draw_logical_polyline"), \
                 patch.object(ui, "draw_text") as labels:
-            ui.draw_lcd_home_bandwidth(None, -1200, 1200)
-        colors = {item.args[3]: item.args[4] for item in labels.call_args_list}
+            cache = MagicMock()
+            cache.font.return_value.size.return_value = (60, 13)
+            ui.draw_lcd_home_bandwidth(cache, -1200, 1200)
+        colors = {item.args[3]: item.args[4] for item in labels.call_args_list + scaled.call_args_list}
         self.assertEqual(colors["PASSBAND"], APP_UI_STYLE.palette.section_heading)
         for label in ("10 kHz", "−5", "0", "+5"):
             self.assertEqual(colors[label], APP_UI_STYLE.palette.secondary_text)

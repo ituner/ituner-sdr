@@ -6,6 +6,11 @@ import logging
 import math
 import subprocess
 import threading
+import sys
+_v4 = os.environ.get("ITUNER_CM5_BOARD") == "v4"
+if _v4:
+    sys.path.insert(0, "/usr/local/lib/ituner-sdr")
+    from cm5_v4_gpio import set_speaker
 _volume = 0.75
 # Honor the app's saved mute state before opening the playback device.
 import json
@@ -30,7 +35,10 @@ def gate():
     global _gate
     enabled = _ready and not _muted and _volume > 0 and not _headphone_blocked
     if enabled != _gate:
-        run('pinctrl', 'set', '13', 'op', 'dh' if enabled else 'dl')
+        if _v4:
+            set_speaker(enabled)
+        else:
+            run('pinctrl', 'set', '13', 'op', 'dh' if enabled else 'dl')
         _gate = enabled
 
 def card_available():
@@ -62,6 +70,13 @@ def set_mute(value):
     global _muted
     with _lock:
         _muted = bool(value)
+        if _muted:
+            gate()
+        # Mute at the codec mixer, after the queued PCM, so both headphones
+        # and speakers react immediately while the playback stream stays live.
+        if card_available():
+            for control in ('Left Headphone Mixer Left DAC', 'Right Headphone Mixer Right DAC'):
+                run('amixer', '-q', '-c', 'CM5ES8316', 'sset', control, 'off' if _muted else 'on')
         gate()
 
 def prepare():
@@ -76,6 +91,7 @@ def prepare():
                             ('Left Headphone Mixer Left DAC','on'), ('Right Headphone Mixer Right DAC','on')]:
             run('amixer','-q','-c','CM5ES8316','sset',name,value)
         set_volume(_volume)
+        set_mute(_muted)
 
 def ready(value=True):
     global _ready

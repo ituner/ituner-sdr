@@ -612,6 +612,12 @@ class VHFHandler(ADSBHandler):
                 rotation=int(query.get('rotation',['0'])[0])
                 if rotation not in (0,90,270):raise ValueError('Invalid preview rotation')
                 self.send(preview_html(key,manager.web_apps.hostname or hostname,manager.token,touch=query.get('touch')==['1'],rotation=rotation).encode(),'text/html; charset=utf-8')
+            elif path=='/api/web-app/encoder-notice':
+                if self.client_address[0] not in ('127.0.0.1','::1') or self.headers.get('X-VHF-Token') != manager.token:
+                    self.send(b'{"error":"Local preview token required"}',status=403);return
+                after=int(query.get('after',['0'])[0])
+                if after < 0:raise ValueError('Invalid notice sequence')
+                self.send(json.dumps(manager.web_apps.encoder_notice(after)).encode())
             elif path=='/api/state':self.send(json.dumps(dict(manager.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum':self.send(json.dumps(dict(manager.spectrum.snapshot(),devices=manager.devices,leases=manager.broker.snapshot(),control_token=manager.token)).encode())
             elif path=='/api/spectrum/trace':self.send(json.dumps(manager.spectrum.trace(query.get('id',[''])[0])).encode())

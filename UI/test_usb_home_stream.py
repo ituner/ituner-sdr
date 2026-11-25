@@ -4,6 +4,77 @@ from unittest.mock import Mock, patch
 import kiwi_gl_display as ui
 
 class USBHomeStreamTests(unittest.TestCase):
+    def test_scan_silence_blocks_already_queued_pcm_at_output(self):
+        from types import SimpleNamespace
+        player=object.__new__(ui.BufferedAudioPlayer)
+        player.player=Mock();player.state=Mock();player.state.external_audio_snapshot.return_value=True
+        player.state.local_signal_search=SimpleNamespace(silent=True)
+        player._smooth_concealment_edge=lambda audio,*args:audio
+        player._write(b'\x11\x22'*64,comfort_noise=True)
+        player.player.stdin.write.assert_called_once_with(bytes(128))
+
+    def test_scan_silence_gates_pcm_without_changing_user_mute(self):
+        from types import SimpleNamespace
+        state=ui.SharedState('http://example.test:8073',94900.,8,-95.,142,245,4,'am',True)
+        state.local_signal_search=SimpleNamespace(silent=True)
+        with patch.object(ui.RTLSDRLab,'probe'):receiver=ui.RTLSDRLab(Mock(),state,Mock())
+        pcm=b'\x01\x02'*100
+        self.assertEqual(receiver._apply_local_squelch(pcm),bytes(len(pcm)))
+        self.assertFalse(state.audio_controls_snapshot()[0]['mute'])
+        state.local_signal_search.silent=False
+        self.assertEqual(receiver._apply_local_squelch(pcm),pcm)
+
+    def test_restored_usb_modes_light_home_family_indicator(self):
+        for mode in ('AM', 'NFM', 'WFM'):
+            with patch.object(ui, 'draw_radio_family_option') as draw, patch.object(ui, 'draw_styled_two_line_button'):
+                ui.draw_home_mode_buttons(Mock(), list(ui.lcd_home_mode_boxes()), mode, 'DIG', usb_receiver=True, family_selector=True)
+            active=[call.args[2] for call in draw.call_args_list if call.args[4] in call.args[3]]
+            self.assertEqual(active, ['AM' if mode=='AM' else 'FM'])
+            fm=next(call for call in draw.call_args_list if call.args[2]=='FM')
+            self.assertEqual(fm.args[3], ('NFM','WFM'))
+
+    def test_selected_mode_survives_stop_start_and_saved_restore(self):
+        import threading
+        for mode in ('AM', 'NFM', 'WFM'):
+            state=ui.SharedState('http://example.test:8073',94900.,8,-95.,142,245,4,'am',True)
+            with patch.object(ui.RTLSDRLab,'probe'):
+                receiver=ui.RTLSDRLab(Mock(),state,Mock())
+                restored=ui.RTLSDRLab(Mock(),state,Mock())
+            receiver.present=True
+            receiver.receiver_selection='serial:abc'
+            receiver.set_home_mode(mode)
+            with patch.object(threading,'Thread'):
+                receiver.start(94900.,8)
+                self.assertEqual(receiver.current_home_mode(),mode)
+                saved=receiver.validate_remembered_receiver(receiver.remembered_receiver())
+                self.assertEqual(saved['mode'],mode)
+                receiver.thread=None
+                receiver.start(94900.,8)
+                self.assertEqual(receiver.current_home_mode(),mode)
+                restored.source_inventory={restored.source_id:dict(present=True,device='Test',tuner='',detail='')}
+                self.assertTrue(restored.restore_receiver(saved))
+                self.assertEqual(restored.current_home_mode(),mode)
+
+    def test_failed_usb_open_releases_lease_without_resuming_kiwi(self):
+        import threading
+        from sdr_broker import ReceiverBroker
+        state=ui.SharedState('http://example.test:8073',1104.7,7,-95.,142,245,4,'am',True)
+        state.set_external_audio(True);state.set_external_waterfall(True)
+        with patch.object(ui.RTLSDRLab,'probe'):
+            receiver=ui.RTLSDRLab(Mock(),state,Mock())
+        receiver.receiver_broker=ReceiverBroker()
+        receiver.receiver_devices=lambda:[dict(id='serial:abc',serial='abc',persistent=True,index=0)]
+        receiver._restore_view=(1104.7,7)
+        receiver._remembered_usb_receiver=dict(source_id=receiver.source_id,freq_khz=100100,zoom=8,preset_index=0)
+        library=Mock();library.rtlsdr_get_index_by_serial.return_value=0;library.rtlsdr_open.return_value=-1
+        with patch.object(receiver,'_librtlsdr',return_value=library),patch.object(ui,'configure_realtime_audio_path'),patch.object(ui,'release_realtime_audio_thread'),patch('builtins.print'):
+            receiver._iq_worker('Test',12000)
+        self.assertEqual(receiver.snapshot()['status'],'ERROR')
+        self.assertTrue(state.external_audio_snapshot());self.assertTrue(state.external_waterfall_snapshot())
+        self.assertEqual(receiver.receiver_broker.snapshot(),{})
+        receiver.stop()
+        self.assertFalse(state.external_audio_snapshot());self.assertFalse(state.external_waterfall_snapshot())
+
     def test_home_fm_tap_selects_real_usb_demodulator(self):
         state=ui.SharedState('http://example.test:8073',100100.,8,-95.,142,245,4,'am',True)
         with patch.object(ui.RTLSDRLab,'probe'):

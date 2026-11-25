@@ -12,10 +12,10 @@ NUMERIC={k for k,_ in LOCATION}
 
 class StationWorkspace(DecoderStyle):
     def __init__(self,ui,station):
-        self.ui=ui;self.station=station;self.open=False;self.page='identity';self.draft={};self.field=None;self.caps=False;self.value='';self.message='';self.actions=[];self.dirty=False
+        self.ui=ui;self.station=station;self.open=False;self.page='identity';self.draft={};self.field=None;self.caps=False;self.value='';self.message='';self.actions=[];self.dirty=False;self.location_preview=False;self.location_detector=None
     def show(self,parent='settings'):
         self.navigation_parent=parent
-        self.draft=dict(self.station.snapshot()['config']);self.open=True;self.field=None;self.message='';self.dirty=False
+        self.draft=dict(self.station.snapshot()['config']);self.open=True;self.field=None;self.message='';self.dirty=False;self.location_preview=False
     def ink(self,cache,x,y,text,size=20,color=None,anchor='lm',width=None):
         text=str(text)
         if width:text=self.ui.fit_station_text(cache,text,width,size,size>=20,False,'Liberation Sans')
@@ -51,7 +51,15 @@ class StationWorkspace(DecoderStyle):
         if self.field is not None:return self.keyboard_tap(x,y)
         for box,(kind,value) in self.actions:
             if not self.ui.contains(box,x,y):continue
-            if kind=='back':self.open=False
+            if kind=='detect':
+                if self.location_detector is None:
+                    from location_detection import LocationDetector
+                    self.location_detector=LocationDetector(self.station.path.with_name('location-estimate.json'))
+                self.location_preview=True;self.location_detector.request()
+            elif kind=='detect_cancel':self.location_preview=False
+            elif kind=='detect_refresh':self.location_detector.request(refresh=True)
+            elif kind=='detect_confirm':self.confirm_location()
+            elif kind=='back':self.open=False
             elif kind=='page':self.page=value;self.message=''
             elif kind=='edit':self.field=value;self.value='' if self.draft[value] is None else str(self.draft[value]);self.message=''
             elif kind=='key':self.key(value)
@@ -76,13 +84,14 @@ class StationWorkspace(DecoderStyle):
         self.ink(cache,24,67,(f"{p['lat']:.6f}°, {p['lon']:.6f}° · {data['grid']} · {source}" if p else 'Location not set · enter coordinates or connect GPS'),18,self.CYAN,width=994)
         self.draw_back(cache)
         for i,(key,title) in enumerate(PAGES):self.button(cache,(24+i*312,100,320+i*312,158),title,('page',key),self.page==key)
+        if self.page=='location':self.button(cache,(960,100,1256,158),'Detect location',('detect',None))
         if self.page in ('identity','location'):
             fields=IDENTITY if self.page=='identity' else LOCATION
             for i,(key,label) in enumerate(fields):
                 y=181+i*75;value=self.draft.get(key);display='Unknown' if key in NUMERIC and value is None else 'Optional · not set' if not value and key not in NUMERIC else str(value)
                 self.ink(cache,32,y+30,label,20,self.MUTED,width=480)
                 self.button(cache,(516,y,1256,y+61),display,('edit',key))
-            if self.page=='location':self.ink(cache,32,642,'WGS84 ellipsoid height differs from sea-level elevation. Leave unknown values blank.',17,self.MUTED,width=1210)
+            if self.page=='location':self.ink(cache,32,642,'Detect uses your internet IP via ipapi.is. No Wi-Fi scan or saved coordinates are sent.',17,self.MUTED,width=1210)
         else:
             for box,label,key in (((24,184,626,248),'GPS receiver monitoring','gps_enabled'),((646,184,1256,248),'Automatic GPS location updates','gps_auto')):
                 self.button(cache,box,label+(' · ON' if self.draft[key] else ' · OFF'),('toggle',key),self.draft[key])
@@ -96,3 +105,46 @@ class StationWorkspace(DecoderStyle):
         self.button(cache,(x1-436,728,x1,792),'Save radio information',('save',None),True)
         self.ink(cache,x0,739,'Callsign optional · receive only',18,self.MUTED,width=x1-x0-460)
         draw_status_clock(ui,cache,x0)
+        if self.location_preview:self.draw_location_preview(cache)
+
+    def cancel_location_preview(self):
+        self.location_preview=False
+
+    def confirm_location(self):
+        status=self.location_detector.snapshot()
+        if status['busy'] or status['error'] or not status['result']:return
+        result=status['result']
+        values=dict(latitude=result['lat'],longitude=result['lon'],gps_auto=False)
+        try:
+            self.station.update(values)
+            self.draft.update(values)
+            self.location_preview=False
+            self.message='Estimated location saved · grid updated · automatic GPS updates off.'
+        except (OSError,ValueError) as exc:self.message=str(exc)
+
+    def draw_location_preview(self,cache):
+        from station_profile import grid
+        ui=self.ui;status=self.location_detector.snapshot();result=status['result']
+        self.actions=[]
+        ui.draw_modal_backdrop()
+        ui.draw_logical_rounded_rect(100,170,1180,690,self.RADIUS,self.PANEL,self.CYAN,1)
+        self.ink(cache,132,210,'DETECT LOCATION',28)
+        self.ink(cache,132,252,'Approximate internet location · ipapi.is',22,self.CYAN)
+        if status['busy']:
+            self.ink(cache,132,312,'Looking up this internet connection…',24)
+        elif status['error']:
+            self.ink(cache,132,312,status['error'],20,self.GOLD,width=1016)
+        elif result:
+            self.ink(cache,132,305,result['place'],24,width=1016)
+            self.ink(cache,132,350,f"{result['lat']:.5f}°, {result['lon']:.5f}° · estimated grid {grid(result['lat'],result['lon'])}",24,width=1016)
+            self.ink(cache,132,392,'Accuracy radius unavailable · may identify a different city.',20,self.GOLD)
+            age=max(0,int((time.time()-result['detected_at'])/60))
+            self.ink(cache,132,428,f"{'Cached estimate' if status['cached'] else 'Detected'} · {age} minutes ago",18,self.MUTED)
+        self.ink(cache,132,480,'Confirm only if this matches your station. You can edit coordinates manually.',19,self.MUTED,width=1016)
+        self.ink(cache,132,516,'Confirmation saves coordinates and grid; automatic GPS updates switch off.',19,self.MUTED,width=1016)
+        self.ink(cache,132,550,self.message if self.message and status['result'] else 'Saved location stays unchanged until you confirm.',18,self.CYAN,width=1016)
+        self.button(cache,(132,592,420,656),'Cancel',('detect_cancel',None))
+        if not status['busy']:
+            self.button(cache,(436,592,724,656),'Refresh estimate',('detect_refresh',None))
+            if result and not status['error']:
+                self.button(cache,(740,592,1148,656),'Confirm location',('detect_confirm',None),True)

@@ -99,26 +99,13 @@ class BoardLayoutTests(unittest.TestCase):
         with patch.dict(ui.theme_system.runtime_theme, {'smeter_style': 'linear_orange'}):
             self.assertEqual(ui.large_frequency_placement('middle')[1], 'rm')
 
-    def test_saving_large_meter_moves_frequency_to_visible_right_rail(self):
+    def test_saving_large_meter_preserves_readout_position(self):
         ui.configure_output(True)
-        with patch.dict(ui.theme_system.runtime_theme, {'sidebar': 'right'}):
-            self.assertEqual(
-                ui.instrument_layout_after_theme_save('left', 'bakelite_square'),
-                'right',
-            )
-            self.assertEqual(
-                ui.instrument_layout_after_theme_save('middle', 'aviation'),
-                'right',
-            )
-            self.assertEqual(
-                ui.instrument_layout_after_theme_save('left', 'linear_orange'),
-                'left',
-            )
-        with patch.dict(ui.theme_system.runtime_theme, {'sidebar': 'left'}):
-            self.assertEqual(
-                ui.instrument_layout_after_theme_save('middle', 'bakelite_square'),
-                'left',
-            )
+        for sidebar in ('left', 'right'):
+            with patch.dict(ui.theme_system.runtime_theme, {'sidebar': sidebar}):
+                for position in ('left', 'middle', 'right'):
+                    for style in ('bakelite_square', 'aviation', 'linear_orange'):
+                        self.assertEqual(ui.instrument_layout_after_theme_save(position, style), position)
 
     def test_old_frequency_positions_keep_their_screen_locations(self):
         self.assertEqual(ui.normalize_frequency_position('compact'), 'right')
@@ -163,7 +150,7 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(draw_frequency.call_args.kwargs['family'], ui.COMPACT_FREQUENCY_FONT_FAMILY)
         self.assertNotIn('fit_text', draw_frequency.call_args.kwargs)
         self.assertEqual(draw_frequency.call_args.kwargs['anchor'], 'lm')
-        self.assertEqual(draw_context.call_args.kwargs['compact'], True)
+        draw_context.assert_not_called()
         draw_meter.assert_not_called()
         draw_analog_meter.assert_called_once_with(
             text_cache, -95, False, -95, meter_x0=439,
@@ -335,11 +322,11 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertEqual(len(lines.call_args_list), 1)
         close_button.assert_called_once_with(text_cache, close, 'CLOSE', size=12)
 
-    def test_band_button_is_third_row_right_with_live_context(self):
+    def test_band_button_shares_tune_scan_row_with_live_context(self):
         ui.configure_output(True)
         scan=ui.smart_seek_waterfall_box();box=ui.band_waterfall_box()
-        self.assertEqual((box[0],box[2]),(scan[0],scan[2]))
-        self.assertEqual(box[1]-scan[3],10)
+        self.assertEqual(box[1::2],scan[1::2])
+        self.assertEqual(box[0]-scan[2],10)
         self.assertEqual(box[2]-box[0],box[3]-box[1])
         with patch.object(ui,'draw_styled_two_line_button') as draw:
             ui.draw_band_waterfall_button(None,7265,'AM')
@@ -518,10 +505,24 @@ class BoardLayoutTests(unittest.TestCase):
             waterfall_band[0], 0, waterfall_band[2], 280,
         ))
         self.assertEqual(waterfall_band[1:4:2], (280, 800))
-        self.assertEqual(spectrum_band[4][:3], ui.APP_UI_STYLE.palette.passband_fill[:3])
+        self.assertEqual(spectrum_band[4][:3], ui.APP_UI_STYLE.palette.focus[:3])
         self.assertEqual(spectrum_band[4][3], ui.APP_UI_STYLE.palette.passband_fill[3])
-        self.assertEqual(spectrum_edge, ui.APP_UI_STYLE.palette.passband_border)
+        self.assertEqual(spectrum_edge, (*ui.APP_UI_STYLE.palette.focus[:3], ui.APP_UI_STYLE.palette.passband_border[3]))
         self.assertLess(spectrum_edge[3], ui.APP_UI_STYLE.palette.passband_center[3])
+
+    def test_passband_tracks_custom_accent_preserving_layer_opacity(self):
+        from dataclasses import replace
+        ui.configure_output(True)
+        for accent in ((31, 160, 240, 255), (210, 80, 190, 255)):
+            palette = replace(ui.APP_UI_STYLE.palette, focus=accent)
+            with patch.object(ui, 'APP_UI_STYLE', replace(ui.APP_UI_STYLE, palette=palette)), \
+                 patch.object(ui, 'draw_logical_rect') as fill, \
+                 patch.object(ui, 'draw_logical_line') as lines:
+                ui.draw_filter_overlay(None, 20, -3000, 3000, 0, 700, alpha=.5)
+            self.assertEqual(fill.call_args.args[4], (*accent[:3], int(palette.passband_fill[3]*.5)))
+            colors = [call.args[4] for call in lines.call_args_list]
+            self.assertIn((*accent[:3], int(palette.passband_border[3]*.5)), colors)
+            self.assertIn((*accent[:3], int(palette.passband_center[3]*.5)), colors)
 
     def test_waterfall_tap_tunes_under_finger_without_recentering_passband(self):
         ui.configure_output(True)
@@ -668,7 +669,7 @@ class BoardLayoutTests(unittest.TestCase):
         fill, border, icon = ui.zoom_button_palette(active=True, pressed=True)
         self.assertEqual(fill, (*ui.APP_UI_STYLE.palette.pressed_surface[:3], 216))
         self.assertEqual(border, ui.APP_UI_STYLE.palette.pressed_border)
-        self.assertEqual(icon, (0, 0, 0, 255))
+        self.assertEqual(icon, (*ui.APP_UI_STYLE.button.resolve(pressed=True).text[:3], 255))
 
     def test_listening_actions_form_square_grid_and_keep_home_zoom_spacing(self):
         ui.configure_output(True)
@@ -680,8 +681,9 @@ class BoardLayoutTests(unittest.TestCase):
         tune, seek = ui.carrier_waterfall_box(), ui.smart_seek_waterfall_box()
         for box in (tune, seek):
             self.assertEqual((box[2]-box[0], box[3]-box[1]), expected_size)
-        self.assertEqual(tune[::2], favorite[::2])
-        self.assertEqual(seek[::2], pause[::2])
+        self.assertEqual(seek[::2], favorite[::2])
+        self.assertEqual(ui.band_waterfall_box()[::2], pause[::2])
+        self.assertEqual(seek[0]-tune[2], 10)
         self.assertEqual((tune[1], tune[3]), (seek[1], seek[3]))
         self.assertEqual(tune[1]-favorite[3], pause[0]-favorite[2])
         self.assertEqual(
@@ -713,7 +715,63 @@ class BoardLayoutTests(unittest.TestCase):
                                       fill_alpha=184)
         self.assertEqual(line.call_count, 2)
 
-    def test_waterfall_pause_uses_the_zoom_icon_stroke_weight(self):
+    def test_shared_zoom_symbols_are_half_again_larger_without_moving_targets(self):
+        ui.configure_output(True)
+        layout = ui.dual_vfo_layout()
+        boxes = (ui.ZOOM_MINUS_BOX, ui.ZOOM_PLUS_BOX,
+                 *(layout[f'zoom_{vfo}_{sign}'] for vfo in ('a', 'b') for sign in ('minus', 'plus')))
+        visual = ui.APP_UI_STYLE.button.resolve()
+        for box in boxes:
+            for label in ('-', '+'):
+                with self.subTest(box=box, label=label), \
+                     patch.object(ui, 'draw_styled_button_frame', return_value=visual) as frame, \
+                     patch.object(ui, 'draw_logical_line') as line:
+                    ui.draw_zoom_button(None, box, label)
+                self.assertEqual(frame.call_args.args[0], box)
+                self.assertEqual(line.call_count, 2 if label == '+' else 1)
+                for call in line.call_args_list:
+                    x0,y0,x1,y1 = call.args[:4]
+                    self.assertEqual(max(abs(x1-x0),abs(y1-y0)),48)
+                    self.assertEqual(call.args[5],6)
+                    self.assertGreaterEqual(min(x0,x1)-3,box[0])
+                    self.assertLessEqual(max(x0,x1)+3,box[2])
+                    self.assertGreaterEqual(min(y0,y1)-3,box[1])
+                    self.assertLessEqual(max(y0,y1)+3,box[3])
+
+    def test_home_zoom_restores_original_symbols_and_keeps_lower_position(self):
+        ui.configure_output(True)
+        with patch.object(ui, 'draw_logical_line') as lines, \
+             patch.object(ui, 'draw_styled_button_frame', return_value=ui.APP_UI_STYLE.button.resolve()):
+            ui.draw_waterfall_operating_controls(None, True)
+        self.assertEqual(lines.call_count, 3)
+        for call in lines.call_args_list:
+            x0, y0, x1, y1 = call.args[:4]
+            self.assertEqual(max(abs(x1-x0), abs(y1-y0)), 32)
+            self.assertEqual(call.args[5], 4)
+        self.assertEqual(ui.ZOOM_MINUS_BOX[3], ui.LOGICAL_H-ui.BOTTOM_STATUS_H-ui.BOTTOM_RULER_H-ui.LCD_CONTROL_GAP)
+
+    def test_shared_plus_minus_buttons_scale_once_with_default_or_explicit_sizes(self):
+        box=(10,20,74,84)
+        visual=ui.APP_UI_STYLE.button.resolve()
+        for label in ('−','-','+'):
+            for size in (None,18,24):
+                with self.subTest(label=label,size=size), \
+                     patch.object(ui,'draw_styled_button_frame',return_value=visual) as frame, \
+                     patch.object(ui,'draw_text') as text:
+                    ui.draw_styled_text_button(None,box,label,size=size)
+                base=ui.APP_UI_STYLE.button.label_size if size is None else size
+                self.assertEqual(text.call_args.args[5],round(base*1.5))
+                self.assertEqual(frame.call_args.args[0],box)
+            with patch.object(ui,'draw_styled_button_frame',return_value=visual), \
+                 patch.object(ui,'draw_text') as text:
+                ui.draw_styled_two_line_button(None,box,label,'')
+            self.assertEqual(text.call_args.args[5],round(ui.APP_UI_STYLE.button.title_size*1.5))
+        with patch.object(ui,'draw_styled_button_frame',return_value=visual), \
+             patch.object(ui,'draw_text') as text:
+            ui.draw_styled_text_button(None,box,'ZOOM IN',size=18)
+        self.assertEqual(text.call_args.args[5],18)
+
+    def test_waterfall_pause_keeps_its_original_stroke_weight(self):
         visual = ui.APP_UI_STYLE.button.resolve()
         with patch.object(ui, 'ui_button_pressed', return_value=False), \
              patch.object(ui, 'draw_styled_button_frame', return_value=visual), \
@@ -724,6 +782,19 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertTrue(all(c.args[5] == 4 for c in line.call_args_list))
         rect.assert_not_called()
 
+    def test_selected_options_use_display_theme_accent_and_dim_unselected(self):
+        from dataclasses import replace
+        palette = replace(ui.APP_UI_STYLE.palette, focus=(220, 100, 40, 255))
+        style = replace(ui.APP_UI_STYLE, palette=palette)
+        with patch.object(ui, 'APP_UI_STYLE', style), \
+             patch.object(ui, 'draw_styled_two_line_button') as button, \
+             patch.object(ui, 'draw_logical_rect') as lamp:
+            ui.draw_selection_button(None, (0, 0, 74, 56), 'LEFT', True)
+            self.assertEqual(lamp.call_args.args[4], palette.focus)
+            self.assertEqual(button.call_args.kwargs['style'].variant, 'smart')
+            ui.draw_selection_button(None, (0, 0, 74, 56), 'MIDDLE', False)
+            self.assertEqual(lamp.call_args.args[4], (44, 20, 8))
+
     def test_display_advanced_sits_above_back_and_reset_beside_speed(self):
         ui.configure_output(True);ui.configure_popup_layout();ui.set_display_page(False)
         self.addCleanup(ui.set_display_page,False)
@@ -732,6 +803,10 @@ class BoardLayoutTests(unittest.TestCase):
         self.assertGreater(ui.DISPLAY_RESET_BOX[0],ui.DISPLAY_SPEED_BOX[2])
         ui.set_display_page(True)
         box=ui.DISPLAY_THEME_BOX
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[-1][1][3]+ui.LCD_NAV_GAP,ui.DISPLAY_HIDE_RAIL_BOX[1])
+        self.assertEqual(ui.DISPLAY_HIDE_RAIL_BOX[3]+ui.LCD_NAV_GAP,ui.lcd_drawer_back_box()[1])
+        self.assertEqual(ui.DISPLAY_LAYOUT_BOXES[0][1][1]-box[3],40)
+        self.assertEqual(box[3]-box[1],64)
         self.assertEqual(ui.display_option_at((box[0]+box[2])/2,(box[1]+box[3])/2),('theme',None))
         self.assertLess(ui.DISPLAY_RESET_BOX[0],0)
 
@@ -746,7 +821,7 @@ class BoardLayoutTests(unittest.TestCase):
                  patch.object(ui, 'draw_display_slider_section') as sliders, \
                  patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
                  patch.object(ui, 'draw_radio_close_button'), patch.object(ui, 'draw_sidebar_header'), \
-                 patch.object(ui, 'draw_display_control') as controls, \
+                 patch.object(ui, 'draw_selection_button') as controls, \
                  patch.object(ui, 'draw_lcd_drawer_heading'):
                 ui.draw_display_setup_panel(None, 100, 200, 1, False, 'kiwi', True)
             if advanced:
@@ -756,10 +831,10 @@ class BoardLayoutTests(unittest.TestCase):
                 self.assertEqual([c.args[2] for c in controls.call_args_list],
                                  ['LEFT', 'MIDDLE', 'RIGHT'])
             else:
-                self.assertEqual([c.args[2:4] for c in cycles.call_args_list],
+                self.assertEqual([c.args[2:4] for c in cycles.call_args_list if c.args[3]],
                                  [('SPECTRUM','ON'), ('WATERFALL','ON (AUTO)'), ('SPEED','SLOW'), ('RESET','DISPLAY')])
-                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING'])
-                self.assertEqual([c.args[2] for c in controls.call_args_list], ['STD','KIWI','GQRX'])
+                self.assertEqual([c.args[2] for c in sliders.call_args_list], ['FLOOR','CEILING','BRIGHTNESS'])
+                self.assertEqual([c.args[2] for c in controls.call_args_list], ['STD','KIWI','GQRX','FILL','DARK','PEAK'])
                 self.assertIn('ADVANCED', [c.args[2] for c in tiles.call_args_list])
 
     def test_display_drawer_options_fit_the_rail(self):
@@ -1132,7 +1207,7 @@ class DualVfoHomeControlTests(unittest.TestCase):
         ui.configure_popup_layout()
         layout = ui.dual_vfo_layout()
         home_meter = ui.lcd_compact_smeter_box()
-        home_modes = tuple(ui.lcd_home_mode_boxes(True))
+        home_modes = tuple(ui.lcd_home_mode_boxes(True,trial=False))
         for vfo in ('A', 'B'):
             meter = layout[f'smeter_{vfo.lower()}']
             self.assertEqual((meter[0], meter[2]), (home_meter[0], home_meter[2]))
@@ -1264,7 +1339,7 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 10.02, 23.0, "stream"), ())
         self.assertEqual(presenter.take(rows, 10.05, 23.0, "stream"), (1,))
 
-    def test_presenter_rebuffers_after_a_real_underrun(self):
+    def test_presenter_rebuffers_at_measured_rate_after_a_real_underrun(self):
         rows = ui.queue.Queue()
         presenter = ui.WaterfallPresenter(reserve_seconds=0.10)
         for value in range(3):
@@ -1274,9 +1349,9 @@ class WaterfallPresentationTests(unittest.TestCase):
         self.assertEqual(presenter.take(rows, 1.2, 23.0, "stream"), ())
         rows.put(3)
         rows.put(4)
-        self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), ())
-        rows.put(5)
         self.assertEqual(presenter.take(rows, 1.3, 23.0, "stream"), (3,))
+        rows.put(5)
+        self.assertEqual(presenter.take(rows, 1.31, 23.0, "stream"), ())
 
     def test_fmdx_presenter_uses_audio_fft_cadence(self):
         self.assertAlmostEqual(
@@ -1544,15 +1619,15 @@ class ReceiverMapLegendTests(unittest.TestCase):
             self.assertEqual(ui.receiver_map_legend_swatch_color(group, False),
                              ui.APP_UI_STYLE.palette.secondary_text)
 
-    def test_legend_draws_small_color_squares_before_labels(self):
+    def test_legend_draws_radio_inputs_before_labels(self):
         receivers = self.receivers()
-        ui.receiver_map_toggle_group('fmdx')
+        ui.receiver_map_select_group('fmdx')
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
-             patch.object(ui, 'draw_logical_rect') as rectangles, \
+             patch.object(ui, 'draw_logical_rect'), \
              patch.object(ui, 'draw_logical_line'), \
              patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_logical_polyline'), \
-             patch.object(ui, 'draw_logical_circle'), \
+             patch.object(ui, 'draw_logical_circle') as circles, \
              patch.object(ui, 'draw_logical_points'), \
              patch.object(ui, 'draw_text'), \
              patch.object(ui, 'fit_station_text', side_effect=lambda _c, text, *_a, **_k: text), \
@@ -1561,11 +1636,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
              patch.object(ui, 'draw_radio_close_button'):
             ui.draw_receiver_map(None, receivers, 0.0, 0.0, 1.0,
                                  '', None, 'idle', {}, map_view='satellite_only')
-        calls = [call.args for call in rectangles.call_args_list]
         for group, (x0, y0, x1, y1) in ui.receiver_map_legend_boxes(receivers):
-            color = (ui.APP_UI_STYLE.palette.secondary_text if group == 'fmdx'
-                     else ui.RECEIVER_MAP_GROUP_COLORS[group])
-            self.assertIn((x0 + 12, (y0+y1)/2 - 6, x0 + 24, (y0+y1)/2 + 6, color), calls)
+            color = ui.receiver_map_legend_swatch_color(group, group == 'fmdx')
+            circles.assert_any_call(x0 + 18, (y0+y1)/2, 7, color, outline=True, width=2)
+            filled = call(x0 + 18, (y0+y1)/2, 3, color)
+            self.assertEqual(filled in circles.call_args_list, group == 'fmdx')
 
     def test_globe_zoom_reaches_1200x_and_uses_home_osd_panel(self):
         self.assertEqual(ui.RADIOGARDEN_ZOOM_MAX, 1200.0)
@@ -1628,11 +1703,11 @@ class ReceiverMapLegendTests(unittest.TestCase):
             tiles.assert_not_called()
 
     def test_legend_label_names_the_action(self):
-        # A lit chip offers to hide its group; a hidden chip offers to show it.
-        self.assertEqual(ui.receiver_map_legend_label('kiwi', True), 'HIDE KIWI')
-        self.assertEqual(ui.receiver_map_legend_label('fmdx', True), 'HIDE FM-DX')
-        self.assertEqual(ui.receiver_map_legend_label('kiwi', False), 'SHOW KIWI')
-        self.assertEqual(ui.receiver_map_legend_label('fmdx', False), 'SHOW FM-DX')
+        # A source is either selected or available for selection.
+        self.assertEqual(ui.receiver_map_legend_label('kiwi', True), 'KIWI SELECTED')
+        self.assertEqual(ui.receiver_map_legend_label('fmdx', True), 'FM-DX SELECTED')
+        self.assertEqual(ui.receiver_map_legend_label('kiwi', False), 'KIWI SELECT')
+        self.assertEqual(ui.receiver_map_legend_label('fmdx', False), 'FM-DX SELECT')
 
     def _legend_texts(self):
         texts = []
@@ -1662,7 +1737,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
         self.assertIn('OPENWEBRX', texts)
         self.assertIn('LAN', texts)
         self.assertIn('FM-DX', texts)
-        ui.receiver_map_toggle_group('kiwi')
+        ui.receiver_map_select_group('kiwi')
         texts = self._legend_texts()
         self.assertIn('KIWI', texts)
 
@@ -1765,7 +1840,7 @@ class ReceiverMapLegendTests(unittest.TestCase):
     def test_render_uses_scale_derived_dot_size(self):
         expected = sorted(
             tuple(ui.RECEIVER_MAP_GROUP_COLORS[group])
-            for group in ('kiwi', 'openwebrx', 'local', 'fmdx')
+            for group in ('kiwi',)
         )
         for scale in (0.55, ui.GLOBE_DEFAULT_SCALE, 12.0, 20.5, 68.8):
             drawn = self._draw_dots(scale)
@@ -1812,12 +1887,18 @@ class ReceiverMapLegendTests(unittest.TestCase):
             self.assertNotIn((160, 190, 180, 140),
                              self._polyline_colors('satellite_only', interactive=moving))
 
-    def test_legend_toggle_hides_and_shows_a_group(self):
-        self.assertTrue(ui.receiver_map_group_visible('fmdx'))
-        self.assertFalse(ui.receiver_map_toggle_group('fmdx'))
+    def test_source_list_defaults_to_kiwi_and_selects_exactly_one(self):
+        self.assertTrue(ui.receiver_map_group_visible('kiwi'))
         self.assertFalse(ui.receiver_map_group_visible('fmdx'))
-        self.assertTrue(ui.receiver_map_toggle_group('fmdx'))
+        for group in ui.RECEIVER_MAP_GROUP_ORDER:
+            for _ in range(2):
+                self.assertTrue(ui.receiver_map_select_group(group))
+                self.assertEqual([g for g in ui.RECEIVER_MAP_GROUP_ORDER
+                                  if ui.receiver_map_group_visible(g)], [group])
+        self.assertFalse(ui.receiver_map_select_group('invalid'))
         self.assertTrue(ui.receiver_map_group_visible('fmdx'))
+        ui.receiver_map_reset_groups()
+        self.assertTrue(ui.receiver_map_group_visible('kiwi'))
 
     def test_legend_chips_are_hit_testable_and_do_not_overlap(self):
         receivers = self.receivers()
@@ -1828,7 +1909,8 @@ class ReceiverMapLegendTests(unittest.TestCase):
             # The legend lives in the Globe's right rail, not over the map.
             self.assertGreaterEqual(box[0], ui.LCD_NAV_X0)
             self.assertLessEqual(box[2], ui.LOGICAL_W)
-            self.assertEqual(box[2] - box[0], 148)
+            self.assertEqual((box[0], box[2]),
+                             (ui.RADIOGARDEN_EXIT_BOX[0], ui.RADIOGARDEN_EXIT_BOX[2]))
             self.assertEqual(box[2], ui.LOGICAL_W - ui.RECEIVER_PICKER_MARGIN)
             self.assertEqual(box[3] - box[1], ui.RECEIVER_PICKER_CATEGORY_HEIGHT)
             self.assertEqual(box[1], ui.RECEIVER_MAP_LEGEND_RAIL_TOP +
@@ -1850,9 +1932,10 @@ class ReceiverMapLegendTests(unittest.TestCase):
 
         with patch.object(ui, 'radiogarden_project', side_effect=project):
             fmdx_x = 100.0 + 3.0 * 1000.0
+            ui.receiver_map_select_group('fmdx')
             self.assertIsNotNone(ui.receiver_map_station_at(
                 fmdx_x, 120, receivers, 0.0, 0.0, ui.PICKER_MAP_BOX, 1.0))
-            ui.receiver_map_toggle_group('fmdx')
+            ui.receiver_map_select_group('kiwi')
             self.assertIsNone(ui.receiver_map_station_at(
                 fmdx_x, 120, receivers, 0.0, 0.0, ui.PICKER_MAP_BOX, 1.0))
             # The focus candidate also skips the hidden FM-DX receiver.
@@ -1885,17 +1968,15 @@ class ReceiverMapLegendTests(unittest.TestCase):
                 map_view='satellite_only',
             )
         # One point per receiver -- every marker shares the same current size.
-        self.assertEqual(sum(count for count, _size in drawn), len(receivers))
+        self.assertEqual(sum(count for count, _size in drawn), 1)
         expected_size = ui.receiver_map_dot_pixels(1.0)
         self.assertTrue(all(size == expected_size for _count, size in drawn))
         # Each legend group has its own colour, so they batch into four calls.
-        self.assertEqual(len(drawn), 4)
+        self.assertEqual(len(drawn), 1)
 
     def test_hidden_group_removes_its_dots_from_the_draw(self):
         receivers = self.receivers()
-        ui.receiver_map_toggle_group('kiwi')
-        ui.receiver_map_toggle_group('openwebrx')
-        ui.receiver_map_toggle_group('local')
+        ui.receiver_map_select_group('fmdx')
         drawn = []
         with patch.object(ui, 'draw_receiver_map_satellite', return_value=False), \
              patch.object(ui, 'draw_logical_rect'), patch.object(ui, 'draw_logical_line'), \
@@ -2008,14 +2089,15 @@ class SharedButtonPressFeedbackTests(unittest.TestCase):
         self.assertEqual(fills[0], ui.APP_UI_STYLE.palette.active_surface)
         self.assertEqual(colors[0], ui.APP_UI_STYLE.palette.text)
 
-    def test_two_line_button_turns_title_and_subtitle_black_when_pressed(self):
+    def test_two_line_button_keeps_pressed_subtitle_dimmed(self):
         box = (10, 20, 104, 114)
         colors = []
         ui.set_ui_press_point(40, 50)
         with patch.object(ui, 'draw_logical_rounded_rect'), \
              patch.object(ui, 'draw_text', side_effect=lambda _c, _x, _y, _label, color, *_a, **_k: colors.append(color)):
             ui.draw_picker_two_line_button(None, box, 'VIEW', 'SAT')
-        self.assertEqual(colors, [ui.UI_PRESSED_TEXT, ui.UI_PRESSED_TEXT])
+        pressed = ui.APP_UI_STYLE.button.resolve(pressed=True)
+        self.assertEqual(colors, [pressed.text, tuple(ui.muted_text_color(pressed.text,pressed.fill))])
 
     def test_legacy_close_entry_point_draws_the_shared_text_back_button(self):
         box = (10, 20, 104, 114)

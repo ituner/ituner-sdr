@@ -18,12 +18,35 @@ from adsb_workspace import ADSBWorkspace
 SITE=dict(lat=44.4268,lon=26.1025)
 
 
+def visible_coverage(*args, **kwargs):
+    """These history/geometry tests model an open coverage view."""
+    coverage = ReceptionCoverage(*args, **kwargs)
+    coverage.snapshot()  # Request history before the worker's next tick.
+    return coverage
+
+
 def row(stamp=None,**fields):
     return dict(time=time.time() if stamp is None else stamp, aircraft=dict(hex='abc123',type='adsb_icao',lat=44.5,lon=26.1,
                 alt_geom=10000,alt_baro=9500,seen_pos=1,rssi=-22,flight='TEST123',**fields))
 
 
 class CoverageTests(unittest.TestCase):
+    def test_history_and_dome_choices_use_selection_lamps_without_changing_actions(self):
+        ui=Mock();w=ADSBWorkspace(ui,Mock());cache=Mock()
+        w.history_draft=3600
+        w.draw_history_window(cache)
+        choices=ui.draw_selection_button.call_args_list
+        self.assertEqual(len(choices),9)
+        self.assertEqual(sum(bool(call.args[3]) for call in choices),1)
+        self.assertEqual(len([action for _box,action in w.actions if action[0]=='history_choice']),9)
+        self.assertIn(('history_apply',None),[action for _box,action in w.actions])
+        ui.reset_mock();w.actions=[];w.coverage_view.window_open=True
+        w.coverage_view.draw(cache,dict(aircraft=[]))
+        choices=ui.draw_selection_button.call_args_list
+        self.assertEqual(len(choices),len(COVERAGE_WINDOWS))
+        self.assertEqual(sum(bool(call.args[3]) for call in choices),1)
+        self.assertEqual(len([action for _box,action in w.actions if action[0]=='coverage_span']),len(COVERAGE_WINDOWS))
+
     def test_empty_dome_message_clears_height_controls_without_moving_them(self):
         w=ADSBWorkspace(Mock(),Mock());w.ink=Mock();w.manager.coverage_error=''
         view=w.coverage_view;view.mode='space';view.data=dict(status='NO SITE',meta={})
@@ -37,7 +60,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_complete_week_is_not_pruned_by_the_older_history_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp)
+            now=time.time();c=visible_coverage(tmp)
             c.add([row(now-i) for i in range(20)]+[row(now-8*86400)])
             with patch('adsb_coverage.MAX_POINTS',5):c.tick(SITE,now=now)
             data=c.snapshot();self.assertEqual(data['meta']['retained_positions'],20)
@@ -351,7 +374,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_native_loading_refresh_preserves_completed_scene_in_every_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);now=time.time();c.add([row(now)]);c.tick(SITE,now)
+            c=visible_coverage(tmp);now=time.time();c.add([row(now)]);c.tick(SITE,now)
             data=c.snapshot();touch=CoverageTouch(Mock())
             for mode in ('cells','trails','space'):
                 touch.mode=mode;touch.update_data(data);frame=touch.frame;identity=touch.frame_id
@@ -379,7 +402,7 @@ class CoverageTests(unittest.TestCase):
         from adsb_footprint import destination
         from adsb_coverage import RETENTION
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp)
+            now=time.time();c=visible_coverage(tmp)
             for stamp,metres in ((now-100,10000),(now-2,1000)):
                 p=destination(SITE,92,metres);sample=row(stamp);sample['receiver_position']=SITE
                 sample['aircraft'].update(lat=p['lat'],lon=p['lon']);c.add([sample])
@@ -392,7 +415,7 @@ class CoverageTests(unittest.TestCase):
             c.tick(SITE,now+RETENTION+10)
             self.assertEqual(c.db.execute('SELECT count(*) FROM positions').fetchone()[0],0)
             self.assertEqual(c.maximum_snapshot(),maximum);c.close()
-            c=ReceptionCoverage(tmp);c.tick(SITE,now)
+            c=visible_coverage(tmp);c.tick(SITE,now)
             self.assertEqual(c.maximum_snapshot(),maximum)
             c.tick(dict(lat=37.6624,lon=-121.8747),now+6)
             self.assertEqual(c.maximum_snapshot()['footprint']['regions'],[])
@@ -424,16 +447,16 @@ class CoverageTests(unittest.TestCase):
             root=Path(tmp);sample=row()
             (root/'flights.jsonl').write_text(json.dumps(sample)+'\ninvalid\n')
             (root/'flights.jsonl.1').write_text(json.dumps(sample)+'\n')
-            c=ReceptionCoverage(root);c.tick(SITE);data=c.snapshot()
+            c=visible_coverage(root);c.tick(SITE);data=c.snapshot()
             self.assertEqual(data['meta']['retained_positions'],1)
             self.assertEqual(data['meta']['max_altitude_ft'],10000)
             self.assertEqual(data['meta']['max_altitude_source'],'GNSS')
-            c.close();c=ReceptionCoverage(root);c.tick(SITE)
+            c.close();c=visible_coverage(root);c.tick(SITE)
             self.assertEqual(c.snapshot()['meta']['retained_positions'],1);c.close()
 
     def test_window_filters_full_database_statistics_cells_footprint_and_keeps_history(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);now=time.time()
+            c=visible_coverage(tmp);now=time.time()
             old=row(now-120);old['aircraft'].update(alt_geom=35000,lat=44.9)
             recent=row(now-2);recent['aircraft'].update(alt_geom=1000)
             c.add([old,recent]);c.tick(SITE,now=now)
@@ -453,7 +476,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_reference_and_height_change_reprojects_without_changing_altitude(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE);first=c.snapshot()
+            c=visible_coverage(tmp);c.add([row()]);c.tick(SITE);first=c.snapshot()
             c.set_height(100);c.tick(SITE,now=time.time()+6);changed=c.snapshot()
             self.assertEqual(first['points'],changed['points']) # packed ENU is referenced at zero ellipsoid height
             self.assertEqual(changed['meta']['reference_height_m'],100)
@@ -464,11 +487,11 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(c.snapshot()['meta']['excluded_other_sites'],1)
             c.snapshot();c.tick(SITE,now=time.time()+18)
             self.assertEqual(c.snapshot()['meta']['retained_positions'],1)
-            c.close();c=ReceptionCoverage(tmp);self.assertEqual(c.height,100);c.close()
+            c.close();c=visible_coverage(tmp);self.assertEqual(c.height,100);c.close()
 
     def test_retention_and_full_history_statistics_with_thinned_dots(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);now=time.time()
+            c=visible_coverage(tmp);now=time.time()
             samples=[]
             for i in range(25):
                 sample=row(now-100+i);sample['aircraft'].update(lat=44.46+i*.001,alt_geom=12000 if i==13 else 1000)
@@ -485,7 +508,7 @@ class CoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             a=SITE;b=dict(lat=45.0,lon=26.0);first=row();first['receiver_position']=a
             second=row(time.time()+2);second['receiver_position']=b
-            c=ReceptionCoverage(tmp);c.add([first,second]);c.tick(a)
+            c=visible_coverage(tmp);c.add([first,second]);c.tick(a)
             self.assertEqual(c.snapshot()['meta']['retained_positions'],1)
             self.assertEqual(c.snapshot()['meta']['excluded_other_sites'],1)
             c.snapshot();c.tick(b,time.time()+6)
@@ -496,12 +519,12 @@ class CoverageTests(unittest.TestCase):
 
     def test_empty_and_unknown_site_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);c.tick(None);self.assertEqual(c.snapshot()['status'],'NO SITE')
+            c=visible_coverage(tmp);c.tick(None);self.assertEqual(c.snapshot()['status'],'NO SITE')
             c.tick(SITE,time.time()+6);self.assertEqual(c.snapshot()['status'],'EMPTY');c.close()
 
     def test_height_validation_and_lifecycle_breaks(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp)
+            c=visible_coverage(tmp)
             for invalid in (float('nan'),True,'100',9001):
                 with self.assertRaises(ValueError):c.set_height(invalid)
             now=time.time();c.add([row(now-2)]);c.mark_break(now-1);c.tick(SITE)
@@ -509,7 +532,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_native_all_modes_and_black_background(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE);data=c.snapshot()
+            c=visible_coverage(tmp);c.add([row()]);c.tick(SITE);data=c.snapshot()
             for mode in ('cells','trails','space'):
                 raster,labels,hits=paint(data,mode,0,55,True)
                 self.assertEqual(len(raster),1232*460*4)
@@ -554,7 +577,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_native_fresh_minute_clears_scene_and_stats_rejects_old_request_and_keeps_history(self):
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp);c.add([row(now-20)]);c.tick(SITE)
+            now=time.time();c=visible_coverage(tmp);c.add([row(now-20)]);c.tick(SITE)
             data=c.snapshot();view=CoverageTouch(ADSBWorkspace(Mock(),Mock()))
             view.update_data(data);old_revision=view.window.revision
             self.assertEqual(view.data['meta']['retained_positions'],1)
@@ -597,7 +620,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_batched_dome_keeps_unknown_cells_filters_and_altitude(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE);data=c.snapshot()
+            c=visible_coverage(tmp);c.add([row()]);c.tick(SITE);data=c.snapshot()
             for mode in ('cells','trails','space'):
                 scene=dome_gl.prepare(data,mode)
                 frame=dome_gl.project(scene,35,55,920,590)
@@ -618,7 +641,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_rotation_changes_projection_without_rebuilding_or_uploading_raster(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c=ReceptionCoverage(tmp);c.add([row()]);c.tick(SITE)
+            c=visible_coverage(tmp);c.add([row()]);c.tick(SITE)
             scene=dome_gl.prepare(c.snapshot(),'cells')
             frame=dome_gl.project(scene,0,55,920,590)
             rotated=dome_gl.project(scene,90,55,920,590)

@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--user', default=os.environ.get('SUDO_USER'))
     parser.add_argument('--root', type=Path)
     parser.add_argument('--commit', default='')
+    parser.add_argument('--cm5-quiet-halt', action='store_true', help='Enable the CM5 carrier quiet-halt EEPROM step during confirmed updates')
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(source / 'UI'))
@@ -44,6 +45,11 @@ def main():
                state=str(state), runtime_info=str(info), user=args.user or pwd.getpwuid(os.getuid()).pw_name,
                python=sys.executable if mac else '/usr/bin/python3')
     path = state / 'config.json' if mac else Path('/etc/ituner-update.json')
+    previous = json.loads(path.read_text()) if path.exists() else {}
+    cfg['system_steps_version'] = 1
+    cfg['cm5_quiet_halt'] = bool(args.cm5_quiet_halt or previous.get('cm5_quiet_halt'))
+    if args.cm5_quiet_halt and (mac or 'Compute Module 5' not in Path('/proc/device-tree/model').read_text()):
+        parser.error('--cm5-quiet-halt requires a Compute Module 5.')
     atomic_json(path, cfg); path.chmod(0o600 if mac else 0o644)
     if not mac:
         helper = Path('/usr/local/sbin/ituner-update')

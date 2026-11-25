@@ -1,4 +1,4 @@
-"""On-demand application updates. No driver, OS, receiver, or model updates.
+"""On-demand application updates with fixed, opt-in device setup steps.
 
 The Pi's privileged copy lives outside the application and only accepts fixed
 operations against the official repository. Desktop workers run as the user.
@@ -129,6 +129,129 @@ def check_release(channel):
     return {'commit': sha, 'name': name, 'notes': notes[:12000], 'channel': channel}
 
 
+# These are fixed helper capabilities, not arbitrary release install hooks.
+SYSTEM_STEPS = ('pi-power-controls-v1', 'pi-network-controls-v1', 'cm5-quiet-halt-v1')
+STEP_FILES = {'pi-power-controls-v1': ('scripts/ituner-power',),
+              'pi-network-controls-v1': ('systemd/ituner-network', 'systemd/90-ituner-network'),
+              'cm5-quiet-halt-v1': ('hardware/cm5/v4/config.ini',)}
+SYSTEM_FILES = tuple(name for files in STEP_FILES.values() for name in files)
+
+
+def quiet_halt_config(current):
+    # Remove every prior override, then append an unconditional setting. Keep
+    # boot order and all unrelated conditional sections exactly as installed.
+    lines = [line for line in current.splitlines()
+             if not re.match(r'^\s*POWER_OFF_ON_HALT\s*=', line)]
+    return '\n'.join(lines).rstrip() + '\n\n[all]\nPOWER_OFF_ON_HALT=0\n'
+
+
+def device_setup_pending(cfg):
+    if not cfg or cfg['platform'] != 'linux' or cfg.get('system_steps_version', 0) < 1:
+        return False
+    steps = read_json(Path(cfg['root']) / 'app-update.json').get('system_steps', [])
+    completed = read_json(Path(cfg['state']) / 'device-steps-complete.json')
+    return bool(steps and (completed.get('steps') != steps or
+                          completed.get('cm5_quiet_halt') != bool(cfg.get('cm5_quiet_halt'))))
+
+
+def system_update_steps(cfg, stage, manifest, runner=subprocess.run):
+    """Idempotent system changes after the candidate UI passes health checks.
+
+    EEPROM is not part of application rollback. Journal before writing and
+    retain its original configuration for explicit recovery.
+    """
+    if cfg['platform'] != 'linux':
+        return ''
+    steps = manifest.get('system_steps', [])
+    if any(step not in SYSTEM_STEPS for step in steps):
+        raise RuntimeError('This release requires a newer updater helper.')
+    if not steps:
+        return ''
+    if cfg.get('system_steps_version', 0) < 1:
+        raise RuntimeError('Upgrade the updater helper with scripts/install-updater.py first.')
+    model = Path('/proc/device-tree/model').read_text().rstrip('\0')
+    if 'Raspberry Pi' not in model:
+        raise RuntimeError('Device update steps require a Raspberry Pi.')
+    state = Path(cfg['state']) / 'device-steps'; state.mkdir(exist_ok=True)
+    def command(args, timeout=30):
+        result = runner(args, capture_output=True, text=True, check=True, timeout=timeout)
+        return result.stdout or ''
+    if 'pi-power-controls-v1' in steps:
+        status(cfg, 'installing', 'Installing REBOOT and SHUT DOWN controls...')
+        user = cfg['user']
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]*', user):
+            raise RuntimeError('Invalid appliance user.')
+        source = stage / 'scripts/ituner-power'
+        if not source.is_file():
+            raise RuntimeError('Update lacks the power-control helper.')
+        rule = state / 'power-sudoers-candidate'
+        rule.write_text(f'{user} ALL=(root) NOPASSWD: /usr/local/sbin/ituner-power reboot, /usr/local/sbin/ituner-power poweroff\n')
+        command(['visudo', '-cf', str(rule)])
+        for src, dest, mode in ((source, Path('/usr/local/sbin/ituner-power'), 0o755),
+                                (rule, Path('/etc/sudoers.d/90-ituner-power'), 0o440)):
+            saved = state / (dest.name + '.before')
+            if dest.exists() and not saved.exists():
+                shutil.copy2(dest, saved)
+            copy_atomic(src, dest)
+            os.chown(dest, 0, 0); dest.chmod(mode)
+    if 'pi-network-controls-v1' in steps:
+        status(cfg, 'installing', 'Installing Wi-Fi and Ethernet settings support...')
+        user = cfg['user']
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]*', user):
+            raise RuntimeError('Invalid appliance user.')
+        rule = state / 'network-sudoers-candidate'
+        rule.write_text((stage / 'systemd/90-ituner-network').read_text().replace('ituner ALL=', user + ' ALL='))
+        command(['visudo', '-cf', str(rule)])
+        for src, dest, mode in ((stage / 'systemd/ituner-network', Path('/usr/local/sbin/ituner-network'), 0o755),
+                                (rule, Path('/etc/sudoers.d/90-ituner-network'), 0o440)):
+            saved = state / (dest.name + '.before')
+            if dest.exists() and not saved.exists(): shutil.copy2(dest, saved)
+            copy_atomic(src, dest); os.chown(dest, 0, 0); dest.chmod(mode)
+    if 'cm5-quiet-halt-v1' not in steps or not cfg.get('cm5_quiet_halt'):
+        return ' Power controls installed.'
+    if 'Compute Module 5' not in model:
+        raise RuntimeError('Quiet halt is enabled for a device that is not a CM5.')
+    status(cfg, 'installing', 'Checking CM5 EEPROM quiet halt; keep power connected...')
+    current = command(['rpi-eeprom-config'])
+    # With a completed journal, avoid repeating an EEPROM write before reboot.
+    journal_path = state / 'cm5-quiet-halt-v1.json'
+    journal = read_json(journal_path)
+    boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    merged = quiet_halt_config(current)
+    original = state / 'eeprom-before-quiet-halt.conf'
+    if not original.exists(): original.write_text(current)
+    version = command(['vcgencmd', 'bootloader_version'])
+    (state / 'eeprom-before-version.txt').write_text(version)
+    # The current image is intentional: --apply without an explicit image can
+    # select an older packaged default or an untested newer firmware release.
+    import datetime
+    match = re.search(r'^timestamp\s+(\d+)', version, re.M)
+    if not match:
+        raise RuntimeError('Could not identify the running EEPROM version.')
+    date = datetime.datetime.fromtimestamp(int(match[1]), datetime.timezone.utc).strftime('%Y-%m-%d')
+    image = next(iter(sorted(Path('/usr/lib/firmware/raspberrypi/bootloader-2712').glob('*/pieeprom-' + date + '.bin'))), None)
+    # Even when already configured, run the vendor update status check. Do not
+    # schedule unrelated firmware upgrades or downgrade the user's bootloader.
+    command(['rpi-eeprom-update'], timeout=60)
+    values = re.findall(r'^\s*POWER_OFF_ON_HALT\s*=\s*(\d+)\s*$', current, re.M)
+    last_section = re.findall(r'^\s*\[([^]]+)\]', current, re.M)
+    enabled = bool(values and all(value == '0' for value in values) and (not last_section or last_section[-1] == 'all'))
+    if enabled:
+        atomic_json(journal_path, dict(applied=True, already_configured=True, version=version, time=time.time()))
+        return ' Quiet halt was already configured.'
+    if journal.get('applied'):
+        if journal.get('boot_id') == boot_id:
+            return ' Quiet halt configured. Reboot the device before testing shutdown.'
+        raise RuntimeError('EEPROM quiet halt did not verify after reboot; see device-steps backup for recovery.')
+    if image is None:
+        raise RuntimeError('Matching EEPROM image is missing; install the matching rpi-eeprom package before retrying.')
+    config = state / 'quiet-halt.conf'; config.write_text(merged)
+    atomic_json(journal_path, dict(applied=False, phase='writing', version=version, image=str(image), time=time.time()))
+    command(['rpi-eeprom-config', '--apply', str(config), str(image)], timeout=180)
+    atomic_json(journal_path, dict(applied=True, version=version, image=str(image), boot_id=boot_id, time=time.time()))
+    return ' Quiet halt configured. Reboot the device before testing shutdown.'
+
+
 def managed_name(name):
     """Only distributed application files; never hidden runtime/data folders."""
     p = PurePosixPath(name)
@@ -136,7 +259,7 @@ def managed_name(name):
         return False
     if any(x in ('__pycache__', 'models', 'logs', 'recordings', 'downloads', 'venv') for x in p.parts):
         return False
-    return str(p) in ('VERSION', 'app-update.json') or (
+    return str(p) in ('VERSION', 'app-update.json', *SYSTEM_FILES) or (
         len(p.parts) > 1 and p.parts[0] in ('UI', 'assets', 'licenses')
         and p.suffix != '.pyc')
 
@@ -176,6 +299,11 @@ def extract_application(archive, destination):
     meta = read_json(destination / 'app-update.json')
     if meta.get('protocol') != PROTOCOL or meta.get('runtime') != 1:
         raise RuntimeError('Runtime/dependency upgrade required. Use the platform installer for this release.')
+    steps = meta.get('system_steps', [])
+    if not isinstance(steps, list) or any(step not in SYSTEM_STEPS for step in steps):
+        raise RuntimeError('This release requires a newer updater helper.')
+    if any(name not in names for step in steps for name in STEP_FILES[step]):
+        raise RuntimeError('Release lacks required device update files.')
     return sorted(names)
 
 
@@ -431,7 +559,7 @@ def worker(cfg, operation, channel='stable', expected=''):
             release = check_release(channel)
             if release['commit'] != expected:
                 raise RuntimeError('The release changed. Check for updates again before installing.')
-            if installed(cfg).get('commit') == expected:
+            if installed(cfg).get('commit') == expected and not device_setup_pending(cfg):
                 status(cfg, 'complete', 'Already running this version.'); return 0
             if shutil.disk_usage(cfg['root']).free < 512 * 1024 * 1024:
                 raise RuntimeError('At least 512 MB free storage is required.')
@@ -455,15 +583,21 @@ def worker(cfg, operation, channel='stable', expected=''):
                 since = time.time(); platform.start(); stopped = False
                 if not platform.healthy(since, expected):
                     raise RuntimeError('New version failed the startup check.')
+                manifest = read_json(stage / 'app-update.json')
+                device_notice = system_update_steps(cfg, stage, manifest)
+                if cfg['platform'] == 'linux':
+                    atomic_json(state / 'device-steps-complete.json', dict(steps=manifest.get('system_steps', []), cm5_quiet_halt=bool(cfg.get('cm5_quiet_halt'))))
                 if previous.exists():
                     shutil.rmtree(previous)
                 pending.rename(previous)
                 atomic_json(state / 'rollback.json', {'available': True,
                             'version': read_json(previous / 'backup.json')['installed'].get('version', '?')})
-                status(cfg, 'complete', 'Update installed and interface verified.', commit=expected)
+                status(cfg, 'complete', 'Update installed and interface verified.' + device_notice, commit=expected)
                 return 0
         except Exception as exc:
             message = str(exc)
+            if (state / 'device-steps').exists():
+                message += ' Device changes are retained; application recovery does not undo EEPROM settings.'
             if (pending / 'backup.json').exists():
                 try:
                     platform.stop(); stopped = True
@@ -496,8 +630,10 @@ class UpdateController:
         self.notes_page = 0
         self.cfg = None
         self.last_status_time = 0
+        self.device_setup_pending = False
         try:
             self.cfg = load_config()
+            self.device_setup_pending = device_setup_pending(self.cfg)
             # Ignore old completed jobs when opening this app; active jobs and
             # failures still need to be visible after a restart.
             state = read_json(Path(self.cfg['state']) / 'status.json')
@@ -505,9 +641,18 @@ class UpdateController:
                 self.last_status_time = state.get('time', 0)
             else:
                 self.poll()
+            self.helper_upgrade_required()
         except RuntimeError as exc:
             self.phase = 'error'
             self.message = str(exc)
+
+    def helper_upgrade_required(self):
+        if self.cfg and self.cfg['platform'] == 'linux' and self.cfg.get('system_steps_version', 0) < 1:
+            self.phase = 'error'
+            self.confirm = None
+            self.message = 'One-time helper upgrade from the new checkout: sudo python3 scripts/install-updater.py --user ituner. CM5 carrier: add --cm5-quiet-halt. Then restart the app.'
+            return True
+        return False
 
     def current(self):
         return installed(self.cfg) if self.cfg else {'version': 'updater not installed'}
@@ -515,6 +660,7 @@ class UpdateController:
     def poll(self):
         if not self.cfg:
             return
+        self.device_setup_pending = device_setup_pending(self.cfg)
         state = read_json(Path(self.cfg['state']) / 'status.json')
         if state.get('time', 0) > self.last_status_time:
             self.last_status_time = state['time']
@@ -522,10 +668,15 @@ class UpdateController:
             self.phase = state.get('phase', 'idle')
             self.busy = self.phase in ('downloading', 'installing')
 
+        if not self.busy:
+            self.helper_upgrade_required()
+
     def rollback_available(self):
         return bool(self.cfg and read_json(Path(self.cfg['state']) / 'rollback.json').get('available'))
 
     def check(self):
+        if self.helper_upgrade_required():
+            return
         if self.busy or not self.cfg:
             return
         self.poll()
@@ -538,7 +689,7 @@ class UpdateController:
             try:
                 self.release = check_release(UPDATE_CHANNEL)
                 self.notes_page = 0
-                current = self.release['commit'] == self.current().get('commit')
+                current = self.release['commit'] == self.current().get('commit') and not self.device_setup_pending
                 self.phase = 'current' if current else 'available'
                 self.message = ('You have the latest build on main.' if current
                                 else 'A new build is available. Install it when you are ready.')
@@ -554,7 +705,9 @@ class UpdateController:
             return
         if operation not in ('install', 'rollback'):
             return
-        if operation == 'install' and (not self.release or self.release['commit'] == self.current().get('commit')):
+        if operation == 'install' and self.helper_upgrade_required():
+            return
+        if operation == 'install' and (not self.release or (self.release['commit'] == self.current().get('commit') and not self.device_setup_pending)):
             return
         if operation == 'rollback' and not self.rollback_available():
             return

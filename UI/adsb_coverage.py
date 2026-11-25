@@ -113,7 +113,8 @@ class ReceptionCoverage:
         self.imported = False
         self.db = None
         self.next_build = 0
-        self.requested = True
+        self.requested = False
+        self.full_used_at = None
         self.next_prune = 0
         self.height = None
         self.next_flush=time.monotonic()+PERSIST_SECONDS;self.pending_prune_at=None
@@ -145,6 +146,7 @@ class ReceptionCoverage:
                 self.scoped[since]['used_at']=time.monotonic()
                 return self.scoped[since]['data']
         with self.lock:
+            self.full_used_at = time.monotonic()
             self.requested = True
             return self.data
 
@@ -325,7 +327,11 @@ class ReceptionCoverage:
         with self.lock:
             height = self.height
             key = (self.revision, json.dumps(site, sort_keys=True), height)
-            full=self.requested and (key!=self.key or self.error) and now>=self.next_build
+            # Invalidating history (startup, site/height changes, pruning)
+            # must not rebuild an unseen view. Native and HTTP consumers renew
+            # this short lease through snapshot(), like scoped windows do.
+            full_used = self.full_used_at is not None and time.monotonic()-self.full_used_at < 12
+            full=self.requested and full_used and (key!=self.key or self.error) and now>=self.next_build
             scopes=[since for since,cache in self.scoped.items() if cache['key']!=key and now>=cache['next_build'] and time.monotonic()-cache.get('used_at',0)<12]
             if full:self.requested=False
         if full:

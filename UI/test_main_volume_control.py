@@ -5,6 +5,14 @@ import kiwi_gl_display as ui
 
 
 class MainVolumeTests(unittest.TestCase):
+    def test_hardware_mute_does_not_reconfigure_remote_stream(self):
+        controls = dict(mute=False, hardware_mute=True, agc=True)
+        self.assertEqual(ui.remote_audio_controls_key(controls),
+                         ui.remote_audio_controls_key(dict(controls, mute=True)))
+        controls['hardware_mute'] = False
+        self.assertNotEqual(ui.remote_audio_controls_key(controls),
+                            ui.remote_audio_controls_key(dict(controls, mute=True)))
+
     def test_mute_unmute_restores_exact_level_repeatedly(self):
         setter = Mock(side_effect=lambda value: value)
         muted = Mock()
@@ -62,10 +70,11 @@ class MainVolumeTests(unittest.TestCase):
                 self.assertEqual(box, ui.ZOOM_OSD_BOX)
 
     def test_mute_uses_zoom_typography_and_persistent_red_panel(self):
-        with patch.object(ui, 'draw_analog_osd_panel') as panel, patch.object(ui, 'draw_text') as text:
+        with patch.object(ui, 'draw_analog_osd_panel') as panel, patch.object(ui, 'draw_text') as text, patch.object(ui, 'draw_logical_line') as line:
             ui.draw_muted_waterfall_badge(None)
         red = ui.themed_instrument_color('danger_border', ui.MUTE_ACCENT)[:3]
         panel.assert_called_once_with(ui.ZOOM_OSD_BOX, 246, red, (8, 0, 0))
-        self.assertEqual([c.args[3] for c in text.call_args_list], ['AUDIO MUTED', 'TAP TO UNMUTE'])
+        self.assertEqual([c.args[3] for c in text.call_args_list], ['AUDIO MUTED', '0%'])
         for call in text.call_args_list:
-            self.assertEqual(call.args[4:9], (red, 28, True, True, 'lm'))
+            self.assertEqual(call.args[4:8], (red, 28, True, True))
+        line.assert_called_once()

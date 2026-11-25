@@ -45,7 +45,7 @@ class USBNoticePopup(StationWorkspace):
         self.actions=[];ui=self.ui
         if n['kind']=='arrival':
             duplicate=n.get('duplicate_warning',False)
-            if duplicate:ui.draw_logical_rect(0,0,1280,800,(0,0,0,125))
+            if duplicate:ui.draw_modal_backdrop()
             ui.draw_logical_rounded_rect(220,210,1060,590,18,self.PANEL,self.GOLD if duplicate else self.CYAN,1)
             self.ink(cache,256,260,n['title'],32,self.GOLD if duplicate else self.CYAN,width=768)
             for i,row in enumerate(n['receivers'][:2]):
@@ -59,7 +59,7 @@ class USBNoticePopup(StationWorkspace):
                 self.button(cache,(256,514,616,574),'Later',('dismiss',None))
                 self.button(cache,(640,514,1024,574),'Fix now',('review',None))
             return
-        ui.draw_logical_rect(0,0,1280,800,(0,0,0,170))
+        ui.draw_modal_backdrop()
         ui.draw_logical_rounded_rect(180,64,1100,752,self.RADIUS,self.PANEL,self.CYAN,1)
         self.ink(cache,208,122,n['title'],28,width=788)
         self.button(cache,(1016,92,1080,156),'×',('dismiss',None))

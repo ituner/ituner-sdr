@@ -9,6 +9,13 @@ from adsb_coverage import ReceptionCoverage
 SITE=dict(lat=44.4268,lon=26.1025)
 
 
+def visible_coverage(*args, **kwargs):
+    """These history/geometry tests model an open coverage view."""
+    coverage = ReceptionCoverage(*args, **kwargs)
+    coverage.snapshot()  # Request history before the worker's next tick.
+    return coverage
+
+
 def row(stamp):
     return dict(time=stamp,aircraft=dict(hex='abc123',type='adsb_icao',lat=44.5,lon=26.1,
                 alt_geom=10000,alt_baro=9500,seen_pos=1,rssi=-22,flight='TEST123'))
@@ -17,7 +24,7 @@ def row(stamp):
 class IncrementalCoverageTests(unittest.TestCase):
     def test_incremental_projection_only_reads_new_rows_and_keeps_published_snapshots(self):
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp)
+            now=time.time();c=visible_coverage(tmp)
             original=[row(now-30+i) for i in range(20)]
             c.add(original);c.tick(SITE,now)
             first=c.snapshot();saved=json.dumps(first,sort_keys=True)
@@ -39,7 +46,7 @@ class IncrementalCoverageTests(unittest.TestCase):
 
     def test_rolling_cache_reuses_coordinates_and_expires_cells_extrema_and_aircraft(self):
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp)
+            now=time.time();c=visible_coverage(tmp)
             old=row(now-120);old['aircraft'].update(hex='old',lat=44.9,alt_geom=40000)
             recent=row(now-10);recent['aircraft'].update(hex='new',alt_geom=1000)
             c.add([old,recent]);c.tick(SITE,now)
@@ -60,7 +67,7 @@ class IncrementalCoverageTests(unittest.TestCase):
 
     def test_late_sample_before_cached_base_and_new_break_are_not_lost(self):
         with tempfile.TemporaryDirectory() as tmp:
-            now=time.time();c=ReceptionCoverage(tmp);c.add([row(now)]);c.tick(SITE,now)
+            now=time.time();c=visible_coverage(tmp);c.add([row(now)]);c.tick(SITE,now)
             initial=c.snapshot();c.add([row(now-10)]);c.mark_break(now-5)
             c.snapshot();c.tick(SITE,now+6)
             data=c.snapshot()

@@ -13,8 +13,8 @@ class SystemNetworkMenuTests(unittest.TestCase):
         self.assertEqual(items[0], ("network", "Wi-Fi / ETHERNET"))
         boxes = [ui.lcd_nav_box(i, len(items), True) for i in range(len(items))]
         network = boxes[0]
-        self.assertEqual(network, (ui.LCD_NAV_X0 + 10, ui.lcd_drawer_back_box()[1] - 4 * (ui.LCD_NAV_TILE_H + ui.LCD_NAV_GAP),
-                                   ui.LOGICAL_W - 10, ui.lcd_drawer_back_box()[1] - 4 * (ui.LCD_NAV_TILE_H + ui.LCD_NAV_GAP) + ui.LCD_NAV_TILE_H))
+        self.assertEqual(network, (ui.LCD_NAV_X0 + 10, ui.lcd_drawer_back_box()[1] - (1 + (len(items)-2+1)//2) * (ui.LCD_NAV_TILE_H + ui.LCD_NAV_GAP),
+                                   ui.LOGICAL_W - 10, ui.lcd_drawer_back_box()[1] - (1 + (len(items)-2+1)//2) * (ui.LCD_NAV_TILE_H + ui.LCD_NAV_GAP) + ui.LCD_NAV_TILE_H))
         self.assertEqual(network[2] - network[0], 236)
         self.assertEqual(boxes[-1], ui.lcd_drawer_back_box())
         self.assertEqual(boxes[-1][1] - boxes[-2][3], ui.LCD_NAV_GAP)
@@ -42,6 +42,7 @@ class SystemNetworkMenuTests(unittest.TestCase):
                 patch.object(ui, "draw_logical_line"), \
                 patch.object(ui, "draw_sidebar_header"), \
                 patch.object(ui, "draw_radio_close_button"), \
+                patch.object(ui, "draw_styled_text_button"), \
                 patch.object(ui, "draw_navigation_button") as button:
             ui.draw_lcd_navigation(None, settings_open=True)
         first = button.call_args_list[0].args

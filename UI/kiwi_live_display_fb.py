@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
+from waterfall_history import CompactRow
 
 import render_sdr_frontend_mockup as sdr_ui
 from client_identity import CLIENT_NAME
@@ -176,7 +177,8 @@ class KiwiWebSocket:
                     if expected not in response:
                         raise RuntimeError(f"websocket accept check failed for {stream_name}")
                     raw.settimeout(1.0)
-                    return KiwiWebSocket(raw, endpoint, stream_name)
+                    from receiver_command_pacing import paced_socket
+                    return paced_socket(KiwiWebSocket(raw, endpoint, stream_name), endpoint, 'kiwi')
                 redirect = websocket_redirect_endpoint(response)
                 if redirect and redirect_count < 2:
                     raw.close()
@@ -213,14 +215,14 @@ class KiwiWebSocket:
             masked = bool(b1 & 0x80)
             length = b1 & 0x7F
             if length == 126:
-                length = struct.unpack(">H", recv_exact(self.sock, 2))[0]
+                length = struct.unpack(">H", recv_exact(self.sock, 2, frame_started=True))[0]
             elif length == 127:
-                length = struct.unpack(">Q", recv_exact(self.sock, 8))[0]
+                length = struct.unpack(">Q", recv_exact(self.sock, 8, frame_started=True))[0]
             if length > WEBSOCKET_MAX_FRAME_BYTES:
                 raise ValueError(f"websocket frame too large: {length} bytes")
 
-            mask = recv_exact(self.sock, 4) if masked else None
-            payload = recv_exact(self.sock, length) if length else b""
+            mask = recv_exact(self.sock, 4, frame_started=True) if masked else None
+            payload = recv_exact(self.sock, length, frame_started=True) if length else b""
             if mask:
                 payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
 
@@ -549,7 +551,7 @@ def raise_for_kiwi_server_message(params):
     raise KiwiServerBusyError(capacity)
 
 
-def recv_exact(sock, count):
+def recv_exact(sock, count, *, frame_started=False):
     """Read one frame segment without losing bytes across socket timeouts."""
     data = bytearray()
     started_at = time.monotonic()
@@ -558,12 +560,13 @@ def recv_exact(sock, count):
             chunk = sock.recv(count - len(data))
         except socket.timeout:
             # At a frame boundary the worker may safely poll again. Once any
-            # bytes have arrived, returning would lose framing permanently:
+            # bytes of this frame have arrived, including an earlier segment,
+            # returning would lose framing permanently:
             # the next recv() would mistake payload bytes for a new header.
-            if not data:
+            if not data and not frame_started:
                 raise
             if time.monotonic() - started_at >= WEBSOCKET_PARTIAL_FRAME_TIMEOUT_SECONDS:
-                raise TimeoutError("websocket partial frame timed out")
+                raise ConnectionError("websocket partial frame timed out; reconnect required")
             continue
         if not chunk:
             raise EOFError("socket closed")
@@ -652,7 +655,7 @@ def send_snd_setup(ws, freq_khz, mode, low_cut, high_cut, audio_controls=None):
     is_nbfm = str(mode).lower() in ("nbfm", "nnfm")
     squelch_param = 0.0 if is_nbfm else float(audio_controls.get("squelch_tail", 0.25))
     send(f"SET squelch={squelch} param={squelch_param:.2f}")
-    send(f"SET mute={int(bool(audio_controls.get('mute', False)))}")
+    send(f"SET mute={int(bool(audio_controls.get('mute', False)) and not audio_controls.get('hardware_mute', False))}")
     send(f"SET de_emp={int(audio_controls.get('deemphasis', 0))} nfm={int(is_nbfm)}")
 
     nb_algo = int(audio_controls.get("nb_algo", 0))
@@ -753,7 +756,7 @@ class WaterfallLeveler:
         return self.floor, self.ceiling
 
 
-def waterfall_line(samples, mapper, floor, ceiling, width=None):
+def waterfall_line(samples, mapper, floor, ceiling, width=None, retain_compact=False):
     """Convert one Kiwi W/F row at the requested RF-canvas width.
 
     `LOGICAL_W` remains the complete UI/touch coordinate space.  The GL LCD
@@ -767,7 +770,10 @@ def waterfall_line(samples, mapper, floor, ceiling, width=None):
     normalized = bytes(max(0, min(255, int((value - floor) * scale))) for value in samples)
     gray = Image.frombytes("L", (len(normalized), 1), normalized).resize((width, 1), Image.Resampling.BILINEAR)
     r_lut, g_lut, b_lut = mapper
-    return Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
+    image = Image.merge("RGB", (gray.point(r_lut), gray.point(g_lut), gray.point(b_lut)))
+    if retain_compact:
+        image.info["waterfall_compact"] = CompactRow.capture(gray.tobytes(), mapper)
+    return image
 
 
 def contains(box, x, y):
@@ -801,7 +807,7 @@ def draw_zoom_buttons(draw):
             ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2 - 1),
             label,
             (222, 246, 249, 226),
-            32,
+            48,
             True,
             mono=True,
             anchor="mm",

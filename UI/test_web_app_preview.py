@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -108,6 +109,74 @@ class PreviewTests(unittest.TestCase):
                 with urlopen(f'http://127.0.0.1:{b.port}/apps/groundstation?touch=1') as r:
                     self.assertIn(b'id="back"',r.read())
             finally:b.close();a.close()
+
+    def test_encoder_notice_is_bounded_active_only_and_uses_current_theme(self):
+        previews=WebAppPreviews()
+        self.assertFalse(previews.publish_encoder_notice('VOLUME','50%'))
+        previews.process=mock.Mock();previews.process.poll.return_value=None
+        with mock.patch('web_app_preview.time.monotonic',return_value=10):
+            self.assertTrue(previews.publish_encoder_notice('VOLUME','50%',2))
+            previews.publish_encoder_notice('VOLUME','55%',2)
+            reply=previews.encoder_notice(0,timeout=0)
+            self.assertEqual(reply['sequence'],2)
+            self.assertEqual(reply['notice']['detail'],'55%')
+            self.assertEqual(reply['notice']['duration'],2)
+            self.assertIn('border',reply['notice']['colors'])
+        with mock.patch('web_app_preview.time.monotonic',return_value=13):
+            self.assertIsNone(previews.encoder_notice(0,timeout=0)['notice'])
+        self.assertIsNone(previews.encoder_notice(2,timeout=0)['notice'])
+
+    def test_long_poll_wakes_on_encoder_and_close(self):
+        previews=WebAppPreviews()
+        previews.process=mock.Mock();previews.process.poll.return_value=None
+        results=[]
+        waiter=threading.Thread(target=lambda:results.append(previews.encoder_notice(0,1)))
+        waiter.start()
+        previews.publish_encoder_notice('ZOOM','Unavailable')
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(results[0]['notice']['title'],'ZOOM')
+        waiter=threading.Thread(target=lambda:results.append(previews.encoder_notice(1,1)))
+        waiter.start()
+        previews.process.poll.return_value=0
+        previews.close()
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive())
+        self.assertFalse(results[-1]['active'])
+
+    def test_preview_notice_is_above_iframe_and_pauses_when_hidden(self):
+        page=preview_html('satvisor','localhost','secret-token',touch=True)
+        self.assertIn('z-index:1000',page)
+        self.assertIn('pointer-events:none',page)
+        self.assertIn("if(!true||!encoderPageActive||!encoderPreviewActive||document.hidden||encoderPolling)return",page)
+        self.assertIn("'visibilitychange'",page)
+        self.assertIn("'pagehide'",page)
+        self.assertIn(".textContent=notice.detail",page)
+        self.assertIn("secret-token",page)
+        self.assertNotIn('setInterval',page)
+        self.assertIn('encoderRetry=setTimeout(watchEncoderNotices,1000)',page)
+        self.assertIn('clearTimeout(encoderRetry)',page)
+        self.assertIn('encoderPageActive=false;stopEncoderNotices()',page)
+        self.assertIn('encoderPreviewActive=update.active',page)
+
+    def test_encoder_notice_endpoint_requires_token_and_returns_latest_event(self):
+        from vhf_monitor import VHFHub
+        with tempfile.TemporaryDirectory() as root:
+            hub=VHFHub(root=root,port=0,scanner=lambda:[])
+            url=f'http://127.0.0.1:{hub.port}/api/web-app/encoder-notice'
+            try:
+                with self.assertRaises(HTTPError) as error:urlopen(url)
+                self.assertEqual(error.exception.code,403)
+                request=Request(url,headers={'X-VHF-Token':hub.token})
+                with urlopen(request) as response:
+                    self.assertFalse(json.load(response)['active'])
+                hub.web_apps.process=mock.Mock();hub.web_apps.process.poll.return_value=None
+                hub.web_apps.publish_encoder_notice('VOLUME','80%')
+                with urlopen(request) as response:
+                    self.assertEqual(json.load(response)['notice']['detail'],'80%')
+            finally:
+                hub.web_apps.process=None
+                hub.close()
 
     def test_http_shell_and_control_authentication(self):
         from vhf_monitor import VHFHub

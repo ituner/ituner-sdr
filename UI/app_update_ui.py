@@ -24,7 +24,8 @@ def lines(text, width=75):
 
 def update_available(controller):
     return bool(controller.release and
-                controller.release['commit'] != controller.current().get('commit'))
+                (controller.release['commit'] != controller.current().get('commit') or
+                 getattr(controller, 'device_setup_pending', False) is True))
 
 
 def controls(controller):
@@ -90,7 +91,10 @@ def draw(controller, ui, cache):
         message = 'Use this only if an update caused a problem. The app will restart.'
     elif controller.confirm == 'install':
         heading = 'Install this update?'
-        message = 'Audio and decoders will stop while the app restarts. Your settings are kept.'
+        message = ('Audio stops while the app restarts. Pi updates install power controls. '
+                   'If enabled for this CM5, quiet-halt EEPROM setup also runs. Keep power connected; a device reboot may be required.'
+                   if controller.cfg.get('platform') == 'linux' else
+                   'Audio and decoders will stop while the app restarts. Your settings are kept.')
     else:
         heading = {
             'idle': 'Ready to check', 'checking': 'Checking for updates...',

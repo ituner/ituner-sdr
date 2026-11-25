@@ -28,6 +28,11 @@ class UpdateScreenTests(unittest.TestCase):
         self.assertNotIn('development', view.boxes(self.ui))
         self.click('check'); self.controller.check.assert_called_once()
 
+    def test_current_build_can_install_pending_device_setup(self):
+        self.available(); self.controller.release['commit'] = 'a'*40
+        self.controller.device_setup_pending = True
+        self.assertEqual(view.controls(self.controller)[0][0], 'install')
+
     def test_install_confirmation_can_be_cancelled(self):
         self.available(); self.click('install')
         self.assertEqual(self.controller.confirm, 'install')

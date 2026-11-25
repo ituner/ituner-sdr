@@ -639,7 +639,8 @@ class WebSocket:
             if b" 101 " not in status or expected not in response:
                 raise RuntimeError(f"FM-DX WebSocket handshake failed: {status.decode('latin1', 'replace')}")
             raw.settimeout(1.0)
-            return cls(raw)
+            from receiver_command_pacing import paced_socket
+            return paced_socket(cls(raw), url, 'fmdx')
         except Exception:
             raw.close()
             raise

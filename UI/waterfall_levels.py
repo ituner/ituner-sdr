@@ -21,4 +21,3 @@ class AutoWaterfallLevels:
             self.floor = .82*self.floor+.18*floor
             self.ceiling = .82*self.ceiling+.18*ceiling
         return self.floor, self.ceiling
-

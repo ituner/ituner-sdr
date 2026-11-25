@@ -1,38 +1,144 @@
 # Themes and S-meters
 
-Open **Display → Themes**. The chooser shows a reduced view of the complete,
-real-time Home screen: waterfall, spectrum, frequency, S-meter, mode controls,
-volume and navigation. The wider gallery beside it has **Themes**, **S-Meters**
-and **Customize** tabs. Selecting a candidate updates the whole preview.
+Open **Display → Themes**. The chooser sits over the complete, full-size live
+HOME screen. Tap **Default**, **Default Inverted**, **Green**, or **Black & White**
+to open that preset's customization immediately. Existing saved themes remain
+available on additional chooser pages; paging does not select or apply a theme.
+**Previous** and **Next** stay in fixed positions on every page, including a
+single-page chooser. Unavailable directions are dimmed and do nothing when tapped.
 
-Tap **Full-screen Preview**, or the preview image, to inspect that same complete
-Home screen at its normal size. The picker disappears. The two actions are:
+The customization panel overlays the waterfall without shrinking HOME. It has
+five sections:
 
-- **Continue Choosing** returns to the gallery with the draft intact.
-- **Save & Home** saves the choice and returns directly to Home.
+- **Colors:** tap **Accent** or **Text** to open the color editor. It has
+  side-by-side Accent and Text sections, each with separate unlabeled square
+  black and white swatches and a thin rainbow slider with
+  a taller touch area. Accent changes
+  interface highlights; Text changes regular interface labels. Warning colors
+  are retained. **Save** returns to Customize with those colors in the draft;
+  **Cancel** restores the colors from before opening the editor. Apply in
+  Customize saves the theme. Intensity and saturation controls live in this Color window;
+  Save and Cancel include their changes too.
+  Swatches and rainbow strips are 20% thinner than the previous color strips,
+  while retaining 44-pixel touch targets.
+  Selected black/white swatches show contrasting checkmarks and outer markers.
+  Each row also names its selection beside the original color code, independently
+  of brightness/saturation. Accent controls both the HOME passband indicator and
+  the spectrum/waterfall passband overlay, retaining their alpha and RF geometry.
+- **Text size:** minus/plus changes the size in 5% steps, within the existing
+  80–120% range. Tap the percentage to return to 100%.
+- **Corners:** **Straight** or **Rounded** (0 or 8 pixels), previewed on HOME's
+  interface controls.
+- **Font style:** **Original** keeps the app's established mix of label fonts;
+  **Clean** uses bundled Liberation Sans labels; **Instrument** uses bundled
+  Liberation Mono labels; **Readable** uses DejaVu Sans. The four equal-width
+  font buttons share a row with the equal-width Slider Style button.
+  Previously saved Classic fonts remain readable but are no longer offered.
+  Tapping changes the HOME labels and Customize immediately. Dedicated frequency
+  and fixed-width numeric readouts keep their existing faces and alignment.
+- **Slider style:** tap the selected-style button beside Font Style to compare twelve
+  designs across three pages: **Classic** (plain bar), **Precision** (major and
+  minor ticks), **Studio** (segments and round knob), **Pointer** (pointed grip),
+  **Halo** (ring knob), **Arrows** (large two-arrow grip), **Ruler** (dense
+  gradations), **Dots** (dotted scale), **Pin** (stem marker), **Fader**
+  (wide grooved grip), **Diamond** (filled diamond on a hairline), and **Bubble**
+  (large circle on a hairline). All three pages contain four choices.
+  Previous and Next stay visible at the bottom of the
+  picker and dim when unavailable. The choice previews on HOME immediately.
+  **Save** returns to Customize with the choice
+  in the draft; **Cancel** restores the previous choice. **Apply** saves it with
+  the theme, and **Reset Theme** restores the preset's Classic style. The same
+  style appears on HOME volume, AUDIO sliders, DISPLAY waterfall limits,
+  PASSBAND shift and width, and the dual-receiver audio mixer. Where the control
+  has room, Precision, Studio, and Ruler show its actual scale labels. Active
+  tracks, selected gradations, and knob details use the selected theme accent;
+  other parts follow the theme's text, slider, and surface colors. Touch ranges
+  and radio values do not change with the artwork. Saved Capsule selections
+  load as Halo, the closest surviving appearance.
+Within **Color**:
 
-Tap elsewhere in full-screen preview to hide or show these controls, so every
-part of Home can be inspected. Back returns to the chooser. No radio tuning or
-volume controls are active during preview.
+- **Color intensity:** brighter/dimmer theme colors, from 50% to 150%, with
+  100% restoring the preset's original brightness. This is brightness, not
+  saturation. Preset text and custom text colors follow this intensity directly.
+  Spectrum colors and waterfall pixels follow the theme as well.
+- **Border color intensity:** interface border visibility from 25% to 200%. Higher
+  values strengthen borders on both dark and light themes. The default is
+  **25%**; **100%** gives the full preset border color. Color intensity defaults
+  to **100%**. Intensity controls use sliders without minus/plus buttons.
+- **Saturation:** global colorfulness from **0%** (grayscale) to **200%**,
+  defaulting to **100%**. It affects theme text, accents, borders, status colors,
+  spectrum and waterfall while preserving alpha and original signal history.
+  Received imagery and data-category legends retain their actual colors.
 
-The chooser also has **Save & Home** and **Cancel**. Cancel discards every
-unsaved preview change. Save failures retain the draft and show an inline error.
+Minus and plus symbols on shared buttons such as Text Size are 50% larger than
+regular button labels. Reset Theme, Choose Theme, Cancel, and Apply use equal-width buttons.
 
-Themes contain colors, text size and layout. The S-meter is an independent
-setting: changing it never creates or modifies a theme, and changing themes
-keeps the chosen meter. **LED Bar**, under **LED / Slider**, is the original
-meter. Other filters are All, Analog and Magic Eye. Meter thumbnails retain
-callsign credits. There is no additional enlarged meter outside the Home preview.
+Subtitles and muted labels blend 65% of the chosen main text color with 35%
+of the background. This applies after brightness and
+saturation, including existing saved themes. Black text on a light surface
+therefore gets gray secondary text; colored text keeps a related dimmed shade.
+Pressed and disabled button subtitles also remain distinct from their titles.
 
-Customize provides name, sidebar side, corners, text size, units and colors.
-Changes render in the real Home preview, including a left sidebar and the
-space tall meters take from Bandpass. Editing a built-in's appearance creates
-an automatically named copy; saved themes update in place. Make a Copy is
-explicit, and deletion requires confirmation. Built-ins are protected.
+**Hide controls** reveals the complete HOME screen. **Show theme controls**
+reopens the panel with the same draft. The panel follows the available RF
+canvas on either sidebar side; HOME's layout and the panel's touch targets do
+not move when text size or corners change. The taller panel has extra space between descriptions and sections. Its text,
+colors, border intensity, and corners follow the candidate along with HOME.
+A roughly 90%-opaque theme-colored background and a subtle shadow give it a
+floating appearance while keeping the controls readable.
 
-The renderer temporarily uses the candidate for each Home frame, then restores
-the active runtime theme before processing user input. Preview never writes
-preferences, starts another receiver connection or changes the radio. A GPU
-copy supplies the miniature and full-screen views; the Home UI is not rebuilt
-from mock controls or screenshot text. Waterfall history keeps its original
-pixels so Cancel can restore their active-theme rendering without clearing it.
+The actions have separate scopes:
+
+- **Reset theme** restores the selected built-in's original accent, text size,
+  font style, corners, color intensity, border intensity, and saturation in the preview. Previously saved
+  customizations of that built-in
+  are also reset to its factory appearance. Reset does not save anything.
+  For an existing named theme, Reset restores the original appearance retained
+  when that theme was first opened in this editor.
+- **Choose theme** returns to the chooser. Each
+  candidate's unsaved changes remain available during that session.
+- **Cancel** discards the whole session and returns to the setup active when
+  Themes was opened.
+- **Apply** saves the selected candidate and returns to HOME. If saving fails,
+  the panel shows the error, retains the draft, and leaves the active setup intact.
+
+Built-in customizations are stored separately from the immutable presets.
+Repeated Apply does not create extra named copies. Existing version-1 theme
+files and named themes remain readable; no theme is deleted by the new editor.
+
+Theme selection preserves the sidebar side, distance/temperature conventions,
+frequency placement, and S-meter selection. Spectrum and waterfall colors follow
+the selected theme again, including Default Inverted, Green, and Black & White.
+The current waterfall history is recolored without clearing its signal patterns;
+color intensity changes its brightness without modifying the numerical contrast
+range, tuning, or audio. Interface-only built-in overrides from the first HOME
+editor are read with the preset's spectrum/waterfall colors restored. Live
+receiver operation continues, but
+radio tuning and volume touches are blocked while the Theme editor is open.
+Previewing, resetting, choosing, dragging intensity sliders, and cancelling do
+not write preferences or
+start a second receiver connection.
+
+S-meter selection is independent. Tap the meter on HOME to open its existing
+visual picker. Choosing a theme keeps that meter; changing the meter does not
+create or modify a theme. The original meter remains **LED Bar**. Meter artwork
+and callsign credits are retained.
+
+The preview uses the actual live HOME framebuffer, including the receiver's
+real spectrum, waterfall, meter, and footer. The UI does not substitute an
+approximate screenshot or synthetic RF scene during normal operation.
+
+The editor derives brightness and border changes from an unchanged base each
+time, avoiding accumulated rounding. Existing named themes retain their base
+appearance with their saved customization parameters, so reopening and editing
+them does not multiply the effect again. Essential label and pressed-button
+contrast is protected for radio readouts while dimming. Regular text follows
+Color Intensity directly; the Color window uses contrasting labels and readouts
+so it stays usable while previewing dark text.
+
+Inactive and disabled buttons use the same preset border color and intensity
+as other controls. Border Intensity adjusts these outlines too; disabled labels stay
+dimmed and the controls remain unavailable. Older built-in customizations adopt
+the full-color factory border base while preserving their saved intensity choice.
+The Theme list and Customize share the same position, theme colors, corner
+style, translucent background, and shadow over HOME.

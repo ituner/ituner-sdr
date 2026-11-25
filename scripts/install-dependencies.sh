@@ -19,3 +19,5 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 python3 "$repo/scripts/bootstrap-runtime.py" "$@"
 
 python3 "$repo/scripts/build-cw.py"
+
+bash "$repo/scripts/install-usb-rds.sh"

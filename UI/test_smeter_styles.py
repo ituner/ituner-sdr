@@ -12,7 +12,8 @@ from smeter_styles import (METER_STYLES, SKIN_ASSET_DIR, SKIN_CALIBRATION,
                           skin_image_box, skin_needle_segment, skin_source_bounds, skin_tip,
                           aviation_image_box, aviation_needle_segment)
 from smeter_styles import EYE_ARTWORK, meter_asset_path, eye_closure, eye_image_box, draw_eye_signal
-from theme_editor import ThemeEditor, theme_screen_boxes, METER_CARDS_PER_PAGE, PREVIEW_BOX
+from theme_editor import ThemeEditor, FULL_HOME_BOX
+from smeter_picker import SMeterPicker
 from theme_system import DEFAULT_THEME, ThemeLibrary, apply_theme, new_theme, normalize_theme
 
 
@@ -36,30 +37,22 @@ class MeterTests(unittest.TestCase):
             self.assertNotEqual(needle_point(style, -121, (0, 0), 1),
                                 needle_point(style, -33, (0, 0), 1))
 
-    def test_chooser_persists_selection_without_changing_live_theme_before_save(self):
+    def test_home_meter_picker_persists_selection_without_creating_themes(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'themes.json'
-            editor = ThemeEditor(ThemeLibrary(path))
-            def tap(action):
-                a, b, c, d = theme_screen_boxes(editor)[action]
-                editor.tap((a + c) / 2, (b + d) / 2)
-            editor.show('meters')
-            self.assertEqual(editor.section, 'METERS')
-            for _ in range(editor.meter_page_count):
-                if 'meter:aviation' in theme_screen_boxes(editor):break
-                tap('meter_next')
-            tap('meter:aviation')
-            self.assertEqual(editor.preview['smeter_style'], 'aviation')
-            self.assertEqual(ui.theme_system.runtime_theme['smeter_style'], 'led')
-            tap('save')
-            restarted = ThemeLibrary(path)
-            self.assertEqual(restarted.get(restarted.active_id)['smeter_style'], 'aviation')
-            # Repeated meter changes never create themes.
-            editor.show('meters')
-            tap('filter:digital')
-            tap('meter:linear')
-            tap('save')
-            self.assertEqual(len(editor.library.themes), 0)
+            library = ThemeLibrary(path)
+            before = deepcopy(library.get('default')['colors'])
+            picker = SMeterPicker(library)
+            for identifier in ('aviation', 'linear'):
+                picker.show()
+                picker.page = picker.ids.index(identifier) // picker.per_page
+                box = picker.boxes()['meter:' + identifier]
+                picker.tap((box[0]+box[2])/2, (box[1]+box[3])/2)
+                self.assertFalse(picker.open)
+                restarted = ThemeLibrary(path)
+                self.assertEqual(restarted.smeter_style, identifier)
+                self.assertEqual(restarted.themes, [])
+                self.assertEqual(restarted.get('default')['colors'], before)
 
     def test_microvolts_are_rms_at_50_ohms_and_follow_power_ratio(self):
         self.assertAlmostEqual(dbm_to_microvolts(-73), 50.059326, places=5)
@@ -87,26 +80,22 @@ class MeterTests(unittest.TestCase):
                     self.assertGreaterEqual(y, bounds[1] - 1e-8)
                     self.assertLessEqual(y, bounds[3] + 1e-8)
 
-    def test_every_meter_is_reachable_and_pages_stop_at_end(self):
+    def test_every_meter_is_reachable_in_independent_home_picker(self):
         with TemporaryDirectory() as directory:
-            editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
-            editor.show('meters')
-            editor.meter_page = 0
+            picker = SMeterPicker(ThemeLibrary(Path(directory) / 'themes.json'))
             seen = set()
-            for _ in range(editor.meter_page_count + 1):
-                boxes = theme_screen_boxes(editor)
-                cards = [key.split(':')[1] for key in boxes if key.startswith('meter:')]
-                self.assertLessEqual(len(cards), METER_CARDS_PER_PAGE)
-                seen.update(cards)
-                for key in [key for key in boxes if key.startswith('meter:')]:
-                    x0, y0, x1, y1 = boxes[key]
-                    self.assertLess(y1, boxes['meter_next'][1])
-                    editor.tap((x0 + x1) / 2, (y0 + y1) / 2)
-                    self.assertEqual(editor.draft['smeter_style'], key.split(':')[1])
-                box = boxes['meter_next']
-                editor.tap((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            for page in range(picker.page_count):
+                picker.page = page
+                boxes = picker.boxes()
+                cards = [key for key in boxes if key.startswith('meter:')]
+                self.assertLessEqual(len(cards), picker.per_page)
+                for key in cards:
+                    seen.add(key.split(':', 1)[1])
+                    box=boxes[key]
+                    self.assertLessEqual(box[3], boxes['next'][1])
+                    picker.tap((box[0]+box[2])/2, (box[1]+box[3])/2)
+                    self.assertEqual(picker.library.smeter_style,key.split(':',1)[1])
             self.assertEqual(seen, set(METER_STYLES))
-            self.assertEqual(editor.meter_page, (len(METER_STYLES) - 1) // METER_CARDS_PER_PAGE)
 
     def test_flex_faces_use_full_rail_width_and_integer_pixel_bounds(self):
         box = (1034, 104, 1270, 264)
@@ -120,7 +109,7 @@ class MeterTests(unittest.TestCase):
                 self.assertLessEqual(segment[1], box[1] + .80 * (box[3] - box[1]) + 1e-8)
 
     def test_flex_texture_is_cached_at_final_resolution_without_metal_border(self):
-        for identifier in SKIN_CALIBRATION:
+        for identifier in (key for key in SKIN_CALIBRATION if key in METER_STYLES):
             cache = Mock()
             cache._cached_texture.return_value = None
             cache.surface_texture.return_value = (1, 236, 160)
@@ -216,56 +205,44 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(skin_image_box('flex_orange', (0, 0, 236, 160)), (0, 10, 236, 129))
         self.assertEqual(skin_source_bounds('flex_orange'), (0, 0, 397, 200))
 
-    def test_picker_uses_complete_home_frame_beside_meter_thumbnails(self):
+    def test_theme_customization_retains_existing_meter_in_full_home_frame(self):
         with TemporaryDirectory() as directory:
-            editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
-            editor.show('meters')
-            editor.meter_page = list(METER_STYLES).index('flex_icom') // METER_CARDS_PER_PAGE
+            library = ThemeLibrary(Path(directory) / 'themes.json')
+            library.set_smeter_style('flex_icom')
+            editor = ThemeEditor(library)
+            editor.show(); editor.select_theme('green')
             editor.live_frame = Mock()
-            editor.draft['smeter_style'] = 'flex_icom'
             with ExitStack() as stack:
                 mocks = {name: stack.enter_context(patch.object(ui, name)) for name in (
                     'draw_logical_rect', 'draw_logical_line', 'draw_logical_circle',
-                    'draw_logical_rounded_rect', 'draw_text', 'draw_sidebar_header',
-                    'draw_styled_text_button', 'draw_styled_button_frame', 'draw_selected_smeter')}
+                    'draw_logical_rounded_rect', 'draw_text', 'draw_styled_text_button',
+                    'draw_styled_two_line_button', 'draw_styled_button_frame', 'draw_selected_smeter')}
                 ui.draw_theme_panel(None, editor)
-                mocks['draw_styled_button_frame'].assert_not_called()
-                editor.live_frame.draw.assert_called_once_with(PREVIEW_BOX)
-                self.assertEqual(mocks['draw_selected_smeter'].call_count, METER_CARDS_PER_PAGE)
-                icom = next(c for c in mocks['draw_selected_smeter'].call_args_list if c.kwargs['style_id']=='flex_icom')
-                box = icom.args[1]
-                self.assertEqual((box[2]-box[0],box[3]-box[1]),(236,160))
-                labels = [call.args for call in mocks['draw_text'].call_args_list]
-                self.assertTrue(any(call[3] == METER_STYLES['flex_icom'].name.split(' · ')[0]
-                                    and call[4] == tuple(editor.preview['colors']['focus']) for call in labels))
+                editor.live_frame.draw.assert_called_once_with(FULL_HOME_BOX)
+                mocks['draw_selected_smeter'].assert_not_called()
+            self.assertEqual(editor.preview['smeter_style'], 'flex_icom')
 
-    def test_theme_editor_controls_use_the_unsaved_theme_palette_and_corners(self):
+    def test_theme_popup_controls_follow_draft_palette_and_corners(self):
         with TemporaryDirectory() as directory:
             editor = ThemeEditor(ThemeLibrary(Path(directory) / 'themes.json'))
-            editor.show()
-            editor.draft['radius'] = 0
-            editor.draft['colors']['background'] = [9, 19, 29, 255]
-            editor.draft['colors']['surface'] = [11, 21, 31, 255]
-            editor.draft['colors']['border'] = [41, 51, 61, 255]
-            editor.draft['colors']['focus'] = [71, 81, 91, 255]
-            editor.draft['colors']['active_surface'] = [12, 22, 32, 255]
-            editor.draft['colors']['active_border'] = [42, 52, 62, 255]
+            editor.show(); editor.select_theme('green')
+            editor.draft['radius'] = 8
+            editor.draft['text_scale_percent'] = 120
+            editor.draft['colors']['text'] = [0, 0, 0]
+            editor.live_frame = Mock()
             saved_runtime = deepcopy(ui.theme_system.runtime_theme)
-            with patch.object(ui, 'draw_logical_rect') as rect, \
-                 patch.object(ui, 'draw_logical_line') as line, \
-                 patch.object(ui, 'draw_logical_circle'), \
-                 patch.object(ui, 'draw_logical_rounded_rect') as rounded, \
-                 patch.object(ui, 'draw_text'):
-                ui.draw_theme_panel(None, editor)
-            self.assertIn(call(0, 0, 1280, 800, (9, 19, 29, 255)), rect.call_args_list)
-            tab = theme_screen_boxes(editor)['tab:themes']
-            self.assertIn(call(*tab, 0, (12, 22, 32, 255), (42, 52, 62, 255), 2),
-                          rounded.call_args_list)
-            self.assertTrue(rounded.call_args_list)
-            self.assertTrue(all(item.args[4] == 0 for item in rounded.call_args_list))
-            self.assertFalse(any(item.args[:4] == (24, 718, 1256, 718)
-                                 for item in line.call_args_list))
-            self.assertEqual(ui.theme_system.runtime_theme, saved_runtime)
+            with ExitStack() as stack:
+                mocks = {name: stack.enter_context(patch.object(ui,name)) for name in (
+                    'draw_logical_rect','draw_logical_line','draw_logical_circle',
+                    'draw_logical_rounded_rect','draw_text','draw_styled_text_button',
+                    'draw_styled_two_line_button','draw_styled_button_frame')}
+                ui.draw_theme_panel(None,editor)
+                for item in mocks['draw_styled_text_button'].call_args_list:
+                    self.assertEqual(item.kwargs['style'].palette.text, (0,0,0))
+                    self.assertEqual(item.kwargs['style'].radius, 8)
+                labels = [c.args[3] for c in mocks['draw_text'].call_args_list]
+                self.assertIn('CORNERS',labels)
+            self.assertEqual(ui.theme_system.runtime_theme,saved_runtime)
 
     def test_retired_round_eyes_migrate_to_plain_without_reappearing(self):
         from smeter_styles import REMOVED_METER_MIGRATIONS, normalize_meter_style
@@ -404,7 +381,7 @@ class MeterTests(unittest.TestCase):
             apply_theme(theme)
             box = ui.lcd_compact_smeter_box()
             self.assertEqual(aviation_image_box(box, footer=False), box)
-            self.assertEqual((box[2]-box[0], box[3]-box[1]), (236, 236))
+            self.assertEqual((box[2]-box[0], box[3]-box[1]), (208, 208))
             modes = list(ui.lcd_home_mode_boxes(True))
             volume, mute, track = (fn(True) for fn in (ui.lcd_home_volume_box, ui.lcd_home_volume_mute_box, ui.lcd_home_volume_track_box))
             self.assertLess(box[3], min(bounds[1] for _, bounds in modes))
@@ -423,7 +400,7 @@ class MeterTests(unittest.TestCase):
                 for call in labels.call_args_list:
                     x, y = call.args[:2]
                     self.assertEqual(x, (box[0]+box[2])/2)
-                    self.assertGreater(y, box[1]+236*.68)
+                    self.assertGreater(y, box[1]+(box[3]-box[1])*.68)
                     self.assertLess(y, box[1]+236*.82)
 
     def test_bakelite_reference_photos_keep_transparency_and_scales_on_paper(self):
@@ -545,7 +522,7 @@ class MeterTests(unittest.TestCase):
                         bandpass = stack.enter_context(patch.object(ui, 'draw_lcd_home_bandwidth'))
                         ui.draw_ui(cache, 7075, 20, -95, -90, None, 'LSB', 'DIG', 100,
                                    instrument_layout=position)
-                        in_rail = position == 'right'
+                        in_rail = position == 'right' or not ui.smeter_supports_top_instrument_strip()
                         on_top = position != 'right' and slim
                         self.assertEqual(ui.home_rail_has_meter(position), in_rail)
                         self.assertEqual(rail_meter.call_count, int(in_rail))
@@ -586,9 +563,9 @@ class MeterTests(unittest.TestCase):
                     self.assertLess(volume[3], ui.lcd_nav_top())
                     if compact:
                         mute = ui.lcd_home_volume_mute_box(compact)
-                        self.assertGreaterEqual(mute[1], volume[1] + 21)
+                        self.assertGreaterEqual(mute[1], volume[1] + 12)
                         meter = ui.lcd_compact_smeter_box()
-                        self.assertEqual(meter[3] - meter[1], style.height)
+                        self.assertEqual(meter[3] - meter[1], ui.LCD_COMPACT_SMETER_HEIGHT + ui.smeter_rail_extra_height() + (20 if identifier in ("bakelite_square", "bakelite_round") else 0))
                         self.assertLess(meter[3], min(box[1] for _, box in modes))
                     elif style.height > 80:
                         meter_top = ui.lcd_home_bandwidth_box(False)[1]

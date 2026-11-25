@@ -55,6 +55,21 @@ class TextCacheTests(unittest.TestCase):
         self.assertEqual(cache.cache, {})
         self.assertEqual(cache._texture_lru, {})
 
+    def test_font_style_changes_texture_and_returning_reuses_previous_texture(self):
+        cache = self.make_cache(limit=4)
+        with mock.patch.object(ui.pygame.image, 'tostring', return_value=b'\0'*128), \
+                mock.patch.object(ui.GL, 'glGenTextures', side_effect=(101,102)) as allocate, \
+                mock.patch.object(ui.GL, 'glBindTexture'), \
+                mock.patch.object(ui.GL, 'glTexParameteri'), \
+                mock.patch.object(ui.GL, 'glTexImage2D'):
+            textures = []
+            for style in ('clean','instrument','clean'):
+                with ui.theme_system.preview_theme({**ui.theme_system.DEFAULT_THEME,'font_style':style}):
+                    textures.append(cache.texture('RECEIVERS',14,(255,255,255),family='Liberation Sans'))
+            self.assertNotEqual(textures[0],textures[1])
+            self.assertEqual(textures[0],textures[2])
+            self.assertEqual(allocate.call_count,2)
+
 
 if __name__ == "__main__":
     unittest.main()

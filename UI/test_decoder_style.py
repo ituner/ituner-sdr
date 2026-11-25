@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock
 
 import theme_system
-from decoder_style import full_width_back_box
+from decoder_style import DecoderStyle, full_width_back_box
 from ui_style import APP_UI_STYLE
 from ui_chrome import RAIL_BACK_BOX
 import test_station_profile
@@ -14,6 +14,35 @@ import test_spectrum_workspace
 
 def overlap(a,b):
     return min(a[2],b[2])>max(a[0],b[0]) and min(a[3],b[3])>max(a[1],b[1])
+
+
+class DecoderSymbolButtonTests(unittest.TestCase):
+    def test_symbol_size_preserves_geometry_action_and_non_symbol_labels(self):
+        workspace = DecoderStyle()
+        workspace.ui = Mock()
+        workspace.ui.fit_station_text.side_effect = lambda cache, title, *args: title
+        box = (20, 30, 100, 94)
+        for label, subtitle, expected in (
+            ('+', '', 30), ('−', '', 30), ('-', '', 30),
+            ('Zoom +', '', 20), ('+', 'DETAIL', 20), ('1', '', 20),
+        ):
+            with self.subTest(label=label, subtitle=subtitle):
+                workspace.actions = []
+                workspace.ui.reset_mock()
+                workspace.decoder_button(None, box, label, ('step', 1), subtitle=subtitle)
+                draw = workspace.ui.draw_text.call_args_list[0]
+                self.assertEqual(draw.args[5], expected)
+                self.assertEqual(draw.args[1:3], (60, 52 if subtitle else 62))
+                self.assertEqual(workspace.ui.draw_logical_rounded_rect.call_args.args[:4], box)
+                self.assertEqual(workspace.actions, [(box, ('step', 1))])
+
+    def test_explicit_decoder_font_is_enlarged_once(self):
+        workspace = DecoderStyle()
+        workspace.ui = Mock()
+        workspace.ui.fit_station_text.side_effect = lambda cache, title, *args: title
+        workspace.actions = []
+        workspace.decoder_button(None, (0, 0, 100, 64), '-', ('key', '-'), font_size=21)
+        self.assertEqual(workspace.ui.draw_text.call_args.args[5], 32)
 
 
 class DecoderThemeTests(unittest.TestCase):
@@ -90,7 +119,7 @@ class DecoderThemeTests(unittest.TestCase):
         self.assertEqual(w.MAP,(0,0,1280,712))
         # A left-side physical BACK hit must map to the same HOME rail coordinates.
         self.assertEqual(theme_system.display_to_logical_x(20),1044)
-        clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC (UTC)']
+        clock=[c for c in ui.draw_text.call_args_list if c.args[3]=='12:34:56 UTC   |   12:34:56']
         self.assertEqual(len(clock),1)
         self.assertEqual(clock[0].args[1:3],(274,771))
         self.assertEqual(clock[0].args[5],18)

@@ -1,6 +1,7 @@
 """Managed Chromium previews for separately installed satellite applications."""
 import html
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -31,6 +32,45 @@ class WebAppPreviews:
         self.lock = threading.RLock()
         self.error_notice = None
         self.error_until = 0
+        self._encoder_condition = threading.Condition(self.lock)
+        self._encoder_sequence = 0
+        self._encoder_notice = None
+
+    def publish_encoder_notice(self, title, detail, duration=1.6, *, colors=None):
+        """Keep only the latest encoder event; no polling or history allocation."""
+        duration = float(duration)
+        if not math.isfinite(duration):
+            raise ValueError('Invalid notice duration')
+        with self._encoder_condition:
+            if not self.active:
+                return False
+            if colors is None:
+                from ui_style import APP_UI_STYLE
+                accent = '#%02x%02x%02x' % tuple(APP_UI_STYLE.palette.notice[:3])
+                colors = dict(background='#000804', border=accent, title=accent, detail=accent)
+            self._encoder_sequence += 1
+            self._encoder_notice = dict(sequence=self._encoder_sequence,
+                title=str(title)[:80], detail=str(detail)[:200],
+                expires=time.monotonic() + max(.1, min(10.0, duration)),
+                colors={k: str(v)[:80] for k, v in colors.items()
+                        if k in ('background', 'border', 'title', 'detail')})
+            self._encoder_condition.notify_all()
+            return True
+
+    def encoder_notice(self, after=0, timeout=25):
+        """One sleeping long-poll per visible browser; wake on input or close."""
+        with self._encoder_condition:
+            self._encoder_condition.wait_for(
+                lambda: self._encoder_sequence > after or not self.active,
+                timeout=max(0.0, min(25.0, float(timeout))))
+            active = self.active
+            notice = self._encoder_notice
+            remaining = notice['expires'] - time.monotonic() if notice else 0
+            event = None
+            if active and notice and remaining > 0 and notice['sequence'] > after:
+                event = {k: v for k, v in notice.items() if k != 'expires'}
+                event['duration'] = remaining
+            return dict(active=active, sequence=self._encoder_sequence, notice=event)
 
     @property
     def active(self):
@@ -129,6 +169,7 @@ class WebAppPreviews:
             ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
             self.key = key
+            self._encoder_notice = None
 
     def close(self):
         with self.lock:
@@ -148,6 +189,8 @@ class WebAppPreviews:
             self.error_until = 0
             self.resume_at = time.monotonic() + .5
             self.return_to_decoders = True
+            self._encoder_notice = None
+            self._encoder_condition.notify_all()
 
 
 def preview_html(key, hostname, token, *, touch=False, rotation=0):
@@ -172,12 +215,49 @@ strong{font-size:20px}small{color:#a3bacb;font-size:14px;margin-left:auto}iframe
 #loading[hidden]{display:none}#loading .card{text-align:center;padding:24px 36px;border:1px solid #557b8f;border-radius:12px;background:#101d29;font-size:24px}
 #loading p{font-size:18px;color:#a3bacb;margin-bottom:0}
 #error{position:absolute;top:75px;left:20px;padding:15px;background:#632c28;border-radius:8px;font-size:20px}
+#encoder-notice{position:absolute;z-index:1000;left:18.75%;top:7.875%;width:480px;max-width:75%;min-height:98px;padding:16px 18px;border:1px solid var(--notice-border,#48ff7a);background:var(--notice-background,#000804);color:var(--notice-title,#48ff7a);pointer-events:none}
+#encoder-notice[hidden]{display:none}#encoder-notice strong{font-size:28px}#encoder-detail{margin-top:10px;font-size:24px;color:var(--notice-detail,#48ff7a)}
 </style></head><body><div class="preview"><header><button id="back">← Decoders</button>
 <strong>TITLE</strong><small>WEB PREVIEW</small><button id="reload">Reload</button></header>
 <iframe title="TITLE application" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" data-source="SOURCE"></iframe>
 <div id="loading" role="status" aria-live="polite"><div class="card"><strong>Loading TITLE…</strong><p id="loading-detail">Please wait</p></div></div>
-<div id="error" hidden></div></div>
+<div id="error" hidden></div><div id="encoder-notice" role="status" aria-live="polite" hidden><strong id="encoder-title"></strong><div id="encoder-detail"></div></div></div>
 <script>
+const encoderBox=document.getElementById('encoder-notice');
+let encoderSequence=0, encoderTimer, encoderRetry, encoderAbort, encoderPolling=false;
+let encoderPageActive=true, encoderPreviewActive=true;
+function stopEncoderNotices(){if(encoderAbort)encoderAbort.abort();clearTimeout(encoderTimer);clearTimeout(encoderRetry);encoderBox.hidden=true;}
+async function watchEncoderNotices(){
+ if(!TOUCH||!encoderPageActive||!encoderPreviewActive||document.hidden||encoderPolling)return;
+ clearTimeout(encoderRetry);
+ encoderPolling=true;
+ try{
+  while(encoderPageActive&&!document.hidden){
+   encoderAbort=new AbortController();
+   const response=await fetch('/api/web-app/encoder-notice?after='+encoderSequence,{headers:{'X-VHF-Token':TOKEN},signal:encoderAbort.signal});
+   if(!response.ok){if(response.status===403)encoderPreviewActive=false;break;}
+   const update=await response.json();encoderSequence=update.sequence;
+   encoderPreviewActive=update.active;if(!encoderPreviewActive)break;
+   const notice=update.notice;
+   if(notice){
+    document.getElementById('encoder-title').textContent=notice.title;
+    document.getElementById('encoder-detail').textContent=notice.detail;
+    for(const [key,value] of Object.entries(notice.colors||{}))encoderBox.style.setProperty('--notice-'+key,value);
+    clearTimeout(encoderTimer);encoderBox.hidden=false;
+    encoderTimer=setTimeout(()=>encoderBox.hidden=true,notice.duration*1000);
+   }
+  }
+ }catch(error){/* Navigation and server shutdown end the sleeping request. */}
+ finally{
+  encoderPolling=false;
+  // Also resumes after a quick hidden/visible change while abort was pending.
+  if(encoderPageActive&&encoderPreviewActive&&!document.hidden)
+   encoderRetry=setTimeout(watchEncoderNotices,1000);
+ }
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopEncoderNotices();else watchEncoderNotices();});
+window.addEventListener('pagehide',()=>{encoderPageActive=false;stopEncoderNotices();});
+watchEncoderNotices();
 const frame=document.querySelector('iframe');
 const loading=document.getElementById('loading');
 const detail=document.getElementById('loading-detail');

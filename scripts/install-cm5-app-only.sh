@@ -6,11 +6,13 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cm5_audio=0
 adsb=0
 vhf=0
+quiet_halt_args=()
 for option in "$@"; do
     case "$option" in
         --cm5-audio) cm5_audio=1 ;;
         --adsb) adsb=1 ;;
         --vhf) vhf=1 ;;
+        --cm5-quiet-halt) quiet_halt_args=(--cm5-quiet-halt) ;;
         --*) echo "Unknown CM5 option: $option" >&2; exit 2 ;;
         *) repo=$option ;;
     esac
@@ -70,21 +72,7 @@ exec /usr/bin/python3 /opt/ituner-sdr/UI/kiwi_gl_display.py \
 EOF
 chmod 0755 /usr/local/lib/ituner-sdr/start-cm5.sh
 
-cat > /usr/local/lib/ituner-sdr/touch-ready.sh <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-for ((attempt=0; attempt<30; attempt++)); do
-    for name in /sys/class/input/event*/device/name; do
-        if [[ -r $name ]] && grep -Eq '^[0-9]+-005d Goodix Capacitive TouchScreen$' "$name"; then
-            exit 0
-        fi
-    done
-    sleep 1
-done
-echo 'Existing Goodix GT911 input device was not found.' >&2
-exit 1
-EOF
-chmod 0755 /usr/local/lib/ituner-sdr/touch-ready.sh
+install -m 0755 "$repo/scripts/cm5-touch-ready.sh" /usr/local/lib/ituner-sdr/touch-ready.sh
 
 cat > /etc/systemd/system/ituner-sdr-touch-ready.service <<'EOF'
 [Unit]
@@ -151,6 +139,7 @@ EOF
 chown "$app_user:$app_user" "$labwc_dir/autostart"
 chmod 0755 "$labwc_dir/autostart"
 runuser -u "$app_user" -- python3 "$repo/scripts/configure-cm5-cursor.py" --home "$app_home"
+runuser -u "$app_user" -- python3 "$repo/scripts/configure-cm5-kiosk.py" --home "$app_home"
 
 # Install the early-boot Plymouth half of the same visual handoff.
 plymouth_theme=/usr/share/plymouth/themes/ituner-sdr
@@ -184,6 +173,7 @@ disable_splash=1
 EOF
 fi
 
+bash "$repo/scripts/install-power-controls.sh" "$app_user"
 install -m 0755 "$repo/scripts/configure.sh" /usr/local/sbin/ituner-sdr-configure
 install -m 0755 "$repo/systemd/ituner-network" /usr/local/sbin/ituner-network
 sudoers_file=$(mktemp)
@@ -218,7 +208,7 @@ if ((cm5_audio)); then
     bash "$repo/scripts/install-cm5-audio.sh" --no-restart
 fi
 # Fixed-scope application updater; never changes board drivers.
-python3 "$repo/scripts/install-updater.py" --user "$app_user"
+python3 "$repo/scripts/install-updater.py" --user "$app_user" "${quiet_halt_args[@]}"
 systemctl enable ituner-sdr-touch-ready.service ituner-sdr.service
 systemctl restart ituner-sdr-touch-ready.service
 systemctl restart ituner-sdr.service

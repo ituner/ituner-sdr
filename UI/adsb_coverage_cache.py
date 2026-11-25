@@ -6,6 +6,7 @@ and ground bearing are calculated once, rather than on every HTTP/touch poll.
 from bisect import bisect_left
 from dataclasses import dataclass
 import math
+import time
 
 from adsb_footprint import SECTOR_DEGREES, footprint_from_peaks
 from adsb_geometry import camera_hull, enu_positions
@@ -30,7 +31,7 @@ class Position:
     radius: float
 
 
-def project_rows(rows, site, height, origin):
+def _project_rows_batch(rows, site, height, origin):
     """Prepare only newly inserted rows; preserve exact measurement statistics."""
     p = math.radians(site['lat'])
     prepared = []
@@ -48,6 +49,21 @@ def project_rows(rows, site, height, origin):
                                  altitude, rssi, gnss, label, distance,
                                  math.hypot(distance, up-(height or 0)), cell,
                                  int(bearing//SECTOR_DEGREES) if radius >= 1 else None, radius))
+    return prepared
+
+
+# Keep history rebuilds cooperative with the render thread's many short GL calls.
+# A large Python loop otherwise repeatedly takes the GIL between those calls.
+HISTORY_BATCH_ROWS = 128
+HISTORY_YIELD_SECONDS = 0.002
+
+
+def project_rows(rows, site, height, origin):
+    prepared = []
+    for start in range(0, len(rows), HISTORY_BATCH_ROWS):
+        if start:
+            time.sleep(HISTORY_YIELD_SECONDS)
+        prepared.extend(_project_rows_batch(rows[start:start + HISTORY_BATCH_ROWS], site, height, origin))
     return prepared
 
 
@@ -92,7 +108,9 @@ class CoverageAccumulator:
             self.indexes[address] = len(self.addresses)
             self.addresses.append(address)
         new_points = []
-        for r in records:
+        for index, r in enumerate(records):
+            if index and index % HISTORY_BATCH_ROWS == 0:
+                time.sleep(HISTORY_YIELD_SECONDS)
             if r.label and r.stamp >= self.names.get(r.address, (-math.inf, ''))[0]:
                 self.names[r.address] = (r.stamp, r.label)
             point = [round(r.stamp-self.base, 3), self.indexes[r.address], r.east, r.north,
@@ -120,11 +138,18 @@ class CoverageAccumulator:
                 peak[0] = max(peak[0], r.radius)
                 peak[1] += 1
         # Late packets touch only the short overlapping tail, not a week-long sort.
-        cut = bisect_left(self.records, records[0].stamp, key=lambda r: r.stamp)
-        tail = list(zip(self.records[cut:], self.points[cut:])) + list(zip(records, new_points))
-        tail.sort(key=lambda item: (item[0].stamp, item[0].address))
-        self.records[cut:] = [r for r, _ in tail]
-        self.points[cut:] = [p for _, p in tail]
+        if not self.records and all((a.stamp, a.address) <= (b.stamp, b.address)
+                                    for a, b in zip(records, records[1:])):
+            # SQLite already orders the initial history. Avoid allocating and
+            # sorting a second full set of paired records just to unzip it.
+            self.records.extend(records)
+            self.points.extend(new_points)
+        else:
+            cut = bisect_left(self.records, records[0].stamp, key=lambda r: r.stamp)
+            tail = list(zip(self.records[cut:], self.points[cut:])) + list(zip(records, new_points))
+            tail.sort(key=lambda item: (item[0].stamp, item[0].address))
+            self.records[cut:] = [r for r, _ in tail]
+            self.points[cut:] = [p for _, p in tail]
         # The convex hull of the old hull plus new points encloses the full cloud.
         self.hull = camera_hull([*self.hull, *([r.east, r.north, r.up] for r in records)]).tolist()
 
