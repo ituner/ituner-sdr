@@ -80,11 +80,14 @@ def draw(controller, ui, cache):
     ui.draw_logical_rect(0, 0, ui.LOGICAL_W, ui.LOGICAL_H, p.surface)
     ui.draw_logical_rect(ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H, p.sidebar)
     ui.draw_sidebar_header(cache, 'SYSTEM')
-    title = 'Reboot the device?' if controller.action == 'reboot' else 'Are you sure you want to shut down?'
-    detail = 'Audio and decoders will stop. Your settings will be saved.'
-    hint = 'The device will restart automatically.' if controller.action == 'reboot' else 'Use the physical power button to start it again.'
-    for y, text, size, color in ((160, title, 30, p.text), (216, detail, 22, p.secondary_text),
-                                  (254, hint, 22, p.secondary_text)):
+    if controller.action == 'reboot':
+        prompt = ((160, 'Restart the device?', 30, p.text),
+                  (216, 'It will start again automatically.', 22, p.secondary_text))
+    else:
+        prompt = ((160, 'Shut down the device?', 30, p.text),
+                  (216, 'Use the power button', 22, p.secondary_text),
+                  (254, 'to start it again.', 22, p.secondary_text))
+    for y, text, size, color in prompt:
         ui.draw_text(cache, 32, y, text, color, size, False, False, 'lm', family=ui.APP_UI_STYLE.button.font_family)
     message = controller.message or ('' if controller.available else 'Power controls are not installed on this device.')
     if message:
