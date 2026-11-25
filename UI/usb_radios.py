@@ -81,7 +81,9 @@ class RadioManagement:
         a,v=self.adsb,self.vhf;session=None;frequency=None
         if owner=='home' and self.home:
             data=self.home.snapshot()
-            return dict(owner=owner,label=owner_label(owner),status=data['status'],detail='Local USB audio and waterfall')
+            mode=self.home.current_home_mode()
+            service='home_am' if mode=='AM' else 'home_fm'
+            return dict(owner=owner,service=service,label=owner_label(service),status=data['status'],detail=mode+' · Local USB audio and waterfall')
         if owner=='adsb' and a:session=a;frequency=1090000000
         elif owner=='uat' and a:session=a.uat;frequency=978000000
         elif owner=='spectrum' and v:session=v.spectrum

@@ -54,7 +54,7 @@ class ThemeModalTests(unittest.TestCase):
 
     def test_theme_capture_precedes_hidden_home_controls(self):
         source=Path(ui.__file__).read_text()
-        start=source.index('                            if theme_editor.open:\n                                gesture = "theme"')
+        start=source.index('                            elif theme_editor.open:\n                                gesture = "theme"')
         end=source.index('                            elif home_rail_restore_at',start)
         self.assertLess(start,end)
 

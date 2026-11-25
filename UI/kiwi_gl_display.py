@@ -4720,6 +4720,9 @@ def waterfall_scan_touch(x, y, drawn, modal_open=False):
 
 
 def carrier_button_visible(state):
+    local = getattr(state, "local_signal_search", None)
+    if local is not None and state.external_waterfall_snapshot():
+        return local.available()
     return (carrier_available(state.radio_snapshot()[0], state.receiver_type_snapshot())
             and not state.external_waterfall_snapshot()
             and not owrx.is_openwebrx_endpoint(state.snapshot()[0])
@@ -5429,6 +5432,10 @@ class SharedState:
 
     def apply_prepared_carrier(self):
         """Apply the prepared carrier on tap; never retune speculatively."""
+        local = getattr(self, "local_signal_search", None)
+        if local is not None and self.external_waterfall_snapshot():
+            _, frequency, zoom, *_ = self.snapshot()
+            return local.tune(self.waterfall_view_center_snapshot() or frequency, kiwi.zoom_to_span_khz(zoom))
         with self.lock:
             now = time.monotonic()
             if not self._carrier_ready(now):
@@ -5493,10 +5500,17 @@ class SharedState:
                    key=lambda band: max(band[0]-self.freq_khz, self.freq_khz-band[1], 0))
 
     def smart_seek_available(self):
+        local = getattr(self, "local_signal_search", None)
+        if local is not None and self.external_waterfall_snapshot():
+            return local.available()
         with self.lock:
             return self._carrier_eligible() and self._smart_seek_band() is not None
 
     def start_smart_seek(self, refresh=False, band_label=None):
+        local = getattr(self, "local_signal_search", None)
+        if local is not None and self.external_waterfall_snapshot():
+            local.toggle_scan()
+            return local.active
         with self.lock:
             self._set_seek_waterfall(False)
             if not self._carrier_eligible():
@@ -5658,6 +5672,12 @@ class SharedState:
         every new receiver, including a station selected while another one is
         still connecting.
         """
+        selected_type = str(receiver_type or "").casefold()
+        if selected_type not in RECEIVER_TYPES:
+            selected_type = "fmdx" if fmdx.is_fmdx_server(server) else "openwebrx" if owrx.is_openwebrx_endpoint(server) else "kiwi"
+        local_receiver = getattr(self, "local_home_receiver", None)
+        if local_receiver is not None:
+            local_receiver.prepare_network_selection(selected_type)
         with self.lock:
             self.carrier_search.finish("", time.monotonic())
             self.carrier_tuned_khz = None
@@ -9229,7 +9249,7 @@ def draw_stream_waterfall_button(text_cache, stream_paused):
         draw_logical_line(cx + 10, cy - 15, cx + 10, cy + 15, icon_color, 4)
 
 
-def draw_waterfall_text_button(text_cache, box, label, *, enabled=True):
+def draw_waterfall_text_button(text_cache, box, label, *, enabled=True, active=False):
     """HOME actions share the same theme surface and translucency as zoom."""
     if not enabled:
         draw_styled_two_line_button(
@@ -9239,8 +9259,8 @@ def draw_waterfall_text_button(text_cache, box, label, *, enabled=True):
         )
         return
     draw_styled_text_button(
-        text_cache, box, label, style=replace(APP_UI_STYLE.button, label_size=18),
-        fill_alpha=waterfall_button_fill_alpha(False, ui_button_pressed(box)),
+        text_cache, box, label, style=replace(APP_UI_STYLE.button, label_size=18), active=active,
+        fill_alpha=waterfall_button_fill_alpha(active, ui_button_pressed(box)),
     )
 
 
@@ -16488,7 +16508,7 @@ def engage_home_mode(state, x, y, compact=True, local_receiver=None):
             if local_receiver is not None:
                 if label == "FM":
                     mode = "WFM" if local_receiver.demod_snapshot()[0] == "wbfm" else "NFM"
-                if not local_receiver.set_home_mode(mode):
+                if not local_receiver.set_home_mode(mode, scan=True):
                     return None
                 state.set_radio_mode(local_receiver.shared_radio_mode(mode))
             else:
@@ -17884,6 +17904,8 @@ def draw_home_mode_buttons(text_cache, buttons, mode, digital, usb_receiver=Fals
                   for family,modes in KIWI_MODE_FAMILIES}
         for label,box in buttons:
             family,modes=families[label]
+            if usb_receiver:
+                modes = dict(RTL_MODE_FAMILIES).get("NFM" if family == "FM" else family, modes)
             if home_mode_enabled(label,usb_receiver):
                 draw_radio_family_option(text_cache,box,family,modes,exact_mode)
             else:
@@ -18708,9 +18730,16 @@ def resolve_kiwi_landing_scan(state, spectrum_values, elapsed_seconds):
     _server, center_khz, zoom, _smeter, _view_generation, generation = state.snapshot()
     if generation != landing.get("server_generation"):
         return None
-    candidate = closest_strong_spectrum_frequency(
-        spectrum_values, center_khz, kiwi.zoom_source_span_khz(zoom),
-    )
+    span_khz = kiwi.zoom_source_span_khz(zoom)
+    # Rank only the selected band. A stronger adjacent-band carrier must not
+    # suppress a valid AM station by winning first and being rejected later.
+    values = tuple(float(value) for value in spectrum_values)
+    if values:
+        baseline = sorted(values)[len(values)//2]
+        values = tuple(value if landing["low_khz"] <= center_khz +
+                       ((index+.5)/len(values)-.5)*span_khz <= landing["high_khz"]
+                       else baseline for index, value in enumerate(values))
+    candidate = closest_strong_spectrum_frequency(values, center_khz, span_khz)
     if candidate is not None and not (
         landing["low_khz"] <= candidate <= landing["high_khz"]
     ):
@@ -20713,7 +20742,7 @@ AIRSPY_HF_AUDIO_PACKET_BYTES = KIWI_RAW_AUDIO_QUANTUM_FRAMES * 2
 # The waterfall texture stores 1,024 columns. Two FFT bins per texture
 # column keeps the local source sharp without resampling artefacts.
 RTL_IQ_FFT_SIZE = 2_048
-RTL_TUNING_MIN_KHZ = 24_000.0
+RTL_TUNING_MIN_KHZ = 500.0  # Experimental Q-branch HF input; hardware wiring varies.
 RTL_TUNING_MAX_KHZ = 1_766_000.0
 RTL_MIN_ZOOM = kiwi.span_to_zoom(RTL_IQ_SAMPLE_RATE / 1000.0)
 AIRSPY_HF_MIN_ZOOM = kiwi.span_to_zoom(AIRSPY_HF_SAMPLE_RATE / 1000.0)
@@ -20830,6 +20859,7 @@ class RTLSDRLab:
     def __init__(self, args, state, line_queue):
         self.args = args
         self.state = state
+        state.local_home_receiver = self
         self.line_queue = line_queue
         self.navigation_parent = "apps"
         self.source_id = RTL_SDR_CAPABILITIES.source_id
@@ -20852,13 +20882,17 @@ class RTLSDRLab:
         self._rtl_library = None
         self._airspy_library = None
         self._restore_view = None
+        self._network_handoff_pending = False
         self._remembered_usb_receiver = None
         self.waterfall_queue = queue.Queue(maxsize=2)
         self.waterfall_thread = None
+        self.selected_home_modes = {}
         self.demod_mode = "wbfm"
         self.demod_generation = 0
         self.control_notice = ""
         self.local_squelch_closed = False
+        self.rds = None
+        self._signal_frame = None
         self._usb_topology = None
         self._usb_check_at = 0.0
         self.probe()
@@ -20936,6 +20970,10 @@ class RTLSDRLab:
         """Start every USB session in AM, independent of its frequency preset."""
         return "AM"
 
+    def current_home_mode(self):
+        with self.lock:
+            return self.selected_home_modes.get((self.source_id, self.receiver_selection), 'AM')
+
     @staticmethod
     def shared_radio_mode(radio_mode):
         """Use the nearest Kiwi value for shared filters and persistence."""
@@ -20956,7 +20994,8 @@ class RTLSDRLab:
                 _server, frequency, zoom, *_rest = self.state.snapshot()
                 self._remembered_usb_receiver = dict(
                     source_id=self.source_id, freq_khz=frequency, zoom=zoom,
-                    preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection)
+                    preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection,
+                    mode=self.current_home_mode())
             return dict(self._remembered_usb_receiver)
 
     @staticmethod
@@ -20972,7 +21011,8 @@ class RTLSDRLab:
         if not math.isfinite(frequency) or not LOCAL_RECEIVER_CAPABILITIES[source].supports_frequency(frequency):return None
         return dict(source_id=source, freq_khz=frequency,
                     zoom=int(clamp(zoom, 0, kiwi.DISPLAY_MAX_ZOOM)), preset_index=max(0, preset),
-                    selection=str(value.get("selection") or "auto"))
+                    selection=str(value.get("selection") or "auto"),
+                    mode=str(value.get('mode', 'AM')).upper() if str(value.get('mode', 'AM')).upper() in ('AM', 'NFM', 'WFM') else 'AM')
 
     def restore_receiver(self, saved):
         with self.lock:
@@ -20981,6 +21021,7 @@ class RTLSDRLab:
             if not self.select_source(saved['source_id']):return False
             self.receiver_selection = saved.get("selection", "auto")
             self.preset_indices[self.source_id] = saved['preset_index'] % len(self._presets())
+            self.set_home_mode(saved.get('mode', 'AM'), saved['freq_khz'])
         return self.start(saved['freq_khz'], saved['zoom'])
 
     def receiver_rows(self):
@@ -21013,7 +21054,7 @@ class RTLSDRLab:
             self._apply_source_inventory()
         return True
 
-    def set_home_mode(self, radio_mode, frequency_khz=None):
+    def set_home_mode(self, radio_mode, frequency_khz=None, *, scan=False):
         """Apply a shared Home demodulator choice to the live local source.
 
         Returning False lets the common UI retain its previous truthful mode
@@ -21027,10 +21068,18 @@ class RTLSDRLab:
             if demod_mode is None:
                 self.control_notice = f"{requested} is not implemented by {self.capabilities.label} yet"
                 return False
+            self.selected_home_modes[(self.source_id, self.receiver_selection)] = {"am": "AM", "fm": "NFM", "wbfm": "WFM"}[demod_mode]
+            if self._remembered_usb_receiver is not None:
+                self._remembered_usb_receiver["mode"] = self.current_home_mode()
             if demod_mode != self.demod_mode:
                 self.demod_mode = demod_mode
                 self.demod_generation += 1
             self.control_notice = ""
+        if scan:
+            search = getattr(self.state, 'local_signal_search', None)
+            if search is not None:
+                self.state.set_view(zoom=self.minimum_zoom())
+                search.request_mode_band(self.current_home_mode())
         return True
 
     def demod_snapshot(self):
@@ -21039,6 +21088,9 @@ class RTLSDRLab:
 
     def _apply_local_squelch(self, pcm):
         """Apply the shared squelch control to locally demodulated audio."""
+        search = getattr(self.state, "local_signal_search", None)
+        if search is not None and search.silent:
+            return bytes(len(pcm))
         controls, _generation = self.state.audio_controls_snapshot()
         level = int(controls.get("squelch_level", 0) or 0)
         muted = bool(controls.get("mute", False) and not controls.get("hardware_mute"))
@@ -21169,6 +21221,7 @@ class RTLSDRLab:
             _server, prior_frequency, prior_zoom, _smeter, _generation, _server_generation = self.state.snapshot()
             if self._restore_view is None:
                 self._restore_view = (prior_frequency, prior_zoom)
+            self._network_handoff_pending = True
             bounds_low, bounds_high = self.tuning_bounds()
             target_frequency = clamp(float(frequency_khz), bounds_low, bounds_high)
             if not self.capabilities.supports_frequency(target_frequency):
@@ -21186,7 +21239,7 @@ class RTLSDRLab:
             self.state.set_view(freq_khz=target_frequency, zoom=target_zoom)
             preset = self._preset()
             name, frequency_hz, mode, rate = preset
-            home_mode = self.preferred_home_mode(preset)
+            home_mode = self.current_home_mode()
             # The source chooses its initial real demodulator and publishes
             # the equivalent Home state before its worker starts.
             self.set_home_mode(home_mode, target_frequency)
@@ -21198,7 +21251,8 @@ class RTLSDRLab:
             worker_name = "airspy-hf-lab-iq" if self.source_id == AIRSPY_HF_CAPABILITIES.source_id else "rtl-sdr-lab-iq"
             self._remembered_usb_receiver = dict(
                 source_id=self.source_id, freq_khz=target_frequency, zoom=target_zoom,
-                preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection)
+                preset_index=self.preset_indices[self.source_id], selection=self.receiver_selection,
+                    mode=self.current_home_mode())
             self.thread = threading.Thread(target=worker, args=(name, rate), name=worker_name, daemon=True)
             self.thread.start()
         return True
@@ -21218,6 +21272,8 @@ class RTLSDRLab:
                 library.rtlsdr_set_center_freq.restype = ctypes.c_int
                 library.rtlsdr_set_sample_rate.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
                 library.rtlsdr_set_sample_rate.restype = ctypes.c_int
+                library.rtlsdr_set_direct_sampling.argtypes = (ctypes.c_void_p, ctypes.c_int)
+                library.rtlsdr_set_direct_sampling.restype = ctypes.c_int
                 library.rtlsdr_set_tuner_gain_mode.argtypes = (ctypes.c_void_p, ctypes.c_int)
                 library.rtlsdr_set_tuner_gain_mode.restype = ctypes.c_int
                 library.rtlsdr_reset_buffer.argtypes = (ctypes.c_void_p,)
@@ -21258,11 +21314,17 @@ class RTLSDRLab:
             audio *= 17800.0 if mode == "wbfm" else 30500.0
         return np.clip(audio, -32768, 32767).astype("<i2", copy=False).tobytes(), samples[-1]
 
+    def signal_snapshot(self):
+        with self.lock:
+            return self._signal_frame
+
     def _publish_waterfall(self, samples, center_khz, lut, levels):
         window = samples[-RTL_IQ_FFT_SIZE:]
         if len(window) != RTL_IQ_FFT_SIZE:
             return
         power = 20.0 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(window))) + 1e-8)
+        with self.lock:
+            self._signal_frame = (time.monotonic(), center_khz, self.source_span_khz(), power)
         # Keep a malformed or future non-divisible FFT frame from taking the
         # entire local receiver down. The present 2048-point FFT maps 2:1.
         bins_per_column = len(power) // WF_TEX_W
@@ -21479,6 +21541,8 @@ class RTLSDRLab:
                 if demod_generation != seen_demod_generation:
                     previous_sample = None
                     seen_demod_generation = demod_generation
+                if self.rds:
+                    self.rds.feed(samples, tuned_khz, AIRSPY_HF_SAMPLE_RATE, demod_mode, self.source_id, self.receiver_selection)
                 pcm, previous_sample = self._pcm_from_iq(
                     samples, demod_mode, output_rate, previous_sample, AIRSPY_HF_SAMPLE_RATE,
                 )
@@ -21547,6 +21611,7 @@ class RTLSDRLab:
                 self.player = None
                 if self.stop_event.is_set():
                     self._apply_source_inventory()
+            if self.rds:self.rds.disable()
             release_realtime_audio_thread()
 
     def _iq_worker(self, name, output_rate):
@@ -21581,6 +21646,8 @@ class RTLSDRLab:
             library.rtlsdr_set_tuner_gain_mode(device, 0)
             _server, freq_khz, _zoom, _smeter, view_generation, _server_generation = self.state.snapshot()
             initial_hz = int(clamp(freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
+            from rtl_sampling import switch_sampling
+            sampling_mode = switch_sampling(library, device, initial_hz)
             if library.rtlsdr_set_center_freq(device, initial_hz) < 0:
                 raise RuntimeError("could not tune RTL-SDR")
             library.rtlsdr_reset_buffer(device)
@@ -21642,6 +21709,8 @@ class RTLSDRLab:
                     # change: it creates a one-packet click.
                     previous_sample = None
                     seen_demod_generation = demod_generation
+                if self.rds:
+                    self.rds.feed(samples, tuned_hz / 1000.0, RTL_IQ_SAMPLE_RATE, demod_mode, self.source_id, self.receiver_selection)
                 pcm, previous_sample = self._pcm_from_iq(samples, demod_mode, output_rate, previous_sample)
                 if pcm:
                     player.submit(self._apply_local_squelch(pcm))
@@ -21653,6 +21722,7 @@ class RTLSDRLab:
                     next_waterfall_at = max(next_waterfall_at + interval, now)
                 desired_hz = int(clamp(next_freq_khz, RTL_TUNING_MIN_KHZ, RTL_TUNING_MAX_KHZ) * 1000.0)
                 if desired_hz != tuned_hz and next_generation != seen_generation and now - last_tune_at >= 0.025:
+                    sampling_mode = switch_sampling(library, device, desired_hz, sampling_mode)
                     if library.rtlsdr_set_center_freq(device, desired_hz) < 0:
                         raise RuntimeError("RTL-SDR retune failed")
                     library.rtlsdr_reset_buffer(device)
@@ -21704,15 +21774,38 @@ class RTLSDRLab:
                 if self.stop_event.is_set():
                     self.status = "READY" if self.present else "NOT FOUND"
                     self.detail = "Local I/Q stopped; Kiwi audio and waterfall resumed."
+            if self.rds:self.rds.disable()
             release_realtime_audio_thread()
+
+    def prepare_network_selection(self, receiver_type):
+        """Release local ownership before selecting a network endpoint.
+
+        Detach the old view before joining: a delayed USB worker must never
+        restore its old frequency after the new server has started landing.
+        """
+        with self.lock:
+            departing = self._network_handoff_pending or self._restore_view is not None or self.state.external_waterfall_snapshot()
+            if not departing:
+                return False
+            self._restore_view = None
+            self._network_handoff_pending = False
+        search = getattr(self.state, 'local_signal_search', None)
+        if search is not None:
+            search.cancel_for_handoff()
+        self.stop()
+        self.state.set_external_audio(False)
+        self.state.set_external_waterfall(False)
+        if receiver_type == 'kiwi':
+            self.state.set_radio_mode('AM')
+        return True
 
     def _restore_network_view(self):
         with self.lock:
             restore_view, self._restore_view = self._restore_view, None
-        if restore_view is not None:
-            self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
-        self.state.set_external_audio(False)
-        self.state.set_external_waterfall(False)
+            if restore_view is not None:
+                self.state.set_view(freq_khz=restore_view[0], zoom=restore_view[1])
+            self.state.set_external_audio(False)
+            self.state.set_external_waterfall(False)
 
     def stop(self):
         with self.lock:
@@ -22258,6 +22351,9 @@ class BufferedAudioPlayer:
     def _write(self, audio, silence=False, comfort_noise=False):
         if self.player is None:
             return
+        search = getattr(self.state, "local_signal_search", None)
+        if search is not None and search.silent and self.state.external_audio_snapshot():
+            audio, silence, comfort_noise = bytes(len(audio)), True, False
         audio = self._smooth_concealment_edge(audio, silence, comfort_noise)
         try:
             if isinstance(self.player, DesktopAudioPlayer):
@@ -24555,7 +24651,9 @@ def waterfall_worker(args, line_queue, stop_event, state, listener_name=None):
                     # not calculate its 10-second peak history in that mode:
                     # this runs for every W/F row and competes with PCM timing
                     # under the Python GIL despite nothing being displayed.
-                    if state.spectrum_enabled_snapshot():
+                    # A pending receiver landing also needs fresh peak data.
+                    # Resume the hidden-spectrum fast path as soon as it finishes.
+                    if state.spectrum_enabled_snapshot() or state.kiwi_landing_snapshot().get("active"):
                         state.update_spectrum(samples, floor, ceiling)
                     row_span = kiwi.zoom_source_span_khz(zoom)
                     row_center_khz = sent_freq_khz
@@ -24869,6 +24967,24 @@ def main():
     # Kept outside the normal Kiwi transport on purpose. This only probes the
     # locally attached USB SDR until the operator opens the separate Lab.
     rtl_lab = RTLSDRLab(args, state, line_queue)
+    from local_signal_search import LocalSignalSearch
+    local_signal_search = LocalSignalSearch(rtl_lab, state)
+    state.local_signal_search = local_signal_search
+    if CM5_AUDIO:local_signal_search.audio_gate = CM5_AUDIO.set_scan_mute
+    from usb_rds import USBRDS
+    from usb_station_view import USBStationView, draw_scan_border
+    usb_rds = USBRDS(Path.home() / ".local/state/ituner-usb-rds.json")
+    rtl_lab.rds = usb_rds
+    local_signal_search.catalog = lambda frequency: usb_rds.store.observe((rtl_lab.source_id, rtl_lab.receiver_selection, round(frequency*1000)))
+    usb_station_view = USBStationView(sys.modules[__name__], local_signal_search, usb_rds, rtl_lab, state)
+    def clear_usb_scan_results():
+        usb_rds.disable()
+        usb_rds.store.clear(rtl_lab.source_id, rtl_lab.receiver_selection)
+        usb_station_view.first = 0
+        usb_station_view.seen_stations.clear()
+        usb_station_view.was_scanning = False
+        usb_station_view.message = ''
+    local_signal_search.clear_catalog = clear_usb_scan_results
     pending_usb_restore = rtl_lab.validate_remembered_receiver(remembered_preferences.get("usb_receiver"))
     if pending_usb_restore:
         # Reserve HOME for the saved USB source while the asynchronous probe runs.
@@ -24960,6 +25076,8 @@ def main():
     anim_start = 0.0
     anim_duration = 0.20
     zoom_osd_until = 0.0
+    local_search_osd = None
+    local_search_osd_until = 0.0
     zoom_unavailable_osd_until = 0.0
     encoder_zoom_osd_until = 0.0
     encoder_zoom_osd_detail = ""
@@ -25105,6 +25223,8 @@ def main():
     interface_settings = network_interface.InterfaceSettings(network_bridge)
     application_update = UpdateController()
     power_control = system_power.PowerController()
+    from hardware_power import PowerButton
+    hardware_power = PowerButton()
     update_poll_at = 0.0
     audio_panel_open = False
     audio_transport_graph_open = False
@@ -26241,7 +26361,7 @@ def main():
         local = state.external_waterfall_snapshot() or rtl_lab.is_running()
         source_key = (source_generation, source_type, state.external_waterfall_snapshot())
         minimum = rtl_lab.minimum_zoom() if local else 0
-        current = continuous_home_zoom.span(source_key, level, display_span)
+        current = continuous_home_zoom.span(source_key, level, min(display_span, receiver_display_span(minimum, source_type)) if local else display_span)
         new_level, span = continuous_home_zoom.step(
             source_key, level, current, delta, minimum, args.max_zoom,
             lambda zoom: receiver_display_span(zoom, source_type),
@@ -26521,9 +26641,8 @@ def main():
     def connect_to_station(station):
         """Use one path for normal list taps and the Home local-receiver key."""
         nonlocal station_pending_server, station_pending_started_at, station_connected_at, zoom_osd_until
-        nonlocal picker_map_selected_server, pending_usb_restore
+        nonlocal picker_map_selected_server, pending_usb_restore, radio_mode, manual_radio_mode
         pending_usb_restore = None
-        rtl_lab.stop()
         if dual_vfo_receiver_list_target in ("A", "B"):
             target_vfo = dual_vfo_receiver_list_target
             if target_vfo == "A":
@@ -26555,6 +26674,8 @@ def main():
             target_server,
             receiver_type=station_receiver_type(station),
         )
+        radio_mode = state.radio_snapshot()[0].upper()
+        manual_radio_mode = True
         write_remembered_view(save_current_frequency=True, force=True)
         drain_queue(line_queue)
         wf_texture.clear()
@@ -27454,7 +27575,7 @@ def main():
         )
 
     def home_screen_visible(*, include_home_overlays=True):
-        return not (zoom_blocking_screen_open(include_home_overlays=include_home_overlays) or picker_open or seek_view.open
+        return not (usb_station_view.open or zoom_blocking_screen_open(include_home_overlays=include_home_overlays) or picker_open or seek_view.open
                     or adsb_workspace.open or vhf_workspace.open)
 
     def muted_rf_notice_visible():
@@ -27554,6 +27675,9 @@ def main():
         web_apps.publish_encoder_notice("ZOOM", "Not available on this screen", args.zoom_osd_seconds)
 
     def rail_relocation_active():
+        if power_control.open:
+            return theme_system.runtime_theme["sidebar"] == "left"
+        if usb_station_view.open:return False
         if home_rail_hidden() or theme_system.runtime_theme["sidebar"] != "left":
             return False
         if shared_keyboard_open():
@@ -27650,6 +27774,7 @@ def main():
     def select_receiver_from_map(x, y):
         """Start the normal Kiwi path and smoothly lock the globe to its RX."""
         nonlocal picker_map_selected_server, picker_map_hover_server, picker_map_lock_target, picker_map_zoom_target
+        nonlocal radio_mode, manual_radio_mode, pending_usb_restore
         nonlocal station_pending_server, station_pending_started_at, station_connected_at
         nonlocal picker_map_notice, picker_map_notice_until, picker_map_inertia_yaw, picker_map_inertia_pitch
         center_x = (PICKER_MAP_BOX[0] + PICKER_MAP_BOX[2]) / 2
@@ -27685,9 +27810,12 @@ def main():
             RADIOGARDEN_ZOOM_MAX,
         )
         picker_map_inertia_yaw = picker_map_inertia_pitch = 0.0
+        pending_usb_restore = None
         _server, freq_khz, zoom, _gen, _server_gen = state.set_server(
             selected["server"], receiver_type=selected.get("receiver_type", "kiwi"),
         )
+        radio_mode = state.radio_snapshot()[0].upper()
+        manual_radio_mode = True
         # A receiver selection is an explicit operator decision. Persist it
         # immediately so a reboot during its connection attempt never falls
         # back to the bundled/default public endpoint.
@@ -27776,13 +27904,16 @@ def main():
         local_minimum_zoom = rtl_lab.minimum_zoom()
         local_zoom = int(clamp(max(local_minimum_zoom, current_zoom), local_minimum_zoom, args.max_zoom))
         local_frequency = preset_hz / 1000.0
+        already_running = rtl_lab.is_running()
         if rtl_lab.start(local_frequency, local_zoom):
+            if not already_running:
+                rtl_lab.set_home_mode(rtl_lab.current_home_mode(), scan=True)
             # RTL now consumes the same Home
             # mode state as Kiwi. Start the
             # drawer on its truthful local
             # equivalent, not the previous
             # remote receiver's sideband.
-            radio_mode = rtl_lab.preferred_home_mode(rtl_lab.snapshot()["preset"])
+            radio_mode = rtl_lab.current_home_mode()
             manual_radio_mode = True
             filter_custom_width = False
             digital_mode = "DIG"
@@ -27804,7 +27935,7 @@ def main():
         if not rtl_lab.is_running():start_usb_receiver()
         if mode == "WFM" and not 87500 <= state.snapshot()[1] <= 108000:
             state.set_view(freq_khz=100100.0)
-        if rtl_lab.set_home_mode(mode):
+        if rtl_lab.set_home_mode(mode, scan=True):
             radio_mode = mode
             manual_radio_mode = True
             state.set_radio_mode(rtl_lab.shared_radio_mode(mode))
@@ -27968,7 +28099,7 @@ def main():
             rtl_lab.refresh_usb_devices()
             if pending_usb_restore and rtl_lab.restore_receiver(pending_usb_restore):
                 pending_usb_restore = None
-                radio_mode = "AM"
+                radio_mode = rtl_lab.current_home_mode()
                 manual_radio_mode = True
                 station_route_filter = "usb"
                 _server, display_freq, restored_zoom, *_rest = state.snapshot()
@@ -27993,6 +28124,22 @@ def main():
                 web_apps.return_to_decoders=False
                 digital_menu_open=True
                 settings_menu_open=False
+            local_signal_search.poll(allowed=(home_screen_visible() or usb_station_view.open or rtl_lab_open or radio_setup_open) and not wf_texture.history.reviewing and not power_control.open)
+            local_search_notice = local_signal_search.pop_notice()
+            if local_search_notice:
+                local_search_osd = local_search_notice
+                local_search_osd_until = now + 8.0
+                print(f"USB search: {local_search_notice[0]}: {local_search_notice[1]}", flush=True)
+                web_apps.publish_encoder_notice(*local_search_notice, 5.0)
+            if hardware_power.consume() and not power_control.open and not power_control.busy:
+                power_control.select('poweroff', hardware=True)
+                if web_apps.active:
+                    threading.Thread(target=web_apps.close, name='power-return-ui', daemon=True).start()
+                touch_started = False
+                gesture = None
+                set_ui_press_point()
+                wake_controls()
+                print('Hardware power button: shutdown confirmation opened', flush=True)
             for event in pygame.event.get():
                 # Desktop close/menu Quit and Cmd-Q must work even while a
                 # modal workspace or an external app blocks radio input.
@@ -28006,7 +28153,7 @@ def main():
                 ):
                     stop_event.set()
                     break
-                if not web_apps.blocks_touch and usb_popup.visible():
+                if not power_control.open and not usb_station_view.open and not web_apps.blocks_touch and usb_popup.visible():
                     if event.type==pygame.KEYDOWN:
                         if event.key==pygame.K_ESCAPE:usb_popup.dismiss()
                         continue
@@ -28021,7 +28168,16 @@ def main():
                         continue
                 if usb_notice_desktop is not None and event.type==pygame.MOUSEBUTTONUP:
                     usb_notice_desktop=None;continue
-                if web_apps.blocks_touch:
+                if web_apps.blocks_touch and not power_control.open:
+                    continue
+                if power_control.open and event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        hardware_request = power_control.hardware
+                        power_control.cancel()
+                        if not hardware_request:restore_navigation_parent('settings')
+                    continue
+                if usb_station_view.open and event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:usb_station_view.close()
                     continue
                 if event.type == pygame.KEYDOWN and seek_view.open:
                     if seek_view.keyboard_open:
@@ -28413,7 +28569,14 @@ def main():
                             # Both globe surfaces take a direct one-finger
                             # gesture, so give them input priority while the
                             # underlying waterfall controls settle.
-                            if theme_editor.open:
+                            if power_control.open:
+                                gesture = "system_power"
+                                scope_drag_eligible = False
+                            elif usb_station_view.open:
+                                gesture = "usb_stations"
+                                usb_station_view.drag_begin(x,y)
+                                scope_drag_eligible = False
+                            elif theme_editor.open:
                                 gesture = "theme"
                                 scope_drag_eligible = False
                             elif radio_setup_open and fmdx_shared_prompt_open:
@@ -29029,6 +29192,8 @@ def main():
                         elif gesture in ("vhf_workspace", "adsb_workspace", "sstv_workspace", "hell_workspace", "qrss_workspace", "cw_workspace"):
                             {"vhf_workspace": vhf_workspace, "adsb_workspace": adsb_workspace, "sstv_workspace": sstv_workspace, "hell_workspace": hell_workspace,
                              "qrss_workspace": qrss_workspace, "cw_workspace": cw_workspace}[gesture].drag_move(start_x, start_y, x, y)
+                        elif gesture == "usb_stations":
+                            usb_station_view.drag_move(x,y)
                         elif gesture == "smart_seek":
                             seek_view.drag(x, y, points=points)
                         elif gesture == "wspr_workspace":
@@ -29976,6 +30141,9 @@ def main():
                                 elif choice == "close":
                                     wspr_decoder_settings_open = False
                             wake_controls()
+                        elif touch_started and gesture == "usb_stations":
+                            usb_station_view.release(x,y,tap=max(abs(x-start_x),abs(y-start_y))<=args.tap_px)
+                            wake_controls()
                         elif touch_started and gesture == "smart_seek":
                             if seek_view.drag(x, y):
                                 seek_view.release(x, y)
@@ -30001,8 +30169,9 @@ def main():
                                     lambda px, py: system_power.action_at(power_control, sys.modules[__name__], px, py),
                                     start_x, start_y, x, y)
                                 if action == "back":
+                                    hardware_request = power_control.hardware
                                     power_control.cancel()
-                                    restore_navigation_parent("settings")
+                                    if not hardware_request:restore_navigation_parent("settings")
                                 elif action == "confirm":
                                     power_control.confirm()
                             wake_controls()
@@ -30615,7 +30784,7 @@ def main():
                                         # demodulator. Do not let a local RTL
                                         # session display a Kiwi-only mode.
                                         rtl_active = rtl_lab.is_running()
-                                        if rtl_active and not rtl_lab.set_home_mode(next_mode):
+                                        if rtl_active and not rtl_lab.set_home_mode(next_mode, scan=True):
                                             next_mode = None
                                         if next_mode is not None:
                                             radio_mode = next_mode
@@ -32153,6 +32322,7 @@ def main():
                     row_span_khz = display_span
                 wf_texture.push_line(line, row_center_khz, row_span_khz)
 
+
             # B has its own W/F socket in Dual mode. Limit consumption to the
             # same bounded amount as the main pane so rendering stays smooth
             # if a server bursts several queued waterfall rows at once.
@@ -32506,8 +32676,11 @@ def main():
                     band_button_drawn = True
                 if not dual_vfo_open:
                     draw_waterfall_text_button(
-                        text_cache, smart_seek_waterfall_box(), "SCAN",
-                        enabled=waterfall_action_enabled(state, "SCAN", wf_texture.history.reviewing))
+                        text_cache, smart_seek_waterfall_box(), "STOP SCAN" if local_signal_search.active else "SCAN",
+                        enabled=waterfall_action_enabled(state, "SCAN", wf_texture.history.reviewing),
+                        active=local_signal_search.active)
+                    if local_signal_search.active:
+                        draw_scan_border(sys.modules[__name__], smart_seek_waterfall_box(), now)
                     scan_button_drawn = True
                     draw_waterfall_text_button(
                         text_cache, carrier_waterfall_box(), "TUNE",
@@ -32932,8 +33105,6 @@ def main():
                     application_update.poll()
                     update_poll_at = now + 0.5
                 app_update_ui.draw(application_update, sys.modules[__name__], text_cache)
-            if power_control.open:
-                system_power.draw(power_control, sys.modules[__name__], text_cache)
             if band_navigation_open:
                 draw_band_navigation(text_cache, display_freq, radio_mode,
                                      state.band_navigation_counts(), active_tuning_bounds())
@@ -32964,6 +33135,10 @@ def main():
                 if sidebar_composer is None:
                     sidebar_composer = SidebarComposer()
                 sidebar_composer.compose_left()
+            if usb_station_view.open:
+                usb_station_view.draw(text_cache)
+            if local_search_osd and local_search_osd_until > now:
+                draw_web_app_notice_osd(text_cache, local_search_osd, green_osd_alpha(local_search_osd_until-now,8))
             web_notice = web_apps.notice
             if web_notice:
                 draw_web_app_notice_osd(text_cache, web_notice, 220 if web_apps.active else
@@ -32989,6 +33164,12 @@ def main():
                 draw_volume_osd(text_cache, audio_volume,
                                 green_osd_alpha(volume_osd_until - now, args.zoom_osd_seconds),
                                 muted=state.audio_controls_snapshot()[0].get("mute", False), title=volume_osd_title)
+            if power_control.open:
+                system_power.draw(power_control, sys.modules[__name__], text_cache)
+                if rail_relocation_active():
+                    if sidebar_composer is None:
+                        sidebar_composer = SidebarComposer()
+                    sidebar_composer.compose_left()
             if screenshot_requested.is_set():
                 pixels = GL.glReadPixels(0, 0, NATIVE_W, NATIVE_H, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
                 screenshot = pygame.image.fromstring(pixels, (NATIVE_W, NATIVE_H), "RGBA", True)
@@ -33022,6 +33203,8 @@ def main():
             dome_interacting = adsb_workspace.open and adsb_workspace.coverage_open and (adsb_workspace.coverage_view.pointer_active or time.monotonic()<adsb_workspace.coverage_view.interaction_until)
             clock.tick(5 if web_apps.active else globe_frame_rate(args.fps, (picker_open and picker_map_open) or (adsb_workspace.open and adsb_workspace.coverage_open), globe_moving or dome_interacting))
     finally:
+        hardware_power.close()
+        usb_rds.close()
         ui_heartbeat.close()
         if CM5_AUDIO is not None:
             CM5_AUDIO.close()

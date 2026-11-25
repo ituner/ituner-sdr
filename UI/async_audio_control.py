@@ -10,6 +10,8 @@ class AsyncAudioControl:
     def __init__(self, backend):
         self.backend = backend
         self._volume = backend.get_volume()
+        self._requested_mute = False
+        self._scan_mute = False
         self._condition = threading.Condition()
         self._commands = deque()
         self._closed = False
@@ -42,7 +44,15 @@ class AsyncAudioControl:
         return value if self._control('volume', value) else None
 
     def set_mute(self, value):
-        self._control('mute', bool(value))
+        with self._condition:
+            self._requested_mute = bool(value)
+            self._control('mute', self._requested_mute or self._scan_mute)
+
+    def set_scan_mute(self, value):
+        """Temporary scan suppression never changes the user's mute choice."""
+        with self._condition:
+            self._scan_mute = bool(value)
+            self._control('mute', self._requested_mute or self._scan_mute)
 
     def _barrier(self, method, *args):
         # Called by audio workers, never the render loop during listening.

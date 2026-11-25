@@ -30,7 +30,7 @@ class DecoderStyle:
         return getattr(APP_UI_STYLE.palette, role)
 
     def decoder_button(self, cache, box, title, action, subtitle='', active=False,
-                       enabled=True, font_size=20, uppercase=True):
+                       enabled=True, font_size=20, uppercase=True, prefix=''):
         ui = self.ui
         style = APP_UI_STYLE.button
         pressed = getattr(ui, 'ui_button_pressed', lambda box: False)(box) is True
@@ -42,9 +42,17 @@ class DecoderStyle:
         title = str(title).upper() if uppercase else str(title)
         if not subtitle and title.strip() in ('-', '−', '+'):
             font_size = int(round(font_size * 1.5))
-        title = ui.fit_station_text(cache, title, x1-x0-20, font_size, True, False, family)
-        ui.draw_text(cache, (x0+x1)/2, (y0+y1)/2-(10 if subtitle else 0), title,
-                     color, font_size, True, False, 'cm', family=family)
+        prefix_width = cache.texture(prefix, font_size, self.MUTED, bold=True, family=family)[1] if prefix else 0
+        title = ui.fit_station_text(cache, title, x1-x0-20-prefix_width, font_size, True, False, family)
+        title_y = (y0+y1)/2-(10 if subtitle else 0)
+        if prefix:
+            title_width = cache.texture(title, font_size, color, bold=True, family=family)[1]
+            left = (x0+x1-prefix_width-title_width)/2
+            ui.draw_text(cache, left, title_y, prefix, self.MUTED, font_size, True, False, 'lm', family=family)
+            ui.draw_text(cache, left+prefix_width, title_y, title, color, font_size, True, False, 'lm', family=family)
+        else:
+            ui.draw_text(cache, (x0+x1)/2, title_y, title,
+                         color, font_size, True, False, 'cm', family=family)
         if subtitle:
             size = min(18, font_size)
             sub = ui.fit_station_text(cache, str(subtitle), x1-x0-20, size, False, False, family)

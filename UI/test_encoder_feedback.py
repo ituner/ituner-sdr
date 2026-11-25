@@ -84,7 +84,7 @@ class EncoderFeedbackTests(unittest.TestCase):
 
     def test_feedback_draws_after_relocation_and_other_notices(self):
         order=[]
-        env=dict(rail_relocation_active=lambda:True,
+        env=dict(local_search_osd=None, local_search_osd_until=0, rail_relocation_active=lambda:True,
                  sidebar_composer=SimpleNamespace(compose_left=lambda:order.append('compose')),
                  web_apps=SimpleNamespace(notice=('LOADING','Please wait'),active=True),
                  draw_web_app_notice_osd=lambda *a:order.append(a[1][0]),
@@ -92,7 +92,7 @@ class EncoderFeedbackTests(unittest.TestCase):
                  draw_volume_osd=lambda *a,**k:order.append('volume'),
                  draw_muted_waterfall_badge=lambda *a,**k:order.append('red-mute'),
                  mute_badge_touch_enabled=False, muted_rf_notice_visible=lambda:True,
-                 theme_editor=SimpleNamespace(open=False),
+                 theme_editor=SimpleNamespace(open=False), power_control=SimpleNamespace(open=False), usb_station_view=SimpleNamespace(open=False),
                  state=SimpleNamespace(audio_controls_snapshot=lambda:({'mute':False},0)),
                  volume_osd_title='VOLUME',
                  text_cache=None, now=10, encoder_zoom_osd_until=12,

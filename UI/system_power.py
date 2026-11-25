@@ -14,15 +14,17 @@ class PowerController:
         self.runner = runner
         self.available = Path(helper).is_file()
         self.open = False
+        self.hardware = False
         self.action = None
         self.busy = False
         self.message = ''
         self.results = queue.SimpleQueue()
 
-    def select(self, action):
+    def select(self, action, *, hardware=False):
         if action not in ACTIONS or self.busy:
             return
         self.action = action
+        self.hardware = hardware
         self.message = ''
         self.open = True
 
@@ -78,7 +80,7 @@ def draw(controller, ui, cache):
     ui.draw_logical_rect(0, 0, ui.LOGICAL_W, ui.LOGICAL_H, p.surface)
     ui.draw_logical_rect(ui.LCD_NAV_X0, 0, ui.LOGICAL_W, ui.LOGICAL_H, p.sidebar)
     ui.draw_sidebar_header(cache, 'SYSTEM')
-    title = 'Reboot the device?' if controller.action == 'reboot' else 'Shut down the device?'
+    title = 'Reboot the device?' if controller.action == 'reboot' else 'Are you sure you want to shut down?'
     detail = 'Audio and decoders will stop. Your settings will be saved.'
     hint = 'The device will restart automatically.' if controller.action == 'reboot' else 'Use the physical power button to start it again.'
     for y, text, size, color in ((160, title, 30, p.text), (216, detail, 22, p.secondary_text),

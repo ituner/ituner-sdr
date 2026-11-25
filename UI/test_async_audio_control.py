@@ -47,6 +47,16 @@ class AsyncControlTests(unittest.TestCase):
         self.assertTrue(self.backend.entered.wait(1))
         return thread
 
+    def test_scan_gate_preserves_user_mute_and_volume(self):
+        self.control.set_scan_mute(True);self.control.ready()
+        self.control.set_mute(False);self.control.set_volume(.6);self.control.ready()
+        self.assertNotIn(('mute',False),self.backend.calls)
+        self.control.set_mute(True);self.control.set_scan_mute(False);self.control.ready()
+        self.assertNotIn(('mute',False),self.backend.calls)
+        self.assertEqual(self.control.get_volume(),.6)
+        self.control.set_mute(False);self.control.ready()
+        self.assertIn(('mute',False),self.backend.calls)
+
     def test_ui_requests_do_not_wait_on_stalled_reconnect_and_coalesce(self):
         thread = self.stall_reconnect()
         started = time.monotonic()

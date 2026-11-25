@@ -70,6 +70,8 @@ class DongleWorkspace(StationWorkspace):
         self.ink(cache,24,72,f"{self.data.get('connected_count',0)} connected · {self.data.get('active_count',0)} in use · shared across decoders",20,self.MUTED,width=980)
         self.draw_back(cache)
         records=self.data.get('dongles',[])
+        if self.selected:
+            self.selected=next((r for r in records if r['id']==self.selected['id']),self.selected)
         if self.selected and self.routing:
             import usb_radios
             self.ink(cache,32,140,'Receiving service · '+radio_name(self.selected),28,self.CYAN,width=1200)
@@ -77,7 +79,7 @@ class DongleWorkspace(StationWorkspace):
             services=usb_radios.SERVICE.services() if usb_radios.SERVICE else []
             for i,(owner,label) in enumerate(services):
                 x=24+(i%2)*624;y=220+(i//2)*70
-                self.button(cache,(x,y,x+608,y+60),label,('service',owner),owner==(self.selected.get('connection') or {}).get('owner','none'))
+                self.button(cache,(x,y,x+608,y+60),label,('service',owner),owner==(self.selected.get('connection') or {}).get('service', (self.selected.get('connection') or {}).get('owner','none')))
             self.draw_status(cache,self.message,'Service settings are saved for restart.',full_width=True)
             return
         if self.selected:

@@ -16,6 +16,16 @@ class RadioTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.registry=DongleRegistry(self.tmp.name);self.broker=ReceiverBroker();self.devices=[device(i) for i in range(1,7)];self.registry.remember(self.devices)
     def tearDown(self):self.tmp.cleanup()
+    def test_home_connection_reports_actual_am_fm_selection(self):
+        for mode,service_id,label in [('AM','home_am','AM Radio'),('WFM','home_fm','FM Radio'),('NFM','home_fm','FM Radio')]:
+            home=Mock();home.snapshot.return_value={'status':'LIVE'};home.current_home_mode.return_value=mode
+            service=RadioManagement(self.registry,self.broker,home=home)
+            connection=service.connection('home')
+            self.assertEqual(connection['owner'],'home')
+            self.assertEqual(connection['service'],service_id)
+            self.assertEqual(connection['label'],label)
+            self.assertIn(mode,connection['detail'])
+
     def test_actual_lease_is_a_connection_but_saved_assignment_is_not(self):
         self.broker.acquire('aprs',self.devices[0]['id'])
         aprs=SimpleNamespace(enabled=True,settings=dict(selection=self.devices[0]['id'],frequency=144390000),status='RECEIVING')
